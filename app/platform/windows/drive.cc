@@ -10,27 +10,34 @@
 // The commands are drive.mm's, with what Windows has: click, doubleclick, rightclick, middleclick,
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
-// resize, place, minimize, window, order, layout, state, title, pasteboard, front, menu, menubar,
-// choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and age, and
-// Windows' own maximize, which the Mac's has no command for, and placement, which logs the window's
-// maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the
-// windows on screen over the app's browser windows; stack, which lists every app's windows over the
-// driven one, front first; and reshow, which shows those of the UI's that are hidden again, as
-// Windows does. window <n> behind drives a window without bringing it forward, as drive.mm's does.
-// The Mac's modifiers are
-// pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with Alt, but Ctrl for
-// ⌃Tab, and alt with both. A trackpad's scrolls and swipes are wheel messages with the pixels in
-// their deltas, as a precision touchpad sends them. choose and dismiss work on ilo's menu and the
+// resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
+// menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
+// age, and Windows' own maximize, which the Mac's has no command for, and placement, which logs the
+// window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
+// lists the windows on screen over the app's browser windows; stack, which lists every app's
+// windows over the driven one, front first; and reshow, which shows those of the UI's that are
+// hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
+// drive.mm's does.
+// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
+// with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
+// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
+// wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
+// scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
+// precision touchpad's, with their touch and lift. choose and dismiss work on ilo's menu and the
 // alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
 // drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
 // save panel" if none shows. dragover, dragdrop and dragleave hand a drag from another app, a shell
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
 // unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
-// Linux's driver does. fullscreen puts the window full screen or takes it out through the core, as
-// Linux's driver does. The others, pageswipe, displays, hide, backdrop and openmenu, Windows has
-// nothing the driver can stand in for yet: each logs "browser: drive: unsupported
-// <command>" before drive.mm's "can't do that", so a run fails at once.
+// Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
+// input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
+// modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
+// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語.
+// fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
+// stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
+// that", so a run fails at once.
 //
 // It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, and "browser:
 // drive <n> done, key <window>, focus <view>, active <0|1>, marked <none|start,length>" once
@@ -76,6 +83,8 @@ bool host_save_dialog_answer(const char* path);
 bool browser_drive_compose(void* hwnd, const char* text, size_t start, size_t end, bool selected);
 bool browser_drive_commit(void* hwnd, const char* text);
 bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
+// The app's, on GPUI's window |hwnd|, for two fingers as a precision touchpad's.
+bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
 }
 
@@ -120,7 +129,7 @@ HWND g_hovered = nullptr;
 // The moves the driver has posted and its windows haven't taken yet, which DropRealPointer lets
 // through. Some are never taken, as by a window that closed, so only the latest are kept.
 std::deque<std::pair<HWND, LPARAM>> g_posted_moves;
-// The last click: its window, place on screen, button and time.
+// The last press, a click's or a drag's: its window, place on screen, button and time.
 struct Click {
   HWND hwnd = nullptr;
   POINT at{};
@@ -413,7 +422,8 @@ void Release(const Target& target, UINT button, int modifiers) {
   PostMessageW(target.hwnd, Up(button), MouseKeys(modifiers, 0), ClientParam(target));
 }
 
-// How long a click at |target| waits, so it isn't taken with the last one for a double click.
+// How long a press at |target| waits, so GPUI, which counts every press, a drag's too, doesn't
+// take it with the last one for a double click, as the driver presses faster than a hand does.
 UINT WaitBeforeClick(const Target& target, UINT button) {
   const ULONGLONG since = GetTickCount64() - g_last_click.time;
   const bool close_by =
@@ -424,6 +434,19 @@ UINT WaitBeforeClick(const Target& target, UINT button) {
     return 0;
   }
   return static_cast<UINT>(GetDoubleClickTime() - since + 50);
+}
+
+// The steps of a press at |target| that starts a drag, waiting as a click does (platform/linux/
+// drive.rs waits the same), so a drag from where the last one started isn't a double click.
+void AddPress(const Target& target, UINT button, int modifiers) {
+  if (const UINT wait = WaitBeforeClick(target, button)) {
+    g_steps.push_back({[] {}, wait});
+  }
+  g_steps.push_back({[=] { Move(target, 0, 0); }});
+  g_steps.push_back({[=] {
+    Press(target, button, modifiers, false);
+    g_last_click = {target.hwnd, target.screen, button, GetTickCount64()};
+  }});
 }
 
 // The steps of a click at |target|, or with |twice| a double click.
@@ -461,13 +484,25 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   return modifiers;
 }
 
+// The Mac's modifiers named in |words| for a click or a drag, as the page and the UI read a click's
+// here: cmd with Ctrl and alt with Alt, so ⌥-click is Alt+click and ⌥⌘-click Ctrl+Alt+click.
+int PointerModifiers(std::istringstream& words) {
+  int modifiers = 0;
+  std::string word;
+  while (words >> word) {
+    modifiers |= word == "cmd" ? kCtrl : word == "shift" ? kShift : word == "alt" ? kAlt : 0;
+  }
+  return modifiers;
+}
+
 // The virtual key of drive.mm's |key|, and the modifiers this keyboard types it with, or 0.
 UINT VirtualKey(const std::string& key, int* modifiers) {
   static const std::pair<const char*, UINT> named[] = {
       {"return", VK_RETURN},  {"escape", VK_ESCAPE}, {"tab", VK_TAB},      {"space", VK_SPACE},
       {"backspace", VK_BACK}, {"delete", VK_DELETE}, {"pageup", VK_PRIOR}, {"pagedown", VK_NEXT},
       {"up", VK_UP},          {"down", VK_DOWN},     {"left", VK_LEFT},    {"right", VK_RIGHT},
-      {"f4", VK_F4},          {"f6", VK_F6},         {"f10", VK_F10},      {"f12", VK_F12}};
+      {"home", VK_HOME},      {"f4", VK_F4},         {"f6", VK_F6},        {"f10", VK_F10},
+      {"f12", VK_F12}};
   for (const auto& [name, vk] : named) {
     if (key == name) {
       return vk;
@@ -712,9 +747,8 @@ bool PlaceFrame(double x, double y, double width, double height) {
   return true;
 }
 
-// Sets the driven window's content to |width| by |height| points, where it is.
-bool ResizeContent(double width, double height) {
-  HWND root = Driven();
+// Sets |root|'s content to |width| by |height| points, where it is.
+bool ResizeContent(HWND root, double width, double height) {
   if (!root) {
     return false;
   }
@@ -814,6 +848,63 @@ void ReportDone(long number) {
 bool g_ime_on = false;
 std::optional<std::string> g_composition;
 
+// Microsoft's Japanese IME, while ime ja is on. Its keys go through Windows' input queue, as a
+// keyboard's do, so the IME composes them itself, in the UI's fields and in a page alike: posted
+// ones would pass it by.
+bool g_japanese = false;
+// The keys that turn a Japanese IME on in hiragana (VK_DBE_HIRAGANA, which not every SDK's headers
+// name) and on or off (VK_KANJI, Alt+` on a US keyboard).
+constexpr UINT kImeHiragana = 0xF2;
+constexpr UINT kImeOnOff = VK_KANJI;
+
+// Microsoft's Japanese IME, where it's one of the user's input methods, which a runner gets from
+// the Language.Basic~~~ja-JP capability and its language list (check-windows.yml).
+HKL JapaneseLayout() {
+  HKL layouts[32];
+  const int count = GetKeyboardLayoutList(32, layouts);
+  for (int i = 0; i < count; ++i) {
+    if (LOWORD(reinterpret_cast<UINT_PTR>(layouts[i])) == 0x0411) {
+      return layouts[i];
+    }
+  }
+  return nullptr;
+}
+
+// |vk| pressed and let go through the input queue, to the window in front.
+void SendVirtualKey(UINT vk) {
+  INPUT inputs[2]{};
+  inputs[0].type = inputs[1].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = inputs[1].ki.wVk = static_cast<WORD>(vk);
+  inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+  SendInput(2, inputs, sizeof inputs[0]);
+}
+
+// Waits, up to |tries| times, for the keys SendInput queued to be handled: the driver's posted
+// messages come off the queue before input does.
+void WaitForKeys(int tries) {
+  if (tries > 0 && HIWORD(GetQueueStatus(QS_KEY))) {
+    g_steps.push_front({[tries] { WaitForKeys(tries - 1); }, 16});
+  }
+}
+
+// Adds |vk| through the input queue, once the input it reaches is ilo's.
+bool AddSentKey(UINT vk) {
+  g_steps.push_back({[vk] {
+    DWORD process = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &process);
+    if (process != GetCurrentProcessId()) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: drive: the IME's key went to another app's window\n");
+      return;
+    }
+    SendVirtualKey(vk);
+  }, 30});
+  g_steps.push_back({[] { WaitForKeys(100); }, 16});
+  // What the IME does with the key, as a composition it cancels, can come a moment after.
+  g_steps.push_back({[] {}, 150});
+  return true;
+}
+
 // Adds the step that handles |key| as drive.mm's scripted input method does, with the calls a
 // Japanese one makes in the UI's field with the keys: letters compose, space converts them all,
 // return commits and escape cancels. Windows' own input methods can't be scripted, and the runners
@@ -823,6 +914,12 @@ std::optional<std::string> g_composition;
 // as plain keys it would pass for a composition.
 int AddImeKey(const std::string& key, int modifiers) {
   const bool letter = key.size() == 1 && key[0] >= 'a' && key[0] <= 'z';
+  // Microsoft's Japanese IME takes the keys without a shortcut's modifiers, as a keyboard's.
+  if (g_japanese && !((modifiers | g_flags) & (kCtrl | kAlt))) {
+    int held = modifiers;
+    const UINT vk = VirtualKey(key, &held);
+    return vk && !held && AddSentKey(vk) ? 1 : 0;
+  }
   if (!g_ime_on || ((modifiers | g_flags) & (kCtrl | kAlt)) || !(g_composition || letter)) {
     return 0;
   }
@@ -1047,11 +1144,13 @@ bool Run(const std::string& line) {
       return true;
     }
     // In front of the app's other browser windows with the keyboard, as a click on it does, but
-    // never over another app's.
+    // never over another app's, nor over one Stay On Top keeps on top, which a click can't put
+    // under it and which SetWindowPos would take out of the topmost windows.
     HWND root = Driven();
     for (size_t index = 0; index < 64; index++) {
       HWND other = Browser(index);
-      if (other && other != root) {
+      const bool topmost = other && (GetWindowLongPtrW(other, GWL_EXSTYLE) & WS_EX_TOPMOST);
+      if (other && other != root && !topmost) {
         SetWindowPos(other, root, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
       }
     }
@@ -1200,7 +1299,8 @@ bool Run(const std::string& line) {
     const UINT button = action.rfind("right", 0) == 0    ? MK_RBUTTON
                         : action.rfind("middle", 0) == 0 ? MK_MBUTTON
                                                          : MK_LBUTTON;
-    AddClick(target, button, in_key ? 0 : Modifiers(words), action.rfind("double", 0) == 0);
+    AddClick(target, button, in_key ? 0 : PointerModifiers(words),
+             action.rfind("double", 0) == 0);
     return true;
   }
   if (action == "drag") {
@@ -1210,8 +1310,7 @@ bool Run(const std::string& line) {
       return false;
     }
     const Target to = At(from.hwnd, OnScreen(Driven(), x2, y2));
-    g_steps.push_back({[=] { Move(from, 0, 0); }});
-    g_steps.push_back({[=] { Press(from, MK_LBUTTON, 0, false); }});
+    AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Release(to, MK_LBUTTON, 0); }});
     return true;
@@ -1227,8 +1326,7 @@ bool Run(const std::string& line) {
     HWND key = GetActiveWindow();
     const Target half = At(from.hwnd, OnScreen(key, (x + x2) / 2, (y + y2) / 2));
     const Target to = At(from.hwnd, OnScreen(key, x2, y2));
-    g_steps.push_back({[=] { Move(from, 0, 0); }});
-    g_steps.push_back({[=] { Press(from, MK_LBUTTON, 0, false); }});
+    AddPress(from, MK_LBUTTON, 0);
     g_steps.push_back({[=] { Move(half, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Move(to, 0, MK_LBUTTON); }});
     g_steps.push_back({[=] { Release(to, MK_LBUTTON, 0); }});
@@ -1244,15 +1342,14 @@ bool Run(const std::string& line) {
     const std::string step = right ? action.substr(5) : action;
     const UINT button = right ? MK_RBUTTON : MK_LBUTTON;
     // The keys named after the point, such as ⌥ for a drag that drops a copy.
-    const int keys = Modifiers(words);
+    const int keys = PointerModifiers(words);
     if (step == "press") {
       Target target;
       if (!TargetAt(x, y, &target)) {
         return false;
       }
       g_pressed = target.hwnd;
-      g_steps.push_back({[=] { Move(target, 0, 0); }});
-      g_steps.push_back({[=] { Press(target, button, keys, false); }});
+      AddPress(target, button, keys);
       return true;
     }
     Target target;
@@ -1302,9 +1399,32 @@ bool Run(const std::string& line) {
     if (count < 1 || !TargetAt(x, y, &target)) {
       return false;
     }
-    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down.
-    const int across = action == "wheel" ? static_cast<int>(dx * WHEEL_DELTA)
-                                         : static_cast<int>(std::lround(dx * 1.2));
+    // Two fingers over GPUI's view reach it as Direct Manipulation hands it a precision
+    // touchpad's: a touch, its moves and its lift, which no wheel message carries (#1212). At
+    // drive.mm's pace, the lift <pause> ms after the last move. Over a page they stay wheel
+    // messages, which Chromium scrolls by.
+    if (action == "swipe" && IsGpui(target.hwnd)) {
+      const float at_x = static_cast<float>(target.client.x);
+      const float at_y = static_cast<float>(target.client.y);
+      const float across = static_cast<float>(dx);
+      const float along = static_cast<float>(dy);
+      g_steps.push_back({[=] { Move(target, 0, 0); }});
+      for (int event = 0; event < count; event++) {
+        g_steps.push_back(
+            {[=] {
+               HoldKeys(0);
+               browser_drive_fingers(target.hwnd, at_x, at_y, across, along, event == 0 ? 0 : 1);
+             },
+             event + 1 < count ? 8u : static_cast<UINT>(pause > 0 ? pause : 0)});
+      }
+      g_steps.push_back({[=] { browser_drive_fingers(target.hwnd, at_x, at_y, 0, 0, 2); }});
+      return true;
+    }
+    // A mouse's tick is a notch; a trackpad's points, content moving up for scrolling down. Across,
+    // drive.mm's dx moves the content right, where Windows' positive delta scrolls right, so
+    // content moves left: a positive dx goes back a Space, as on the Mac.
+    const int across = action == "wheel" ? static_cast<int>(-dx * WHEEL_DELTA)
+                                         : static_cast<int>(std::lround(-dx * 1.2));
     const int along = static_cast<int>(std::lround(-dy * 1.2));
     g_steps.push_back({[=] { Move(target, 0, 0); }});
     for (int event = 0; event < count; event++) {
@@ -1331,7 +1451,12 @@ bool Run(const std::string& line) {
   }
   if (action == "resize") {
     double width, height;
-    return words >> width >> height && ResizeContent(width, height);
+    return words >> width >> height && ResizeContent(Driven(), width, height);
+  }
+  // The window with the keyboard, such as Settings, as resize does the driven one.
+  if (action == "resizekey") {
+    double width, height;
+    return words >> width >> height && ResizeContent(GetActiveWindow(), width, height);
   }
   if (action == "place") {
     double x, y, width, height;
@@ -1547,8 +1672,23 @@ bool Run(const std::string& line) {
   if (action == "ime") {
     std::string state;
     words >> state;
-    if (state != "on" && state != "off") {
+    if (state != "on" && state != "off" && state != "ja") {
       return false;
+    }
+    if (state == "ja") {
+      // The UI thread's input method is the IME, on, in hiragana, as the user would pick it. Off,
+      // it stays the thread's, closed, which types as the keyboard does.
+      HKL japanese = JapaneseLayout();
+      if (!japanese) {
+        fprintf(stderr, "browser: drive: no Japanese IME\n");
+        return false;
+      }
+      g_steps.push_back({[japanese] { ActivateKeyboardLayout(japanese, 0); }});
+      g_japanese = AddSentKey(kImeHiragana);
+      return true;
+    }
+    if (std::exchange(g_japanese, false)) {
+      AddSentKey(kImeOnOff);
     }
     // As the commands before it have run, which the keys after it are read with.
     g_ime_on = state == "on";

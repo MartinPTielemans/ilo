@@ -53,7 +53,9 @@ pub(super) type SpaceSlides = HashMap<(Along, u64), (f32, Instant)>;
 impl Shell {
     /// The dot dragged, while GPUI still holds it.
     pub(super) fn space_drag(&self) -> Option<&SpaceDrag> {
-        self.space_drag.as_ref().filter(|drag| drag.ghost.upgrade().is_some())
+        self.space_drag
+            .as_ref()
+            .filter(|drag| drag.ghost.upgrade().is_some())
     }
 
     /// Whether `space`'s dot is being dragged, so its place dims.
@@ -71,14 +73,25 @@ impl Shell {
         grab: f32,
         cx: &mut gpui::App,
     ) -> Entity<SpaceGhost> {
-        let ghost = cx.new(|_| SpaceGhost { shell: shell.clone(), space, along, width });
+        let ghost = cx.new(|_| SpaceGhost {
+            shell: shell.clone(),
+            space,
+            along,
+            width,
+        });
         let weak = ghost.downgrade();
         shell
             .update(cx, |shell, cx| {
                 // check.sh waits for this line.
                 log!("browser: drag space {space}");
-                shell.space_drag =
-                    Some(SpaceDrag { space, along, ghost: weak, grab, width, gap: None });
+                shell.space_drag = Some(SpaceDrag {
+                    space,
+                    along,
+                    ghost: weak,
+                    grab,
+                    width,
+                    gap: None,
+                });
                 cx.notify();
             })
             .ok();
@@ -119,9 +132,10 @@ impl Shell {
                 let left = (span - cells.iter().sum::<f32>()) / 2.;
                 (cells, left)
             }
-            Along::Cards => {
-                (vec![CARD_WIDTH + CARD_GAP; self.spaces.len()], SPACES_LEFT - CARD_GAP / 2.)
-            }
+            Along::Cards => (
+                vec![CARD_WIDTH + CARD_GAP; self.spaces.len()],
+                SPACES_LEFT - CARD_GAP / 2.,
+            ),
         }
     }
 
@@ -134,7 +148,10 @@ impl Shell {
         bounds: Bounds<Pixels>,
     ) -> Option<usize> {
         let drag = self.space_drag().filter(|drag| drag.along == along)?;
-        let from = self.spaces.iter().position(|space| space.id == drag.space)?;
+        let from = self
+            .spaces
+            .iter()
+            .position(|space| space.id == drag.space)?;
         let (x, over) = self.along_at(along, position, bounds);
         let (cells, left) = self.cells(along);
         over.then(|| gap_at(&cells, left, from, x))
@@ -186,7 +203,11 @@ impl Shell {
         // check.sh waits for this line.
         log!("browser: dropped space {space} after {after}");
         if let Some(back) = self.move_space(space, after, cx) {
-            self.keep(What::MOVE_SPACE, Some(Edit::MoveSpace { space, after: back }), cx);
+            self.keep(
+                What::MOVE_SPACE,
+                Some(Edit::MoveSpace { space, after: back }),
+                cx,
+            );
         } else {
             self.space_landing = None;
         }
@@ -205,8 +226,12 @@ impl Shell {
     /// The Space a dot dragged from its place goes after for `gap` among the others: none before
     /// the first, and None for the gap it came from.
     fn after_gap(&self, space: u64, gap: usize) -> Option<u64> {
-        let others: Vec<u64> =
-            self.spaces.iter().map(|each| each.id).filter(|&id| id != space).collect();
+        let others: Vec<u64> = self
+            .spaces
+            .iter()
+            .map(|each| each.id)
+            .filter(|&id| id != space)
+            .collect();
         let from = self.spaces.iter().position(|each| each.id == space)?;
         if gap == from || gap > others.len() {
             return None;
@@ -223,7 +248,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<u64> {
         let from = self.spaces.iter().position(|each| each.id == space)?;
-        let before = if from == 0 { 0 } else { self.spaces[from - 1].id };
+        let before = if from == 0 {
+            0
+        } else {
+            self.spaces[from - 1].id
+        };
         let gone = after != 0 && !self.spaces.iter().any(|each| each.id == after);
         if after == before || after == space || gone {
             return None;
@@ -270,16 +299,21 @@ impl Shell {
                 },
             };
             if from != at {
-                self.space_slides.insert(key, (from - at + self.space_slide(key.0, key.1), now));
+                self.space_slides
+                    .insert(key, (from - at + self.space_slide(key.0, key.1), now));
             }
         }
     }
 
     /// How far right of its place `space`'s dot or card is drawn while it glides there.
     pub(super) fn space_slide(&self, along: Along, space: u64) -> f32 {
-        self.space_slides.get(&(along, space)).map_or(0., |&(from, start)| {
-            Curve::Slide.at(start.elapsed().as_secs_f32()).map_or(0., |done| from * (1. - done))
-        })
+        self.space_slides
+            .get(&(along, space))
+            .map_or(0., |&(from, start)| {
+                Curve::Slide
+                    .at(start.elapsed().as_secs_f32())
+                    .map_or(0., |done| from * (1. - done))
+            })
     }
 
     /// Drops the glides that are done, and keeps frames coming for the rest.
@@ -297,7 +331,10 @@ impl Shell {
     /// in from a plate's left and its end as far above their foot, from the section's left.
     pub(super) fn space_drop_line(&self, along: Along) -> Option<AnyElement> {
         let drag = self.space_drag().filter(|drag| drag.along == along)?;
-        let from = self.spaces.iter().position(|space| space.id == drag.space)?;
+        let from = self
+            .spaces
+            .iter()
+            .position(|space| space.id == drag.space)?;
         let (cells, left) = self.cells(along);
         let x = line_x(&cells, left, from, drag.gap?)?;
         Some(match along {
@@ -348,7 +385,9 @@ impl Shell {
                     if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
                         let position = event.position;
                         shell
-                            .update(cx, |shell, cx| shell.drop_space(along, position, bounds, cx))
+                            .update(cx, |shell, cx| {
+                                shell.drop_space(along, position, bounds, cx)
+                            })
                             .ok();
                     }
                 });
@@ -397,7 +436,10 @@ pub(super) struct SpaceGhost {
 impl Render for SpaceGhost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (space, width) = (self.space, self.width);
-        let shell = self.shell.upgrade().filter(|shell| shell.read(cx).space_dragged(space));
+        let shell = self
+            .shell
+            .upgrade()
+            .filter(|shell| shell.read(cx).space_dragged(space));
         let ghost = shell.and_then(|shell| match self.along {
             Along::Switcher => shell.read(cx).dot_ghost(space, width),
             Along::Cards => shell.update(cx, |shell, cx| shell.space_card_ghost(space, cx)),

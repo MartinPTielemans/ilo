@@ -22,13 +22,19 @@ impl Sites {
     }
 
     pub fn to_text(&self) -> String {
-        self.sites.iter().map(|(host, profile)| format!("{host}\t{profile}\n")).collect()
+        self.sites
+            .iter()
+            .map(|(host, profile)| format!("{host}\t{profile}\n"))
+            .collect()
     }
 
     /// The profile picked for `url`'s site, if one was.
     pub fn profile(&self, url: &str) -> Option<&str> {
         let site = site(url)?;
-        self.sites.iter().find(|(host, _)| *host == site).map(|(_, profile)| profile.as_str())
+        self.sites
+            .iter()
+            .find(|(host, _)| *host == site)
+            .map(|(_, profile)| profile.as_str())
     }
 
     /// Keeps `profile` as the one `url`'s site opens in, and says whether that changed anything.
@@ -62,7 +68,8 @@ impl Sites {
     /// Forgets the sites of profiles not in `names`, which were deleted.
     pub fn keep_profiles(&mut self, names: &[&str]) -> bool {
         let before = self.sites.len();
-        self.sites.retain(|(_, profile)| names.contains(&profile.as_str()));
+        self.sites
+            .retain(|(_, profile)| names.contains(&profile.as_str()));
         self.sites.len() != before
     }
 }
@@ -74,7 +81,9 @@ pub fn site(url: &str) -> Option<String> {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     // A port follows the last colon, but for an IPv6 address's own, inside its brackets.
     let host = match host.rfind(':') {
         Some(at) if !host[at..].contains(']') => &host[..at],
@@ -91,8 +100,14 @@ mod tests {
 
     #[test]
     fn a_site_is_its_host_without_www() {
-        assert_eq!(site("https://www.Example.com/a?b#c").as_deref(), Some("example.com"));
-        assert_eq!(site("http://user@mail.example.com:8080/").as_deref(), Some("mail.example.com"));
+        assert_eq!(
+            site("https://www.Example.com/a?b#c").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(
+            site("http://user@mail.example.com:8080/").as_deref(),
+            Some("mail.example.com")
+        );
         assert_eq!(site("https://[::1]:443/").as_deref(), Some("[::1]"));
         assert_eq!(site("file:///tmp/a.html"), None);
         assert_eq!(site("about:blank"), None);

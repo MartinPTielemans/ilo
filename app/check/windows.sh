@@ -1,5 +1,7 @@
-# ⌘N opens another window on the same Spaces, showing the key window's Space with no page, whose
-# card shows its one line, and a click on the card with ⌘T's bar open only closes the bar. Settings
+# Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
+# another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
+# command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
+# bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
 # The Spaces menu acts on the window in front. A click on a row whose page another window shows
@@ -77,6 +79,7 @@ second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $second shows 0\$" "the new window showed a page"
 none_since "^browser: window $first shows" || fail "⌘N changed what the first window shows"
 shown_first=$(grep -c "^browser: window $first shows" "$log")
+new_window_bar "$out/new-window-bar.png"
 send window 2
 ../tools/window-screenshot.sh "$pid" "$out/windows-new.png" all || fail "no window to capture"
 # The new window's card shows its mark and line, and its URL field its placeholder, once the fade
@@ -334,6 +337,7 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for Safari's engine's page"
   fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $fourth shows 0\$" "the window for Safari's engine's page showed a page"
+  new_window_bar
   send window 4
   send click $(row 0)
   expect "^browser: window $fourth shows $d\$" \
@@ -458,6 +462,7 @@ first_size=$(grep '^browser: layout content ' "$log" | tail -1 | sed 's/^browser
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the moves"
 fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 driven_fourth=$(grep -c '^browser: window opened ' "$log")
 rm -f "$out/handover.txt"
@@ -497,6 +502,29 @@ awk -F'|' '
     }
   }' "$out/handover.txt" > "$out/handover-summary.txt"
 cat "$out/handover-summary.txt"
+
+# Stay On Top keeps the first window over the others, the fourth too once it's in front, and the
+# command bar's Don't Stay On Top lets it go back among them (Arc's Window › Stay On Top). The
+# command bar, an overlay, still shows over it.
+send window 1
+bar_command stay-on-top "Stay On Top" "stay on top"
+expect '^browser: stays on top 1$' "Stay On Top didn't keep the window on top"
+send window $driven_fourth
+send order
+expect "^browser: order window 1 window $driven_fourth" \
+  "the fourth window in front came over the one on top: $(grep '^browser: order' "$log" | tail -1)"
+send window 1
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar over the window on top"
+../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+bar_command stay-on-top "Don't Stay On Top" "stay on top"
+expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
+send window $driven_fourth
+send order
+expect "^browser: order window $driven_fourth window 1" \
+  "the fourth window in front didn't come over the one no longer on top: $(grep '^browser: order' "$log" | tail -1)"
 send window $driven_fourth
 send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"

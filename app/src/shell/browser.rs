@@ -45,8 +45,14 @@ pub trait Browser {
     /// Opens tabs loading `urls`, in their order, at `index` in the Space shown's Today tabs, or
     /// in its pinned tabs, inside `folder` if it isn't 0, counted as `move_tab` counts. Shows the
     /// first and returns it, or 0 if none opened.
-    fn open_at(&self, urls: &[String], pinned: bool, folder: u64, index: usize, cx: &mut App)
-    -> u64;
+    fn open_at(
+        &self,
+        urls: &[String],
+        pinned: bool,
+        folder: u64,
+        index: usize,
+        cx: &mut App,
+    ) -> u64;
     /// Opens tabs for `urls` where `open_at` would, each loading once it's shown, and shows none,
     /// as a folder from the desktop's files come in.
     fn open_behind(&self, urls: &[String], pinned: bool, folder: u64, index: usize, cx: &mut App);
@@ -88,6 +94,12 @@ pub trait Browser {
     /// Shows the window over the page that draws `Shell::over_page`, drawing it again, or hides
     /// it.
     fn show_drop_targets(&self, shown: bool, cx: &mut App);
+    /// Where the pointer is, in the window's content, wherever it is on screen: over the page, as
+    /// the UI hears no move there, or outside the window. None where the host doesn't say.
+    fn pointer(&self, cx: &mut App) -> Option<Point<Pixels>>;
+    /// Whether what the window over the page draws blends with the page under it, as motion
+    /// across it needs: not on X11 with no compositor, which draws its every pixel opaque.
+    fn over_page_blends(&self) -> bool;
     /// Loads a pinned tab's pinned URL, unless it's there already.
     fn back_to_pinned_url(&self, tab: u64, cx: &mut App);
     /// Mutes `tab`, or unmutes it.
@@ -285,6 +297,13 @@ pub trait Browser {
     /// Opens Chrome's Clear browsing data dialog in a tab of the Space shown, for its profile. The
     /// user's, as site_search_settings is.
     fn clear_browsing_data(&self, cx: &mut App);
+    /// The command bar picks kept for `profile`, as `usage::Usage` writes them, on this computer
+    /// only: never synced, sent or put in a crash report. The user's, so no agent path reads them.
+    fn bar_picks(&self, _profile: u64) -> String {
+        String::new()
+    }
+    /// Keeps `text` as `profile`'s command bar picks, as `bar_picks` reads them.
+    fn set_bar_picks(&self, _profile: u64, _text: &str) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;
@@ -404,8 +423,17 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
     fn press_window_button(&self, button: WindowButton, cx: &mut App);
+    /// Keeps the window over other apps' windows, its overlays still over it, or lets it go back
+    /// among them.
+    fn set_on_top(&self, on: bool, cx: &mut App);
+    /// Whether the window can stay on top: not under Wayland, which gives no client a way.
+    fn can_stay_on_top(&self) -> bool {
+        true
+    }
     /// The window's own buttons as the system draws them, for the copies the UI draws in their
     /// place, once it can say: the Mac's. Elsewhere the UI draws the only ones, at
     /// `WindowButtonGeometry::default`.
@@ -489,6 +517,21 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// Shows `text` in the toast with the capture toast's Share button after it, which runs `share`
+    /// with where in the toast it was pressed, for `time` and for as long as the pointer is over it.
+    /// Where there's no share sheet it's the plain toast.
+    fn toast_share(
+        &self,
+        text: &str,
+        _share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        time: Duration,
+        cx: &mut App,
+    ) {
+        self.toast(text, None, time, cx);
+    }
+    /// Opens the system's share sheet for the page at `url`, titled `title`, hanging from `at` in
+    /// the toast, where its Share button was pressed.
+    fn share_from_toast(&self, _url: &str, _title: &str, _at: Point<Pixels>, _cx: &mut App) {}
     /// The user closed the tab's protected-media note: the profile keeps it from showing again at
     /// the site of its page, and Site Controls offer Safari's engine there instead.
     fn close_media_note(&self, _tab: u64, _cx: &mut App) {}
@@ -517,6 +560,15 @@ pub trait Browser {
     fn set_edit_titles(&self, undo: Option<&str>, redo: Option<&str>, cx: &mut App);
     /// Shows the note on how to leave full screen in the toast, or takes it away if it shows.
     fn full_screen_note(&self, shown: bool, cx: &mut App);
+    /// Puts the window full screen of its own, as the green button or the window manager's key
+    /// does, unless it is already, which it returns: AppKit takes a window opened from a
+    /// full-screen one there itself.
+    fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
+    /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
+    fn on_active_space(&self) -> bool {
+        true
+    }
     /// Shows the note that `tab`'s page stopped answering in the toast, with Wait and Reload, until
     /// one is pressed or it's taken away (`shown` false).
     fn hang_note(&self, tab: u64, shown: bool, cx: &mut App);
@@ -537,14 +589,20 @@ pub trait Browser {
     /// if it shows. `None` ends it.
     fn link_target(
         &self,
-        plate: Option<(crate::link_target::Plate, Bounds<Pixels>, crate::link_target::Side)>,
+        plate: Option<(
+            crate::link_target::Plate,
+            Bounds<Pixels>,
+            crate::link_target::Side,
+        )>,
         cx: &mut App,
     );
     /// Opens the command bar for a new tab or on `editing`'s URL, with `tabs` to list before
-    /// anything is typed: over `field`, the URL field's box in the window, else centred over it.
+    /// anything is typed, and the pages `shown`, whose rows go last: over `field`, the URL field's
+    /// box in the window, else centred over it.
     fn command_bar(
         &self,
         editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
         tabs: Vec<BarTab>,
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
@@ -558,12 +616,7 @@ pub trait Browser {
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
-    fn command_bar_follows(
-        &self,
-        tabs: Vec<BarTab>,
-        open_tabs: Vec<BarTab>,
-        cx: &mut App,
-    ) -> bool;
+    fn command_bar_follows(&self, tabs: Vec<BarTab>, open_tabs: Vec<BarTab>, cx: &mut App) -> bool;
     /// Opens the command bar over `pane`, a new pane in the card at `card`, for a page to show
     /// there in a split view with `with`.
     fn split_bar(&self, with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App);
@@ -626,25 +679,11 @@ pub trait Browser {
     fn import(&self, cx: &mut App);
     /// Opens the Settings window on its Passwords tab, with the logins of `space`'s profile.
     fn passwords(&self, space: u64, cx: &mut App);
-    /// Opens the Settings window on its Agents tab, which lists what each agent did.
-    fn agent_activity(&self, cx: &mut App);
-    /// What the user let the agent whose Space is `space` do, for its Space's menu to take back.
-    fn agent_permissions(&self, space: u64, cx: &App) -> AgentGrants;
-    /// Forgets the user's answer for good to the agent whose Space is `space` on `site`, or on
-    /// every site with None.
-    fn revoke_agent(&self, space: u64, site: Option<SharedString>, cx: &mut App);
-    /// Disconnects the agent whose Space is `space`, whose token then stops working.
-    fn disconnect_agent(&self, space: u64, cx: &mut App);
-    /// The user takes back each tab of the agent's Space `space` they don't hold, as Take Over
-    /// takes one.
-    fn take_back_agent_tabs(&self, space: u64, cx: &mut App);
     /// The user takes over `tab`, where the agent with the id `agent` is at work: it may not act
     /// there until they hand it back.
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
     /// The user hands `tab` back to its agent.
     fn hand_back(&self, tab: u64, cx: &mut App);
-    /// The user gives the agent whose Space is `space` their `tab`, which moves there.
-    fn give_to_agent(&self, tab: u64, space: u64, cx: &mut App);
     /// The user does `action` to the task whose agent is `agent` (Agent task).
     fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
@@ -732,7 +771,11 @@ impl Default for WindowButtonGeometry {
     /// UI's own on Linux and Windows.
     fn default() -> Self {
         let centres = super::WINDOW_BUTTONS.map(|(x, _)| x);
-        Self { centres, y: WINDOW_BUTTON_Y, diameter: WINDOW_BUTTON_SIZE }
+        Self {
+            centres,
+            y: WINDOW_BUTTON_Y,
+            diameter: WINDOW_BUTTON_SIZE,
+        }
     }
 }
 
@@ -814,17 +857,6 @@ pub enum Trouble {
 
 /// A split view: its tabs in their order, which sit together in their list as one row, shown side
 /// by side, else stacked top to bottom.
-/// What an agent's Space's menu lists, to take back (agent_permissions).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AgentGrants {
-    /// The sites where the user answered the agent for good, by name: Always Allow (true) or
-    /// Never (false).
-    pub sites: Vec<(SharedString, bool)>,
-    pub connected: bool,
-    /// Whether the Space has a tab the user doesn't hold.
-    pub tabs: bool,
-}
-
 #[derive(Clone, Default)]
 pub struct Split {
     pub tabs: Vec<u64>,

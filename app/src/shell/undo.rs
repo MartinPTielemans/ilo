@@ -129,7 +129,10 @@ pub(super) enum Value {
     Text(String),
     /// A Space's colour, or none for the system's accent, and its theme as `Theme` writes it, or
     /// empty for none.
-    Color { color: Option<u32>, theme: String },
+    Color {
+        color: Option<u32>,
+        theme: String,
+    },
 }
 
 /// A step. Applying one does it and returns the step that undoes it, or None if it can't be done
@@ -140,12 +143,18 @@ pub(super) enum Edit {
     /// one that was shown when they closed, if it's among them. They're in the reverse of the
     /// order they closed in: the core puts each back where it was then, and a split's pane only
     /// beside one still open as it closed, which the one reopened before it has become (#1361).
-    Reopen { tabs: Vec<u64>, show: Option<u64> },
+    Reopen {
+        tabs: Vec<u64>,
+        show: Option<u64>,
+    },
     /// Closes Today tabs, last first, so the Reopen it returns has them in that order.
     Close(Vec<u64>),
     /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
     /// went back to, and pins the row again at `spot`.
-    Repin { tabs: Vec<(u64, String)>, spot: Spot },
+    Repin {
+        tabs: Vec<(u64, String)>,
+        spot: Spot,
+    },
     /// Removes a pinned row from the pinned tabs, as its remove button does.
     Remove(u64),
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
@@ -183,9 +192,15 @@ pub(super) enum Edit {
     },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
-    Unsplit { tab: u64, back: Box<Edit> },
+    Unsplit {
+        tab: u64,
+        back: Box<Edit>,
+    },
     /// Stacks the pages of a tab's split view top to bottom, or puts them side by side.
-    Stack { tab: u64, stacked: bool },
+    Stack {
+        tab: u64,
+        stacked: bool,
+    },
     /// Gives a name, an icon or a colour back.
     Set(Prop, Value),
     /// Brings back the tabs the window's Clear `clear` closed in `space`. Each of these three asks
@@ -312,7 +327,10 @@ impl Edit {
                 }
             }
             Edit::ReopenPreview(closed) | Edit::ClosePreview(closed) => id(&mut closed.over),
-            Edit::RestoreTask(_) | Edit::DismissTask(_) | Edit::UndeleteTask(_) | Edit::DeleteTask(_) => {}
+            Edit::RestoreTask(_)
+            | Edit::DismissTask(_)
+            | Edit::UndeleteTask(_)
+            | Edit::DeleteTask(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
@@ -350,19 +368,27 @@ impl Edit {
     fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
             Edit::RestoreTask(agent) => {
-                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Restore, cx);
+                shell
+                    .browser
+                    .task(agent.clone(), crate::agents::task::TaskAction::Restore, cx);
                 Some(Edit::DismissTask(agent))
             }
             Edit::DismissTask(agent) => {
-                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
+                shell
+                    .browser
+                    .task(agent.clone(), crate::agents::task::TaskAction::Dismiss, cx);
                 Some(Edit::RestoreTask(agent))
             }
             Edit::UndeleteTask(agent) => {
-                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Undelete, cx);
+                shell
+                    .browser
+                    .task(agent.clone(), crate::agents::task::TaskAction::Undelete, cx);
                 Some(Edit::DeleteTask(agent))
             }
             Edit::DeleteTask(agent) => {
-                shell.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+                shell
+                    .browser
+                    .task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
                 Some(Edit::UndeleteTask(agent))
             }
             Edit::Reopen { tabs: closed, show } => {
@@ -450,7 +476,11 @@ impl Edit {
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
             }
-            Edit::MoveSplit { tabs, stacked, spot } => {
+            Edit::MoveSplit {
+                tabs,
+                stacked,
+                spot,
+            } => {
                 let first = *tabs.first()?;
                 let now = shell.spot_of(first)?;
                 if now.space != spot.space {
@@ -463,7 +493,11 @@ impl Edit {
                     At::Today(index) => shell.browser.move_tab(first, false, 0, index, cx),
                     At::Favorite(_) => {}
                 }
-                Some(Edit::MoveSplit { tabs, stacked, spot: now })
+                Some(Edit::MoveSplit {
+                    tabs,
+                    stacked,
+                    spot: now,
+                })
             }
             Edit::Separate(tab) => {
                 let join = shell.join_of(tab)?;
@@ -576,9 +610,9 @@ impl Edit {
                 let back = std::mem::replace(&mut shell.history.done, done);
                 (!back.is_empty()).then_some(Edit::Many(back))
             }
-            Edit::ReopenPreview(closed) => {
-                shell.reopen_preview(&closed, "undo", cx).then_some(Edit::ClosePreview(closed))
-            }
+            Edit::ReopenPreview(closed) => shell
+                .reopen_preview(&closed, "undo", cx)
+                .then_some(Edit::ClosePreview(closed)),
             Edit::ClosePreview(closed) => (shell.browser.close_preview(closed.over, cx))
                 .then_some(Edit::ReopenPreview(closed)),
         }
@@ -600,7 +634,10 @@ impl Shell {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
-        if matches!(edit, Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }) {
+        if matches!(
+            edit,
+            Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }
+        ) {
             self.closed_preview = None;
             self.closed_pinned = None;
             self.closed_task = None;
@@ -715,8 +752,12 @@ impl Shell {
         }
         self.closed_preview = None;
         // check.sh waits for this line.
-        log!("browser: link preview reopened over {} via {via}", closed.over);
-        self.browser.open_preview(closed.over, closed.url.clone(), closed.link, page, cx);
+        log!(
+            "browser: link preview reopened over {} via {via}",
+            closed.over
+        );
+        self.browser
+            .open_preview(closed.over, closed.url.clone(), closed.link, page, cx);
         true
     }
 
@@ -751,12 +792,17 @@ impl Shell {
     /// Brings the dismissed task `agent` back, by ⇧⌘T or from the Archive, which takes its
     /// dismissal off the history, as it has nothing left to undo.
     pub(super) fn bring_back_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
-        if self.closed_task.as_ref().is_some_and(|(closed, _)| *closed == agent) {
+        if self
+            .closed_task
+            .as_ref()
+            .is_some_and(|(closed, _)| *closed == agent)
+        {
             self.closed_task = None;
         }
         let restore = Edit::RestoreTask(agent.clone());
         self.history.undo.retain(|entry| entry.edit != restore);
-        self.browser.task(agent, crate::agents::task::TaskAction::Restore, cx);
+        self.browser
+            .task(agent, crate::agents::task::TaskAction::Restore, cx);
         self.send_edit_titles(false, cx);
     }
 
@@ -786,13 +832,48 @@ impl Shell {
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);
+        if tabs.is_empty() {
+            self.show_the_tab_before(tab, split, cx);
+        }
         self.browser.close(tab, split, cx);
         let what = if tabs.len() > 1 {
             What::CLOSE_TABS
         } else {
             What::CLOSE_TAB
         };
-        self.keep(what, (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }), cx);
+        self.keep(
+            what,
+            (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }),
+            cx,
+        );
+    }
+
+    /// Close and Keep Pinned on the tab shown, a pinned tab or a favorite, shows the tab shown
+    /// before it that's still open in this Space, and rings its row, as Arc 1.170 does: a Today
+    /// tab, or a pinned tab or favorite with its page, so it loads no other. Shown first, so the
+    /// core has no tab of its own to pick, and its pick, the top Today tab, stands when there's
+    /// none. The list glides to the row, as it does to any tab shown.
+    fn show_the_tab_before(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
+        let going = if split { self.panes(tab) } else { vec![tab] };
+        let Some(space) = self
+            .shown_space()
+            .filter(|_| self.shown_among(&going).is_some())
+        else {
+            return;
+        };
+        let open = |other: &u64| {
+            space.today.contains(other)
+                || ((space.pinned.contains(other) || self.favorites.contains(other))
+                    && !self.page(*other).unloaded)
+        };
+        let before = self
+            .recent
+            .iter()
+            .find(|other| !going.contains(other) && open(other));
+        if let Some(&before) = before {
+            self.select(before, cx);
+            self.ring_for_attention(before, cx);
+        }
     }
 
     /// Removes the pinned row whose first tab is `tab` from the pinned tabs, with its split, as
@@ -819,7 +900,9 @@ impl Shell {
         if self.is_folder_anywhere(tab) {
             return None;
         }
-        let spot = self.spot_of(tab).filter(|spot| matches!(spot.at, At::Pinned { .. }))?;
+        let spot = self
+            .spot_of(tab)
+            .filter(|spot| matches!(spot.at, At::Pinned { .. }))?;
         let space = self.spaces.iter().find(|space| space.id == spot.space)?;
         let tabs = (space.panes(tab).into_iter())
             .map(|pane| (pane, self.browser.pinned_url(pane)))
@@ -927,7 +1010,10 @@ impl Shell {
         }
         // The core moves a pinned tab pinned, into another profile's Space too, and pins a split
         // whole.
-        let pinned = matches!(self.spot_of(tab).map(|spot| spot.at), Some(At::Pinned { .. }));
+        let pinned = matches!(
+            self.spot_of(tab).map(|spot| spot.at),
+            Some(At::Pinned { .. })
+        );
         if pin && !pinned {
             self.browser.set_pinned(tab, true, cx);
         }
@@ -941,7 +1027,11 @@ impl Shell {
                 return self.keep(What::MOVE_TO_SPACE, None, cx);
             }
             let spot = self.spot_of(tab);
-            let before = spot.map(|spot| Edit::MoveSplit { tabs: tabs.clone(), stacked, spot });
+            let before = spot.map(|spot| Edit::MoveSplit {
+                tabs: tabs.clone(),
+                stacked,
+                spot,
+            });
             self.move_split(&tabs, stacked, space, cx);
             return self.keep(What::MOVE_TO_SPACE, before, cx);
         }
@@ -1020,7 +1110,11 @@ impl Shell {
         let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
         let back = if kept { None } else { self.put_back(tab) };
         // The copies show as they open, so the favorite's last, which the window then shows.
-        let joining = if kept { self.browser.duplicate(tab, cx) } else { tab };
+        let joining = if kept {
+            self.browser.duplicate(tab, cx)
+        } else {
+            tab
+        };
         let copy = self.browser.duplicate(favorite, cx);
         if joining == 0 || copy == 0 {
             return;
@@ -1031,7 +1125,11 @@ impl Shell {
         }
         // The copies close first, the favorite's last so the joining one's goes back beside it on
         // Redo, and then the Today tab, alone again, goes back to its place.
-        let close = Edit::Close(if kept { vec![copy, joining] } else { vec![copy] });
+        let close = Edit::Close(if kept {
+            vec![copy, joining]
+        } else {
+            vec![copy]
+        });
         let undo = match back {
             Some(back) => Edit::Many(vec![close, back]),
             None => close,
@@ -1079,9 +1177,15 @@ impl Shell {
 
     /// Stacks the pages of `tab`'s split view top to bottom, or puts them side by side.
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
-        let undo = self.split_of(tab).map(|(_, now)| Edit::Stack { tab, stacked: now });
+        let undo = self
+            .split_of(tab)
+            .map(|(_, now)| Edit::Stack { tab, stacked: now });
         self.browser.set_split_stacked(tab, stacked, cx);
-        let what = if stacked { What::CONVERT_VERTICAL } else { What::CONVERT_HORIZONTAL };
+        let what = if stacked {
+            What::CONVERT_VERTICAL
+        } else {
+            What::CONVERT_HORIZONTAL
+        };
         self.keep(what, undo, cx);
     }
 
@@ -1121,15 +1225,27 @@ impl Shell {
     pub(super) fn empty_archive(&mut self, cx: &mut Context<Self>) {
         let removal = self.browser.clear_archive(cx);
         let tabs = (removal != 0).then_some(Edit::UndoArchive { removal, id: None });
-        let tasks: Vec<SharedString> = self.archived_tasks.iter().map(|task| task.agent.clone()).collect();
-        if self.closed_task.as_ref().is_some_and(|(closed, _)| tasks.contains(closed)) {
+        let tasks: Vec<SharedString> = self
+            .archived_tasks
+            .iter()
+            .map(|task| task.agent.clone())
+            .collect();
+        if self
+            .closed_task
+            .as_ref()
+            .is_some_and(|(closed, _)| tasks.contains(closed))
+        {
             self.closed_task = None;
         }
         for agent in &tasks {
             log!("browser: remove archived task {agent}");
-            self.browser.task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
+            self.browser
+                .task(agent.clone(), crate::agents::task::TaskAction::Delete, cx);
         }
-        let mut edits: Vec<Edit> = tabs.into_iter().chain(tasks.into_iter().map(Edit::UndeleteTask)).collect();
+        let mut edits: Vec<Edit> = tabs
+            .into_iter()
+            .chain(tasks.into_iter().map(Edit::UndeleteTask))
+            .collect();
         let edit = match edits.len() {
             0 | 1 => edits.pop(),
             _ => Some(Edit::Many(edits)),
@@ -1273,7 +1389,9 @@ impl Shell {
     /// is: the split it's in, else its row. None where the core won't join them, as `with`'s split
     /// is full or has it.
     fn unsplit_of(&self, tab: u64, with: u64) -> Option<Edit> {
-        let panes = self.split_of(with).map_or_else(|| vec![with], |(panes, _)| panes);
+        let panes = self
+            .split_of(with)
+            .map_or_else(|| vec![with], |(panes, _)| panes);
         if panes.contains(&tab) || panes.len() >= super::MAX_PANES {
             return None;
         }
@@ -1316,15 +1434,23 @@ impl Shell {
                 Value::Text(space.folders.folders.get(&folder)?.0.to_string())
             }
             Prop::FolderIcon(folder) => {
-                self.spaces.iter().any(|space| space.is_folder(folder)).then_some(())?;
+                self.spaces
+                    .iter()
+                    .any(|space| space.is_folder(folder))
+                    .then_some(())?;
                 Value::Text(self.folder_icon(folder).to_string())
             }
             Prop::SpaceName(id) => Value::Text(space(id)?.name.to_string()),
             Prop::SpaceIcon(id) => Value::Text(space(id)?.icon.to_string()),
             Prop::SpaceColor(id) => {
                 let space = space(id)?;
-                let theme = space.theme.map_or_else(String::new, |theme| theme.to_text());
-                Value::Color { color: space.color, theme }
+                let theme = space
+                    .theme
+                    .map_or_else(String::new, |theme| theme.to_text());
+                Value::Color {
+                    color: space.color,
+                    theme,
+                }
             }
         })
     }
@@ -1345,9 +1471,10 @@ impl Shell {
             (Prop::SpaceIcon(space), Value::Text(icon)) => browser.set_space_icon(space, icon, cx),
             (Prop::SpaceColor(space), Value::Color { color, theme }) => {
                 // The theme being made gives way to the one ⌘Z gives back.
-                if self.theme_preview.is_some_and(|(previewed, made)| {
-                    previewed == space && made.to_text() != *theme
-                }) {
+                if self
+                    .theme_preview
+                    .is_some_and(|(previewed, made)| previewed == space && made.to_text() != *theme)
+                {
                     self.theme_preview = None;
                 }
                 browser.set_space_theme(space, theme, cx);

@@ -19,6 +19,10 @@ impl Host for Recorder {
         self.asked.borrow_mut().push("check");
     }
 
+    fn show(&self, _: &mut App) {
+        self.asked.borrow_mut().push("show");
+    }
+
     fn restart(&self, _: &mut App) {
         self.asked.borrow_mut().push("restart");
     }
@@ -56,10 +60,19 @@ impl Shown<'_> {
 
     /// What the row says, and its button's title, as drawn.
     fn reads(&mut self) -> (Option<String>, Option<&'static str>) {
-        let drawn = self.row.read_with(self.cx, |row, _| row.button_bounds().is_some());
+        let drawn = self
+            .row
+            .read_with(self.cx, |row, _| row.button_bounds().is_some());
         let (said, action) = self.cx.update(|_, cx| words(updater(cx), &stage(cx)));
-        assert_eq!(drawn, action.is_some(), "the button drawn isn't the one offered");
-        (said.map(|said| said.to_string()), action.map(|(_, title)| title))
+        assert_eq!(
+            drawn,
+            action.is_some(),
+            "the button drawn isn't the one offered"
+        );
+        (
+            said.map(|said| said.to_string()),
+            action.map(|(_, title)| title),
+        )
     }
 
     /// Clicks the row's button, which must be drawn.
@@ -102,7 +115,10 @@ fn up_to_date_says_so_and_checks_again(cx: &mut TestAppContext) {
     about.says(Stage::Checking);
     about.says(Stage::Current);
     let up_to_date = concat!(env!("APP_NAME"), " is up to date");
-    assert_eq!(about.reads(), (Some(up_to_date.into()), Some("Check for Updates")));
+    assert_eq!(
+        about.reads(),
+        (Some(up_to_date.into()), Some("Check for Updates"))
+    );
     about.click();
     assert_eq!(about.asked(), ["check"]);
 }
@@ -116,8 +132,30 @@ fn downloading_names_the_version(cx: &mut TestAppContext) {
     assert_eq!(about.reads(), (Some("Downloading 0.1.1…".into()), None));
     // Flatpak's portal doesn't name it.
     about.says(Stage::Downloading(None));
-    assert_eq!(about.reads(), (Some("Downloading the update…".into()), None));
+    assert_eq!(
+        about.reads(),
+        (Some("Downloading the update…".into()), None)
+    );
     assert!(about.asked().is_empty());
+}
+
+/// An update the updater won't download by itself, as Sparkle leaves one for the user to say,
+/// offers Show Update, which asks the updater to show it in its own window. A failure after it is
+/// the update's.
+#[gpui::test]
+fn an_update_the_updater_waits_on_offers_its_window(cx: &mut TestAppContext) {
+    let mut about = shown(Updater::Own, cx);
+    about.says(Stage::Found(Some("0.1.5".into())));
+    about.says(Stage::Available(Some("0.1.5".into())));
+    let available = concat!(env!("APP_NAME"), " 0.1.5 is available");
+    assert_eq!(about.reads(), (Some(available.into()), Some("Show Update")));
+    about.click();
+    assert_eq!(about.asked(), ["show"]);
+    about.says(Stage::Failed { found: false });
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
 }
 
 /// A ready update offers Restart to Update, which asks the updater to install it now, as do the
@@ -129,8 +167,14 @@ fn ready_restarts_into_the_update(cx: &mut TestAppContext) {
     about.says(Stage::Downloading(Some("0.1.1".into())));
     about.says(Stage::Ready(Some("0.1.1".into())));
     let ready = concat!(env!("APP_NAME"), " 0.1.1 is ready");
-    assert_eq!(about.reads(), (Some(ready.into()), Some("Restart to Update")));
-    assert_eq!(about.cx.update(|_, cx| command_title(cx)), "Restart to Update");
+    assert_eq!(
+        about.reads(),
+        (Some(ready.into()), Some("Restart to Update"))
+    );
+    assert_eq!(
+        about.cx.update(|_, cx| command_title(cx)),
+        "Restart to Update"
+    );
     about.click();
     assert_eq!(about.asked(), ["restart"]);
     about.says(Stage::Checking);
@@ -158,7 +202,10 @@ fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
     assert_eq!(about.reads(), (None, None));
     about.cx.update(|_, cx| act(Action::Check, cx));
     assert!(about.asked().is_empty());
-    assert_eq!(about.cx.update(|_, cx| command_title(cx)), "Check for Updates…");
+    assert_eq!(
+        about.cx.update(|_, cx| command_title(cx)),
+        "Check for Updates…"
+    );
 }
 
 /// A launch that's older than the update the last quit started installing is the copy it was to
@@ -167,12 +214,18 @@ fn a_dev_build_has_no_button(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_launch_older_than_the_update_installed_says_it_didn_t_install(cx: &mut TestAppContext) {
     assert!(went_in(1572, 1572), "the update's own build");
-    assert!(went_in(1572, 1580), "a newer build, as one installed by hand");
+    assert!(
+        went_in(1572, 1580),
+        "a newer build, as one installed by hand"
+    );
     assert!(!went_in(1572, 1571), "the build it was to replace");
     let mut about = shown(Updater::Own, cx);
     about.cx.update(|_, cx| didnt_install(cx));
     about.cx.run_until_parked();
-    assert_eq!(about.reads(), (Some("The update didn’t install".into()), Some("Try Again")));
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
     about.click();
     assert_eq!(about.asked(), ["check"]);
     about.says(Stage::Checking);
@@ -191,10 +244,18 @@ fn only_the_first_launch_of_a_newer_version_opens_its_notes() {
     let notes = |version: &str| Some(format!("{}#{version}", crate::build_info::WHATS_NEW));
     assert_eq!(launch("0.1.9"), None, "a new profile's first launch");
     assert_eq!(launch("0.1.9"), None, "the same version again");
-    assert_eq!(launch("0.1.10"), notes("0.1.10"), "an update, numbered past 0.1.9");
+    assert_eq!(
+        launch("0.1.10"),
+        notes("0.1.10"),
+        "an update, numbered past 0.1.9"
+    );
     assert_eq!(launch("0.1.10"), None, "the update's next launch");
     assert_eq!(launch("0.1.9"), None, "a downgrade");
-    assert_eq!(launch("0.2.0"), notes("0.2.0"), "an update after the downgrade");
+    assert_eq!(
+        launch("0.2.0"),
+        notes("0.2.0"),
+        "an update after the downgrade"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -206,12 +267,18 @@ fn a_failure_or_a_cancel_offers_the_check_again(cx: &mut TestAppContext) {
     let mut about = shown(Updater::Own, cx);
     about.says(Stage::Checking);
     about.says(Stage::Failed { found: true });
-    assert_eq!(about.reads(), (Some("Couldn’t check for updates".into()), Some("Try Again")));
+    assert_eq!(
+        about.reads(),
+        (Some("Couldn’t check for updates".into()), Some("Try Again"))
+    );
     about.click();
     assert_eq!(about.asked(), ["check"]);
     about.says(Stage::Downloading(Some("0.1.1".into())));
     about.says(Stage::Failed { found: false });
-    assert_eq!(about.reads(), (Some("The update didn’t install".into()), Some("Try Again")));
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
     about.says(Stage::Found(None));
     assert_eq!(about.reads(), (Some("An update is available".into()), None));
     about.says(Stage::Idle);
@@ -242,15 +309,28 @@ fn nightly(
     let (row, cx) = cx.add_window_view(|_, cx| NightlyRow::new(cx));
     let version = cx.new(|cx| VersionRow::new("Version 0.2.0 (1688)", cx));
     cx.run_until_parked();
-    Nightly { row, version, cx, host }
+    Nightly {
+        row,
+        version,
+        cx,
+        host,
+    }
 }
 
 impl Nightly<'_> {
     /// What the row says under its name, and whether its switch is on, if the row is drawn.
     fn reads(&mut self) -> Option<(&'static str, bool)> {
-        let drawn = self.row.read_with(self.cx, |row, _| row.switch_bounds().is_some());
-        let shown = self.cx.update(|_, cx| followed(cx).map(|followed| (built(cx), followed)));
-        assert_eq!(drawn, shown.is_some(), "the switch drawn isn't the row offered");
+        let drawn = self
+            .row
+            .read_with(self.cx, |row, _| row.switch_bounds().is_some());
+        let shown = self
+            .cx
+            .update(|_, cx| followed(cx).map(|followed| (built(cx), followed)));
+        assert_eq!(
+            drawn,
+            shown.is_some(),
+            "the switch drawn isn't the row offered"
+        );
         shown.map(|(built, followed)| (nightly_words(built, followed), followed == Track::Nightly))
     }
 
@@ -271,7 +351,10 @@ impl Nightly<'_> {
     fn version_reads(&mut self) -> (Option<String>, Option<&'static str>) {
         _ = &self.version;
         let (said, action) = self.cx.update(|_, cx| words(updater(cx), &stage(cx)));
-        (said.map(|said| said.to_string()), action.map(|(_, title)| title))
+        (
+            said.map(|said| said.to_string()),
+            action.map(|(_, title)| title),
+        )
     }
 
     fn asked(&self) -> Vec<&'static str> {
@@ -279,9 +362,15 @@ impl Nightly<'_> {
     }
 }
 
-const NIGHTLY_LINE: &str =
-    concat!("Each night’s build of ", env!("APP_NAME"), ", ahead of the next release.");
-const KEEPS_LINE: &str = concat!(env!("APP_NAME"), " keeps this build until a release is newer.");
+const NIGHTLY_LINE: &str = concat!(
+    "Each night’s build of ",
+    env!("APP_NAME"),
+    ", ahead of the next release."
+);
+const KEEPS_LINE: &str = concat!(
+    env!("APP_NAME"),
+    " keeps this build until a release is newer."
+);
 
 /// On a release, the switch starts off and says what a nightly is. Turned on, the updater reads
 /// the nightly feed and checks it at once; turned off again, it reads the releases' and checks
@@ -313,7 +402,10 @@ fn a_nightly_turned_off_keeps_its_build(cx: &mut TestAppContext) {
     about.says(Stage::Checking);
     about.says(Stage::Current);
     let up_to_date = concat!(env!("APP_NAME"), " is up to date");
-    assert_eq!(about.version_reads(), (Some(up_to_date.into()), Some("Check for Updates")));
+    assert_eq!(
+        about.version_reads(),
+        (Some(up_to_date.into()), Some("Check for Updates"))
+    );
     assert!(about.asked().is_empty());
     about.click();
     assert_eq!(about.asked(), ["follow nightlies", "check"]);
@@ -342,7 +434,11 @@ fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
     for (updater, followed) in cases {
         let mut cx = TestAppContext::single();
         let mut about = nightly(updater, Track::Release, followed, &mut cx);
-        assert_eq!(about.reads(), None, "{updater:?} with {followed:?} offers nightly builds");
+        assert_eq!(
+            about.reads(),
+            None,
+            "{updater:?} with {followed:?} offers nightly builds"
+        );
         about.cx.update(|_, cx| follow(Track::Nightly, cx));
         assert!(about.asked().is_empty());
     }

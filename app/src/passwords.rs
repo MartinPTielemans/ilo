@@ -62,10 +62,16 @@ pub fn menu(logins: &[Login]) -> Vec<(MenuEntry, Option<Action>)> {
         .map(|login| item(remove(login), Action::Remove(login.clone())))
         .collect();
     items.extend((logins.iter().filter(|login| login.never)).map(|login| {
-        item(MenuEntry::new("Offer to Save Passwords", true), Action::Allow(login.clone()))
+        item(
+            MenuEntry::new("Offer to Save Passwords", true),
+            Action::Allow(login.clone()),
+        )
     }));
     items.push((MenuEntry::line(), None));
-    items.push(item(MenuEntry::new("All Passwords…", true), Action::ShowAll));
+    items.push(item(
+        MenuEntry::new("All Passwords…", true),
+        Action::ShowAll,
+    ));
     items
 }
 
@@ -74,9 +80,15 @@ pub fn menu(logins: &[Login]) -> Vec<(MenuEntry, Option<Action>)> {
 pub fn question(login: &Login) -> (String, String) {
     let message = match login.username.is_empty() {
         true => format!("Remove the password saved for {}?", login.site),
-        false => format!("Remove the password for “{}” on {}?", login.username, login.site),
+        false => format!(
+            "Remove the password for “{}” on {}?",
+            login.username, login.site
+        ),
     };
-    (message, format!("{} won't fill it in again.", env!("APP_NAME")))
+    (
+        message,
+        format!("{} won't fill it in again.", env!("APP_NAME")),
+    )
 }
 
 /// A login as a menu item names it.

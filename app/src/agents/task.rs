@@ -1,9 +1,12 @@
 //! Agent tasks: the user asks in ⌘T, and their own `claude` or `codex` does it in the browser
 //! (Agent task). Each task is an agent of its own, `task-<n>`, with a token the server knows, so
-//! the rules, the activity log, the confirmations and the handoffs are the Agent Space's. Its Space
-//! is hidden, in the profile of the Space it was asked in, and it shows as a card at the top of
-//! that Space's Today tabs. Tasks live as long as the browser runs: their Spaces go when a task is
-//! dropped, at quit, and at the next launch for any a crash left.
+//! the rules, the activity log, the confirmations and the handoffs are any agent's. Its Space is
+//! hidden, in the profile of the Space it was asked in, and it shows as a card at the sidebar's
+//! foot. An outside agent's session, from a client the user connected, is a task too,
+//! `session-<n>`, with the same card (Agent task › Outside agents): one a client at a time, whose
+//! calls, on any of its connections, come as its client's agent, in that agent's hidden Space. Tasks
+//! and sessions live as long as the browser runs: their Spaces go when a task is dropped, at quit, and at the next launch for
+//! any a crash left.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -16,7 +19,7 @@ use serde_json::Value;
 
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
-use super::{Agents, Question, ToolResult, page, site, tools};
+use super::{Agents, Client, Question, ToolResult, page, site, tools};
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -31,21 +34,36 @@ const KEPT: usize = 10;
 /// How long a turn's Thinking waits for the CLI's first step or message before it says the CLI
 /// didn't answer: past the longest a model thinks before it does anything.
 pub const NO_ANSWER: Duration = Duration::from_secs(180);
+/// How long an outside agent's session waits for its next call, with none under way, before it's
+/// done (#1080, for now): a client can stay connected long after its user has moved on.
+pub const IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// A task's state, as its card shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
     Working,
     /// The agent asks the user (ask), and waits for the answer.
-    Asking { question: SharedString, answers: Vec<SharedString> },
+    Asking {
+        question: SharedString,
+        answers: Vec<SharedString>,
+    },
     /// The agent finished, with its result, the line its card says it in, and the tabs it left the
     /// user to open, in its order, until each is opened.
-    Done { result: SharedString, summary: Option<SharedString>, tabs: Vec<u64> },
+    Done {
+        result: SharedString,
+        summary: Option<SharedString>,
+        tabs: Vec<u64>,
+    },
     /// The user's plan is at its limit, until this time, as the clock reads it.
-    Limit { resets: Option<SharedString> },
+    Limit {
+        resets: Option<SharedString>,
+    },
     Stopped,
     /// It couldn't go on: why, and the command that fixes it, if one does.
-    Failed { why: SharedString, command: Option<&'static str> },
+    Failed {
+        why: SharedString,
+        command: Option<&'static str>,
+    },
 }
 
 /// A line of the conversation, and when it was said, which ends the stretch of work before it.
@@ -69,7 +87,11 @@ pub enum Who {
 
 impl Message {
     fn new(who: Who, text: impl Into<SharedString>) -> Self {
-        Self { who, text: text.into(), at: Instant::now() }
+        Self {
+            who,
+            text: text.into(),
+            at: Instant::now(),
+        }
     }
 }
 
@@ -78,8 +100,8 @@ impl Message {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Conversation {
     pub agent: SharedString,
-    /// The agent's name, in text: Claude or Codex.
-    pub name: &'static str,
+    /// The agent's name, in text: Claude, Codex, or an outside agent's.
+    pub name: SharedString,
     pub title: SharedString,
     /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
     pub about: SharedString,
@@ -109,10 +131,15 @@ pub enum Line {
     Said(SharedString),
     /// A stretch of work between two messages.
     Trace(Trace),
+    /// A step of an outside agent's session, whose stretches and messages are in its terminal.
+    Step(TraceStep),
     /// The turn the user sent, from the moment they sent it until the agent's first step or
     /// message takes its place: Thinking, or why the agent couldn't start on it. Its key is the
     /// one the turn's trace takes.
-    Thinking { key: usize, failed: Option<SharedString> },
+    Thinking {
+        key: usize,
+        failed: Option<SharedString>,
+    },
 }
 
 /// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
@@ -131,7 +158,9 @@ pub struct Trace {
 
 impl Trace {
     pub fn steps(&self) -> usize {
-        (self.items.iter()).filter(|item| matches!(item, TraceItem::Step(_))).count()
+        (self.items.iter())
+            .filter(|item| matches!(item, TraceItem::Step(_)))
+            .count()
     }
 
     /// Its summary line's title and description.
@@ -207,7 +236,11 @@ pub struct AskedOn {
 
 pub struct Task {
     pub agent: String,
-    pub cli: Cli,
+    /// The CLI a task the user asked runs on, or None for an outside agent's session.
+    pub cli: Option<Cli>,
+    /// Who works on it, as its card says: the CLI's name, or the session's client's.
+    pub name: SharedString,
+    pub session: Option<Session>,
     /// The user's Space it was asked in, whose Today it shows at the top of.
     pub home: u64,
     /// Its own Space, hidden, where its tabs open.
@@ -252,6 +285,24 @@ pub struct Writing {
     pub said: bool,
 }
 
+/// An outside agent's session: a client the user connected at work, on any of its connections,
+/// from its first call that opens or acts on a tab until its last connection closes, the user
+/// stops it, or IDLE passes. Its connections share its client's Space, rules and card.
+pub struct Session {
+    /// The agent's id, which its calls, its rules, its Space and its activity go by.
+    pub agent: String,
+    /// Its pages: the tabs it opened or acted in, in that order.
+    pub tabs: Vec<u64>,
+    /// The orders it placed and the messages it sent, each once the user allowed it and it was
+    /// done, for its receipt. For this run only, as the session is.
+    pub(super) orders: usize,
+    pub(super) messages: usize,
+    /// Its calls under way, which it waits on.
+    pub(super) calls: Vec<u64>,
+    /// What ends it once it has waited IDLE for its next call.
+    idle: Option<gpui::Task<()>>,
+}
+
 impl Task {
     pub(super) fn token(&self) -> &str {
         &self.token
@@ -259,7 +310,10 @@ impl Task {
 
     /// Where the turn under way starts among its messages: after the user's last.
     fn turn(&self) -> usize {
-        self.messages.iter().rposition(|message| message.who == Who::User).map_or(0, |at| at + 1)
+        self.messages
+            .iter()
+            .rposition(|message| message.who == Who::User)
+            .map_or(0, |at| at + 1)
     }
 
     /// Whether the turn is sent and its CLI hasn't answered yet: no step and no message since.
@@ -282,7 +336,11 @@ pub struct Card {
     pub home: u64,
     /// The task's own Space, which the page area shows it from.
     pub space: u64,
-    pub cli: Cli,
+    /// Who works on it: Claude, Codex, or an outside agent's name as its client gives it.
+    pub name: SharedString,
+    /// Whether the user talks to it here: a task, not an outside agent's session, whose user talks
+    /// to it where they started it.
+    pub replies: bool,
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
@@ -349,7 +407,8 @@ pub struct ArchivedTask {
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
     pub dot: Dot,
-    /// Its CLI, how it ended and when, and the pages it still holds: "Claude · Done 13:31 · 1 page".
+    /// Who worked on it, how it ended and when, and the pages it still holds:
+    /// "Claude · Done 13:31 · 1 page".
     pub about: SharedString,
     /// When it left the foot, in milliseconds since the Unix epoch, as the archive dates its tabs.
     pub left: f64,
@@ -379,6 +438,8 @@ pub struct Tasks {
     /// The dismissed, newest last, for ⇧⌘T.
     pub(super) dismissed: VecDeque<String>,
     pub(super) next: u64,
+    /// The name each outside agent last gave, by its id, for its session's card.
+    pub(super) names: HashMap<String, SharedString>,
     pub found: HashMap<Cli, Found>,
     pub(super) looking: bool,
     /// Whether ⌘T's ask has shown in this run, which learns again once.
@@ -389,7 +450,10 @@ pub struct Tasks {
     pub models: HashMap<Cli, String>,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
-    pub(super) events: Option<(futures::channel::mpsc::UnboundedSender<runner::Event>, gpui::Task<()>)>,
+    pub(super) events: Option<(
+        futures::channel::mpsc::UnboundedSender<runner::Event>,
+        gpui::Task<()>,
+    )>,
     /// Where tasks run: a directory of their own each, under the profile's.
     pub dir: Option<PathBuf>,
 }
@@ -426,7 +490,7 @@ impl Agents {
                     State::Failed { .. } => ("Failed", Dot::Ended),
                     _ => ("Stopped", Dot::Ended),
                 };
-                let mut about = format!("{} · {words}", task.cli.name());
+                let mut about = format!("{} · {words}", task.name);
                 if let Some(at) = task.ended.or(task.left) {
                     about = format!("{about} {}", super::local_time(seconds(at)));
                 }
@@ -435,7 +499,9 @@ impl Agents {
                     1 => about.push_str(" · 1 page"),
                     pages => about.push_str(&format!(" · {pages} pages")),
                 }
-                let left = task.left.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
+                let left = task
+                    .left
+                    .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
                 ArchivedTask {
                     agent: task.agent.clone().into(),
                     title: task.title.clone(),
@@ -456,6 +522,16 @@ impl Agents {
         action: TaskAction,
         cx: &mut Context<Self>,
     ) -> (Option<u64>, Option<String>) {
+        // A session's user talks to its agent where they started it.
+        let session = self.task(agent).is_some_and(|task| task.session.is_some());
+        if session
+            && matches!(
+                action,
+                TaskAction::Answer(_) | TaskAction::Reply(_) | TaskAction::Retry
+            )
+        {
+            return (None, None);
+        }
         match action {
             TaskAction::Dismiss => self.dismiss_task(agent, cx),
             TaskAction::Restore => {
@@ -481,23 +557,36 @@ impl Agents {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
         let working = task.state == State::Working;
-        let mut lines = fold(&task.messages, &task.trace, ended, working, task.writing.as_ref());
+        let mut lines = fold(
+            &task.messages,
+            &task.trace,
+            ended,
+            working,
+            task.writing.as_ref(),
+        );
+        // A session's conversation is in its agent's terminal: here, only its steps, one by one.
+        if task.session.is_some() {
+            lines = steps(lines);
+        }
         // A turn the CLI hasn't answered says it's thinking from the moment it's sent, and if the
         // CLI goes or never answers, why, so nothing is left running.
         if task.heard_nothing() {
             let failed = match &task.state {
                 State::Working => Some(None),
                 State::Failed { why, .. } => Some(Some(why.trim_end_matches('.').to_string())),
-                State::Limit { resets } => Some(Some(limit_words(task.cli, resets))),
+                State::Limit { resets } => Some(Some(limit_words(&task.name, resets))),
                 _ => None,
             };
             if let Some(failed) = failed {
                 let failed = failed.map(|why| page::clip(&why, 60).into());
-                lines.push(Line::Thinking { key: task.trace.len(), failed });
+                lines.push(Line::Thinking {
+                    key: task.trace.len(),
+                    failed,
+                });
             }
         }
-        let tabs = (self.browser.space_tabs(task.space, cx).into_iter())
-            .map(|tab| (tab.id, site(&tab.url).to_string().into()))
+        let tabs = (self.pages(task, cx).into_iter())
+            .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
         let about = match &task.state {
             State::Working if self.waits_on_user(task) => "Waiting for you".to_string(),
@@ -507,23 +596,27 @@ impl Agents {
                 Some(at) => format!("Done {}", super::local_time(seconds(at))),
                 None => "Done".to_string(),
             },
-            State::Limit { resets } => limit_words(task.cli, resets),
+            State::Limit { resets } => limit_words(&task.name, resets),
             State::Stopped | State::Failed { .. } => "Stopped".to_string(),
         };
-        let about = match task.model.is_empty() {
-            true => format!("{} · {about}", task.cli.name()),
-            false => format!("{} · {} · {about}", task.cli.name(), task.model),
+        // A session's title is its agent's name, so what's under it is how it's doing alone.
+        let about = match (&task.session, task.model.is_empty()) {
+            (Some(_), _) => about,
+            (None, true) => format!("{} · {about}", task.name),
+            (None, false) => format!("{} · {} · {about}", task.name, task.model),
         };
         Some(Conversation {
             agent: task.agent.clone().into(),
-            name: task.cli.name(),
+            name: task.name.clone(),
             title: task.title.clone(),
             about: about.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
             tabs,
-            on: (task.state == State::Working).then(|| self.current.get(agent).copied()).flatten(),
+            on: (task.state == State::Working)
+                .then(|| self.on(task))
+                .flatten(),
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
             open: open_label(&self.open_tabs(task, cx)),
             answers: match &task.state {
@@ -534,18 +627,60 @@ impl Agents {
         })
     }
 
-
     /// Whether a confirmation or a handoff of the task's waits on the user.
     fn waits_on_user(&self, task: &Task) -> bool {
         self.task_question(task).is_some()
     }
 
     fn task_question(&self, task: &Task) -> Option<Question> {
-        let first = self.first_prompt(&task.agent)?;
+        let (from, first) = match &task.session {
+            Some(session) => (session.agent.as_str(), self.session_prompt(session)?),
+            None => (task.agent.as_str(), self.first_prompt(&task.agent)?),
+        };
         (self.asking.iter().map(|asking| &asking.question))
-            .chain(self.question().as_ref().filter(|question| question.handoff.is_some()))
-            .find(|question| question.from == task.agent.as_str() && question.id == first)
+            .chain(
+                self.question()
+                    .as_ref()
+                    .filter(|question| question.handoff.is_some()),
+            )
+            .find(|question| question.from == from && question.id == first)
             .cloned()
+    }
+
+    /// The number of the first of the prompts a session's calls under way wait on: its client's
+    /// other connections' calls wait on theirs.
+    fn session_prompt(&self, session: &Session) -> Option<u64> {
+        let ours = |agent: &str, call: u64| agent == session.agent && session.calls.contains(&call);
+        let confirmations = (self.asking.iter())
+            .filter(|asking| ours(&asking.act.agent, asking.act.call))
+            .map(|asking| asking.question.id);
+        let handoffs = (self.held.values())
+            .filter(|held| held.reply.is_some() && ours(&held.agent, held.call))
+            .map(|held| held.question);
+        confirmations.chain(handoffs).min()
+    }
+
+    /// The tab a task is on while it works: its agent's last, or a session's last step's, as its
+    /// client's other connections have their own.
+    fn on(&self, task: &Task) -> Option<u64> {
+        match &task.session {
+            Some(_) => task.trace.iter().rev().find_map(|step| step.did.tab),
+            None => self.current.get(&task.agent).copied(),
+        }
+    }
+
+    /// A task's pages: its Space's tabs, or of its client's Space, a session's own.
+    fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
+        let tabs = self.browser.space_tab_ids(task.space, cx);
+        match &task.session {
+            Some(session) => session
+                .tabs
+                .iter()
+                .copied()
+                .filter(|tab| tabs.contains(tab))
+                .collect(),
+            None => tabs,
+        }
     }
 
     /// The number of `agent`'s prompt that came first, of its confirmations, the handoffs that
@@ -558,7 +693,10 @@ impl Agents {
         let handoffs = (self.held.values())
             .filter(|held| held.agent == agent && held.reply.is_some())
             .map(|held| held.question);
-        let ask = self.task(agent).and_then(|task| task.asking.as_ref()).map(|(id, _)| *id);
+        let ask = self
+            .task(agent)
+            .and_then(|task| task.asking.as_ref())
+            .map(|(id, _)| *id);
         confirmations.chain(handoffs).chain(ask).min()
     }
 
@@ -569,7 +707,9 @@ impl Agents {
 
     /// Done's tabs to open, with their sites, those still in the task's Space.
     fn open_tabs(&self, task: &Task, cx: &App) -> Vec<(u64, SharedString)> {
-        let State::Done { tabs, .. } = &task.state else { return Vec::new() };
+        let State::Done { tabs, .. } = &task.state else {
+            return Vec::new();
+        };
         let own = self.browser.space_tab_ids(task.space, cx);
         (tabs.iter().filter(|tab| own.contains(tab)))
             .map(|&tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
@@ -602,11 +742,26 @@ impl Agents {
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
             (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
-            // The tick says it's done, so a finish with no line says the result's first words.
-            (State::Done { result, summary, .. }, _) => {
-                (summary.clone().unwrap_or_else(|| first_words(result)), Dot::Done)
+            // A session has no result to say, so its receipt says what it did, or with nothing to
+            // count, when it ended.
+            (State::Done { .. }, _) if let Some(session) = &task.session => {
+                let at = task
+                    .ended
+                    .map(|at| super::local_time(seconds(at)))
+                    .unwrap_or_default();
+                (receipt(session, &at).into(), Dot::Done)
             }
-            (State::Limit { resets }, _) => (limit_words(task.cli, resets).into(), Dot::Ended),
+            // The tick says it's done, so a finish with no line says the result's first words.
+            (
+                State::Done {
+                    result, summary, ..
+                },
+                _,
+            ) => (
+                summary.clone().unwrap_or_else(|| first_words(result)),
+                Dot::Done,
+            ),
+            (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
             (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
@@ -614,15 +769,20 @@ impl Agents {
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         let status = match &task.state {
-            State::Done { tabs, .. } if open.is_empty() && tabs.len() == 1 => "Its page went to the Archive".into(),
-            State::Done { tabs, .. } if open.is_empty() && !tabs.is_empty() => "Its pages went to the Archive".into(),
+            State::Done { tabs, .. } if open.is_empty() && tabs.len() == 1 => {
+                "Its page went to the Archive".into()
+            }
+            State::Done { tabs, .. } if open.is_empty() && !tabs.is_empty() => {
+                "Its pages went to the Archive".into()
+            }
             _ => status,
         };
         Card {
             agent: task.agent.clone().into(),
             home: task.home,
             space: task.space,
-            cli: task.cli,
+            name: task.name.clone(),
+            replies: task.session.is_none(),
             title: task.title.clone(),
             status,
             asks,
@@ -647,13 +807,21 @@ impl Agents {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
-            .filter(|cli| self.tasks.found.get(cli).is_some_and(|found| found.ready == Ready::SignedIn))
+            .filter(|cli| {
+                self.tasks
+                    .found
+                    .get(cli)
+                    .is_some_and(|found| found.ready == Ready::SignedIn)
+            })
             .collect();
         if let Some(default) = self.tasks.default {
             clis.sort_by_key(|cli| *cli != default);
         }
         (clis.into_iter())
-            .map(|cli| AskAgent { cli, resets: self.tasks.limits.get(&cli).cloned().flatten() })
+            .map(|cli| AskAgent {
+                cli,
+                resets: self.tasks.limits.get(&cli).cloned().flatten(),
+            })
             .collect()
     }
 
@@ -672,7 +840,10 @@ impl Agents {
 
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
-        self.tasks.found.get(&cli).map_or(Ready::Unknown, |found| found.ready)
+        self.tasks
+            .found
+            .get(&cli)
+            .map_or(Ready::Unknown, |found| found.ready)
     }
 
     /// Learns again whether each CLI is installed and signed in, off the UI thread, unless it's
@@ -693,8 +864,14 @@ impl Agents {
                 agents.tasks.found.extend(found);
                 agents.save();
                 // The first ready is the default until the user picks one.
-                if agents.tasks.default.is_none_or(|cli| agents.found(cli) != Ready::SignedIn) {
-                    let ready = Cli::ALL.into_iter().find(|cli| agents.found(*cli) == Ready::SignedIn);
+                if agents
+                    .tasks
+                    .default
+                    .is_none_or(|cli| agents.found(cli) != Ready::SignedIn)
+                {
+                    let ready = Cli::ALL
+                        .into_iter()
+                        .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
                 }
                 cx.notify();
@@ -712,8 +889,16 @@ impl Agents {
     /// aliases, and the models Codex listed when it was last looked for.
     pub fn task_models(&self, cli: Cli) -> Vec<(String, String)> {
         match cli.models() {
-            [] => self.tasks.found.get(&cli).map(|found| found.models.clone()).unwrap_or_default(),
-            models => models.iter().map(|(id, name)| (id.to_string(), name.to_string())).collect(),
+            [] => self
+                .tasks
+                .found
+                .get(&cli)
+                .map(|found| found.models.clone())
+                .unwrap_or_default(),
+            models => models
+                .iter()
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .collect(),
         }
     }
 
@@ -736,7 +921,10 @@ impl Agents {
             return None;
         }
         let models = self.task_models(cli);
-        let name = models.into_iter().find(|(id, _)| id == chosen).map_or(chosen.to_string(), |(_, name)| name);
+        let name = models
+            .into_iter()
+            .find(|(id, _)| id == chosen)
+            .map_or(chosen.to_string(), |(_, name)| name);
         Some(name.into())
     }
 
@@ -767,13 +955,18 @@ impl Agents {
         self.tasks.next += 1;
         let agent = format!("task-{}", self.tasks.next);
         // check.sh reads this line.
-        log!("browser: task {agent} on {} asked from space {home}", cli.id());
+        log!(
+            "browser: task {agent} on {} asked from space {home}",
+            cli.id()
+        );
         let space = self.browser.make_task_space(&agent, cli.name(), home, cx);
         let title: SharedString = page::clip(asked, 80).into();
         let model = self.task_model_name(cli).unwrap_or_default();
         let task = Task {
             agent: agent.clone(),
-            cli,
+            cli: Some(cli),
+            name: cli.name().into(),
+            session: None,
             home,
             space,
             asked: asked.to_string().into(),
@@ -805,7 +998,9 @@ impl Agents {
     /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
     /// or the task ends, saying so: a CLI that hangs never leaves a Thinking going.
     pub(super) fn wait_for_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent).filter(|task| task.thinking()) else { return };
+        let Some(task) = self.task_mut(agent).filter(|task| task.thinking()) else {
+            return;
+        };
         let agent = agent.to_string();
         task.waiting = Some(cx.spawn(async move |agents, cx| {
             cx.background_executor().timer(NO_ANSWER).await;
@@ -814,7 +1009,9 @@ impl Agents {
     }
 
     fn no_answer(&mut self, agent: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent) else { return };
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         // It's this timer that runs: it goes once it's done.
         if let Some(timer) = task.waiting.take() {
             timer.detach();
@@ -823,22 +1020,35 @@ impl Agents {
             return;
         }
         // check.sh reads this line.
-        log!("browser: task {agent} had no answer in {} s", NO_ANSWER.as_secs());
+        log!(
+            "browser: task {agent} had no answer in {} s",
+            NO_ANSWER.as_secs()
+        );
         // Its CLI ends, so what it might say late isn't taken for the task's; a reply starts it again.
         task.process = None;
-        let why = format!("{} didn't answer.", task.cli.name());
+        let why = format!("{} didn't answer.", task.name);
         self.fail(agent, Failure::Other(why), cx);
     }
 
     /// Starts the task's CLI with its first message.
     fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task(agent) else { return };
-        let cli = task.cli;
+        let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
+            return;
+        };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            return self.fail(agent, Failure::Other(format!("{} isn't installed.", cli.name())), cx);
+            return self.fail(
+                agent,
+                Failure::Other(format!("{} isn't installed.", cli.name())),
+                cx,
+            );
         };
-        let dir = self.tasks.dir.clone().unwrap_or_else(std::env::temp_dir).join("Tasks");
+        let dir = self
+            .tasks
+            .dir
+            .clone()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("Tasks");
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
@@ -849,7 +1059,11 @@ impl Agents {
             path: found.path.clone(),
             dir: dir.join(agent),
             config: dir.join(format!("{agent}.json")),
-            server: runner::Server { command, args, token: task.token.clone() },
+            server: runner::Server {
+                command,
+                args,
+                token: task.token.clone(),
+            },
             model,
             instructions: tools::TASK_INSTRUCTIONS.into(),
             tools: tools::names(agent),
@@ -863,20 +1077,30 @@ impl Agents {
             }
             Err(error) => {
                 log!("browser: task {agent} couldn't start {}: {error}", cli.id());
-                self.fail(agent, Failure::Other(format!("{} couldn't start.", cli.name())), cx);
+                self.fail(
+                    agent,
+                    Failure::Other(format!("{} couldn't start.", cli.name())),
+                    cx,
+                );
             }
         }
     }
 
     /// Where the tasks' processes hand their output, which wakes the UI only as they say something.
-    fn task_events(&mut self, cx: &mut Context<Self>) -> futures::channel::mpsc::UnboundedSender<runner::Event> {
+    fn task_events(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> futures::channel::mpsc::UnboundedSender<runner::Event> {
         if let Some((events, _)) = &self.tasks.events {
             return events.clone();
         }
         let (events, mut said) = futures::channel::mpsc::unbounded();
         let reading = cx.spawn(async move |agents, cx| {
             while let Some(event) = said.next().await {
-                if agents.update(cx, |agents, cx| agents.task_said(event, cx)).is_err() {
+                if agents
+                    .update(cx, |agents, cx| agents.task_said(event, cx))
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -894,7 +1118,9 @@ impl Agents {
         }
         match out {
             Out::Said(text) => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 // Finish's result is the answer, and the task has ended: what the CLI writes after
                 // it, as its turn winds down, isn't shown.
                 if matches!(task.state, State::Done { .. }) {
@@ -902,28 +1128,44 @@ impl Agents {
                 }
                 // What it was writing is this message, which stays where it showed.
                 if let Some(writing) = &mut task.writing {
-                    *writing = Writing { text: text.clone().into(), said: true };
+                    *writing = Writing {
+                        text: text.clone().into(),
+                        said: true,
+                    };
                 }
                 task.messages.push(Message::new(Who::Agent, text));
             }
             Out::Writing(text) => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 if task.state != State::Working {
                     return;
                 }
-                task.writing = (!text.is_empty()).then(|| Writing { text: text.into(), said: false });
+                task.writing = (!text.is_empty()).then(|| Writing {
+                    text: text.into(),
+                    said: false,
+                });
             }
             // A call takes what it wrote into the trace, as what it said along the way.
             Out::Calling => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 task.writing = None;
             }
             Out::Thought { text, took } => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 let now = Instant::now();
                 task.trace.push(Traced {
                     call: 0,
-                    did: tools::Did { tool: "thought".into(), text: page::clip(&text, 4000), ..Default::default() },
+                    did: tools::Did {
+                        tool: "thought".into(),
+                        text: page::clip(&text, 4000),
+                        ..Default::default()
+                    },
                     after: task.messages.len(),
                     started: now.checked_sub(took).unwrap_or(now),
                     ended: Some(now),
@@ -932,27 +1174,38 @@ impl Agents {
                 });
             }
             Out::Ended(None) => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 task.writing = None;
                 // A turn that ends without finish ends the task with what it said last.
                 if task.state == State::Working {
                     let result = (task.messages.iter().rev())
                         .find(|message| message.who != Who::User)
                         .map_or_else(|| "Done".into(), |message| message.text.clone());
-                    task.state = State::Done { result, summary: None, tabs: Vec::new() };
+                    task.state = State::Done {
+                        result,
+                        summary: None,
+                        tabs: Vec::new(),
+                    };
                     task.ended = Some(SystemTime::now());
                 }
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
-            Out::Ended(Some(_)) if self.task(&agent).is_some_and(|task| task.state == State::Stopped) => {}
+            Out::Ended(Some(_))
+                if self
+                    .task(&agent)
+                    .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
             Out::Gone(said) => {
-                let Some(task) = self.task_mut(&agent) else { return };
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
                 task.process = None;
                 if matches!(task.state, State::Working | State::Asking { .. }) {
                     let said = said.trim();
                     log!("browser: task {agent} ended: {said}");
-                    let why = format!("{} stopped working.", task.cli.name());
+                    let why = format!("{} stopped working.", task.name);
                     self.fail(&agent, Failure::Other(why), cx);
                 }
             }
@@ -962,19 +1215,30 @@ impl Agents {
 
     /// The task can't go on: its card says why, and what fixes it.
     fn fail(&mut self, agent: &str, failure: Failure, cx: &mut Context<Self>) {
-        let Some(cli) = self.task(agent).map(|task| task.cli) else { return };
+        let Some(cli) = self.task(agent).and_then(|task| task.cli) else {
+            return;
+        };
         // check.sh reads this line.
         log!("browser: task {agent} failed: {failure:?}");
         let state = match failure {
-            Failure::Limit(resets) => State::Limit { resets: resets.map(clock) },
+            Failure::Limit(resets) => State::Limit {
+                resets: resets.map(clock),
+            },
             Failure::SignedOut => {
                 let why = format!("{} isn't signed in.", cli.name()).into();
-                State::Failed { why, command: Some(cli.sign_in()) }
+                State::Failed {
+                    why,
+                    command: Some(cli.sign_in()),
+                }
             }
-            Failure::Other(why) if why.contains("isn't installed") => {
-                State::Failed { why: why.into(), command: Some(cli.install()) }
-            }
-            Failure::Other(why) => State::Failed { why: page::clip(&why, 200).into(), command: None },
+            Failure::Other(why) if why.contains("isn't installed") => State::Failed {
+                why: why.into(),
+                command: Some(cli.install()),
+            },
+            Failure::Other(why) => State::Failed {
+                why: page::clip(&why, 200).into(),
+                command: None,
+            },
         };
         if let State::Limit { resets } = &state {
             self.tasks.limits.insert(cli, resets.clone());
@@ -1001,8 +1265,11 @@ impl Agents {
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
             return self.answer_task(agent, text, cx);
         }
-        let Some(task) = self.task_mut(agent) else { return };
-        task.messages.push(Message::new(Who::User, text.to_string()));
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        task.messages
+            .push(Message::new(Who::User, text.to_string()));
         task.state = State::Working;
         task.writing = None;
         let sent = task.process.as_mut().map(|process| process.say(text));
@@ -1017,9 +1284,14 @@ impl Agents {
 
     /// The user's answer to the task's ask.
     pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent) else { return };
-        let Some((_, reply)) = task.asking.take() else { return };
-        task.messages.push(Message::new(Who::User, answer.to_string()));
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
+        let Some((_, reply)) = task.asking.take() else {
+            return;
+        };
+        task.messages
+            .push(Message::new(Who::User, answer.to_string()));
         task.state = State::Working;
         task.writing = None;
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
@@ -1031,7 +1303,9 @@ impl Agents {
 
     /// ⌘. or Stop: ends what the task is doing at once. A reply goes on from there.
     pub fn stop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent) else { return };
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         if !matches!(task.state, State::Working | State::Asking { .. }) {
             return;
         }
@@ -1043,21 +1317,33 @@ impl Agents {
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
-        self.stop_agent(agent, cx);
+        // A session's agent is its client's, whose calls under way the user stops, on each of its
+        // connections, as the agent path always has.
+        let driver = match &mut task.session {
+            Some(session) => {
+                session.idle = None;
+                session.agent.clone()
+            }
+            None => agent.to_string(),
+        };
+        self.stop_agent(&driver, cx);
         cx.notify();
     }
 
     /// Limit's Retry: goes on from where it stopped. The browser never retries by itself.
     pub fn retry_task(&mut self, agent: &str, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent) else { return };
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         if !matches!(task.state, State::Limit { .. }) {
             return;
         }
         task.state = State::Working;
         task.writing = None;
         let sent = task.process.as_mut().map(|process| process.say(RETRY));
-        let cli = task.cli;
-        self.tasks.limits.remove(&cli);
+        if let Some(cli) = task.cli {
+            self.tasks.limits.remove(&cli);
+        }
         if !matches!(sent, Some(Ok(()))) {
             let first = conversation(self.task(agent).expect("found"));
             self.launch(agent, &first, cx);
@@ -1070,7 +1356,9 @@ impl Agents {
     /// doing stops. An older dismissed task than the last few goes for good.
     pub fn dismiss_task(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.stop_task(agent, cx);
-        let Some(task) = self.task_mut(agent) else { return };
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         task.dismissed = true;
         task.deleted = false;
         task.left = Some(SystemTime::now());
@@ -1092,10 +1380,15 @@ impl Agents {
     /// Delete from Archive: the dismissed task leaves the Archive and ⇧⌘T's reach, or with
     /// `deleted` false, ⌘Z brings it back there.
     fn delete_task(&mut self, agent: &str, deleted: bool, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(agent).filter(|task| task.dismissed) else { return };
+        let Some(task) = self.task_mut(agent).filter(|task| task.dismissed) else {
+            return;
+        };
         task.deleted = deleted;
         // check.sh reads this line.
-        log!("browser: task {agent} {}", if deleted { "deleted" } else { "undeleted" });
+        log!(
+            "browser: task {agent} {}",
+            if deleted { "deleted" } else { "undeleted" }
+        );
         cx.notify();
     }
 
@@ -1104,7 +1397,13 @@ impl Agents {
         let deleted = |each: &String| self.task(each).is_none_or(|task| task.deleted);
         let agent = match agent {
             Some(agent) => agent.to_string(),
-            None => self.tasks.dismissed.iter().rev().find(|each| !deleted(each))?.clone(),
+            None => self
+                .tasks
+                .dismissed
+                .iter()
+                .rev()
+                .find(|each| !deleted(each))?
+                .clone(),
         };
         if deleted(&agent) {
             return None;
@@ -1121,13 +1420,23 @@ impl Agents {
     /// Today tabs of the Space it was asked in, in the agent's order, the user's now. Returns the
     /// first, to show. A tab moved is out of the task's for good: bringing its card back with ⌘Z
     /// offers the rest.
-    pub fn open_result(&mut self, agent: &str, only: Option<u64>, cx: &mut Context<Self>) -> Option<u64> {
+    pub fn open_result(
+        &mut self,
+        agent: &str,
+        only: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
         let task = self.task(agent)?;
         let open: Vec<u64> = (self.open_tabs(task, cx).into_iter())
             .map(|(tab, _)| tab)
             .filter(|tab| only.is_none_or(|only| only == *tab))
             .collect();
-        let (home, first) = (task.home, *open.first()?);
+        // A session's go to the Space the user is in, as it was asked from none.
+        let home = match task.session {
+            Some(_) => self.browser.user_space(task.space),
+            None => task.home,
+        };
+        let first = *open.first()?;
         let task = self.task_mut(agent)?;
         if let State::Done { tabs, .. } = &mut task.state {
             tabs.retain(|tab| !open.contains(tab));
@@ -1143,33 +1452,106 @@ impl Agents {
     }
 
     /// The task goes for good: its CLI ends and its Space goes, with its tabs.
-    fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+    pub(super) fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+        self.end_task(agent, true, cx);
+    }
+
+    /// The task goes: its CLI ends, and its Space too with `space`. A session's tabs close instead,
+    /// as its Space is its client's.
+    fn end_task(&mut self, agent: &str, space: bool, cx: &mut Context<Self>) {
         let Some(at) = self.tasks.tasks.iter().position(|task| task.agent == agent) else {
             return;
         };
         let task = self.tasks.tasks.remove(at);
+        // check.sh reads this line.
+        log!("browser: task {agent} dropped");
+        // A session's Space is its client's, which keeps the tabs of its other sessions: its own
+        // close, but for any a session under way works in.
+        if let Some(session) = task.session {
+            let pages = self.pages_of(&session, task.space, cx);
+            let live = (self.tasks.tasks.iter())
+                .filter(|other| other.state == State::Working)
+                .filter_map(|other| other.session.as_ref())
+                .flat_map(|other| other.tabs.clone())
+                .collect::<Vec<_>>();
+            for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
+                self.browser.close_tab(tab, cx);
+            }
+            return;
+        }
         self.forget_waiting(agent, cx);
         self.doing.remove(agent);
         self.tokens_changed();
-        if task.space != 0 {
+        if space && task.space != 0 {
             self.browser.delete_space(task.space, cx);
         }
         self.remove_task_files(agent);
-        log!("browser: task {agent} dropped");
     }
 
-    /// At quit: every task goes, with its Space.
-    pub fn end_tasks(&mut self, cx: &mut Context<Self>) {
-        let agents: Vec<String> = self.tasks.tasks.iter().map(|task| task.agent.clone()).collect();
+    /// A session's pages still in its client's Space `space`.
+    fn pages_of(&self, session: &Session, space: u64, cx: &App) -> Vec<u64> {
+        let tabs = self.browser.space_tab_ids(space, cx);
+        session
+            .tabs
+            .iter()
+            .copied()
+            .filter(|tab| tabs.contains(tab))
+            .collect()
+    }
+
+    /// At quit: every task goes, and every session, and with `spaces` the tasks' Spaces and the
+    /// clients'. With no window left, as when the last one closed on Windows or Linux, the core
+    /// can't delete a Space (#1676), and the next launch deletes them, as after a crash.
+    pub fn end_tasks(&mut self, spaces: bool, cx: &mut Context<Self>) {
+        let sessions = (self.tasks.tasks.iter())
+            .filter(|task| task.session.is_some())
+            .map(|task| task.agent.clone())
+            .collect::<Vec<_>>();
+        self.tasks.tasks.retain(|task| task.session.is_none());
+        log!("browser: {} sessions end", sessions.len());
+        let agents: Vec<String> = self
+            .tasks
+            .tasks
+            .iter()
+            .map(|task| task.agent.clone())
+            .collect();
         for agent in agents {
-            self.drop_task(&agent, cx);
+            self.end_task(&agent, spaces, cx);
+        }
+        if !spaces {
+            return;
+        }
+        for client in Client::ALL {
+            let space = self.browser.agent_space(client.id());
+            if space != 0 {
+                self.browser.delete_space(space, cx);
+            }
         }
     }
 
-    /// At launch: the Spaces a run before left of its tasks, as a crash would, go.
+    /// At launch: the Spaces a run before left of its tasks, as a crash would, go. An outside
+    /// agent's, which a crash leaves too, and before #1080 the user saw as a Space of theirs, gives
+    /// its tabs to the user's Space in its profile first, as a session's Open would.
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
         for space in self.browser.task_spaces() {
             log!("browser: deleting space {space} of a task before");
+            self.browser.delete_space(space, cx);
+        }
+        for client in Client::ALL {
+            let space = self.browser.agent_space(client.id());
+            if space == 0 {
+                continue;
+            }
+            let home = self.browser.user_space(space);
+            // Each goes to the top, so the last goes first.
+            for tab in self.browser.space_tab_ids(space, cx).into_iter().rev() {
+                self.browser.move_tab(tab, home, cx);
+            }
+            // check.sh reads this line.
+            log!(
+                "browser: deleting space {space} of agent {} before",
+                client.id()
+            );
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
@@ -1182,47 +1564,97 @@ impl Agents {
         let dir = dir.join("Tasks");
         _ = std::fs::remove_dir_all(dir.join(agent));
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
+        _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
     }
 
-    /// A task's call, as a step of its trace from when it came. A run's steps are steps of their
-    /// own (`trace_step`); its name and its finish aren't steps of its work.
-    pub(super) fn trace_call(&mut self, call: &super::Call, cx: &App) {
+    /// A task's call, as a step of its trace from when it came, or an outside agent's, as a step
+    /// of its client's session, which its first call that opens or acts on a tab starts. A
+    /// run's steps are steps of their own (`trace_step`); its name and its finish aren't steps of
+    /// its work.
+    pub(super) fn trace_call(&mut self, call: &super::Call, cx: &mut Context<Self>) {
         let tool = call.tool.as_str();
-        if matches!(tool, "title" | "finish" | "run_steps") || self.task(&call.agent).is_none() {
+        let key = match self.task(&call.agent) {
+            Some(_) => call.agent.clone(),
+            None => match self.session_for(call, cx) {
+                Some(key) => key,
+                None => return,
+            },
+        };
+        if matches!(tool, "title" | "finish" | "run_steps") {
             return;
         }
         let did = self.did(&call.agent, tool, &call.arguments, None, cx);
-        self.trace(&call.agent, call.id, did, call.at);
+        self.trace(&key, call.id, did, call.at);
     }
 
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
     pub(super) fn trace_step(&mut self, agent: &str, call: u64, tab: u64, step: &Value, cx: &App) {
-        if self.task(agent).is_none() {
+        let Some(key) = self.tracer(agent, call) else {
             return;
-        }
-        let tool = step.get("action").and_then(Value::as_str).unwrap_or_default();
+        };
+        let tool = step
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let did = self.did(agent, tool, step, Some(tab), cx);
         let now = Instant::now();
-        let Some(task) = self.task_mut(agent) else { return };
-        let before = task.trace.iter_mut().rev().find(|each| each.call == call && each.ended.is_none());
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        let before = task
+            .trace
+            .iter_mut()
+            .rev()
+            .find(|each| each.call == call && each.ended.is_none());
         if let Some(before) = before {
             before.ended = Some(now);
         }
-        self.trace(agent, call, did, now);
+        self.trace(&key, call, did, now);
     }
 
-    fn trace(&mut self, agent: &str, call: u64, did: tools::Did, at: Instant) {
-        let Some(task) = self.task_mut(agent) else { return };
+    fn trace(&mut self, key: &str, call: u64, did: tools::Did, at: Instant) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        // A session's pages are the tabs it works in.
+        if let (Some(session), Some(tab)) = (&mut task.session, did.tab)
+            && !session.tabs.contains(&tab)
+        {
+            session.tabs.push(tab);
+        }
         // An ask is done once asked: the wait for the answer is the user's.
         let ended = (did.tool == "ask").then_some(at);
         let after = task.messages.len();
-        task.trace.push(Traced { call, did, after, started: at, ended, error: None, picture: None });
+        task.trace.push(Traced {
+            call,
+            did,
+            after,
+            started: at,
+            ended,
+            error: None,
+            picture: None,
+        });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
         task.writing = None;
     }
 
-    /// `agent`'s call was answered `at`: its step ends, with why it failed or what it saw.
+    /// The card whose trace `agent`'s `call` goes in: its task's, or the session it came in.
+    fn tracer(&self, agent: &str, call: u64) -> Option<String> {
+        let task = self.task(agent).or_else(|| self.session_of(agent, call))?;
+        Some(task.agent.clone())
+    }
+
+    /// The session of `agent`'s whose call `call` is under way.
+    pub(super) fn session_of(&self, agent: &str, call: u64) -> Option<&Task> {
+        (self.tasks.tasks.iter()).find(|task| {
+            (task.session.as_ref())
+                .is_some_and(|session| session.agent == agent && session.calls.contains(&call))
+        })
+    }
+
+    /// `agent`'s call was answered `at`: its step ends, with why it failed or what it saw. A
+    /// session with no call left under way ends once IDLE passes without another.
     pub(super) fn answered(
         &mut self,
         agent: &str,
@@ -1232,8 +1664,28 @@ impl Agents {
         image: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(task) = self.task_mut(agent) else { return };
-        let step = task.trace.iter_mut().rev().find(|step| step.call == call && step.ended.is_none());
+        let Some(key) = self.tracer(agent, call) else {
+            return;
+        };
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        if let Some(session) = &mut task.session {
+            session.calls.retain(|each| *each != call);
+        }
+        let idle = (task.session.as_ref())
+            .is_some_and(|session| session.calls.is_empty() && task.state == State::Working);
+        if idle {
+            self.idle_from_now(&key, cx);
+        }
+        let Some(task) = self.task_mut(&key) else {
+            return;
+        };
+        let step = task
+            .trace
+            .iter_mut()
+            .rev()
+            .find(|step| step.call == call && step.ended.is_none());
         let Some(step) = step else { return };
         step.ended = Some(at);
         // An error's first paragraph: a wait's goes on with the page's outline.
@@ -1244,13 +1696,223 @@ impl Agents {
         cx.notify();
     }
 
+    /// A client said hello: the name its sessions' cards show. One the user connected in
+    /// Settings › Agents by name has that; any other MCP client, the name it gives.
+    pub(super) fn hello(&mut self, agent: &str, client: &str) {
+        let name = match Client::from_id(agent) {
+            Some(Client::Other) if !client.is_empty() => client.to_string(),
+            Some(known) => known.name().to_string(),
+            None => return,
+        };
+        self.tasks
+            .names
+            .insert(agent.into(), page::clip(&name, 60).into());
+    }
+
+    /// The session under way of the call's client, on whichever of its connections, or, for a call
+    /// that opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
+    fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
+        // Only a client the user connected has sessions.
+        Client::from_id(&call.agent)?;
+        let live = (self.tasks.tasks.iter_mut()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == call.agent)
+        });
+        if let Some(task) = live {
+            let session = task.session.as_mut().expect("a session, as found");
+            session.calls.push(call.id);
+            session.idle = None;
+            return Some(task.agent.clone());
+        }
+        if call.tool == "list_tabs" {
+            return None;
+        }
+        self.tasks.next += 1;
+        let key = format!("session-{}", self.tasks.next);
+        let name = self.agent_name(&call.agent);
+        let space = self.space(&call.agent, cx);
+        // check.sh reads this line.
+        log!("browser: session {key} of agent {} as {name}", call.agent);
+        let session = Session {
+            agent: call.agent.clone(),
+            tabs: Vec::new(),
+            orders: 0,
+            messages: 0,
+            calls: vec![call.id],
+            idle: None,
+        };
+        self.tasks.tasks.push(Task {
+            agent: key.clone(),
+            cli: None,
+            title: name.clone(),
+            name,
+            session: Some(session),
+            home: 0,
+            space,
+            asked: SharedString::default(),
+            page: None,
+            model: SharedString::default(),
+            state: State::Working,
+            ended: None,
+            messages: Vec::new(),
+            trace: Vec::new(),
+            dismissed: false,
+            left: None,
+            deleted: false,
+            token: String::new(),
+            process: None,
+            asking: None,
+            waiting: None,
+            writing: None,
+        });
+        cx.notify();
+        Some(key)
+    }
+
+    /// The agent's call `call` opened `tab`, which is a page of its session's.
+    pub(super) fn opened(&mut self, agent: &str, call: u64, tab: u64) {
+        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+            return;
+        };
+        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        if !session.tabs.contains(&tab) {
+            session.tabs.push(tab);
+        }
+    }
+
+    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt.
+    pub(super) fn counted(&mut self, agent: &str, call: u64, did: super::Did) {
+        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+            return;
+        };
+        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        match did {
+            super::Did::Order => session.orders += 1,
+            super::Did::Message => session.messages += 1,
+        }
+    }
+
+    /// The client's Space was made again, as the core lost it: its sessions' Space.
+    pub(super) fn client_space_made(&mut self, agent: &str, space: u64) {
+        for task in &mut self.tasks.tasks {
+            if task
+                .session
+                .as_ref()
+                .is_some_and(|session| session.agent == agent)
+            {
+                task.space = space;
+            }
+        }
+    }
+
+    /// The client's last connection closed: its session under way is done.
+    pub(super) fn end_session(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let live = (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        if let Some(key) = live.map(|task| task.agent.clone()) {
+            self.session_done(&key, cx);
+        }
+    }
+
+    /// The user stopped the outside agent `agent`: its session under way is stopped.
+    pub(super) fn session_stopped(&mut self, agent: &str) {
+        let live = (self.tasks.tasks.iter_mut()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
+        });
+        if let Some(task) = live {
+            task.state = State::Stopped;
+            task.ended = Some(SystemTime::now());
+            if let Some(session) = &mut task.session {
+                session.idle = None;
+            }
+        }
+    }
+
+    /// From now, the session ends once IDLE passes without a call.
+    fn idle_from_now(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(session) = self.task_mut(key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        let key = key.to_string();
+        session.idle = Some(cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(IDLE).await;
+            _ = agents.update(cx, |agents, cx| agents.idle(&key, cx));
+        }));
+    }
+
+    fn idle(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(session) = self.task_mut(key).and_then(|task| task.session.as_mut()) else {
+            return;
+        };
+        // It's this timer that runs: it goes once it's done.
+        if let Some(timer) = session.idle.take() {
+            timer.detach();
+        }
+        if !session.calls.is_empty() {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: session {key} idle for {} s", IDLE.as_secs());
+        self.session_done(key, cx);
+    }
+
+    /// The session is done: its card has the tick, with the pages it worked in, the first
+    /// PAGES, to open.
+    fn session_done(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else { return };
+        let Some(session) = &task.session else { return };
+        if task.state != State::Working {
+            return;
+        }
+        let mut tabs = self.pages_of(session, task.space, cx);
+        tabs.truncate(PAGES);
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        task.state = State::Done {
+            result: SharedString::default(),
+            summary: None,
+            tabs,
+        };
+        task.ended = Some(SystemTime::now());
+        if let Some(session) = &mut task.session {
+            session.idle = None;
+        }
+        // check.sh reads this line.
+        log!("browser: session {key} done");
+        cx.notify();
+    }
+
     /// What a call or a run's step does, as its trace says it: on `tab`, else the tab it names,
     /// else the agent's last.
-    fn did(&self, agent: &str, tool: &str, arguments: &Value, tab: Option<u64>, cx: &App) -> tools::Did {
-        let string = |name: &str| arguments.get(name).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    fn did(
+        &self,
+        agent: &str,
+        tool: &str,
+        arguments: &Value,
+        tab: Option<u64>,
+        cx: &App,
+    ) -> tools::Did {
+        let string = |name: &str| {
+            arguments
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
         let tab = (tab.or_else(|| tools::tab_argument(arguments).ok().flatten()))
             .or_else(|| self.current.get(agent).copied());
-        let url = tab.map(|tab| self.browser.tab(tab, cx).url.to_string()).unwrap_or_default();
+        let url = tab
+            .map(|tab| self.browser.tab(tab, cx).url.to_string())
+            .unwrap_or_default();
         let element = (arguments.get("ref").and_then(Value::as_str).zip(tab))
             .and_then(|(name, tab)| self.refs.get(&tab)?.get(name).cloned());
         let named = |element: &page::Element| match element.name.trim().is_empty() {
@@ -1258,7 +1920,13 @@ impl Agents {
             false => format!("“{}”", page::clip(element.name.trim(), 40)),
         };
         let (on, page) = (site(&url), address(&url));
-        let mut did = tools::Did { tool: tool.to_string(), site: on, tab, page, ..Default::default() };
+        let mut did = tools::Did {
+            tool: tool.to_string(),
+            site: on,
+            tab,
+            page,
+            ..Default::default()
+        };
         match tool {
             "open_tab" | "navigate" => match string("url").as_str() {
                 back @ ("back" | "forward") => did.tool = back.to_string(),
@@ -1305,7 +1973,9 @@ impl Agents {
                     (true, None) => String::new(),
                 };
             }
-            "list_tabs" | "ask" => (did.site, did.tab, did.page) = (String::new(), None, String::new()),
+            "list_tabs" | "ask" => {
+                (did.site, did.tab, did.page) = (String::new(), None, String::new())
+            }
             _ => {}
         }
         did
@@ -1321,18 +1991,24 @@ impl Agents {
         };
         let mut tabs = Vec::new();
         for id in ids {
-            let tab = id.as_u64().ok_or("tabs is a list of your tabs' ids, from list_tabs.")?;
+            let tab = id
+                .as_u64()
+                .ok_or("tabs is a list of your tabs' ids, from list_tabs.")?;
             if !tabs.contains(&tab) {
                 tabs.push(tab);
             }
         }
         if tabs.len() > PAGES {
-            return Err(format!("tabs takes {PAGES} tabs at most: leave the user the {PAGES} that matter most."));
+            return Err(format!(
+                "tabs takes {PAGES} tabs at most: leave the user the {PAGES} that matter most."
+            ));
         }
         let space = self.task(agent).map_or(0, |task| task.space);
         let own = self.browser.space_tab_ids(space, cx);
         match tabs.iter().find(|tab| !own.contains(tab)) {
-            Some(tab) => Err(format!("Tab {tab} isn't one of yours: give the ids of tabs in your Space, from list_tabs.")),
+            Some(tab) => Err(format!(
+                "Tab {tab} isn't one of yours: give the ids of tabs in your Space, from list_tabs."
+            )),
             None => Ok(tabs),
         }
     }
@@ -1346,15 +2022,25 @@ impl Agents {
         reply: mpsc::Sender<ToolResult>,
         cx: &mut Context<Self>,
     ) {
-        let text = |name: &str| arguments.get(name).and_then(Value::as_str).unwrap_or("").trim();
+        let text = |name: &str| {
+            arguments
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+        };
         match tool {
             "title" => {
                 let title = text("text");
                 if title.is_empty() {
-                    _ = reply.send(ToolResult::error("text is the task's name, in two to four words."));
+                    _ = reply.send(ToolResult::error(
+                        "text is the task's name, in two to four words.",
+                    ));
                     return;
                 }
-                let Some(task) = self.task_mut(agent) else { return };
+                let Some(task) = self.task_mut(agent) else {
+                    return;
+                };
                 task.title = page::clip(title, 60).into();
                 self.note(agent, "title", "", "");
                 _ = reply.send(ToolResult::text("The task has its name."));
@@ -1365,18 +2051,21 @@ impl Agents {
                     _ = reply.send(ToolResult::error("question is what you ask the user."));
                     return;
                 }
-                let answers: Vec<SharedString> = (arguments.get("answers").and_then(Value::as_array))
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|answer| !answer.is_empty())
-                    .map(|answer| page::clip(answer, 60).into())
-                    .collect();
+                let answers: Vec<SharedString> =
+                    (arguments.get("answers").and_then(Value::as_array))
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::trim)
+                        .filter(|answer| !answer.is_empty())
+                        .map(|answer| page::clip(answer, 60).into())
+                        .collect();
                 // Up to three short answers are buttons; else the user answers in the
                 // conversation.
                 let buttons = match answers.len() <= ANSWERS
-                    && answers.iter().all(|answer| answer.chars().count() <= ANSWER_LENGTH)
+                    && answers
+                        .iter()
+                        .all(|answer| answer.chars().count() <= ANSWER_LENGTH)
                 {
                     true => answers,
                     false => Vec::new(),
@@ -1384,21 +2073,32 @@ impl Agents {
                 // The conversation has the context over the question; the card, the question.
                 let said = match text("context") {
                     "" => page::clip(question, 2000),
-                    context => format!("{}\n\n{}", page::clip(context, 2000), page::clip(question, 300)),
+                    context => format!(
+                        "{}\n\n{}",
+                        page::clip(context, 2000),
+                        page::clip(question, 300)
+                    ),
                 };
                 let question: SharedString = page::clip(card_question(question), 300).into();
                 let number = self.next_request;
                 self.next_request += 1;
-                let Some(task) = self.task_mut(agent) else { return };
+                let Some(task) = self.task_mut(agent) else {
+                    return;
+                };
                 task.messages.push(Message::new(Who::Asked, said));
-                task.state = State::Asking { question, answers: buttons };
+                task.state = State::Asking {
+                    question,
+                    answers: buttons,
+                };
                 task.asking = Some((number, reply));
                 self.note(agent, "ask", "", "");
             }
             "finish" => {
                 let result = text("result");
                 if result.is_empty() {
-                    _ = reply.send(ToolResult::error("result is what you did, in a sentence or two."));
+                    _ = reply.send(ToolResult::error(
+                        "result is what you did, in a sentence or two.",
+                    ));
                     return;
                 }
                 // A model can write its other arguments into result as markup, which would show as
@@ -1420,10 +2120,16 @@ impl Agents {
                     tabs => format!("{} pages", tabs.len()),
                 };
                 // Whole: the card's ellipsis is the only cut.
-                let summary = Some(text("summary")).filter(|summary| !summary.is_empty()).map(SharedString::from);
-                let Some(task) = self.task_mut(agent) else { return };
+                let summary = Some(text("summary"))
+                    .filter(|summary| !summary.is_empty())
+                    .map(SharedString::from);
+                let Some(task) = self.task_mut(agent) else {
+                    return;
+                };
                 // The answer written just before finish is its result, which shows once.
-                if (task.messages.last()).is_some_and(|last| last.who == Who::Agent && last.text.trim() == result) {
+                if (task.messages.last())
+                    .is_some_and(|last| last.who == Who::Agent && last.text.trim() == result)
+                {
                     task.messages.pop();
                     let messages = task.messages.len();
                     for step in &mut task.trace {
@@ -1431,11 +2137,18 @@ impl Agents {
                     }
                 }
                 let result: SharedString = page::clip(result, 2000).into();
-                task.messages.push(Message::new(Who::Result, result.clone()));
-                task.state = State::Done { result, summary, tabs };
+                task.messages
+                    .push(Message::new(Who::Result, result.clone()));
+                task.state = State::Done {
+                    result,
+                    summary,
+                    tabs,
+                };
                 task.ended = Some(SystemTime::now());
                 self.note(agent, "finish", &site, "");
-                _ = reply.send(ToolResult::text("Done. The user sees your result. Stop here."));
+                _ = reply.send(ToolResult::text(
+                    "Done. The user sees your result. Stop here.",
+                ));
             }
             _ => _ = reply.send(ToolResult::error(format!("There's no tool {tool}."))),
         }
@@ -1446,7 +2159,9 @@ impl Agents {
 /// An ask's line on the card: the question alone. An agent that put what the user needs to know
 /// in it too has its last sentence that asks, else all of it.
 pub fn card_question(asked: &str) -> &str {
-    let Some(end) = asked.rfind('?') else { return asked };
+    let Some(end) = asked.rfind('?') else {
+        return asked;
+    };
     let before = &asked[..end];
     // A sentence starts after a newline, or after an end and a space with no lowercase after it,
     // so "i.e. the museum" stays one.
@@ -1463,8 +2178,7 @@ pub fn card_question(asked: &str) -> &str {
 }
 
 /// What finish says to a result with its other arguments written into it.
-pub const FINISH_AGAIN: &str =
-    "result has your other arguments written into it: call finish again with result, summary and tabs each an argument of its own.";
+pub const FINISH_AGAIN: &str = "result has your other arguments written into it: call finish again with result, summary and tabs each an argument of its own.";
 
 /// What Retry says to the agent.
 const RETRY: &str = "Go on from where you stopped.";
@@ -1484,7 +2198,11 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
 fn conversation(task: &Task) -> String {
     let mut text = first_message(&task.asked, task.page.as_ref());
     for message in &task.messages {
-        let who = if message.who == Who::User { "Me" } else { "You" };
+        let who = if message.who == Who::User {
+            "Me"
+        } else {
+            "You"
+        };
         text.push_str(&format!("\n\n{who}: {}", message.text));
     }
     text.push_str("\n\nGo on from here.");
@@ -1497,15 +2215,15 @@ fn clock(at: u64) -> SharedString {
 }
 
 fn seconds(at: SystemTime) -> u64 {
-    at.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_secs())
+    at.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
 }
 
-
-/// What a task at its plan's limit says: when it resets, if the CLI said.
-fn limit_words(cli: Cli, resets: &Option<SharedString>) -> String {
+/// What a task at its plan's limit says: when it resets, if the CLI, by `name`, said.
+fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     match resets {
         Some(at) => format!("Limit resets at {at}"),
-        None => format!("{} hit its usage limit", cli.name()),
+        None => format!("{name} hit its usage limit"),
     }
 }
 
@@ -1513,7 +2231,11 @@ fn limit_words(cli: Cli, resets: &Option<SharedString>) -> String {
 /// make it a heading, a list's item or bold.
 fn first_words(result: &str) -> SharedString {
     let line = (result.lines())
-        .map(|line| line.trim().trim_start_matches(['#', '>', '-', '*', ' ']).trim_end_matches(['*', ' ']))
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .trim_end_matches(['*', ' '])
+        })
         .find(|line| !line.is_empty());
     match line {
         Some(line) => page::clip(&line.replace("**", ""), 120).into(),
@@ -1578,7 +2300,9 @@ pub fn fold(
     // Which messages show as lines of their own.
     let mut shown = vec![false; messages.len()];
     let mut first = 0;
-    let turns: Vec<&[Message]> = messages.split_inclusive(|message| message.who == Who::User).collect();
+    let turns: Vec<&[Message]> = messages
+        .split_inclusive(|message| message.who == Who::User)
+        .collect();
     for turn in &turns {
         // A turn the user has written after is over, even as the next is under way.
         let turn_ended = ended || turn.last().is_some_and(|message| message.who == Who::User);
@@ -1620,6 +2344,19 @@ pub fn fold(
     lines
 }
 
+/// A session's lines: its traces' steps, each a line of its own, newest last.
+fn steps(lines: Vec<Line>) -> Vec<Line> {
+    let steps = lines.into_iter().flat_map(|line| match line {
+        Line::Trace(trace) => trace.items,
+        _ => Vec::new(),
+    });
+    (steps.filter_map(|item| match item {
+        TraceItem::Step(step) => Some(Line::Step(step)),
+        TraceItem::Said(_) => None,
+    }))
+    .collect()
+}
+
 /// The stretch of work a trace is made of, as it gathers.
 #[derive(Default)]
 struct Stretch<'a> {
@@ -1638,7 +2375,10 @@ enum Gathered<'a> {
 impl<'a> Stretch<'a> {
     fn step(&mut self, key: usize, step: &'a Traced) {
         self.key.get_or_insert(key);
-        self.started = Some(self.started.map_or(step.started, |started| started.min(step.started)));
+        self.started = Some(
+            self.started
+                .map_or(step.started, |started| started.min(step.started)),
+        );
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
         self.gathered.push(Gathered::Step(key, step));
@@ -1676,9 +2416,18 @@ impl<'a> Stretch<'a> {
         let took = (!running).then(|| {
             let started = started.unwrap_or_else(Instant::now);
             let ended = ended.into_iter().chain(end).max().unwrap_or(started);
-            (ended.saturating_duration_since(started).as_secs_f32().round() as u64).max(1)
+            (ended
+                .saturating_duration_since(started)
+                .as_secs_f32()
+                .round() as u64)
+                .max(1)
         });
-        lines.push(Line::Trace(Trace { key, running, took, items }));
+        lines.push(Line::Trace(Trace {
+            key,
+            running,
+            took,
+            items,
+        }));
     }
 }
 
@@ -1713,9 +2462,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             matches!(line, Together::Steps(steps)
                 if steps[0].1.did.tool == did.tool && steps[0].1.did.target == did.target)
         };
-        let on_tab = |line: &Together| {
-            matches!(line, Together::Steps(steps) if steps.iter().any(|(_, each)| each.did.tab == did.tab))
-        };
+        let on_tab = |line: &Together| matches!(line, Together::Steps(steps) if steps.iter().any(|(_, each)| each.did.tab == did.tab));
         let joins = (lines.len() > from && groups)
             .then(|| (from..lines.len()).rev().find(|&at| like(&lines[at])))
             .flatten()
@@ -1738,8 +2485,12 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
 
 /// A line of a trace: a step, or a turn's same step on several tabs, which opens to each tab's.
 fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
-    let &[(key, step)] = steps else { return trace_group(steps) };
-    let took = step.ended.map(|ended| ended.saturating_duration_since(step.started));
+    let &[(key, step)] = steps else {
+        return trace_group(steps);
+    };
+    let took = step
+        .ended
+        .map(|ended| ended.saturating_duration_since(step.started));
     let description = match (&step.error, took) {
         (Some(error), _) => tools::reason(error),
         // A wait's title says its time.
@@ -1751,10 +2502,14 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
     let text = (!step.did.text.is_empty()).then(|| step.did.text.clone());
     let opened = matches!(step.did.tool.as_str(), "open_tab" | "navigate");
     let opens = match (&step.error, &step.picture, text) {
-        (Some(error), _, Some(address)) if opened => Opens::Text(format!("{address}\n{error}").into()),
+        (Some(error), _, Some(address)) if opened => {
+            Opens::Text(format!("{address}\n{error}").into())
+        }
         (Some(error), _, _) => Opens::Text(error.clone()),
         (None, Some(picture), _) => Opens::Picture(picture.clone()),
-        (None, None, Some(text)) if opened || step.did.tool == "thought" => Opens::Text(text.into()),
+        (None, None, Some(text)) if opened || step.did.tool == "thought" => {
+            Opens::Text(text.into())
+        }
         _ => Opens::Nothing,
     };
     TraceStep {
@@ -1778,7 +2533,10 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             let line = trace_step(&[(key, step)]);
             match step.did.page.is_empty() {
                 true => line,
-                false => TraceStep { title: step.did.page.clone().into(), ..line },
+                false => TraceStep {
+                    title: step.did.page.clone().into(),
+                    ..line
+                },
             }
         })
         .collect();
@@ -1795,9 +2553,17 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
     if steps.iter().any(|(_, step)| step.did.text != did.text) {
         did.text.clear();
     }
-    let started = steps.iter().map(|(_, step)| step.started).min().unwrap_or(first.started);
-    let ended = steps.iter().map(|(_, step)| step.ended).collect::<Option<Vec<_>>>();
-    let took = (ended.into_iter().flatten().max()).map(|ended| ended.saturating_duration_since(started));
+    let started = steps
+        .iter()
+        .map(|(_, step)| step.started)
+        .min()
+        .unwrap_or(first.started);
+    let ended = steps
+        .iter()
+        .map(|(_, step)| step.ended)
+        .collect::<Option<Vec<_>>>();
+    let took =
+        (ended.into_iter().flatten().max()).map(|ended| ended.saturating_duration_since(started));
     let description = match (running, failed) {
         (1.., _) => format!("{} of {count}", count - running),
         // Failed on each, it says why if it's the same why.
@@ -1810,7 +2576,9 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         }
         (0, 1..) => format!("{failed} failed"),
         _ => match took {
-            Some(took) if took >= Duration::from_secs(1) && did.tool != "wait" => duration(took.as_secs()),
+            Some(took) if took >= Duration::from_secs(1) && did.tool != "wait" => {
+                duration(took.as_secs())
+            }
             _ => String::new(),
         },
     };
@@ -1828,6 +2596,33 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
 /// A screenshot's picture, from its JPEG in base64.
 fn picture(base64: &str) -> Option<Arc<gpui::Image>> {
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(base64).ok()?;
-    Some(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, bytes)))
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64)
+        .ok()?;
+    Some(Arc::new(gpui::Image::from_bytes(
+        gpui::ImageFormat::Jpeg,
+        bytes,
+    )))
+}
+
+/// A session's receipt as it ends: what it did that had consequences, the orders and messages the
+/// user allowed it, once done, "Done · 1 order placed · 2 messages sent". Its pages are Open's
+/// button's to count. With none of them, "Done 13:28", when it ended.
+fn receipt(session: &Session, ended: &str) -> String {
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let did: Vec<String> = [
+        count(session.orders, "order placed", "orders placed"),
+        count(session.messages, "message sent", "messages sent"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    match did.is_empty() {
+        true => format!("Done {ended}").trim_end().to_string(),
+        false => format!("Done · {}", did.join(" · ")),
+    }
 }

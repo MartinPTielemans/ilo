@@ -10,10 +10,8 @@ use gpui::{
     OperatingSystem,
 };
 
-use super::commands::{
-    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, ShellHandle, keystroke_keys, keystroke_label,
-};
 use super::Command;
+use super::commands::{BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label};
 
 /// Keys that run something other than a command: AppKit's Hide, Hide Others and Minimize, which
 /// main.rs binds, the Edit menu's, which reach the focused page or field, and the View menu's
@@ -73,13 +71,12 @@ const PREFER_ILO: &str = "prefer-ilo";
 
 impl Global for UserKeys {}
 
-static DEFAULTS: UserKeys =
-    UserKeys {
-        set: Vec::new(),
-        favorites_unnumbered: false,
-        last_tab_ninth: false,
-        ilo_first: Vec::new(),
-    };
+static DEFAULTS: UserKeys = UserKeys {
+    set: Vec::new(),
+    favorites_unnumbered: false,
+    last_tab_ninth: false,
+    ilo_first: Vec::new(),
+};
 
 /// How soon after a page kept a shortcut a second press of it runs ilo's command, as Arc's does.
 const SECOND_PRESS: Duration = Duration::from_secs(1);
@@ -142,13 +139,16 @@ pub fn rebindable(command: Command) -> bool {
             | Command::MoveToSpace(_)
             | Command::PinToSpace(_)
             | Command::OpenFolder(_)
+            | Command::MoveToFolder(_)
             | Command::EditTheme
     )
 }
 
 /// Whether `command` reaches the browser before the page, on whichever key it has.
 pub fn reserved(command: Command) -> bool {
-    SHORTCUTS.iter().any(|&(_, each, reserved)| each == command && reserved)
+    SHORTCUTS
+        .iter()
+        .any(|&(_, each, reserved)| each == command && reserved)
 }
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
@@ -214,7 +214,7 @@ pub(super) fn pressed_as(key: &str) -> Vec<String> {
     }
 }
 
-fn pressed_off_the_mac(key: &str) -> Vec<String> {
+pub(super) fn pressed_off_the_mac(key: &str) -> Vec<String> {
     let ([ctrl, alt, shift, cmd], rest) = held(key);
     // ⌃Tab stays Ctrl+Tab, as Alt+Tab is the desktop's, and a key with ⌃ and ⌥ has no Alt of its
     // own.
@@ -226,8 +226,12 @@ fn pressed_off_the_mac(key: &str) -> Vec<String> {
     if CHROME_ALT_KEYS.iter().any(|&(chrome, _)| chrome == pressed) {
         return Vec::new();
     }
-    let chrome = CHROME_ALT_KEYS.iter().filter(|&&(_, ours)| ours == Some(key));
-    std::iter::once(pressed).chain(chrome.map(|&(chrome, _)| chrome.to_string())).collect()
+    let chrome = CHROME_ALT_KEYS
+        .iter()
+        .filter(|&&(_, ours)| ours == Some(key));
+    std::iter::once(pressed)
+        .chain(chrome.map(|&(chrome, _)| chrome.to_string()))
+        .collect()
 }
 
 /// A binding of `key`, written the Mac's way, to `action` while `context` has the keyboard, in a
@@ -239,7 +243,9 @@ pub fn view_binding(key: &str, action: Box<dyn Action>, context: &str, cx: &App)
         true => written([cmd, ctrl || alt, shift, false], rest),
         false => key.to_string(),
     };
-    let context = KeyBindingContextPredicate::parse(context).ok().map(std::rc::Rc::new);
+    let context = KeyBindingContextPredicate::parse(context)
+        .ok()
+        .map(std::rc::Rc::new);
     KeyBinding::load(&pressed, action, context, false, None, cx).expect("a valid key")
 }
 
@@ -271,7 +277,11 @@ fn pressed_in_page(key: &str, latin_key: &str, modifiers: u32, off_the_mac: bool
         true => bc::BC_MODIFIER_CONTROL,
         false => bc::BC_MODIFIER_META,
     };
-    let name = if modifiers & command != 0 && !latin_key.is_empty() { latin_key } else { key };
+    let name = if modifiers & command != 0 && !latin_key.is_empty() {
+        latin_key
+    } else {
+        key
+    };
     keystroke + &gpui_key(name)
 }
 
@@ -310,7 +320,9 @@ pub fn written_as(keystroke: &str) -> String {
 }
 
 fn written_off_the_mac(keystroke: &str) -> String {
-    if let Some(&(_, Some(ours))) = CHROME_ALT_KEYS.iter().find(|&&(chrome, _)| chrome == keystroke)
+    if let Some(&(_, Some(ours))) = CHROME_ALT_KEYS
+        .iter()
+        .find(|&&(chrome, _)| chrome == keystroke)
     {
         return ours.to_string();
     }
@@ -326,7 +338,8 @@ fn written_off_the_mac(keystroke: &str) -> String {
     let as_control = written([alt, false, shift, ctrl], rest);
     let known = |key: &str| {
         let keys = SHORTCUTS.iter().map(|&(key, ..)| key);
-        keys.chain(SYSTEM_KEYS.iter().map(|&(key, _)| key)).any(|each| each == key)
+        keys.chain(SYSTEM_KEYS.iter().map(|&(key, _)| key))
+            .any(|each| each == key)
     };
     match alt && (!ctrl || known(&as_control)) {
         true => as_control,
@@ -360,7 +373,9 @@ const MODIFIERS: [&str; 4] = ["ctrl-", "alt-", "shift-", "cmd-"];
 pub fn recorded(keystroke: &Keystroke) -> Result<Vec<String>, Refused> {
     let modifiers = &keystroke.modifiers;
     let key = keystroke.key.as_str();
-    let function = key.strip_prefix('f').is_some_and(|number| number.parse::<u8>().is_ok());
+    let function = key
+        .strip_prefix('f')
+        .is_some_and(|number| number.parse::<u8>().is_ok());
     let text = |shift: bool| {
         let mut text = String::new();
         for (held, name) in [
@@ -407,7 +422,8 @@ impl UserKeys {
     /// The command `keystroke` runs, if it's a shortcut that reaches the browser before the page,
     /// with `reserved`, or one the page gets first.
     pub fn command_for(&self, keystroke: &str, reserved: bool) -> Option<Command> {
-        self.command_with(keystroke).filter(|&command| self.before_page(command) == reserved)
+        self.command_with(keystroke)
+            .filter(|&command| self.before_page(command) == reserved)
     }
 
     /// Whether `command`'s keys reach the browser before the page: a reserved one's always, and
@@ -445,11 +461,15 @@ impl UserKeys {
     /// it, such as ⌘L, so the keys typed right after it wait for that field. A reserved one's bar
     /// holds them itself, since it opens before the page could see them.
     pub fn holds_keys(&self, keystroke: &str) -> bool {
-        self.command_for(keystroke, false).is_some_and(Command::opens_field)
+        self.command_for(keystroke, false)
+            .is_some_and(Command::opens_field)
     }
 
     fn command_with(&self, keystroke: &str) -> Option<Command> {
-        let user = self.set.iter().find(|(_, keys)| keys.iter().any(|key| key == keystroke));
+        let user = self
+            .set
+            .iter()
+            .find(|(_, keys)| keys.iter().any(|key| key == keystroke));
         user.map(|&(command, _)| command).or_else(|| {
             (SHORTCUTS.iter())
                 .find(|&&(key, command, _)| key == keystroke && !self.is_set(command))
@@ -465,15 +485,22 @@ impl UserKeys {
     /// The same keys one by one, for a tooltip's chips: ⇧, ⌘ and L for ⇧⌘L. None if no key runs
     /// `command`.
     pub fn chips(&self, command: Command) -> Vec<String> {
-        self.keys(command).first().map(|&key| keystroke_keys(key)).unwrap_or_default()
+        self.keys(command)
+            .first()
+            .map(|&key| keystroke_keys(key))
+            .unwrap_or_default()
     }
 
     /// Each key and the command it runs.
     fn bindings(&self) -> Vec<(&str, Command)> {
-        let defaults = SHORTCUTS.iter().filter(|&&(_, command, _)| !self.is_set(command));
+        let defaults = SHORTCUTS
+            .iter()
+            .filter(|&&(_, command, _)| !self.is_set(command));
         let user = (self.set.iter())
             .flat_map(|(command, keys)| keys.iter().map(|key| (key.as_str(), *command)));
-        (defaults.map(|&(key, command, _)| (key, command))).chain(user).collect()
+        (defaults.map(|&(key, command, _)| (key, command)))
+            .chain(user)
+            .collect()
     }
 
     /// Gives `command` `keys`, or none, taking each from the command that has it, as a user's
@@ -556,11 +583,19 @@ impl UserKeys {
             let words = std::iter::once(name.as_str()).chain(keys.iter().map(String::as_str));
             words.collect::<Vec<_>>().join(" ") + "\n"
         });
-        let unnumbered = self.favorites_unnumbered.then(|| format!("{FAVORITES_UNNUMBERED}\n"));
+        let unnumbered = self
+            .favorites_unnumbered
+            .then(|| format!("{FAVORITES_UNNUMBERED}\n"));
         let ninth = self.last_tab_ninth.then(|| format!("{LAST_TAB_NINTH}\n"));
-        let ilo_first =
-            self.ilo_first.iter().map(|command| format!("{PREFER_ILO} {}\n", command.key_name()));
-        lines.chain(unnumbered).chain(ninth).chain(ilo_first).collect()
+        let ilo_first = self
+            .ilo_first
+            .iter()
+            .map(|command| format!("{PREFER_ILO} {}\n", command.key_name()));
+        lines
+            .chain(unnumbered)
+            .chain(ninth)
+            .chain(ilo_first)
+            .collect()
     }
 
     /// What to_text wrote. A line it can't read, or keys another command keeps, is left out.
@@ -609,7 +644,9 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
     // disables the earlier ones, for keystrokes and for the menus' key equivalents, and the
     // bindings after it win again.
     let old = changed.iter().flat_map(|&command| before.keys(command));
-    let old: Vec<KeyBinding> = old.flat_map(|key| bindings_of(key, Box::new(NoAction), cx)).collect();
+    let old: Vec<KeyBinding> = old
+        .flat_map(|key| bindings_of(key, Box::new(NoAction), cx))
+        .collect();
     let app: &App = cx;
     let new = changed.iter().flat_map(|&command| {
         let keys = after.keys(command).into_iter();
@@ -627,11 +664,15 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
         // check.sh waits for these lines.
         match keys.is_empty() {
             true => log!("browser: shortcut {} none", command.key_name()),
-            false => log!("browser: shortcut {} {}", command.key_name(), keys.join(" ")),
+            false => log!(
+                "browser: shortcut {} {}",
+                command.key_name(),
+                keys.join(" ")
+            ),
         }
     }
     cx.set_global(after);
-    if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
+    if let Some(shell) = super::commands::key_shell(cx) {
         shell.update(cx, |shell, cx| shell.refresh_menus(cx)).ok();
     }
     result
@@ -650,7 +691,10 @@ pub(super) fn key_bindings(cx: &App) -> Vec<KeyBinding> {
 pub fn shortcut_found(typed: &str, name: &str, keys: Option<&str>) -> bool {
     let name = name.to_lowercase();
     let starts_a_word = |typed: &str| name.split([' ', '/']).any(|word| word.starts_with(typed));
-    if typed.split_whitespace().all(|typed| starts_a_word(&typed.to_lowercase())) {
+    if typed
+        .split_whitespace()
+        .all(|typed| starts_a_word(&typed.to_lowercase()))
+    {
         return true;
     }
     let Some((held, key)) = keys_named_in(typed).filter(|&(held, _)| held != 0) else {
@@ -739,17 +783,20 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use gpui::{
-        Context, FocusHandle, Modifiers, TestAppContext, VisualTestContext, Window, div,
-        prelude::*,
+        Context, FocusHandle, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*,
     };
 
-    use super::*;
+    use super::{super::commands::ShellHandle, *};
 
     /// Whether the Shortcuts tab's search for `typed` finds each of `rows`, a name and the
     /// command's keystroke as a binding writes it, or none.
     fn found(typed: &str, rows: &[(&str, &str)]) -> Vec<bool> {
         let found = |&(name, keys): &(&str, &str)| {
-            shortcut_found(typed, name, (!keys.is_empty()).then(|| keystroke_label(keys)).as_deref())
+            shortcut_found(
+                typed,
+                name,
+                (!keys.is_empty()).then(|| keystroke_label(keys)).as_deref(),
+            )
         };
         rows.iter().map(found).collect()
     }
@@ -768,9 +815,18 @@ mod tests {
     fn shortcuts_search_finds_rows_by_their_names_words() {
         assert_eq!(found("", ROWS), [true; 6]);
         assert_eq!(found("tab", ROWS), [true, true, true, false, false, false]);
-        assert_eq!(found("task", ROWS), [false, false, false, false, false, true]);
-        assert_eq!(found("TAB new", ROWS), [true, false, false, false, false, false]);
-        assert_eq!(found("clo", ROWS), [false, true, false, false, false, false]);
+        assert_eq!(
+            found("task", ROWS),
+            [false, false, false, false, false, true]
+        );
+        assert_eq!(
+            found("TAB new", ROWS),
+            [true, false, false, false, false, false]
+        );
+        assert_eq!(
+            found("clo", ROWS),
+            [false, true, false, false, false, false]
+        );
         assert_eq!(found("ab", ROWS), [false; 6]);
     }
 
@@ -778,12 +834,30 @@ mod tests {
     /// and a row with no keys only by its name.
     #[test]
     fn shortcuts_search_finds_rows_by_their_keys() {
-        assert_eq!(found("cmd t", ROWS), [true, true, false, false, false, false]);
-        assert_eq!(found("shift cmd t", ROWS), [false, true, false, false, false, false]);
-        assert_eq!(found("⇧⌘A", ROWS), [false, false, true, false, false, false]);
-        assert_eq!(found("Command+Shift+C", ROWS), [false, false, false, false, true, false]);
-        assert_eq!(found("cmd -", ROWS), [false, false, false, true, false, false]);
-        assert_eq!(found("shift", ROWS), [false, true, true, false, true, false]);
+        assert_eq!(
+            found("cmd t", ROWS),
+            [true, true, false, false, false, false]
+        );
+        assert_eq!(
+            found("shift cmd t", ROWS),
+            [false, true, false, false, false, false]
+        );
+        assert_eq!(
+            found("⇧⌘A", ROWS),
+            [false, false, true, false, false, false]
+        );
+        assert_eq!(
+            found("Command+Shift+C", ROWS),
+            [false, false, false, false, true, false]
+        );
+        assert_eq!(
+            found("cmd -", ROWS),
+            [false, false, false, true, false, false]
+        );
+        assert_eq!(
+            found("shift", ROWS),
+            [false, true, true, false, true, false]
+        );
         assert_eq!(found("ctrl t", ROWS), [false; 6]);
         // Two keys besides the modifiers name no shortcut.
         assert_eq!(found("cmd t a", ROWS), [false; 6]);
@@ -810,7 +884,10 @@ mod tests {
 
     impl Render for Root {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().key_context(KEY_CONTEXT).track_focus(&self.0).size_full()
+            div()
+                .key_context(KEY_CONTEXT)
+                .track_focus(&self.0)
+                .size_full()
         }
     }
 
@@ -844,7 +921,11 @@ mod tests {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
             let binding = keymap.bindings_for_action(&Run(Command::EditUrl)).next();
-            binding.map(|binding| binding.keystrokes()[0].inner().unparse(OperatingSystem::Mac))
+            binding.map(|binding| {
+                binding.keystrokes()[0]
+                    .inner()
+                    .unparse(OperatingSystem::Mac)
+            })
         });
         assert_eq!(shown.as_deref(), Some("cmd-k"));
         // Back to ⌘L, which runs it again, and ⌘K nothing.
@@ -863,7 +944,8 @@ mod tests {
 
         impl Render for Reveal {
             fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-                self.0.update(cx, |shell, cx| shell.render_reveal(window, cx))
+                self.0
+                    .update(cx, |shell, cx| shell.render_reveal(window, cx))
             }
         }
 
@@ -871,14 +953,18 @@ mod tests {
             cx.bind_keys(key_bindings(cx));
             cx.on_action(|run: &Run, cx| {
                 let shell = cx.global::<ShellHandle>().0.clone();
-                shell.update(cx, |shell, cx| shell.run(run.0, "ui", cx)).ok();
+                shell
+                    .update(cx, |shell, cx| shell.run(run.0, "ui", cx))
+                    .ok();
             });
         });
         let (shell, _) = shell_with(cx, &[], &[1], Default::default());
         cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
-        let window = cx.update(|cx| cx.open_window(Default::default(), |_, cx| {
-            cx.new(|_| Reveal(shell.clone()))
-        }));
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                cx.new(|_| Reveal(shell.clone()))
+            })
+        });
         let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
         // The panel comes out only over a hidden sidebar.
         shell.update(&mut cx, |shell, cx| {
@@ -905,7 +991,11 @@ mod tests {
 
         impl Render for Field {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().key_context(KEY_CONTEXT).track_focus(&self.0).size_full().child(self.1.clone())
+                div()
+                    .key_context(KEY_CONTEXT)
+                    .track_focus(&self.0)
+                    .size_full()
+                    .child(self.1.clone())
             }
         }
 
@@ -929,8 +1019,13 @@ mod tests {
         let window = window.unwrap();
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         cx.simulate_keystrokes("ctrl-d");
-        let field = window.update(&mut cx, |field, _, _| field.1.clone()).unwrap();
-        assert_eq!(field.read_with(&cx, |input, _| input.text().to_string()), "a");
+        let field = window
+            .update(&mut cx, |field, _, _| field.1.clone())
+            .unwrap();
+        assert_eq!(
+            field.read_with(&cx, |input, _| input.text().to_string()),
+            "a"
+        );
         assert_eq!(ran.take(), []);
 
         window
@@ -960,10 +1055,16 @@ mod tests {
         assert_eq!(ran("ֆ", "f", false), Some(Command::Find));
         // ⇧ comes with the Latin layout's character, as a page's key does on a Latin layout.
         let shifted = BC_MODIFIER_META | BC_MODIFIER_SHIFT;
-        assert_eq!(page_keystroke("ט", "T", shifted), page_keystroke("T", "", shifted));
+        assert_eq!(
+            page_keystroke("ט", "T", shifted),
+            page_keystroke("T", "", shifted)
+        );
         // A Latin layout's key, which the core gives none for, is its character, as on AZERTY.
         assert_eq!(page_keystroke("a", "", BC_MODIFIER_META), "cmd-a");
-        assert_eq!(page_keystroke("ArrowLeft", "", BC_MODIFIER_META), "cmd-left");
+        assert_eq!(
+            page_keystroke("ArrowLeft", "", BC_MODIFIER_META),
+            "cmd-left"
+        );
         // Without ⌘ the layout's own character stays.
         assert_eq!(page_keystroke("א", "t", BC_MODIFIER_CONTROL), "ctrl-א");
     }
@@ -990,7 +1091,10 @@ mod tests {
         assert_eq!(pressed("Е", "T", shifted), pressed("T", "", shifted));
         assert_eq!(pressed("е", "t", BC_MODIFIER_ALT), "ctrl-е");
         // ⌘ is Ctrl there, so the Mac's ⌘ the core names isn't one.
-        assert_eq!(pressed_in_page("е", "t", crate::bc::BC_MODIFIER_META, true), "cmd-е");
+        assert_eq!(
+            pressed_in_page("е", "t", crate::bc::BC_MODIFIER_META, true),
+            "cmd-е"
+        );
     }
 
     /// A rebound key runs its command, and the key it had runs nothing.
@@ -1027,7 +1131,13 @@ mod tests {
                 assert!(pressed.is_empty(), "{key} takes Chrome's key");
                 continue;
             }
-            assert_eq!(pressed.first().map(|first| written_off_the_mac(first)).as_deref(), Some(key));
+            assert_eq!(
+                pressed
+                    .first()
+                    .map(|first| written_off_the_mac(first))
+                    .as_deref(),
+                Some(key)
+            );
             for each in pressed {
                 match taken.iter().find(|(other, _)| *other == each) {
                     Some(&(_, other)) => assert_eq!(other, command, "{each}"),
@@ -1057,7 +1167,8 @@ mod tests {
         assert_eq!(user.chips(Command::ViewLibrary), ["⇧", "⌘", "L"]);
         assert_eq!(user.chips(Command::Back), ["⌘", "["]);
         assert_eq!(user.chips(Command::Stop), ["⌘", "."]);
-        user.set(Command::ViewLibrary, keys(&["ctrl-alt-space"])).unwrap();
+        user.set(Command::ViewLibrary, keys(&["ctrl-alt-space"]))
+            .unwrap();
         assert_eq!(user.chips(Command::ViewLibrary), ["⌃", "⌥", "Space"]);
         user.set(Command::ViewLibrary, vec![]).unwrap();
         assert!(user.chips(Command::ViewLibrary).is_empty());
@@ -1091,12 +1202,21 @@ mod tests {
     #[test]
     fn a_spaces_keys_change_by_its_number() {
         let mut user = UserKeys::default();
-        assert_eq!(user.set(Command::SelectSpace(1), keys(&["alt-cmd-2"])), Ok(vec![]));
-        assert_eq!(user.command_for("alt-cmd-2", false), Some(Command::SelectSpace(1)));
+        assert_eq!(
+            user.set(Command::SelectSpace(1), keys(&["alt-cmd-2"])),
+            Ok(vec![])
+        );
+        assert_eq!(
+            user.command_for("alt-cmd-2", false),
+            Some(Command::SelectSpace(1))
+        );
         assert_eq!(user.command_for("ctrl-2", false), None);
         assert_eq!(user.keys(Command::SelectSpace(0)), ["ctrl-1"]);
         // ⌃3 moves to the first Space, and the third has none.
-        assert_eq!(user.set(Command::SelectSpace(0), keys(&["ctrl-3"])), Ok(vec![Command::SelectSpace(2)]));
+        assert_eq!(
+            user.set(Command::SelectSpace(0), keys(&["ctrl-3"])),
+            Ok(vec![Command::SelectSpace(2)])
+        );
         assert!(user.keys(Command::SelectSpace(2)).is_empty());
         let saved = user.to_text();
         assert!(saved.contains("select-space-2 alt-cmd-2\n"), "{saved}");
@@ -1108,20 +1228,38 @@ mod tests {
     #[test]
     fn a_taken_key_moves_unless_it_is_reserved() {
         let mut user = UserKeys::default();
-        assert_eq!(user.set(Command::EditUrl, keys(&["shift-cmd-k"])), Ok(vec![Command::Clear]));
-        assert_eq!(user.command_for("shift-cmd-k", false), Some(Command::EditUrl));
+        assert_eq!(
+            user.set(Command::EditUrl, keys(&["shift-cmd-k"])),
+            Ok(vec![Command::Clear])
+        );
+        assert_eq!(
+            user.command_for("shift-cmd-k", false),
+            Some(Command::EditUrl)
+        );
         assert!(user.keys(Command::Clear).is_empty());
         // A command with two keys keeps the other.
         user.set(Command::Find, keys(&["cmd-["])).unwrap();
         assert_eq!(user.keys(Command::Back), ["cmd-left"]);
         let before = user.clone();
         let taken = |command| Err(Refused::Taken(Holder::Command(command)));
-        assert_eq!(user.set(Command::EditUrl, keys(&["cmd-t"])), taken(Command::NewTab));
-        assert_eq!(user.set(Command::EditUrl, keys(&["cmd-q"])), taken(Command::Quit));
-        assert_eq!(user.set(Command::EditUrl, keys(&["cmd-1"])), taken(Command::SelectTab(0)));
+        assert_eq!(
+            user.set(Command::EditUrl, keys(&["cmd-t"])),
+            taken(Command::NewTab)
+        );
+        assert_eq!(
+            user.set(Command::EditUrl, keys(&["cmd-q"])),
+            taken(Command::Quit)
+        );
+        assert_eq!(
+            user.set(Command::EditUrl, keys(&["cmd-1"])),
+            taken(Command::SelectTab(0))
+        );
         let system = Err(Refused::Taken(Holder::System("Copy")));
         assert_eq!(user.set(Command::EditUrl, keys(&["cmd-c"])), system);
-        assert_eq!(user.set(Command::Quit, keys(&["cmd-k"])), taken(Command::Quit));
+        assert_eq!(
+            user.set(Command::Quit, keys(&["cmd-k"])),
+            taken(Command::Quit)
+        );
         assert_eq!(user, before);
     }
 
@@ -1152,7 +1290,10 @@ mod tests {
         assert_eq!(UserKeys::parse(&user.to_text()), user);
         user.set_last_tab_ninth(true);
         assert_eq!(UserKeys::parse(&user.to_text()), user);
-        assert_eq!(UserKeys::parse("quit cmd-k\nnothing cmd-j\n"), UserKeys::default());
+        assert_eq!(
+            UserKeys::parse("quit cmd-k\nnothing cmd-j\n"),
+            UserKeys::default()
+        );
     }
 
     /// Prefer ilo has a shortcut the page gets first reach ilo before the page, as Arc's Prefer Arc
@@ -1182,7 +1323,10 @@ mod tests {
         assert!(!UserKeys::can_prefer(Command::NewTab) && !UserKeys::can_prefer(Command::Quit));
         user.set_prefers_ilo(Command::NewTab, true);
         assert!(!user.prefers_ilo(Command::NewTab) && user.before_page(Command::NewTab));
-        assert_eq!(UserKeys::parse("prefer-ilo new-tab\nprefer-ilo quit\n"), UserKeys::default());
+        assert_eq!(
+            UserKeys::parse("prefer-ilo new-tab\nprefer-ilo quit\n"),
+            UserKeys::default()
+        );
     }
 
     /// A shortcut the page kept runs ilo's command on a second press within a second, as Arc's
@@ -1194,15 +1338,33 @@ mod tests {
         let at = |ms: u64| start + Duration::from_millis(ms);
         let mut second = SecondPress::default();
         assert!(!second.press(1, "cmd-f", true, false, at(0)));
-        assert!(!second.press(1, "cmd-f", true, true, at(200)), "a repeat was a press");
+        assert!(
+            !second.press(1, "cmd-f", true, true, at(200)),
+            "a repeat was a press"
+        );
         assert!(second.press(1, "cmd-f", true, false, at(400)));
-        assert!(!second.press(1, "cmd-f", true, false, at(600)), "a third press ran it again");
-        assert!(!second.press(1, "cmd-f", true, false, at(1700)), "1.1 s apart ran it");
-        assert!(!second.press(2, "cmd-f", true, false, at(1800)), "another tab's ran it");
+        assert!(
+            !second.press(1, "cmd-f", true, false, at(600)),
+            "a third press ran it again"
+        );
+        assert!(
+            !second.press(1, "cmd-f", true, false, at(1700)),
+            "1.1 s apart ran it"
+        );
+        assert!(
+            !second.press(2, "cmd-f", true, false, at(1800)),
+            "another tab's ran it"
+        );
         assert!(!second.press(2, "a", false, false, at(1900)));
-        assert!(!second.press(2, "cmd-f", true, false, at(2000)), "a key between didn't count");
+        assert!(
+            !second.press(2, "cmd-f", true, false, at(2000)),
+            "a key between didn't count"
+        );
         second.declined("cmd-f");
-        assert!(!second.press(2, "cmd-f", true, false, at(2100)), "a declined press counted");
+        assert!(
+            !second.press(2, "cmd-f", true, false, at(2100)),
+            "a declined press counted"
+        );
         assert!(second.press(2, "cmd-f", true, false, at(2200)));
     }
 
@@ -1225,15 +1387,32 @@ mod tests {
     #[test]
     fn recorded_keys_are_written_as_the_shortcuts_are() {
         let keystroke = |control, shift, platform, key: &str| Keystroke {
-            modifiers: Modifiers { control, shift, platform, ..Default::default() },
+            modifiers: Modifiers {
+                control,
+                shift,
+                platform,
+                ..Default::default()
+            },
             key: key.into(),
             key_char: None,
         };
-        assert_eq!(recorded(&keystroke(true, false, true, "t")), Ok(keys(&["ctrl-cmd-t"])));
-        assert_eq!(recorded(&keystroke(false, true, true, "k")), Ok(keys(&["shift-cmd-k"])));
+        assert_eq!(
+            recorded(&keystroke(true, false, true, "t")),
+            Ok(keys(&["ctrl-cmd-t"]))
+        );
+        assert_eq!(
+            recorded(&keystroke(false, true, true, "k")),
+            Ok(keys(&["shift-cmd-k"]))
+        );
         let plus = recorded(&keystroke(false, false, true, "+"));
         assert_eq!(plus, Ok(keys(&["cmd-+", "shift-cmd-+"])));
-        assert_eq!(recorded(&keystroke(false, false, false, "f5")), Ok(keys(&["f5"])));
-        assert_eq!(recorded(&keystroke(false, true, false, "k")), Err(Refused::Plain));
+        assert_eq!(
+            recorded(&keystroke(false, false, false, "f5")),
+            Ok(keys(&["f5"]))
+        );
+        assert_eq!(
+            recorded(&keystroke(false, true, false, "k")),
+            Err(Refused::Plain)
+        );
     }
 }

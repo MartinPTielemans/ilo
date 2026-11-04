@@ -25,6 +25,8 @@ pub struct MenuBar {
     pub developer_mode: Option<bool>,
     /// Whether a trace is recording, which Help › Troubleshooting's item stops.
     pub tracing: bool,
+    /// Window › Stay On Top's tick, or None where the window can't stay on top.
+    pub on_top: Option<bool>,
     /// Spaces › Change Profile: each profile by id and name, whether the Space shown can change to
     /// it and whether it's in it, then whether New Profile can be chosen. None in a private window.
     pub profiles: Option<(Vec<ProfileChoice>, bool)>,
@@ -56,7 +58,11 @@ pub struct ProfileChoice {
 impl MenuBar {
     /// View's item for ⌘S, by what it does now, as Arc's.
     pub fn sidebar_title(&self) -> &'static str {
-        if self.sidebar_hidden { "Show Sidebar" } else { "Hide Sidebar" }
+        if self.sidebar_hidden {
+            "Show Sidebar"
+        } else {
+            "Hide Sidebar"
+        }
     }
 
     /// Tabs' item for ⌘D, by the tab shown, as Arc's, which names both with none shown.
@@ -80,7 +86,8 @@ impl MenuBar {
     /// View › Developer's item for the page's Developer Mode, by what it would do, as the command
     /// bar names it. None leaves it out, as Arc's shows only with a page.
     pub fn developer_mode_title(&self) -> Option<&'static str> {
-        self.developer_mode.map(super::commands::developer_mode_title)
+        self.developer_mode
+            .map(super::commands::developer_mode_title)
     }
 
     /// Help › Troubleshooting's item for the trace, by what it would do, as the command bar names
@@ -91,6 +98,19 @@ impl MenuBar {
 }
 
 impl Shell {
+    /// Window › Stay On Top: keeps this window over other apps' windows, or lets it go back among
+    /// them. The menu's tick and the command bar's Don't Stay On Top show it's on, and end it.
+    pub(super) fn toggle_on_top(&mut self, cx: &mut Context<Self>) {
+        if !self.browser.can_stay_on_top() {
+            return;
+        }
+        self.on_top = !self.on_top;
+        // check.sh reads this line.
+        log!("browser: stays on top {}", self.on_top as u8);
+        self.browser.set_on_top(self.on_top, cx);
+        self.update_menus(cx);
+    }
+
     /// What the menu bar shows for this window now.
     pub(super) fn menu_bar(&self, cx: &App) -> MenuBar {
         let profile = self.shown_space().map_or(0, |space| space.profile);
@@ -110,11 +130,14 @@ impl Shell {
             extensions,
             sidebar_hidden: self.sidebar_hidden,
             pinned,
-            pinned_shut: self.shown_space().is_some_and(|space| space.folders.pinned_shut),
+            pinned_shut: self
+                .shown_space()
+                .is_some_and(|space| space.folders.pinned_shut),
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
+            on_top: self.browser.can_stay_on_top().then_some(self.on_top),
             profiles: self.profile_choices(self.space).filter(|_| !self.private),
             appearance: self.app_appearance,
             sidebar_backups: (self.shown_space())
@@ -154,7 +177,10 @@ impl Shell {
     /// Control by it; the window doesn't draw it.
     pub fn update_title(&mut self, cx: &mut Context<Self>) {
         let title = match self.selected {
-            0 => self.shown_space().map(|space| space.name.clone()).unwrap_or_default(),
+            0 => self
+                .shown_space()
+                .map(|space| space.name.clone())
+                .unwrap_or_default(),
             tab => self.title(tab),
         };
         if title != self.window_title {
@@ -186,11 +212,56 @@ mod tests {
         assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
         shell.update(cx, |shell, cx| shell.run(Command::ToggleSidebar, "ui", cx));
         assert_eq!(host.menu_bar.borrow().sidebar_title(), "Show Sidebar");
-        assert_eq!(host.menu_bar.borrow().pinned_item().1, Command::CollapsePinned);
-        let shut = Folders { pinned_shut: true, ..Folders::default() };
-        shell.update(cx, |shell, cx| shell.set_tabs(1, vec![1], vec![10], Vec::new(), shut, cx));
+        assert_eq!(
+            host.menu_bar.borrow().pinned_item().1,
+            Command::CollapsePinned
+        );
+        let shut = Folders {
+            pinned_shut: true,
+            ..Folders::default()
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, vec![1], vec![10], Vec::new(), shut, cx)
+        });
         let item = host.menu_bar.borrow().pinned_item();
         assert_eq!(item, ("Expand Pinned Tabs", Command::ExpandPinned));
+    }
+
+    /// Window › Stay On Top keeps the window over other apps', ticked, and the command bar's row
+    /// then offers Don't Stay On Top, which lets it go back; where the window can't, neither.
+    #[gpui::test]
+    fn stay_on_top_shows_its_tick_and_the_way_back(cx: &mut TestAppContext) {
+        use crate::shell::commands::{ShellHandle, bar_commands};
+        let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
+        cx.update(|cx| cx.set_global(ShellHandle(shell.downgrade())));
+        let rows = |cx: &mut TestAppContext| -> Vec<String> {
+            let rows = cx.update(|cx| bar_commands("top", cx));
+            (rows.iter())
+                .filter(|row| row.command == Command::StayOnTop)
+                .map(|row| row.name.to_string())
+                .collect()
+        };
+        assert_eq!(host.menu_bar.borrow().on_top, Some(false));
+        assert_eq!(rows(cx), ["Stay On Top"]);
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(host.take().contains(&"on top true".to_string()));
+        assert_eq!(
+            host.menu_bar.borrow().on_top,
+            Some(true),
+            "the menu has no tick"
+        );
+        assert_eq!(rows(cx), ["Don't Stay On Top"]);
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(host.take().contains(&"on top false".to_string()));
+        assert_eq!(host.menu_bar.borrow().on_top, Some(false));
+        host.no_stay_on_top.set(true);
+        shell.update(cx, |shell, cx| shell.run(Command::StayOnTop, "ui", cx));
+        assert!(!host.take().iter().any(|call| call.starts_with("on top")));
+        assert!(
+            rows(cx).is_empty(),
+            "the bar offers it where the window can't"
+        );
     }
 
     /// Tabs › Pin Tab pins the tab shown while its page loads, as the menu sends it to the shell
@@ -199,7 +270,11 @@ mod tests {
     fn the_menu_bar_pins_a_loading_page(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
         cx.update(crate::shell::bind_keys);
-        let loading = Page { url: "https://example.com/".into(), loading: true, ..Page::default() };
+        let loading = Page {
+            url: "https://example.com/".into(),
+            loading: true,
+            ..Page::default()
+        };
         shell.update(cx, |shell, cx| {
             shell.set_selected(10, cx);
             shell.set_page(10, loading, cx);
@@ -209,7 +284,14 @@ mod tests {
         cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
         assert_eq!(host.take_edits(), ["pinned 10 true"]);
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, vec![1, 10], Vec::new(), Vec::new(), Folders::default(), cx)
+            shell.set_tabs(
+                1,
+                vec![1, 10],
+                Vec::new(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            )
         });
         assert_eq!(host.menu_bar.borrow().pin_title(), "Unpin Tab");
         cx.update(|cx| cx.dispatch_action(&crate::shell::Run(Command::TogglePin)));
@@ -229,11 +311,17 @@ mod tests {
             developer_mode,
             ..Page::default()
         };
-        shell.update(cx, |shell, cx| shell.set_page(10, page("http://localhost:3000/", true), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("http://localhost:3000/", true), cx)
+        });
         assert_eq!(title(), Some("Turn off Developer Mode for this site"));
-        shell.update(cx, |shell, cx| shell.set_page(10, page("http://localhost:3000/", false), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("http://localhost:3000/", false), cx)
+        });
         assert_eq!(title(), Some("Turn on Developer Mode for this site"));
-        shell.update(cx, |shell, cx| shell.set_page(10, page("chrome://settings/", false), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(10, page("chrome://settings/", false), cx)
+        });
         assert_eq!(title(), None);
     }
 
@@ -265,12 +353,25 @@ mod tests {
             enabled,
             checked,
         };
-        let full = vec![choice(0, "Default", true, true), choice(5, "Work", false, false)];
+        let full = vec![
+            choice(0, "Default", true, true),
+            choice(5, "Work", false, false),
+        ];
         assert_eq!(host.menu_bar.borrow().profiles, Some((full, false)));
         shell.update(cx, |shell, cx| {
-            shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), Folders::default(), cx)
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            )
         });
-        let empty = vec![choice(0, "Default", true, true), choice(5, "Work", true, false)];
+        let empty = vec![
+            choice(0, "Default", true, true),
+            choice(5, "Work", true, false),
+        ];
         assert_eq!(host.menu_bar.borrow().profiles, Some((empty, true)));
     }
 }

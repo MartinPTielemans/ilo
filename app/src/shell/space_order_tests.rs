@@ -17,7 +17,15 @@ use crate::tokens::shell::library::{
 };
 
 fn entry(id: u64) -> SpaceEntry {
-    (id, format!("Space {id}").into(), None, 1, "".into(), "".into(), "".into())
+    (
+        id,
+        format!("Space {id}").into(),
+        None,
+        1,
+        "".into(),
+        "".into(),
+        "".into(),
+    )
 }
 
 /// A window with Spaces 1, 2 and 3, the first shown.
@@ -56,7 +64,10 @@ fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, order: &[u64]) {
 /// How far right of its place `space`'s dot or card started its glide, or 0 if it has none.
 fn glide_from(shell: &Entity<Shell>, cx: &mut VisualTestContext, along: Along, space: u64) -> f32 {
     shell.read_with(cx, |shell, _| {
-        shell.space_slides.get(&(along, space)).map_or(0., |&(from, _)| from)
+        shell
+            .space_slides
+            .get(&(along, space))
+            .map_or(0., |&(from, _)| from)
     })
 }
 
@@ -71,7 +82,11 @@ fn dot(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Point<P
 /// Presses at `from` and drags to `to`, without letting go.
 fn hold(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
-    cx.simulate_mouse_move(from + point(px(6.), px(0.)), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        from + point(px(6.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
     cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
 }
@@ -92,7 +107,10 @@ fn a_dot_dragged_before_the_first_moves_its_space_first(cx: &mut TestAppContext)
     assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
     let_go(cx, to);
     assert_eq!(host.take_edits(), ["move space 3 after 0"]);
-    assert!(host.shown.take().is_empty(), "the drag was a click on the dot");
+    assert!(
+        host.shown.take().is_empty(),
+        "the drag was a click on the dot"
+    );
     assert!(!shell.read_with(cx, |shell, _| shell.space_dragged(3)));
 
     report(&shell, cx, &[3, 1, 2]);
@@ -127,7 +145,10 @@ fn a_dot_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestAppC
     let last = dot(&shell, cx, 3) + point(px(20.), px(0.));
     let from = dot(&shell, cx, 1);
     hold(cx, from, last);
-    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(1)), "the dot didn't drag");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.space_dragged(1)),
+        "the dot didn't drag"
+    );
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
     let_go(cx, last);
     assert!(host.take_edits().is_empty());
@@ -145,11 +166,19 @@ fn the_dots_glide_to_their_new_places(cx: &mut TestAppContext) {
     hold(cx, second, to);
     let_go(cx, to);
     report_gliding(&shell, cx, &[2, 1, 3]);
-    let slides =
-        (glide_from(&shell, cx, Along::Switcher, 2), glide_from(&shell, cx, Along::Switcher, 1));
+    let slides = (
+        glide_from(&shell, cx, Along::Switcher, 2),
+        glide_from(&shell, cx, Along::Switcher, 1),
+    );
     let pitch = f32::from(second.x - first.x);
-    assert!((slides.0 + 18.).abs() < 1., "the dot let go starts at its copy: {slides:?}");
-    assert!((slides.1 + pitch).abs() < 1., "the dot passed starts at its old place: {slides:?}");
+    assert!(
+        (slides.0 + 18.).abs() < 1.,
+        "the dot let go starts at its copy: {slides:?}"
+    );
+    assert!(
+        (slides.1 + pitch).abs() < 1.,
+        "the dot passed starts at its old place: {slides:?}"
+    );
 }
 
 /// A press, one move and the release, as the check's driver sends a drag: the move starts the
@@ -157,7 +186,10 @@ fn the_dots_glide_to_their_new_places(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_flick_with_one_move_still_moves_the_space(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
-    let (from, to) = (dot(&shell, cx, 1), dot(&shell, cx, 3) + point(px(20.), px(0.)));
+    let (from, to) = (
+        dot(&shell, cx, 1),
+        dot(&shell, cx, 3) + point(px(20.), px(0.)),
+    );
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
@@ -185,7 +217,10 @@ fn handle(shell: &Entity<Shell>, cx: &mut VisualTestContext, space: u64) -> Poin
     shell.read_with(cx, |shell, _| {
         let middle = shell.space_places()[&(Along::Cards, space)] - shell.cards_at();
         let x = COLUMN_WIDTH + middle - CARD_WIDTH / 2. + CARD_MORE_X;
-        point(px(x), shell.viewport.height - px(SPACES_INSET + CARD_MORE_Y))
+        point(
+            px(x),
+            shell.viewport.height - px(SPACES_INSET + CARD_MORE_Y),
+        )
     })
 }
 
@@ -205,7 +240,10 @@ fn a_card_dragged_by_its_handle_moves_its_space(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.space_dragged(3)));
     let_go(cx, to);
     assert_eq!(host.take_edits(), ["move space 3 after 0"]);
-    assert!(host.shown.take().is_empty(), "the drag was a click on the card");
+    assert!(
+        host.shown.take().is_empty(),
+        "the drag was a click on the card"
+    );
     assert!(shell.read_with(cx, |shell, _| shell.library_open && !shell.space_dragged(3)));
 
     report(&shell, cx, &[3, 1, 2]);
@@ -237,7 +275,10 @@ fn a_card_goes_into_the_gap_it_was_let_go_over_and_nowhere_else(cx: &mut TestApp
     let_go(cx, column);
     let last = handle(&shell, cx, 3) + point(px(CARD_WIDTH), px(0.));
     hold(cx, from, last);
-    assert!(shell.read_with(cx, |shell, _| shell.space_dragged(1)), "the handle didn't drag");
+    assert!(
+        shell.read_with(cx, |shell, _| shell.space_dragged(1)),
+        "the handle didn't drag"
+    );
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "key", cx));
     let_go(cx, last);
     assert!(host.take_edits().is_empty());
@@ -255,8 +296,17 @@ fn the_cards_glide_to_their_new_places(cx: &mut TestAppContext) {
     hold(cx, second, to);
     let_go(cx, to);
     report_gliding(&shell, cx, &[2, 1, 3]);
-    let slides = (glide_from(&shell, cx, Along::Cards, 2), glide_from(&shell, cx, Along::Cards, 1));
-    assert!((slides.0 + 18.).abs() < 1., "the card let go starts at its copy: {slides:?}");
+    let slides = (
+        glide_from(&shell, cx, Along::Cards, 2),
+        glide_from(&shell, cx, Along::Cards, 1),
+    );
+    assert!(
+        (slides.0 + 18.).abs() < 1.,
+        "the card let go starts at its copy: {slides:?}"
+    );
     let pitch = CARD_WIDTH + CARD_GAP;
-    assert!((slides.1 + pitch).abs() < 1., "the card passed starts at its old place: {slides:?}");
+    assert!(
+        (slides.1 + pitch).abs() < 1.,
+        "the card passed starts at its old place: {slides:?}"
+    );
 }

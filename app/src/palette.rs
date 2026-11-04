@@ -13,34 +13,50 @@
 //! component to WCAG's minimums.
 
 use gpui::{
-    BoxShadow, ColorSpace, Div, Global, Hsla, Rgba, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb, rgba,
+    BoxShadow, ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
 
-pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::icon_picker::{
     FILL as CARD, HINT as CARD_HINT, LABEL as CARD_LABEL, SEGMENTS_FILL as CARD_SEGMENTS,
 };
-use crate::tokens::palette::{
-    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE, LIGHT_GRADIENT_ALPHA,
-    LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN,
-    LIGHT_TINT, NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN, TINT,
-};
 pub use crate::tokens::palette::SECOND_AT;
-pub use crate::tokens::palette::{STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED};
-use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
-use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
-use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION};
+use crate::tokens::palette::{
+    ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
+};
+use crate::tokens::palette::{
+    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
+    LIGHT_GRADIENT_ALPHA, LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE,
+    LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL, NEUTRAL_GRADIENT_ALPHA,
+    OVERLAY_LIGHT, STAND_IN, TINT,
+};
+pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
     LIGHT_SELECTED_SHADOW_Y,
 };
+pub use crate::tokens::palette::{
+    STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
+};
+use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
+use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
+use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
-const BLACK: Rgba = Rgba { r: 0., g: 0., b: 0., a: 1. };
-const WHITE: Rgba = Rgba { r: 1., g: 1., b: 1., a: 1. };
+const BLACK: Rgba = Rgba {
+    r: 0.,
+    g: 0.,
+    b: 0.,
+    a: 1.,
+};
+const WHITE: Rgba = Rgba {
+    r: 1.,
+    g: 1.,
+    b: 1.,
+    a: 1.,
+};
 /// The shade's steps, from none up.
 const SHADE_STEP: f32 = 0.05;
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
@@ -145,11 +161,19 @@ impl Tone {
         }
     }
 
-    /// The card the pages lie in, what shows before a page first paints.
+    /// The card the pages lie in.
     fn page(self) -> Rgba {
         rgba(match self {
             Tone::Dark => PAGE_CARD,
             Tone::Light => LIGHT_PAGE_CARD,
+        })
+    }
+
+    /// What a page shows until its first frame, while websites are told this is the appearance.
+    pub fn unpainted(self) -> Rgba {
+        rgba(match self {
+            Tone::Dark => UNPAINTED,
+            Tone::Light => LIGHT_UNPAINTED,
         })
     }
 
@@ -248,7 +272,13 @@ impl Palette {
         let accent = palette.solve_accent(rgb(theme.main_color()), &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(Some(theme), &window);
-        Palette { accent, accent_label: label_on(accent), section_glyph, swatch, ..palette }
+        Palette {
+            accent,
+            accent_label: label_on(accent),
+            section_glyph,
+            swatch,
+            ..palette
+        }
     }
 
     /// No theme: the tinted material alone, never shaded, and ilo green, as light as it has to
@@ -259,7 +289,13 @@ impl Palette {
         let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(None, &window);
-        Palette { accent, accent_label: label_on(accent), section_glyph, swatch, ..palette }
+        Palette {
+            accent,
+            accent_label: label_on(accent),
+            section_glyph,
+            swatch,
+            ..palette
+        }
     }
 
     fn with(shade: f32, layer_alpha: f32, window: &Window) -> Palette {
@@ -268,7 +304,10 @@ impl Palette {
         let (overlay, dialog) = tone.overlays();
         let mut palette = Palette {
             tone,
-            tint: Rgba { a: 1. - (1. - tone.tint()) * (1. - shade), ..tone.tint_color() },
+            tint: Rgba {
+                a: 1. - (1. - tone.tint()) * (1. - shade),
+                ..tone.tint_color()
+            },
             underlay: over(tone.stand_in(), tone.tint_color(), shade),
             layer_alpha,
             shade,
@@ -305,8 +344,10 @@ impl Palette {
     /// toward the ink; and under the selected, hovered and field plates.
     fn grounds(&self, window: &Window) -> Vec<Rgba> {
         let plain = window.samples(self.shade, self.layer_alpha);
-        let mut grounds: Vec<Rgba> =
-            plain.iter().map(|&at| over(at, self.ink, GRAIN_SHIFT * window.grain)).collect();
+        let mut grounds: Vec<Rgba> = plain
+            .iter()
+            .map(|&at| over(at, self.ink, GRAIN_SHIFT * window.grain))
+            .collect();
         // A light window's selected row is white, and a control's states still reach the ink's
         // selected plate.
         let (selected, alpha, _) = self.tone.selected();
@@ -332,7 +373,11 @@ impl Palette {
             b: a.b + (b.b - a.b) * t,
             a: a.a + (b.a - a.a) * t,
         };
-        let (near, _) = if t < 0.5 { (self, other) } else { (other, self) };
+        let (near, _) = if t < 0.5 {
+            (self, other)
+        } else {
+            (other, self)
+        };
         Palette {
             tone: near.tone,
             underlay: mix(self.underlay, other.underlay),
@@ -358,13 +403,25 @@ impl Palette {
     /// The accent under the pointer, darker, as every filled button goes.
     pub fn accent_hovered(&self) -> Hsla {
         let Rgba { r, g, b, a } = self.accent;
-        Rgba { r: r * ACCENT_HOVERED, g: g * ACCENT_HOVERED, b: b * ACCENT_HOVERED, a }.into()
+        Rgba {
+            r: r * ACCENT_HOVERED,
+            g: g * ACCENT_HOVERED,
+            b: b * ACCENT_HOVERED,
+            a,
+        }
+        .into()
     }
 
     /// The accent pressed, a step darker than under the pointer, whatever its label (the owner).
     pub fn accent_pressed(&self) -> Hsla {
         let Rgba { r, g, b, a } = self.accent;
-        Rgba { r: r * ACCENT_PRESSED, g: g * ACCENT_PRESSED, b: b * ACCENT_PRESSED, a }.into()
+        Rgba {
+            r: r * ACCENT_PRESSED,
+            g: g * ACCENT_PRESSED,
+            b: b * ACCENT_PRESSED,
+            a,
+        }
+        .into()
     }
 
     /// Behind selected text in a field: the accent, faint.
@@ -375,6 +432,28 @@ impl Palette {
     /// Ink or Paper at `alpha`, or as much more as text needs to read on any theme.
     pub fn text(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
+    }
+
+    /// Text at `alpha`, `lit` of the way to the ink at `high`, as a shimmer's highlight passes. It
+    /// goes from where the floor puts the text, so the highlight shows however far that raises it.
+    pub fn lit(&self, alpha: f32, high: f32, lit: f32) -> Hsla {
+        let rest = self.text(alpha);
+        Hsla {
+            a: rest.a + (high.max(rest.a) - rest.a) * lit,
+            ..rest
+        }
+    }
+
+    /// The highlight that draws text in `lit(alpha, high, 1.)`, its peak, `lit` of the way there.
+    /// GPUI keeps the text's own alpha under a highlight's colour, so a brighter one of the same ink
+    /// shows nothing: the text is drawn at its peak, and each part fades down from it.
+    pub fn lit_highlight(&self, alpha: f32, high: f32, lit: f32) -> HighlightStyle {
+        let peak = self.lit(alpha, high, 1.).a;
+        let fade = 1. - self.lit(alpha, high, lit).a / peak.max(f32::EPSILON);
+        HighlightStyle {
+            fade_out: Some(fade),
+            ..Default::default()
+        }
     }
 
     /// Ink or Paper at `alpha`, or as much more as a glyph or boundary needs.
@@ -471,14 +550,24 @@ impl Palette {
     pub fn swatch_ring_of(from: Rgba, to: Rgba, behind: &[Rgba]) -> Option<Rgba> {
         let (a, b) = (luminance(from), luminance(to));
         let (darkest, lightest) = (a.min(b), a.max(b));
-        let swatch = Swatch { from, to, angle: 135., to_at: 1., third: None, darkest, lightest };
+        let swatch = Swatch {
+            from,
+            to,
+            angle: 135.,
+            to_at: 1.,
+            third: None,
+            darkest,
+            lightest,
+        };
         swatch.ring_on(behind)
     }
 
     /// Where a swatch ring is checked against this palette's window: every point checked, over
     /// both backdrops.
     pub fn window_samples(&self, theme: Option<&Theme>) -> Vec<Rgba> {
-        let window = theme.map_or(Window::of_none(self.tone), |theme| Window::of(theme, self.tone));
+        let window = theme.map_or(Window::of_none(self.tone), |theme| {
+            Window::of(theme, self.tone)
+        });
         window.samples(self.shade, self.layer_alpha)
     }
 
@@ -504,15 +593,17 @@ impl Palette {
             b: measured.b + (opaque.b - measured.b) * t,
             a: measured.a + (opaque.a - measured.a) * t,
         };
-        (0..=steps).map(|step| toward(step as f32 * SHADE_STEP)).find(|&fill| {
-            behind.iter().all(|&at| {
-                let card = over(at, fill, fill.a);
-                let segments = over(card, WHITE, rgba(CARD_SEGMENTS).a);
-                contrast(over(card, WHITE, rgba(CARD_HINT).a), card) >= TEXT + BETWEEN
-                    && contrast(rgb(CARD_LABEL), segments) >= TEXT + BETWEEN
+        (0..=steps)
+            .map(|step| toward(step as f32 * SHADE_STEP))
+            .find(|&fill| {
+                behind.iter().all(|&at| {
+                    let card = over(at, fill, fill.a);
+                    let segments = over(card, WHITE, rgba(CARD_SEGMENTS).a);
+                    contrast(over(card, WHITE, rgba(CARD_HINT).a), card) >= TEXT + BETWEEN
+                        && contrast(rgb(CARD_LABEL), segments) >= TEXT + BETWEEN
+                })
             })
-        })
-        .unwrap_or(opaque)
+            .unwrap_or(opaque)
     }
 
     /// The main colour, its hue kept, at the OKLab lightness nearest its own at which it reads
@@ -520,14 +611,25 @@ impl Palette {
     /// label reads on it; with as much of its chroma as the gamut there allows. Grey, at worst.
     fn solve_accent(&self, main: Rgba, window: &Window) -> Rgba {
         let plain = window.samples(self.shade, self.layer_alpha);
-        let section: Vec<Rgba> = plain.iter().map(|&at| over(at, self.ink, SECTION_PLATE)).collect();
-        let target: Vec<Rgba> = plain.iter().map(|&at| over(at, self.ink, TARGET_PLATE)).collect();
+        let section: Vec<Rgba> = plain
+            .iter()
+            .map(|&at| over(at, self.ink, SECTION_PLATE))
+            .collect();
+        let target: Vec<Rgba> = plain
+            .iter()
+            .map(|&at| over(at, self.ink, TARGET_PLATE))
+            .collect();
         let passes = |c: Rgba| {
             contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
                 && contrast(c, self.overlay) >= GLYPH
                 && contrast(c, self.dialog) >= GLYPH
-                && plain.iter().chain(&section).all(|&at| contrast(c, at) >= GLYPH + BETWEEN)
-                && target.iter().all(|&at| contrast(c, over(at, c, TARGET_ACCENT)) >= GLYPH + BETWEEN)
+                && plain
+                    .iter()
+                    .chain(&section)
+                    .all(|&at| contrast(c, at) >= GLYPH + BETWEEN)
+                && target
+                    .iter()
+                    .all(|&at| contrast(c, over(at, c, TARGET_ACCENT)) >= GLYPH + BETWEEN)
         };
         nearest(main, passes).unwrap_or(self.ink)
     }
@@ -538,7 +640,11 @@ impl Palette {
         let selected: Vec<Rgba> = (window.samples(self.shade, self.layer_alpha).iter())
             .map(|&at| over(over(at, self.ink, COLUMN), self.ink, LIBRARY_PLATE))
             .collect();
-        let passes = |c: Rgba| selected.iter().all(|&at| contrast(c, at) >= GLYPH + BETWEEN);
+        let passes = |c: Rgba| {
+            selected
+                .iter()
+                .all(|&at| contrast(c, at) >= GLYPH + BETWEEN)
+        };
         nearest(accent, passes).unwrap_or(self.ink)
     }
 }
@@ -591,12 +697,25 @@ impl Swatch {
         };
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         let (from, to, angle, to_at) = match colors[..] {
-            [_] => (Layer::of(theme, 0., 0.).color, Layer::of(theme, 0., 1.).color, 180., 1.),
+            [_] => (
+                Layer::of(theme, 0., 0.).color,
+                Layer::of(theme, 0., 1.).color,
+                180.,
+                1.,
+            ),
             _ => (colors[0], colors[1], 135., SECOND_AT),
         };
         let lums = window.swatch().into_iter().map(luminance);
         let (darkest, lightest) = lums.fold((f32::MAX, f32::MIN), |(d, l), y| (d.min(y), l.max(y)));
-        Swatch { from, to, angle, to_at, third: colors.get(2).copied(), darkest, lightest }
+        Swatch {
+            from,
+            to,
+            angle,
+            to_at,
+            third: colors.get(2).copied(),
+            darkest,
+            lightest,
+        }
     }
 
     /// Ink or Paper for a hairline ring where any of the swatch is under 3:1 against any of
@@ -617,8 +736,17 @@ impl Swatch {
             return None;
         }
         let (ink, paper) = (rgb(INK), rgb(PAPER));
-        let worst = |ring: Rgba| behind.iter().map(|&b| contrast(ring, b)).fold(f32::MAX, f32::min);
-        Some(if worst(ink) >= worst(paper) { ink } else { paper })
+        let worst = |ring: Rgba| {
+            behind
+                .iter()
+                .map(|&b| contrast(ring, b))
+                .fold(f32::MAX, f32::min)
+        };
+        Some(if worst(ink) >= worst(paper) {
+            ink
+        } else {
+            paper
+        })
     }
 
     /// The swatch, `size` across, on any of `behind`.
@@ -639,16 +767,27 @@ impl Swatch {
                 let third = Hsla::from(third);
                 // Rounded itself: GPUI clips a child to its parent's box, not its rounded corners,
                 // so a square layer's corners would show under the circle (#1354).
-                swatch.child(div().absolute().size_full().rounded_full().bg(linear_gradient(
-                    180.,
-                    linear_color_stop(third.opacity(0.), 0.),
-                    linear_color_stop(third, 1.),
-                )))
+                swatch.child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded_full()
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(third.opacity(0.), 0.),
+                            linear_color_stop(third, 1.),
+                        )),
+                )
             })
             .when_some(self.ring_on(behind), |swatch, ring| {
                 // The ring is its own layer, over the colours, so it doesn't move them.
                 swatch.child(
-                    div().absolute().size_full().rounded_full().border(px(RING)).border_color(ring),
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded_full()
+                        .border(px(RING))
+                        .border_color(ring),
                 )
             })
     }
@@ -673,7 +812,10 @@ struct Layer {
 
 impl Layer {
     fn none() -> Layer {
-        Layer { color: BLACK, third: None }
+        Layer {
+            color: BLACK,
+            third: None,
+        }
     }
 
     /// `theme`'s colour `along` the gradient's line (0 at the window's top left, 1 at its bottom
@@ -684,11 +826,21 @@ impl Layer {
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         if colors.len() == 1 {
             let main = Hsla::from(colors[0]);
-            return Layer { color: Hsla { l: (main.l + 0.25 * y).min(1.), ..main }.into(), third: None };
+            return Layer {
+                color: Hsla {
+                    l: (main.l + 0.25 * y).min(1.),
+                    ..main
+                }
+                .into(),
+                third: None,
+            };
         }
         let along = (along / SECOND_AT).min(1.);
         let color = theme::mix_oklab(colors[0], colors[1], along);
-        Layer { color, third: colors.get(2).map(|&third| (third, y)) }
+        Layer {
+            color,
+            third: colors.get(2).map(|&third| (third, y)),
+        }
     }
 
     fn over(&self, base: Rgba, alpha: f32) -> Rgba {
@@ -703,7 +855,12 @@ impl Layer {
 impl Window {
     /// No theme: the ground alone.
     fn of_none(tone: Tone) -> Window {
-        Window { tone, alpha: 0., layers: vec![Layer::none()], grain: 0. }
+        Window {
+            tone,
+            alpha: 0.,
+            layers: vec![Layer::none()],
+            grain: 0.,
+        }
     }
 
     fn of(theme: &Theme, tone: Tone) -> Window {
@@ -713,7 +870,12 @@ impl Window {
             .iter()
             .flat_map(|&along| DOWN.iter().map(move |&y| Layer::of(theme, along, y)))
             .collect();
-        Window { tone, alpha: layer_alpha(theme, tone), layers, grain: theme.grain }
+        Window {
+            tone,
+            alpha: layer_alpha(theme, tone),
+            layers,
+            grain: theme.grain,
+        }
     }
 
     /// The window at every point checked over both backdrops, its ground under the tint's colour
@@ -721,13 +883,20 @@ impl Window {
     fn samples(&self, shade: f32, alpha: f32) -> Vec<Rgba> {
         grounds(self.tone, shade)
             .into_iter()
-            .flat_map(|ground| self.layers.iter().map(move |layer| layer.over(ground, alpha)))
+            .flat_map(|ground| {
+                self.layers
+                    .iter()
+                    .map(move |layer| layer.over(ground, alpha))
+            })
             .collect()
     }
 
     /// The theme's colours as a swatch shows them, opaque.
     fn swatch(&self) -> Vec<Rgba> {
-        self.layers.iter().map(|layer| layer.over(BLACK, 1.)).collect()
+        self.layers
+            .iter()
+            .map(|layer| layer.over(BLACK, 1.))
+            .collect()
     }
 
     /// The least shade, in steps, at which the ink reads on the window and the selected and
@@ -751,8 +920,13 @@ impl Window {
         };
         let steps = (1. / SHADE_STEP).round() as i32;
         let shaded = (0..=steps).map(|step| (step as f32 * SHADE_STEP, self.alpha));
-        let faded = (0..steps).rev().map(|step| (1., self.alpha * step as f32 * SHADE_STEP));
-        shaded.chain(faded).find(|&(shade, alpha)| reads(shade, alpha)).unwrap_or((1., 0.))
+        let faded = (0..steps)
+            .rev()
+            .map(|step| (1., self.alpha * step as f32 * SHADE_STEP));
+        shaded
+            .chain(faded)
+            .find(|&(shade, alpha)| reads(shade, alpha))
+            .unwrap_or((1., 0.))
     }
 }
 
@@ -761,7 +935,11 @@ impl Window {
 fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
     let saturation = Hsla::from(rgb(theme.main_color())).s;
     let (colored, neutral) = tone.gradient_alphas();
-    let alpha = if saturation < NEUTRAL { neutral } else { colored };
+    let alpha = if saturation < NEUTRAL {
+        neutral
+    } else {
+        colored
+    };
     let at = |intensity: f32| INTENSITY_FLOOR + INTENSITY_SPAN * intensity;
     alpha * at(theme.intensity) / at(DEFAULT_INTENSITY)
 }
@@ -769,7 +947,8 @@ fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
 /// The window's tinted material over a black and over a white backdrop, under the tint's colour
 /// at `shade`.
 fn grounds(tone: Tone, shade: f32) -> [Rgba; 2] {
-    tone.grounds().map(|ground| over(rgb(ground), tone.tint_color(), shade))
+    tone.grounds()
+        .map(|ground| over(rgb(ground), tone.tint_color(), shade))
 }
 
 /// The most a control on an overlay rests at under its text: a chip's or a button's plate.
@@ -784,7 +963,11 @@ pub const fn state_alpha(rest: f32, state: f32) -> f32 {
 /// Ink or Paper, whichever reads more on `color`.
 fn label_on(color: Rgba) -> Rgba {
     let (ink, paper) = (rgb(INK), rgb(PAPER));
-    if contrast(ink, color) >= contrast(paper, color) { ink } else { paper }
+    if contrast(ink, color) >= contrast(paper, color) {
+        ink
+    } else {
+        paper
+    }
 }
 
 /// The least alpha, in 25ths, at which `ink` over each of `grounds` reaches `minimum`; 1 where
@@ -792,7 +975,11 @@ fn label_on(color: Rgba) -> Rgba {
 fn least_alpha(ink: Rgba, grounds: &[Rgba], minimum: f32) -> f32 {
     (0..=25)
         .map(|step| step as f32 / 25.)
-        .find(|&alpha| grounds.iter().all(|&at| contrast(over(at, ink, alpha), at) >= minimum))
+        .find(|&alpha| {
+            grounds
+                .iter()
+                .all(|&at| contrast(over(at, ink, alpha), at) >= minimum)
+        })
         .unwrap_or(1.)
 }
 
@@ -809,7 +996,11 @@ fn in_gamut(l: f32, a: f32, b: f32) -> Rgba {
     } else {
         for _ in 0..14 {
             let middle = (low + high) / 2.;
-            if inside(middle) { low = middle } else { high = middle }
+            if inside(middle) {
+                low = middle
+            } else {
+                high = middle
+            }
         }
     }
     let [r, g, b] = theme::from_oklab([l, a * low, b * low]);
@@ -824,7 +1015,12 @@ pub fn quantized(color: Rgba) -> Rgba {
 /// `color` at `alpha` over opaque `base`.
 pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
     let mix = |b: f32, c: f32| b + (c - b) * alpha;
-    Rgba { r: mix(base.r, color.r), g: mix(base.g, color.g), b: mix(base.b, color.b), a: 1. }
+    Rgba {
+        r: mix(base.r, color.r),
+        g: mix(base.g, color.g),
+        b: mix(base.b, color.b),
+        a: 1.,
+    }
 }
 
 /// WCAG's relative luminance.

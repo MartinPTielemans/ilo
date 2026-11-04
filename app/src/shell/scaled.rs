@@ -1,4 +1,5 @@
-//! An element painted smaller or larger than it's laid out, as a layer's transform would.
+//! An element painted smaller or larger than it's laid out, as a layer's transform would. Under
+//! Reduce Motion it's painted at its own size (`motion::scale`).
 
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -8,17 +9,29 @@ use gpui::{
 /// `child`, painted at `factor` its size about `origin`, in the window's coordinates. It's laid
 /// out and hit where it would be at full size.
 pub fn scaled(child: impl IntoElement, factor: f32, origin: Point<Pixels>) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::At(origin) }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::At(origin),
+    }
 }
 
 /// `child`, painted at `factor` its size about the middle of its top edge.
 pub fn scaled_from_top(child: impl IntoElement, factor: f32) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::Top }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::Top,
+    }
 }
 
 /// `child`, painted at `factor` its size about its middle.
 pub fn scaled_from_middle(child: impl IntoElement, factor: f32) -> Scaled {
-    Scaled { child: child.into_any_element(), factor, origin: Origin::Middle }
+    Scaled {
+        child: child.into_any_element(),
+        factor,
+        origin: Origin::Middle,
+    }
 }
 
 pub struct Scaled {
@@ -87,7 +100,8 @@ impl Element for Scaled {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if self.factor == 1. {
+        let factor = crate::motion::scale(self.factor, cx);
+        if factor == 1. {
             return self.child.paint(window, cx);
         }
         let origin = match self.origin {
@@ -95,6 +109,6 @@ impl Element for Scaled {
             Origin::Top => point(bounds.center().x, bounds.top()),
             Origin::Middle => bounds.center(),
         };
-        window.with_scale(self.factor, origin, |window| self.child.paint(window, cx));
+        window.with_scale(factor, origin, |window| self.child.paint(window, cx));
     }
 }

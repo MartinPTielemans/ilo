@@ -8,15 +8,18 @@
 use std::time::Instant;
 
 use gpui::{
-    Bounds, BorderStyle, Hsla, PathBuilder, Pixels, Point, Window, fill, point, px, quad,
+    BorderStyle, Bounds, Hsla, PathBuilder, Pixels, Point, Window, fill, point, px, quad,
     transparent_black,
 };
 
 use super::motion::{Curve, Ease};
 use crate::agents::task::Dot;
-use crate::tokens::shell::task::motion::{CROSSFADE, DOT_FADE, ORBIT, RING as RING_MOTION, TICK, TICK_DELAY};
+use crate::tokens::shell::task::motion::{
+    CROSSFADE, DOT_FADE, ORBIT, RING as RING_MOTION, TICK, TICK_DELAY,
+};
 use crate::tokens::shell::task::{
-    DOT, DOT_ASKS, DOT_DONE, RING, RING_DONE, RING_STOPPED, RING_STROKE, RING_WORKING, TICK_STROKE,
+    DOT, DOT_ASKS, DOT_DONE, RING, RING_DONE, RING_STOPPED, RING_STROKE, RING_WORKING,
+    RING_WORKING_SELECTED, TICK_STROKE,
 };
 
 /// What the glyph says.
@@ -56,14 +59,39 @@ pub(super) struct Look {
 
 impl Look {
     fn of(state: State) -> Self {
-        let rest = Look { ring: RING_WORKING, scale: 1., grey: 0., inward: 0., dot_scale: 1., dot: 1., tick: 0. };
+        let rest = Look {
+            ring: RING_WORKING,
+            scale: 1.,
+            grey: 0.,
+            inward: 0.,
+            dot_scale: 1.,
+            dot: 1.,
+            tick: 0.,
+        };
         match state {
             State::Working => rest,
-            State::Asks => Look { ring: 1., inward: 1., dot_scale: DOT_ASKS, ..rest },
-            State::Done => {
-                Look { ring: 0., scale: RING_DONE, inward: 1., dot_scale: DOT_DONE, dot: 0., tick: 1., ..rest }
-            }
-            State::Stopped => Look { ring: 1., scale: RING_STOPPED, grey: 1., dot: 0., ..rest },
+            State::Asks => Look {
+                ring: 1.,
+                inward: 1.,
+                dot_scale: DOT_ASKS,
+                ..rest
+            },
+            State::Done => Look {
+                ring: 0.,
+                scale: RING_DONE,
+                inward: 1.,
+                dot_scale: DOT_DONE,
+                dot: 0.,
+                tick: 1.,
+                ..rest
+            },
+            State::Stopped => Look {
+                ring: 1.,
+                scale: RING_STOPPED,
+                grey: 1.,
+                dot: 0.,
+                ..rest
+            },
         }
     }
 }
@@ -124,7 +152,12 @@ impl Glyph {
         let to = Look::of(state);
         if still {
             self.from = Some((self.look_at(now), now));
-            *self = Self { from: self.from, turns: self.turns, circling: None, ..Self::new(state, now, true) };
+            *self = Self {
+                from: self.from,
+                turns: self.turns,
+                circling: None,
+                ..Self::new(state, now, true)
+            };
             return;
         }
         self.state = state;
@@ -132,14 +165,17 @@ impl Glyph {
         self.scale.go(to.scale, now, RING_MOTION, 0., Curve::Ease);
         self.grey.go(to.grey, now, RING_MOTION, 0., Curve::Ease);
         self.inward.go(to.inward, now, RING_MOTION, 0., Curve::Ease);
-        self.dot_scale.go(to.dot_scale, now, RING_MOTION, 0., Curve::Ease);
+        self.dot_scale
+            .go(to.dot_scale, now, RING_MOTION, 0., Curve::Ease);
         self.dot.go(to.dot, now, DOT_FADE, 0., Curve::Linear);
         self.tick.go(to.tick, now, TICK, TICK_DELAY, Curve::Ease);
     }
 
     /// Where the dot is round the ring at `now`, in turns.
     pub(super) fn turns_at(&self, now: Instant) -> f32 {
-        let circled = self.circling.map_or(0., |since| now.saturating_duration_since(since).as_secs_f32() / ORBIT);
+        let circled = self.circling.map_or(0., |since| {
+            now.saturating_duration_since(since).as_secs_f32() / ORBIT
+        });
         (self.turns + circled).fract()
     }
 
@@ -157,11 +193,21 @@ impl Glyph {
 
     /// Whether a change is still on its way at `now`, which a frame each draws.
     pub(super) fn moving(&self, now: Instant) -> bool {
-        let crossfading = self.from.is_some_and(|(_, since)| now.saturating_duration_since(since).as_secs_f32() < CROSSFADE);
+        let crossfading = self.from.is_some_and(|(_, since)| {
+            now.saturating_duration_since(since).as_secs_f32() < CROSSFADE
+        });
         crossfading
-            || [self.ring, self.scale, self.grey, self.inward, self.dot_scale, self.dot, self.tick]
-                .iter()
-                .any(|part| part.moving(now))
+            || [
+                self.ring,
+                self.scale,
+                self.grey,
+                self.inward,
+                self.dot_scale,
+                self.dot,
+                self.tick,
+            ]
+            .iter()
+            .any(|part| part.moving(now))
     }
 
     /// Whether the dot circles, which the foot's clock draws.
@@ -178,8 +224,14 @@ impl Glyph {
             (t < 1.).then_some((from, t))
         });
         match crossfade {
-            Some((from, t)) => Drawn { looks: vec![(from, 1. - t), (look, t)], turns },
-            None => Drawn { looks: vec![(look, 1.)], turns },
+            Some((from, t)) => Drawn {
+                looks: vec![(from, 1. - t), (look, t)],
+                turns,
+            },
+            None => Drawn {
+                looks: vec![(look, 1.)],
+                turns,
+            },
         }
     }
 }
@@ -195,8 +247,22 @@ pub(super) struct Drawn {
 const TICK_POINTS: [(f32, f32); 3] = [(5.2, 9.3), (7.8, 11.8), (12.8, 6.4)];
 const TICK_DASH: f32 = 12.;
 
-/// Paints `drawn` in `bounds`, the glyph's box, in Signal, the stopped ring in `stopped`.
-pub(super) fn paint(drawn: &Drawn, bounds: Bounds<Pixels>, signal: Hsla, stopped: Hsla, window: &mut Window) {
+/// Paints `drawn` in `bounds`, the glyph's box, in Signal, the stopped ring in `stopped`. On the
+/// selected plate's fill, which Signal stands out from less, the ring is as much brighter as the
+/// working ring's `ring-working-selected` is.
+pub(super) fn paint(
+    drawn: &Drawn,
+    bounds: Bounds<Pixels>,
+    signal: Hsla,
+    stopped: Hsla,
+    selected: bool,
+    window: &mut Window,
+) {
+    let lift = if selected {
+        RING_WORKING_SELECTED / RING_WORKING
+    } else {
+        1.
+    };
     let centre = bounds.center();
     let at = |x: f32, y: f32| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
     for &(look, alpha) in &drawn.looks {
@@ -211,14 +277,29 @@ pub(super) fn paint(drawn: &Drawn, bounds: Bounds<Pixels>, signal: Hsla, stopped
                 point(centre.x - px(outer), centre.y - px(outer)),
                 gpui::size(px(2. * outer), px(2. * outer)),
             );
-            let colour = colour.opacity(look.ring * alpha);
-            window.paint_quad(quad(square, px(outer), transparent_black(), px(RING_STROKE), colour, BorderStyle::Solid));
+            let colour = colour.opacity((look.ring * lift).min(1.) * alpha);
+            window.paint_quad(quad(
+                square,
+                px(outer),
+                transparent_black(),
+                px(RING_STROKE),
+                colour,
+                BorderStyle::Solid,
+            ));
         }
         if look.dot > 0. {
             let angle = drawn.turns * std::f32::consts::TAU;
             let out = RING * (1. - look.inward);
-            let middle = point(centre.x + px(out * angle.sin()), centre.y - px(out * angle.cos()));
-            dot(middle, DOT * look.dot_scale, signal.opacity(look.dot * alpha), window);
+            let middle = point(
+                centre.x + px(out * angle.sin()),
+                centre.y - px(out * angle.cos()),
+            );
+            dot(
+                middle,
+                DOT * look.dot_scale,
+                signal.opacity(look.dot * alpha),
+                window,
+            );
         }
         if look.tick > 0. {
             let colour = signal.opacity(alpha);
@@ -268,7 +349,13 @@ fn mix(from: Hsla, to: Hsla, way: f32) -> Hsla {
     }
     let (a, b) = (gpui::Rgba::from(from), gpui::Rgba::from(to));
     let lerp = |a: f32, b: f32| a + (b - a) * way;
-    gpui::Rgba { r: lerp(a.r, b.r), g: lerp(a.g, b.g), b: lerp(a.b, b.b), a: lerp(a.a, b.a) }.into()
+    gpui::Rgba {
+        r: lerp(a.r, b.r),
+        g: lerp(a.g, b.g),
+        b: lerp(a.b, b.b),
+        a: lerp(a.a, b.a),
+    }
+    .into()
 }
 
 #[cfg(test)]
@@ -297,15 +384,26 @@ mod tests {
         assert!(!glyph.moving(settled));
         assert_eq!(glyph.look_at(settled), Look::of(State::Asks));
         assert_eq!(glyph.look_at(settled).dot_scale, DOT_ASKS);
-        assert_eq!(glyph.turns_at(settled), stopped_at, "the dot moved while it asked");
+        assert_eq!(
+            glyph.turns_at(settled),
+            stopped_at,
+            "the dot moved while it asked"
+        );
 
         glyph.set(State::Working, settled, false);
         let on = settled + Duration::from_millis(140);
-        assert!((glyph.turns_at(on) - (stopped_at + 0.1)).abs() < 0.001, "it didn't circle on");
+        assert!(
+            (glyph.turns_at(on) - (stopped_at + 0.1)).abs() < 0.001,
+            "it didn't circle on"
+        );
 
         glyph.set(State::Done, on, false);
         let early = on + Duration::from_millis(60);
-        assert_eq!(glyph.look_at(early).tick, 0., "the tick draws after the ring starts going");
+        assert_eq!(
+            glyph.look_at(early).tick,
+            0.,
+            "the tick draws after the ring starts going"
+        );
         let done = on + Duration::from_secs(1);
         assert_eq!(glyph.look_at(done), Look::of(State::Done));
         glyph.set(State::Stopped, done, false);
