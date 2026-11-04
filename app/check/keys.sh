@@ -519,7 +519,7 @@ send key a cmd
 send type focus sidebar
 expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar"
-send clickkey $(drawn "shortcut new-tab")
+send clickkey $(drawn "shortcut focus-sidebar")
 expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl

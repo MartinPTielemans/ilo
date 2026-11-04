@@ -4167,10 +4167,17 @@ impl Settings {
         pages.push(self.import_export(cx));
         // In the column's order, as the results run.
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
-        let (mut entries, mut divs) = (Vec::new(), Vec::new());
+        let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
             for block in page.blocks {
-                let Block::Rows(rows) = block else { continue };
+                let rows = match block {
+                    Block::Rows(rows) => rows,
+                    Block::Under(buttons) => {
+                        under.push((page.section, buttons));
+                        continue;
+                    }
+                    _ => continue,
+                };
                 let head = rows
                     .iter()
                     .find(|row| !row.nested)
@@ -4205,7 +4212,7 @@ impl Settings {
         });
         let logged = self.drawn_logged.clone();
         let drawn = move |what| browser::settings_rows::drawn(what, logged.clone());
-        let results = settings_search::results(&self.look, found, show, drawn);
+        let results = settings_search::results(&self.look, found, under, show, drawn);
         (results, sections)
     }
 

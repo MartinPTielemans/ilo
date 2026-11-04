@@ -178,7 +178,7 @@ impl Render for Searched {
                     let row = frame().child(row_text(&look, entry.name.clone(), None));
                     (entry, row)
                 });
-                results(&look, found.collect(), show, drawn)
+                results(&look, found.collect(), Vec::new(), show, drawn)
             }
         };
         let input = self.input.clone();

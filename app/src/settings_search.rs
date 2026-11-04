@@ -13,8 +13,8 @@ use crate::settings_rows::{Look, group};
 use crate::shell;
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
-    HEADING_BOTTOM, HEADING_TOP, PAGE_WIDTH, SEARCH_CLEAR, SEARCH_CLEAR_FILL, SEARCH_CLEAR_GLYPH,
-    SEARCH_HINT, TEXT_X,
+    BUTTONS_TOP, HEADING_BOTTOM, HEADING_TOP, PAGE_WIDTH, SEARCH_CLEAR, SEARCH_CLEAR_FILL,
+    SEARCH_CLEAR_GLYPH, SEARCH_HINT, TEXT_X,
 };
 use crate::tokens::shell::PLATE_INSET;
 use crate::tokens::shell::library::{
@@ -106,11 +106,13 @@ pub fn sections(found: &[&Entry]) -> Vec<Section> {
 pub type Show = Rc<dyn Fn(Section, SharedString, &mut Window, &mut App)>;
 
 /// The found rows in place of the section's page: each run of them from one section, or one
-/// feature in it, under the section's name, which shows the section at the row. "Nothing found"
-/// when there are none. `drawn` puts in each name where check.sh can click it.
+/// feature in it, under the section's name, which shows the section at the row, and after a
+/// section's last the buttons that sit `under` its groups, as Shortcuts' Restore Defaults.
+/// "Nothing found" when there are none. `drawn` puts in each name where check.sh can click it.
 pub fn results(
     look: &Look,
     found: Vec<(Entry, gpui::Div)>,
+    mut under: Vec<(Section, gpui::Div)>,
     show: Show,
     drawn: impl Fn(String) -> gpui::Canvas<()>,
 ) -> gpui::Div {
@@ -134,7 +136,20 @@ pub fn results(
         }
     }
     let (heading, detail, ink) = (look.heading, look.detail, look.ink);
+    let last: Vec<bool> = (0..runs.len())
+        .map(|index| {
+            runs.get(index + 1)
+                .is_none_or(|(next, _)| next.section != runs[index].0.section)
+        })
+        .collect();
     let runs = runs.into_iter().enumerate().map(|(index, (first, rows))| {
+        let buttons = match last[index] {
+            true => under
+                .iter()
+                .position(|(section, _)| *section == first.section)
+                .map(|at| under.remove(at).1),
+            false => None,
+        };
         let (section, row) = (first.section, first.name.clone());
         let show = show.clone();
         let under = first.under.clone().map(|under| {
@@ -164,6 +179,7 @@ pub fn results(
             .when(index > 0, |run| run.mt(px(HEADING_TOP)))
             .child(name)
             .child(group(look, rows))
+            .children(buttons.map(|buttons| div().mt(px(BUTTONS_TOP)).child(buttons)))
     });
     page.children(runs)
 }
