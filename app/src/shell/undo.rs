@@ -60,6 +60,7 @@ impl What {
     pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
     pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
+    pub const RENAME_SPLIT: What = What::quiet("Rename Split View");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
     pub const CHANGE_ICON: What = What::quiet("Change Icon");
@@ -121,6 +122,9 @@ pub(super) enum Prop {
     PinnedUrl(u64),
     FolderName(u64),
     FolderIcon(u64),
+    /// The name or icon of the split view a tab is in.
+    SplitName(u64),
+    SplitIcon(u64),
     SpaceName(u64),
     SpaceIcon(u64),
     SpaceColor(u64),
@@ -135,6 +139,15 @@ pub(super) enum Value {
         color: Option<u32>,
         theme: String,
     },
+}
+
+/// How a split view looks, which goes with its tabs when they're joined again: stacked or side by
+/// side, and the name and icon the user gave it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Look {
+    pub stacked: bool,
+    pub name: SharedString,
+    pub icon: SharedString,
 }
 
 /// A step. Applying one does it and returns the step that undoes it, or None if it can't be done
@@ -177,19 +190,19 @@ pub(super) enum Edit {
     },
     /// Takes a tab out of its split view.
     Separate(u64),
-    /// Puts a tab in a split view with another, as `Join` does, stacking the split if `stacked`,
-    /// which the user did and ⌘Z takes back out.
+    /// Puts a tab in a split view with another, as `Join` does, which then looks as `look` says:
+    /// what the user did and ⌘Z takes back out, or a split that a tab leaving ended.
     Split {
         tab: u64,
         with: u64,
         left: bool,
-        stacked: bool,
+        look: Look,
     },
     /// Puts a split view, by its tabs in order, at a spot, in another Space too, joined there
-    /// again and stacked if `stacked`, as the core moves a tab to another Space alone.
+    /// again as it looked, as the core moves a tab to another Space alone.
     MoveSplit {
         tabs: Vec<u64>,
-        stacked: bool,
+        look: Look,
         spot: Spot,
     },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
@@ -339,7 +352,9 @@ impl Edit {
                 | Prop::TabIcon(each)
                 | Prop::PinnedUrl(each)
                 | Prop::FolderName(each)
-                | Prop::FolderIcon(each) => id(each),
+                | Prop::FolderIcon(each)
+                | Prop::SplitName(each)
+                | Prop::SplitIcon(each) => id(each),
                 Prop::SpaceName(_) | Prop::SpaceIcon(_) | Prop::SpaceColor(_) => {}
             },
             Edit::UndoClear { .. }
@@ -478,15 +493,11 @@ impl Edit {
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
             }
-            Edit::MoveSplit {
-                tabs,
-                stacked,
-                spot,
-            } => {
+            Edit::MoveSplit { tabs, look, spot } => {
                 let first = *tabs.first()?;
                 let now = shell.spot_of(first)?;
                 if now.space != spot.space {
-                    shell.move_split(&tabs, stacked, spot.space, cx);
+                    shell.move_split(&tabs, &look, spot.space, cx);
                 }
                 match spot.at {
                     At::Pinned { folder, index } => {
@@ -497,7 +508,7 @@ impl Edit {
                 }
                 Some(Edit::MoveSplit {
                     tabs,
-                    stacked,
+                    look,
                     spot: now,
                 })
             }
@@ -510,25 +521,27 @@ impl Edit {
                 tab,
                 with,
                 left,
-                stacked,
+                look,
             } => {
                 if !shell.has_tab(tab) || !shell.has_tab(with) {
                     return None;
                 }
                 let undo = shell.unsplit_of(tab, with)?;
                 shell.browser.split_with(tab, with, left, cx);
-                if stacked {
-                    shell.browser.set_split_stacked(with, true, cx);
-                }
+                shell.give_look(with, &look, cx);
                 Some(undo)
             }
             Edit::Unsplit { tab, back } => {
                 let Some(Edit::Join { with, left, .. }) = shell.join_of(tab) else {
                     return None;
                 };
-                let (panes, stacked) = shell.split_of(tab)?;
-                // A split of two goes with the tab, and its orientation with it, for Redo to give.
-                let stacked = stacked && panes.len() == 2;
+                let (panes, look) = shell.split_of(tab)?;
+                // A split of two goes with the tab, and how it looked with it, for Redo to give.
+                let look = if panes.len() == 2 {
+                    look
+                } else {
+                    Look::default()
+                };
                 let shown = shell.selected;
                 match *back {
                     join @ Edit::Join { .. } => {
@@ -550,11 +563,11 @@ impl Edit {
                     tab,
                     with,
                     left,
-                    stacked,
+                    look,
                 })
             }
             Edit::Stack { tab, stacked } => {
-                let (_, now) = shell.split_of(tab)?;
+                let now = shell.split_of(tab)?.1.stacked;
                 shell.browser.set_split_stacked(tab, stacked, cx);
                 Some(Edit::Stack { tab, stacked: now })
             }
@@ -1054,7 +1067,7 @@ impl Shell {
             self.browser.set_pinned(tab, true, cx);
         }
         // A split moves whole, as its row does in its Space (Arc).
-        if let Some((tabs, stacked)) = self.split_of(tab) {
+        if let Some((tabs, look)) = self.split_of(tab) {
             if !same_profile {
                 // There the core makes each page a new tab, in a row of its own.
                 for &each in &tabs {
@@ -1065,27 +1078,44 @@ impl Shell {
             let spot = self.spot_of(tab);
             let before = spot.map(|spot| Edit::MoveSplit {
                 tabs: tabs.clone(),
-                stacked,
+                look: look.clone(),
                 spot,
             });
-            self.move_split(&tabs, stacked, space, cx);
+            self.move_split(&tabs, &look, space, cx);
             return self.keep(What::MOVE_TO_SPACE, before, cx);
         }
         self.browser.move_to_space(tab, space, cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
     }
 
-    /// Moves a split view's `tabs` to `space` and joins them again there, in their order and
-    /// orientation, at even sizes.
-    fn move_split(&mut self, tabs: &[u64], stacked: bool, space: u64, cx: &mut Context<Self>) {
+    /// Moves a split view's `tabs` to `space` and joins them again there, in their order, as it
+    /// looked, at even sizes.
+    fn move_split(&mut self, tabs: &[u64], look: &Look, space: u64, cx: &mut Context<Self>) {
         for &tab in tabs {
             self.browser.move_to_space(tab, space, cx);
         }
+        self.join_again(tabs, look, cx);
+    }
+
+    /// Joins `tabs` in a split view in their order, looking as `look` says.
+    pub(super) fn join_again(&mut self, tabs: &[u64], look: &Look, cx: &mut Context<Self>) {
         for pair in tabs.windows(2) {
             self.browser.split_with(pair[1], pair[0], false, cx);
         }
-        if stacked {
-            self.browser.set_split_stacked(tabs[0], true, cx);
+        self.give_look(tabs[0], look, cx);
+    }
+
+    /// Gives `tab`'s split view, just joined again, the look it had. A new split is side by side
+    /// with no name or icon, so only what differs is set.
+    fn give_look(&mut self, tab: u64, look: &Look, cx: &mut Context<Self>) {
+        if look.stacked {
+            self.browser.set_split_stacked(tab, true, cx);
+        }
+        if !look.name.is_empty() {
+            self.browser.set_split_name(tab, &look.name, cx);
+        }
+        if !look.icon.is_empty() {
+            self.browser.set_split_icon(tab, &look.icon, cx);
         }
     }
 
@@ -1096,9 +1126,20 @@ impl Shell {
         self.keep(What::DELETE_FOLDER, snapshot, cx);
     }
 
-    /// Takes `tab` out of its split view.
+    /// Takes `tab` out of its split view. ⌘Z joins it again, and a split of two that it ended
+    /// looks again as it did.
     pub(super) fn separate_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let join = self.join_of(tab);
+        let join = match (self.join_of(tab), self.split_of(tab)) {
+            (Some(Edit::Join { tab, with, left }), Some((panes, look))) if panes.len() == 2 => {
+                Some(Edit::Split {
+                    tab,
+                    with,
+                    left,
+                    look,
+                })
+            }
+            (join, _) => join,
+        };
         self.browser.separate(tab, cx);
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
@@ -1213,9 +1254,10 @@ impl Shell {
 
     /// Stacks the pages of `tab`'s split view top to bottom, or puts them side by side.
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
-        let undo = self
-            .split_of(tab)
-            .map(|(_, now)| Edit::Stack { tab, stacked: now });
+        let undo = self.split_of(tab).map(|(_, now)| Edit::Stack {
+            tab,
+            stacked: now.stacked,
+        });
         self.browser.set_split_stacked(tab, stacked, cx);
         let what = if stacked {
             What::CONVERT_VERTICAL
@@ -1234,9 +1276,12 @@ impl Shell {
         self.set_prop(prop, &value, cx);
         let what = match prop {
             Prop::TabName(_) => What::RENAME_TAB,
+            Prop::SplitName(_) => What::RENAME_SPLIT,
             Prop::FolderName(_) => What::RENAME_FOLDER,
             Prop::SpaceName(_) => What::RENAME_SPACE,
-            Prop::TabIcon(_) | Prop::FolderIcon(_) | Prop::SpaceIcon(_) => What::CHANGE_ICON,
+            Prop::TabIcon(_) | Prop::FolderIcon(_) | Prop::SplitIcon(_) | Prop::SpaceIcon(_) => {
+                What::CHANGE_ICON
+            }
             Prop::PinnedUrl(_) => What::CHANGE_PINNED_URL,
             Prop::SpaceColor(_) => match value {
                 Value::Color { color: None, .. } => What::REMOVE_THEME,
@@ -1438,11 +1483,19 @@ impl Shell {
         })
     }
 
-    /// The tabs of `tab`'s split view, in any Space, and whether it's stacked.
-    fn split_of(&self, tab: u64) -> Option<(Vec<u64>, bool)> {
+    /// The tabs of `tab`'s split view, in any Space, and how it looks.
+    pub(super) fn split_of(&self, tab: u64) -> Option<(Vec<u64>, Look)> {
         self.spaces.iter().find_map(|space| {
-            let panes = space.panes(tab);
-            (panes.len() > 1).then(|| (panes, space.stacked(tab)))
+            let split = space
+                .splits
+                .iter()
+                .find(|split| split.tabs.contains(&tab))?;
+            let look = Look {
+                stacked: split.stacked,
+                name: split.name.clone(),
+                icon: split.icon.clone(),
+            };
+            Some((split.tabs.clone(), look))
         })
     }
 
@@ -1476,6 +1529,8 @@ impl Shell {
                     .then_some(())?;
                 Value::Text(self.folder_icon(folder).to_string())
             }
+            Prop::SplitName(tab) => Value::Text(self.split_of(tab)?.1.name.to_string()),
+            Prop::SplitIcon(tab) => Value::Text(self.split_of(tab)?.1.icon.to_string()),
             Prop::SpaceName(id) => Value::Text(space(id)?.name.to_string()),
             Prop::SpaceIcon(id) => Value::Text(space(id)?.icon.to_string()),
             Prop::SpaceColor(id) => {
@@ -1503,6 +1558,8 @@ impl Shell {
             (Prop::FolderIcon(folder), Value::Text(icon)) => {
                 browser.set_folder_icon(folder, icon, cx)
             }
+            (Prop::SplitName(tab), Value::Text(name)) => browser.set_split_name(tab, name, cx),
+            (Prop::SplitIcon(tab), Value::Text(icon)) => browser.set_split_icon(tab, icon, cx),
             (Prop::SpaceName(space), Value::Text(name)) => browser.rename_space(space, name, cx),
             (Prop::SpaceIcon(space), Value::Text(icon)) => browser.set_space_icon(space, icon, cx),
             (Prop::SpaceColor(space), Value::Color { color, theme }) => {

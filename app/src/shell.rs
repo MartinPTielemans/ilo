@@ -721,6 +721,8 @@ struct SpaceForm {
 enum Naming {
     Space(u64),
     Tab(u64),
+    /// The split view a tab is in, in its row in place of its pages' titles.
+    Split(u64),
     /// A pinned tab's pinned URL, in its row in place of its title.
     PinnedUrl(u64),
     Folder(u64),
@@ -732,7 +734,7 @@ impl Naming {
     /// The tab whose row the field is in, if it's a tab's.
     fn tab(self) -> Option<u64> {
         match self {
-            Naming::Tab(tab) | Naming::PinnedUrl(tab) => Some(tab),
+            Naming::Tab(tab) | Naming::Split(tab) | Naming::PinnedUrl(tab) => Some(tab),
             Naming::Space(_) | Naming::Folder(_) | Naming::Profile(_) => None,
         }
     }
@@ -1954,6 +1956,12 @@ impl Shell {
         self.shown_space().is_some_and(|space| space.stacked(tab))
     }
 
+    /// `tab`'s split view in the Space shown.
+    fn split(&self, tab: u64) -> Option<&Split> {
+        let space = self.shown_space()?;
+        space.splits.iter().find(|split| split.tabs.contains(&tab))
+    }
+
     /// The tab of `tab`'s split view in the Space shown that took the card, else 0.
     fn expanded(&self, tab: u64) -> u64 {
         self.shown_space().map_or(0, |space| space.expanded(tab))
@@ -2432,6 +2440,16 @@ impl Shell {
             .collect();
         entry.pinned = pinned;
         entry.today = today;
+        for split in &splits {
+            let was = entry
+                .splits
+                .iter()
+                .find(|was| was.tabs.first() == split.tabs.first());
+            if was.map_or(!split.name.is_empty(), |was| was.name != split.name) {
+                // check.sh waits for this line.
+                log!("browser: renamed split {} {}", split.tabs[0], split.name);
+            }
+        }
         entry.splits = splits;
         for (folder, (name, _)) in &folders.folders {
             if entry

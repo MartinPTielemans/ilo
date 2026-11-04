@@ -40,6 +40,9 @@ struct SavedTab {
   // Whether it's in a split view with the tab saved above it, and whether that split is stacked.
   bool split = false;
   bool stacked = false;
+  // The name and icon of that split view, if the user gave it any.
+  std::string split_name;
+  std::string split_icon;
   // Its share of its split view, or 0 while the split's shares are even.
   double share = 0;
   // Whether its page took its split view's card, the other pages keeping 220 pt, which the shares

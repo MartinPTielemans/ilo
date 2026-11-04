@@ -137,6 +137,8 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
                 stacked: unsafe { bc::bc_tab_split_stacked(tab) },
                 shares: if even { Vec::new() } else { shares },
                 expanded: unsafe { bc::bc_tab_split_expanded(tab) },
+                name: name(bc::bc_tab_split_name, tab),
+                icon: name(bc::bc_tab_split_icon, tab),
             });
         }
     }

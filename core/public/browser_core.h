@@ -1675,6 +1675,24 @@ BC_EXPORT bc_id bc_tab_split_expanded(bc_id tab);
 // doing nothing, if |tab| is in no split view. Then space_changed.
 BC_EXPORT bool bc_tab_set_split_expanded(bc_id tab, bool expanded);
 
+// Copies the name the user gave |tab|'s split view into |name| as bc_space_name does, or an empty
+// string if it has none or |tab| is in no split view. A split with a name or an icon shows them in
+// its row in place of its pages' titles and favicons. Kept after a quit, through ⇧⌘T of its pages
+// and with what moves it, such as a folder; it goes when the split does.
+BC_EXPORT size_t bc_tab_split_name(bc_id tab, char* name, size_t capacity);
+
+// Names |tab|'s split view, or takes its name away if |name| is empty. Returns false, doing
+// nothing, if |tab| is in no split view. Then space_changed.
+BC_EXPORT bool bc_tab_set_split_name(bc_id tab, const char* name);
+
+// Copies the icon the user gave |tab|'s split view, an emoji, UTF-8, into |icon| as
+// bc_tab_split_name does, or an empty string if it has none.
+BC_EXPORT size_t bc_tab_split_icon(bc_id tab, char* icon, size_t capacity);
+
+// Gives |tab|'s split view |icon|, an emoji, UTF-8, or takes its icon away if |icon| is empty.
+// Returns false, doing nothing, if |tab| is in no split view. Then space_changed.
+BC_EXPORT bool bc_tab_set_split_icon(bc_id tab, const char* icon);
+
 // Makes |space| the one the window shows: its tabs are the ones bc_window_select shows, and the
 // window's new tabs go in it. The window shows the tab it last showed there, else the Space's top
 // Today tab, else its top pinned tab, else no page, passing over tabs another window shows. Then
