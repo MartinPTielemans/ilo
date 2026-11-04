@@ -446,18 +446,6 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
-// The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
-// renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
-// bar's suggestions, is drawn cut off. The size again after the update reaches it.
-void SizeAgainLater(HWND hwnd) {
-  Later([hwnd] {
-    RECT client{};
-    if (IsWindow(hwnd) && GetClientRect(hwnd, &client)) {
-      SendMessageW(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
-    }
-  });
-}
 
 // The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
 // over, or |hwnd| if it has no owner.
@@ -486,6 +474,7 @@ HWND InsertAfter(HWND hwnd) {
   return HWND_TOP;
 }
 
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
   const HWND after = InsertAfter(hwnd);
   SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
@@ -501,7 +490,6 @@ void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate)
     SetWindowPos(hwnd, after, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
   }
-  SizeAgainLater(hwnd);
 }
 
 // Whether one of the app's windows has the foreground, rather than another app's the user is in.
@@ -635,7 +623,6 @@ void Resize(Floating& floating, double height) {
   SetWindowPos(floating.hwnd, nullptr, 0, 0, rect.right - rect.left,
                static_cast<int>(std::lround(height * Scale(floating.hwnd))),
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-  SizeAgainLater(floating.hwnd);
 }
 
 // The UI views host_ui_view made, in order, for the watchers to find a browser window's.
@@ -1196,7 +1183,6 @@ void PlaceToast() {
   ClientToScreen(root, &origin);
   SetWindowPos(g_toast.hwnd, nullptr, origin.x, origin.y, std::lround(width * scale),
                std::lround(height * scale), SWP_NOZORDER | SWP_NOACTIVATE);
-  SizeAgainLater(g_toast.hwnd);
 }
 
 // While the link target or a reveal shows, the pointer's moves over the app's windows.

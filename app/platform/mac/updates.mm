@@ -140,13 +140,6 @@ OSStatus Regrant(NSString* name, NSData* key) {
   return status;
 }
 
-bool AnyFullScreen() {
-  for (NSWindow* window in NSApp.windows) {
-    if (window.styleMask & NSWindowStyleMaskFullScreen) return true;
-  }
-  return false;
-}
-
 // Where Sparkle unpacks an update before installing it, as Sparkle 2.10's installer does: the app
 // is a few folders down in ~/Library/Caches/<bundle id>/org.sparkle-project.Sparkle/Installation.
 NSBundle* StagedApp(NSString* version) {
@@ -208,8 +201,6 @@ NSString* NightlyFeed() {
 // Sparkle's delegate, for both its updater and its alerts.
 @interface Updates : NSObject <SPUUpdaterDelegate, SPUStandardUserDriverDelegate>
 @property(nonatomic) SPUStandardUpdaterController* controller;
-// A scheduled update's alert held back while a window was full screen.
-@property(nonatomic) BOOL waiting;
 // Told where the update stands, for Settings › About.
 @property(nonatomic) void (*changed)(int stage, const char* version);
 // Sparkle's install now, of the update downloaded to install on quit.
@@ -237,10 +228,6 @@ NSString* NightlyFeed() {
     _warmed = [NSMutableSet set];
     _afterWarming = [NSMutableArray array];
     NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-    [center addObserver:self
-               selector:@selector(leftFullScreen:)
-                   name:NSWindowDidExitFullScreenNotification
-                 object:nil];
     [center addObserver:self
                selector:@selector(terminating:)
                    name:NSApplicationWillTerminateNotification
@@ -467,22 +454,28 @@ NSString* NightlyFeed() {
                  dispatch_get_main_queue(), restart);
 }
 
-// A scheduled update's alert waits while a window is full screen (ux-spec), and shows when none is.
+// A scheduled check shows no alert of Sparkle's own (#678): the sidebar's banner says what it
+// found, quietly, and Sparkle's window shows it only once the user asks, from the banner or Check
+// for Updates…, which Sparkle shows in immediate focus. An update Sparkle downloads by itself
+// becomes ready through willInstallUpdateOnQuit; one it won't is the banner's Update available.
 - (BOOL)supportsGentleScheduledUpdateReminders {
   return YES;
 }
 
 - (BOOL)standardUserDriverShouldHandleShowingScheduledUpdate:(SUAppcastItem*)update
                                          andInImmediateFocus:(BOOL)immediateFocus {
-  return !AnyFullScreen();
+  return NO;
 }
 
 - (void)standardUserDriverWillHandleShowingUpdate:(BOOL)handleShowingUpdate
                                         forUpdate:(SUAppcastItem*)update
                                             state:(SPUUserUpdateState*)state {
-  self.waiting = !handleShowingUpdate;
-  NSString* outcome = handleShowingUpdate ? @"shown" : @"held in full screen";
-  Log([NSString stringWithFormat:@"update %@ %@", update.versionString, outcome]);
+  if (handleShowingUpdate) {
+    Log([NSString stringWithFormat:@"update %@ shown", update.versionString]);
+    return;
+  }
+  Log([NSString stringWithFormat:@"update %@ in the banner", update.versionString]);
+  if (state.stage == SPUUserUpdateStageNotDownloaded) [self tell:HOST_UPDATE_AVAILABLE item:update];
 }
 
 // Any of Sparkle's alerts, an error's too.
@@ -504,18 +497,10 @@ NSString* NightlyFeed() {
   return nil;
 }
 
+// The user closed Sparkle's window, skipped the version or installed it: an update the banner
+// offered goes with it.
 - (void)standardUserDriverWillFinishUpdateSession {
-  self.waiting = NO;
-}
-
-- (void)leftFullScreen:(NSNotification*)notification {
-  // AppKit takes the style away just after this, so the window that left is looked at next turn.
-  dispatch_async(dispatch_get_main_queue(), ^{
-    if (!self.waiting || AnyFullScreen()) return;
-    self.waiting = NO;
-    Log(@"update shown after full screen");
-    [self.controller checkForUpdates:nil];
-  });
+  if (_stage == HOST_UPDATE_AVAILABLE) [self tell:HOST_UPDATE_IDLE item:nil];
 }
 
 @end

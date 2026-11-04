@@ -32,6 +32,9 @@ mod agent_bar;
 mod agent_pointer;
 mod agent_question;
 mod assets;
+mod bar_usage;
+#[cfg(test)]
+mod bar_usage_tests;
 mod beside;
 mod browser;
 mod card_strip;
@@ -111,9 +114,10 @@ mod tile_theme;
 mod trace;
 mod trouble;
 mod undo;
-mod update_sign;
+mod update_banner;
 
 pub use assets::Assets;
+pub use bar_usage::{forget_bar_usage, picked_in_bar};
 pub use browser::{
     Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
 };
@@ -124,7 +128,7 @@ pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, Run, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
-    shown_tab, task_page_shown, with_named_rows,
+    shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::dropped_urls;
@@ -1494,9 +1498,15 @@ pub struct Shell {
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
-    /// where that's drawn, and the watch on the updater.
-    update_waiting: bool,
+    /// What the update banner at the foot offers, whether it's open under the pointer or says a
+    /// restart is under way, its opening or closing from a height, and what the log said last
+    /// (update_banner.rs).
+    update_banner: Option<update_banner::Waiting>,
+    update_open: bool,
+    update_restarting: bool,
+    update_motion: Option<(f32, Instant)>,
+    update_said: Option<&'static str>,
+    /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
@@ -1794,7 +1804,11 @@ impl Shell {
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
             media_drawn: Rc::default(),
-            update_waiting: crate::updates::ready(cx),
+            update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
+            update_open: false,
+            update_restarting: false,
+            update_motion: None,
+            update_said: None,
             update_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
@@ -1911,9 +1925,7 @@ impl Shell {
         browser: Rc<dyn Browser>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let key = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone());
+        let key = commands::key_shell(cx);
         let shell = Self::seeded_from(from, browser, cx);
         if let Some(key) = key {
             cx.set_global(ShellHandle(key));
@@ -2591,6 +2603,7 @@ impl Shell {
             })
         });
         self.crash_cards.retain(|tab, _| open(tab));
+        self.forget_switches(open, cx);
         self.recent.retain(open);
         if let Some(tab) = self
             .renaming
@@ -2664,7 +2677,7 @@ impl Shell {
         self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
-            self.shown(tab);
+            self.shown(tab, cx);
         }
         self.selected_for_picture(tab, cx);
         self.hid_for_cards(hidden, cx);
@@ -2690,7 +2703,7 @@ impl Shell {
         let new_tab = follows
             && self
                 .browser
-                .command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
+                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
         self.set_new_tab(new_tab, cx);
         self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
@@ -2708,6 +2721,7 @@ impl Shell {
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
         cx.set_global(ShellHandle(cx.weak_entity()));
+        commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
         // its hung page's note shows, which waited while it was behind.
         self.page_dialog_shown = None;
@@ -2790,8 +2804,11 @@ impl Shell {
         }
     }
 
-    fn shown(&mut self, tab: u64) {
+    fn shown(&mut self, tab: u64, cx: &mut App) {
         if tab != 0 {
+            if self.recent.first() != Some(&tab) {
+                self.switched_to(tab, cx);
+            }
             self.recent.retain(|&other| other != tab);
             self.recent.insert(0, tab);
         }
@@ -2799,11 +2816,11 @@ impl Shell {
 
     /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
     /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, _: &mut Context<Self>) {
+    pub fn control_released(&mut self, cx: &mut Context<Self>) {
         if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked);
+            self.shown(walked, cx);
         }
-        self.shown(self.selected);
+        self.shown(self.selected, cx);
     }
 
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
@@ -3157,10 +3174,7 @@ impl Shell {
     /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
     /// the user's, so its dot is the icon's own.
     fn follow_dock(&self, cx: &mut Context<Self>) {
-        if cx
-            .try_global::<ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity())
-        {
+        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
         }
     }
@@ -3638,6 +3652,7 @@ impl Render for Shell {
         self.step_foot(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
+        self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
                 window.request_animation_frame();
@@ -3945,9 +3960,10 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
-                    .children(self.update_sign())
                     .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
+                    // Over the players and the task's foot, which it opens over.
+                    .children(self.update_banner(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx))
             }

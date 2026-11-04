@@ -780,6 +780,9 @@ enum {
   // host_install_update.
   HOST_UPDATE_READY = 5,
   HOST_UPDATE_FAILED = 6,
+  // A newer version the updater won't download by itself, as Sparkle leaves one that needs the
+  // user's go-ahead: host_check_for_updates shows it in Sparkle's window. The Mac's alone.
+  HOST_UPDATE_AVAILABLE = 7,
 };
 
 // Starts the updater, which checks every 8 hours and downloads a newer version in the background

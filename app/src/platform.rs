@@ -391,6 +391,7 @@ pub const UPDATE_FOUND: c_int = 3;
 pub const UPDATE_DOWNLOADING: c_int = 4;
 pub const UPDATE_READY: c_int = 5;
 pub const UPDATE_FAILED: c_int = 6;
+pub const UPDATE_AVAILABLE: c_int = 7;
 
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;
