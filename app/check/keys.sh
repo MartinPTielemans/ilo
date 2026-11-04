@@ -364,8 +364,8 @@ expect "^browser: today $before\$" "⌘W didn't close the history tab"
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "after the history tab closed"
 
-# Settings › Shortcuts' search, over its boxes, finds a command by the words of its name or by
-# its keys (#682). Under it, New Tab comes first, its keys in a chip at the row's right, 56 wide
+# Settings' search, at the column's top, finds a command by the words of its name or by its keys
+# (#682, #1636). Under it, New Tab comes first, its keys in a chip at the row's right, 56 wide
 # and 10 in from the box, and ↺, once it has other keys, 6 before the chip. A click on the chip
 # records the next keys pressed.
 send menu Settings…
@@ -374,19 +374,19 @@ settings_drew
 send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send type new tab
 # Paste URL as New Tab has the words too, under it.
-expect '^browser: shortcuts search "new tab" finds New Tab, Paste URL as New Tab$' \
+expect '^browser: settings search "new tab" finds New Tab, Paste URL as New Tab$' \
   "the search didn't find New Tab by name"
 send key a cmd
 send type cmd t
-expect '^browser: shortcuts search "cmd t" finds New Tab, Restore Last Closed Tab$' \
+expect '^browser: settings search "cmd t" finds New Tab, Restore Last Closed Tab$' \
   "the search didn't find ⌘T and ⇧⌘T by their keys"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-search.png" || fail "no window to capture"
 send key a cmd
 send type copy
-expect '^browser: shortcuts search "copy" finds ' "the search for copy didn't end"
+expect '^browser: settings search "copy" finds ' "the search for copy didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-rows.png" || fail "no window to capture"
 # Every command the user can give keys has a row (#1062), these among them.
 for name in "Duplicate Current Tab" "Favorite Tab" "Rename Current Tab" Share "Capture Full Page" \
@@ -397,14 +397,35 @@ for name in "Duplicate Current Tab" "Favorite Tab" "Rename Current Tab" Share "C
   query=$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed "s/[^a-z. ].*//; s/ *\$//")
   send key a cmd
   send type $query
-  expect "^browser: shortcuts search \"$query\" finds " "the search for $name didn't end"
-  grep "^browser: shortcuts search \"$query\" finds " "$log" | tail -1 |
+  expect "^browser: settings search \"$query\" finds " "the search for $name didn't end"
+  grep "^browser: settings search \"$query\" finds " "$log" | tail -1 |
     grep -q -e "finds $name\$" -e "finds $name, " -e ", $name\$" -e ", $name, " ||
     fail "Settings › Shortcuts has no row $name"
 done
 send key a cmd
 send key backspace
-expect '^browser: shortcuts search cleared$' "⌫ didn't clear the search"
+expect '^browser: settings search cleared$' "⌫ didn't clear the search"
+# It reads every section's rows: "archive" finds five in three sections, live under their names,
+# and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
+# click on Features' name shows Features at its row.
+send key a cmd
+send type archive
+found='Archive Today tabs after, Archive windows left unused after, Archive Tab, View Archive, Clear Archive'
+expect "^browser: settings search \"archive\" finds $found\$" \
+  "the search for archive didn't find its five rows: $(grep '"archive" finds' "$log" | tail -1)"
+../tools/window-screenshot.sh "$pid" "$out/settings-search.png" || fail "no window to capture"
+send key escape
+expect '^browser: settings search cleared$' "Esc didn't empty the search"
+send key f cmd
+send type archive
+expect "^browser: settings search \"archive\" finds $found\$" "⌘F didn't search again"
+send clickkey $(drawn "found Features Archive windows left unused after")
+expect '^browser: settings found Features › Archive windows left unused after$' \
+  "a click on Features' name didn't show its row"
+settings_drew Features
+../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
+send clickkey $(drawn "toolbar Shortcuts")
+settings_drew Shortcuts
 send clickkey $(drawn "shortcut new-tab")
 expect '^browser: shortcut recording new-tab$' "a click on New Tab's keys didn't record them"
 send key t cmd ctrl
@@ -482,22 +503,23 @@ settings_drew
 send clickkey $(drawn "toolbar Shortcuts")
 expect '^browser: settings tab Shortcuts$' "a click on Shortcuts didn't show its tab"
 settings_drew Shortcuts
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send type sidebar
-expect '^browser: shortcuts search "sidebar" finds ' "the search for sidebar didn't end"
+expect '^browser: settings search "sidebar" finds ' "the search for sidebar didn't end"
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-sidebar.png" || fail "no window to capture"
 found='Reveal Tab in Sidebar, Focus Sidebar, Show/Hide Sidebar, Restore Earlier Sidebar'
-grep -q "^browser: shortcuts search \"sidebar\" finds $found\$" "$log" ||
+# Tabs & Sidebar's hidden sidebar row comes first, before the commands.
+grep -q "^browser: settings search \"sidebar\" finds \(.*, \)\{0,1\}$found\$" "$log" ||
   fail "the search didn't find the sidebar's commands: $(grep '"sidebar" finds' "$log" | tail -1)"
 send key a cmd
 send type pinned tabs
-expect '^browser: shortcuts search "pinned tabs" finds Collapse Pinned Tabs, Expand Pinned Tabs$' \
+expect '^browser: settings search "pinned tabs" finds Collapse Pinned Tabs, Expand Pinned Tabs$' \
   "the search didn't find Collapse and Expand Pinned Tabs"
 send key a cmd
 send type focus sidebar
-expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
+expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar"
-send clickkey $(drawn "shortcut new-tab")
+send clickkey $(drawn "shortcut focus-sidebar")
 expect '^browser: shortcut recording focus-sidebar$' \
   "a click on Focus Sidebar's keys didn't record them"
 send key k cmd ctrl
@@ -516,10 +538,10 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send key a cmd
 send type focus sidebar
-expect '^browser: shortcuts search "focus sidebar" finds Focus Sidebar$' \
+expect '^browser: settings search "focus sidebar" finds Focus Sidebar$' \
   "the search didn't find Focus Sidebar again"
 # Restore Defaults, under the one row found, where ↺'s place follows its chip's width, which is
 # the key's name's off the Mac. New Tab has its default already.
@@ -555,10 +577,10 @@ prefer() {
   send menu Settings…
   expect '^browser: settings shown Shortcuts$' \
     "Settings… didn't show the Shortcuts tab it showed last"
-  send clickkey $(drawn "shortcuts search")
+  send clickkey $(drawn "search")
   send key a cmd
   send type find
-  expect '^browser: shortcuts search "find" finds \(.*, \)\{0,1\}Find\(, .*\)\{0,1\}$' \
+  expect '^browser: settings search "find" finds \(.*, \)\{0,1\}Find\(, .*\)\{0,1\}$' \
     "the search didn't find Find"
   at=$(drawn "shortcut find") || fail "Find's keys weren't drawn"
   post rightclickkey $at
@@ -713,12 +735,12 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send key a cmd
 send type go to space
-expect '^browser: shortcuts search "go to space" finds Go to Space 1, Go to Space 2, ' \
+expect '^browser: settings search "go to space" finds Go to Space 1, Go to Space 2, ' \
   "the search didn't find Go to Space 1 first"
-send clickkey $(drawn "shortcut new-tab")
+send clickkey $(drawn "shortcut select-space-1")
 expect '^browser: shortcut recording select-space-1$' \
   "a click on Go to Space 1's keys didn't record them"
 send key 1 cmd ctrl
@@ -774,13 +796,13 @@ send menu Settings…
 expect '^browser: settings shown Shortcuts$' \
   "Settings… didn't show the Shortcuts tab it showed last"
 settings_drew Shortcuts
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send key a cmd
 send type include favorites
 # The row names the keys as its OS does, Ctrl+1–Ctrl+8 off the Mac.
 numbered='⌘1–⌘8'
 [ "$(uname)" = Darwin ] || numbered='Ctrl+1–Ctrl+8'
-expect "^browser: shortcuts search \"include favorites\" finds Include Favorites in $numbered\$" \
+expect "^browser: settings search \"include favorites\" finds Include Favorites in $numbered\$" \
   "the search didn't find Include Favorites in $numbered"
 at=$(drawn "switch favorites numbered") || fail "Include Favorites has no switch"
 send clickkey $at
@@ -788,10 +810,10 @@ expect '^browser: favorites numbered off$' "a click on Include Favorites didn't 
 ../tools/window-screenshot.sh "$pid" "$out/shortcuts-favorites.png" || fail "no window to capture"
 # Last Tab Goes to the Ninth Tab makes ⌘9 the ninth tab, counted as ⌘1–⌘8 count (#682). The
 # switch took the keyboard from the search field.
-send clickkey $(drawn "shortcuts search")
+send clickkey $(drawn "search")
 send key a cmd
 send type ninth
-expect '^browser: shortcuts search "ninth" finds Last Tab Goes to the Ninth Tab$' \
+expect '^browser: settings search "ninth" finds Last Tab Goes to the Ninth Tab$' \
   "the search didn't find Last Tab Goes to the Ninth Tab"
 at=$(drawn "switch last tab ninth") || fail "Last Tab Goes to the Ninth Tab has no switch"
 send clickkey $at

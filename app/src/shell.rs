@@ -164,6 +164,7 @@ pub use recent_downloads::{FilePreview, HOVER_ALL};
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
+pub use sidebar::{SidebarEdge, edge_reveals};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -3428,6 +3429,22 @@ impl Shell {
                             .ok();
                     }
                 });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// The pointer leaving the window's own view, for the page's or another window, which ends a
+    /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
+    /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
+    /// shell doesn't hear the pointer in, and a pointer passing the edge brought the sidebar out.
+    fn leave_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
                 window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         shell
@@ -3873,6 +3890,7 @@ impl Render for Shell {
                 }),
             )
             .child(self.window_background())
+            .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {

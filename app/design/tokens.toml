@@ -557,6 +557,11 @@ intensity-floor = 0.2
 intensity-span = 0.55
 # A Space swatch's ring, a hairline.
 ring = 1.0
+# A Space swatch of two colours holds its main colour, the one the Space's accents take, solid
+# this far along its 135° diagonal, then reaches the second at its far edge: about two thirds of
+# the disc is nearer the main colour, where the window's own 75 % would leave it a third (ours,
+# #1849).
+swatch-main-to = 0.25
 # The accent under the pointer, each channel at this, darker as every filled button goes (the
 # owner, 2026-10-26); pressed, each channel at this, a step darker again, whatever the label (the
 # owner, #707); and a text selection, the accent at this.
@@ -612,6 +617,19 @@ section-shadow = 0x00000033
 section-hovered = 0.12
 foot-text = 0.55
 foot-glyph-alpha = 0.45
+# Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
+# 8 in, with the sections 12 under it. ⌘F sits at its end, quiet, until typing starts; then ✕ on an
+# 18 circle empties it. While it finds rows, the sections with none dim to 0.35, so where things
+# live stays readable, and a row a click on its section's name goes to flashes once: a plate under
+# it up to the sidebar's hovered 0.12 and back over 600 ms.
+search-gap = 12.0
+search-hint = 0.4
+search-clear = 18.0
+search-clear-glyph = 10.0
+search-clear-fill = 0.2
+search-dimmed = 0.35
+found-flash = 0.12
+found-flash-time = 0.6
 # The card the section shows on: 10 in from the window's top, right and bottom at the card's
 # radius, its rim in dark and its ring and shadow in light, and a fade into its fill over the last
 # 28 where rows go on under it.
