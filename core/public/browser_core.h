@@ -114,6 +114,12 @@ typedef struct bc_tab_state {
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
   // the page's site, or it's localhost, as Chrome counts it, and they didn't turn it off there.
   bool developer_mode;
+  // The page's background, as its CSS sets it and its renderer last told Chromium, 0xRRGGBBAA, or 0
+  // while it has told none, with no page and for a page in the system's engine. It comes again as
+  // it changes. Off the Mac the UI draws it under the page, where the card would show for the
+  // frame a resize uncovers before the page draws at its new size; the Mac's page view fills that
+  // with it already (#669).
+  uint32_t background;
 } bc_tab_state;
 
 // A tab's find in page, as its find bar shows it.

@@ -1026,6 +1026,21 @@ void Tab::StateChanged() {
   ReportStateSoon();
 }
 
+void Tab::OnBackgroundColorChanged() {
+  ReportStateSoon();
+}
+
+// The page's background as its CSS sets it (WebContents::GetBackgroundColor), as bc_tab_state
+// gives it, 0xRRGGBBAA, or 0 with none.
+uint32_t Tab::PageBackground(content::WebContents* contents) {
+  const std::optional<SkColor> color = contents->GetBackgroundColor();
+  if (!color) {
+    return 0;
+  }
+  return SkColorGetR(*color) << 24 | SkColorGetG(*color) << 16 | SkColorGetB(*color) << 8 |
+         SkColorGetA(*color);
+}
+
 void Tab::ReportStateSoon() {
   if (state_report_posted_) {
     return;
@@ -1125,6 +1140,7 @@ void Tab::ReportState() {
           std::ranges::contains(session->GetMediaSessionActionsSync(),
                                 media_session::mojom::MediaSessionAction::kEnterPictureInPicture),
       .developer_mode = developer_mode::On(profile(), GURL(url)),
+      .background = page ? 0 : PageBackground(contents),
   };
   Host().tab_state_changed(Host().context, id_, &state);
   // The system page's comes from FetchSystemPageFavicon.

@@ -518,6 +518,55 @@ mod tests {
         px, size,
     };
 
+    /// Off the Mac the card under a page takes the page's own background once it has told one,
+    /// so a resize uncovers the page's colour, not the card's; a page with none, or no page, has
+    /// the card's fill, and a switch takes the next tab's from the state already held (#669).
+    #[gpui::test]
+    fn the_card_under_a_page_takes_its_background_off_the_mac(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        let blue = gpui::rgba(0x3366ccff);
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Work".into(), None, 0, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 20],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            let painted = Page {
+                url: "https://blue.test/".into(),
+                background: Some(blue),
+                ..Page::default()
+            };
+            shell.set_page(10, painted, cx);
+            shell.set_selected(10, cx);
+        });
+        let (fill, card) =
+            shell.read_with(cx, |shell, _| (shell.card_fill(10), shell.palette.page));
+        let expected = if crate::shell::OFF_THE_MAC {
+            blue
+        } else {
+            card
+        };
+        assert_eq!(fill, expected, "the card under the blue page");
+        shell.update(cx, |shell, cx| shell.set_selected(20, cx));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.card_fill(20)),
+            card,
+            "a page that told no background took one"
+        );
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.card_fill(0)),
+            card,
+            "no page took a background"
+        );
+    }
+
     /// A dragged gap's shares put the pages back where it was dragged to, as the core lays them
     /// out with the same rounding, so the cards behind the pages line up with them.
     #[test]

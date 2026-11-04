@@ -256,6 +256,7 @@ class Tab : public content::WebContentsObserver,
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override;
   void OnRendererResponsive(content::RenderProcessHost* process) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
+  void OnBackgroundColorChanged() override;
   void DidToggleFullscreenModeForTab(bool entered_fullscreen, bool will_cause_resize) override;
   void DidUpdateAudioMutingState(bool muted) override;
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
@@ -323,6 +324,7 @@ class Tab : public content::WebContentsObserver,
   void ReportLinkTarget(const GURL& url);
   // A BC_PAGE_ value, for the app and agents.
   int Trouble() const;
+  static uint32_t PageBackground(content::WebContents* contents);
   // Says the page is fine again if it hung, without telling the app.
   void ClearHang();
   // Lays out each window showing the tab, from a task of its own, so a crashed page's pane shows

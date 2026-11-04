@@ -242,6 +242,8 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         media_next: state.media_next,
         media_picture_in_picture: state.media_picture_in_picture,
         developer_mode: state.developer_mode,
+        // An opaque one only: through a clear one the card shows as it would.
+        background: (state.background & 0xff == 0xff).then(|| gpui::rgba(state.background)),
     };
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));

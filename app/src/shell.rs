@@ -3873,7 +3873,7 @@ impl Shell {
             .zip(&panes)
             .map(|(bounds, &tab)| {
                 let focused = split && tab == self.selected;
-                card(bounds, self.palette.page)
+                card(bounds, self.card_fill(tab))
                     .when(focused, |card| card.shadow(vec![glow.clone()]))
             })
             .collect();
@@ -3886,6 +3886,17 @@ impl Shell {
             ));
         }
         cards
+    }
+
+    /// The fill of the card under `tab`'s page: off the Mac, the page's own background once it has
+    /// told one, so the space a resize uncovers before the page draws at its new size shows the
+    /// page's colour, not the card's (Arc's; the Mac's page view fills it so itself). It's the
+    /// tab's state the shell holds already, so a tab switch does nothing more for it.
+    fn card_fill(&self, tab: u64) -> Rgba {
+        match self.page(tab).background {
+            Some(background) if OFF_THE_MAC && tab != 0 => background,
+            _ => self.palette.page,
+        }
     }
 
     /// The sidebar: the header's buttons, the URL field and the Space's tabs, or the Create a

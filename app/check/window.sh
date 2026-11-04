@@ -2,7 +2,8 @@
 # and the window's buttons stay in the header row. A page that goes full screen takes the window
 # with it, and escape or the page leaving brings both back, the page resized once each way, straight
 # to its new size, and its leaving reported once, timed from the page's request to the window's and
-# the UI's steps, going in and out. The window leaving full screen by its green button takes the page
+# the UI's steps, going in and out. While the window resizes, the space the page hasn't drawn yet
+# shows the page's colour. The window leaving full screen by its green button takes the page
 # out with it and brings back the sidebar and the card, and the page's full screen takes the window
 # again after. A full-screen window's display going away keeps the window and the page together,
 # both full screen or both out, and escape and the page's full screen work after; going away while
@@ -938,6 +939,66 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   fi
   material="over grey ${material%; }"
 fi
+
+# While the window resizes, the space the page hasn't drawn yet at its new size shows the page's
+# colour, not the card's (Arc's): off the Mac the card under the page takes the page's background
+# (bc_tab_state.background), and the Mac's page view fills its gutter with it itself (#669). A blue
+# page; off the Mac a capture straight after a resize the driver doesn't wait for shows it blue. The
+# window's edge dragged in steps is recorded on the Mac and Linux (resize-steps.mp4), the frames
+# for a reader to look at one by one.
+printf '%s' '<title>resized</title><style>body{margin:0;background:#3366cc}</style>' \
+  > "$out/site/resized.html"
+# Whether capture $1 at x $2 of its width, halfway down, is the page's blue, within 24 a channel.
+blue_at() {
+  set -- $(pixel "$1" "$2" 0.5)
+  [ $(($1 - 51)) -le 24 ] && [ $((51 - $1)) -le 24 ] && [ $(($2 - 102)) -le 24 ] &&
+    [ $((102 - $2)) -le 24 ] && [ $(($3 - 204)) -le 24 ] && [ $((204 - $3)) -le 24 ]
+}
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar for the resized page"
+send insert "${site}resized.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}resized.html\$" "the resized page didn't load"
+send click $page_point
+send resize 800 560
+for _ in $(seq 20); do
+  ../tools/window-screenshot.sh "$pid" "$out/resized-small.png" || fail "no window to capture"
+  blue_at "$out/resized-small.png" 0.6 && break
+  sleep 0.1
+done
+blue_at "$out/resized-small.png" 0.6 || fail "the resized page didn't draw blue"
+if ! windows; then
+  ../tools/window-record.sh "$pid" 3 "$out/resize-steps.mp4" > "$out/resize-record.txt" 2>&1 &
+  recorder=$!
+  for _ in $(seq 50); do
+    grep -q recording "$out/resize-record.txt" && break
+    sleep 0.1
+  done
+  grep -q recording "$out/resize-record.txt" ||
+    echo "skip: recording the resize: $(cat "$out/resize-record.txt")"
+fi
+if [ "$(uname)" = Darwin ]; then
+  # The edge, 2 outside it, as a hand drags it: AppKit's live resize.
+  send press 802 280
+  for x in 840 880 920 960 1000 1040 1080 1120 1160 1200; do
+    send dragto $x 280
+  done
+  send release 1200 280
+else
+  post resize 1200 800
+  ../tools/window-screenshot.sh "$pid" "$out/resized-at-once.png" || fail "no window to capture"
+  if ! blue_at "$out/resized-at-once.png" 0.9 || ! blue_at "$out/resized-at-once.png" 0.5; then
+    fail "straight after a resize the card showed where the page hadn't drawn yet, not its blue: $(pixel "$out/resized-at-once.png" 0.9 0.5) at 0.9"
+  fi
+  for width in 800 900 1000 1100 1200; do
+    post resize $width 800
+  done
+  send state
+fi
+[ -z "${recorder:-}" ] || wait "$recorder" || true
+send resize 1000 700
+check_layout "after the resized page's steps"
+send key w cmd
 
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
 # press. Two within 500 ms leave anyway, and so does one held 600 ms (Arc's).

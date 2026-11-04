@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
+use gpui::{App, Bounds, Pixels, Point, RenderImage, Rgba, SharedString, Size, point, px, size};
 
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
@@ -801,6 +801,9 @@ pub struct Page {
     pub media_picture_in_picture: bool,
     /// The tab shows its page in Developer Mode, for its site or as localhost.
     pub developer_mode: bool,
+    /// The page's background as its CSS sets it, once its renderer has told, which off the Mac
+    /// the card under it takes, so a resize uncovers it rather than the card's fill.
+    pub background: Option<Rgba>,
 }
 
 /// What the sidebar's player does to a page's media.
