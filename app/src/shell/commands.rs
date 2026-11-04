@@ -143,6 +143,9 @@ pub enum Command {
     TaskManager,
     /// Starts recording a trace of the whole browser, or stops it and asks where to save it.
     RecordTrace,
+    /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
+    /// Stay On Top).
+    StayOnTop,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -362,6 +365,10 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
 /// sidebar to hide.
 const HIDE_SIDEBAR: &str = "Hide Sidebar";
 
+/// Window › Stay On Top, and the command bar's row that ends it while it's on.
+pub const STAY_ON_TOP: &str = "Stay On Top";
+const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
 const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
@@ -560,6 +567,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["dev mode", "localhost"],
     ),
     ("Open Task Manager", Command::TaskManager, &[]),
+    (
+        STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
+    (
+        DONT_STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
     (
         trace::RECORD,
         Command::RecordTrace,
@@ -1088,6 +1105,7 @@ impl Command {
             Command::JavaScriptConsole => "javascript-console",
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
+            Command::StayOnTop => "stay-on-top",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1469,6 +1487,7 @@ impl Shell {
                 trace::toggle(self.browser.clone(), cx);
                 return self.update_menus(cx);
             }
+            Command::StayOnTop => return self.toggle_on_top(cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1721,9 +1740,30 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
-            self.copy(&text, toast, cx);
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, markdown) else {
+            return;
+        };
+        match markdown {
+            true => self.copy(&text, toast, cx),
+            false => self.copy_page_url(tab, text, toast, cx),
         }
+    }
+
+    /// Copies `tab`'s link, `url`, and says so in `toast`, which shares the page too where there's
+    /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
+    fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
+        if !self.browser.has_share_sheet() {
+            return self.copy(&url, toast, cx);
+        }
+        self.browser.copy(&url, cx);
+        // check.sh reads this line.
+        log!("browser: copied {url}");
+        let (browser, title) = (self.browser.clone(), self.title(tab));
+        let share = std::rc::Rc::new(move |at, cx: &mut App| {
+            browser.share_from_toast(&url, &title, at, cx)
+        });
+        self.browser.toast_share(toast, share, COPIED_TIME, cx);
     }
 
     /// Opens the clipboard's web link at the top of the Today tabs and shows it, as Arc's ⌥⌘V
@@ -1788,10 +1828,11 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, false) else {
             return;
         };
-        self.copy(&text, toast, cx);
+        self.copy_page_url(tab, text, toast, cx);
         if self.url_copied.is_none() {
             self.swaps
                 .start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
@@ -2017,6 +2058,7 @@ impl Shell {
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace
+            | Command::StayOnTop
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -2068,6 +2110,15 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            // The row that changes it, where the window can stay on top at all.
+            Command::StayOnTop => (self.browser.can_stay_on_top()
+                && name
+                    == if self.on_top {
+                        DONT_STAY_ON_TOP
+                    } else {
+                        STAY_ON_TOP
+                    })
+            .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
