@@ -46,6 +46,13 @@ update_checks_about() {
 update_checks_check() {
   if [ "$(uname)" = Linux ]; then
     # The run's own app: About draws its rows, and none is the switch.
+    log="$out/update-checks.log"
+    step=0
+    BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>update checks</title>' "$browser" \
+      < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await_load
     send menu "About $app_name"
     expect '^browser: settings \(shown\|tab\|drew\) About$' \
       "About $app_name didn't show Settings' About tab"
@@ -53,6 +60,8 @@ update_checks_check() {
     grep -q '^browser: settings switch automatic update checks at ' "$log" &&
       fail "About on Linux has a switch for automatic update checks, which are Flathub's"
     ../tools/window-screenshot.sh "$pid" "$out/update-checks-linux.png" || fail "no window to capture"
+    exec 3>&-
+    quit
     echo "ok: About on Linux has no Check for updates automatically, as Flathub updates the" \
       "Flatpak. Window: $out/update-checks-linux.png"
     return 0

@@ -3767,7 +3767,7 @@ impl Settings {
             let line = match on {
                 true => "Every 8 hours, and it downloads them in the background.".to_string(),
                 false => format!(
-                    "{} won't look for new versions until you choose Check for Updates….",
+                    "{} won't look for new versions until you choose Check for Updates.",
                     env!("APP_NAME")
                 ),
             };
