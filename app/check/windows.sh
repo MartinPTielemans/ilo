@@ -526,6 +526,8 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: title [0-9]* ready$' "the page to drag didn't draw"
   c=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
   expect "^browser: window $first shows $c\$" "the page to drag didn't show in the first window"
+  # Its field, at the page's top left, takes the keyboard from the UI the command bar left it with.
+  send click 380 28
   send type kept
   expect "^browser: title $c value kept\$" "the page to drag didn't take what was typed"
   # kept <what>: the page wasn't loaded again, and its field still has what was typed, which a key
