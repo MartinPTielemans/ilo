@@ -643,25 +643,11 @@ pub trait Browser {
     fn import(&self, cx: &mut App);
     /// Opens the Settings window on its Passwords tab, with the logins of `space`'s profile.
     fn passwords(&self, space: u64, cx: &mut App);
-    /// Opens the Settings window on its Agents tab, which lists what each agent did.
-    fn agent_activity(&self, cx: &mut App);
-    /// What the user let the agent whose Space is `space` do, for its Space's menu to take back.
-    fn agent_permissions(&self, space: u64, cx: &App) -> AgentGrants;
-    /// Forgets the user's answer for good to the agent whose Space is `space` on `site`, or on
-    /// every site with None.
-    fn revoke_agent(&self, space: u64, site: Option<SharedString>, cx: &mut App);
-    /// Disconnects the agent whose Space is `space`, whose token then stops working.
-    fn disconnect_agent(&self, space: u64, cx: &mut App);
-    /// The user takes back each tab of the agent's Space `space` they don't hold, as Take Over
-    /// takes one.
-    fn take_back_agent_tabs(&self, space: u64, cx: &mut App);
     /// The user takes over `tab`, where the agent with the id `agent` is at work: it may not act
     /// there until they hand it back.
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
     /// The user hands `tab` back to its agent.
     fn hand_back(&self, tab: u64, cx: &mut App);
-    /// The user gives the agent whose Space is `space` their `tab`, which moves there.
-    fn give_to_agent(&self, tab: u64, space: u64, cx: &mut App);
     /// The user does `action` to the task whose agent is `agent` (Agent task).
     fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
@@ -835,17 +821,6 @@ pub enum Trouble {
 
 /// A split view: its tabs in their order, which sit together in their list as one row, shown side
 /// by side, else stacked top to bottom.
-/// What an agent's Space's menu lists, to take back (agent_permissions).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AgentGrants {
-    /// The sites where the user answered the agent for good, by name: Always Allow (true) or
-    /// Never (false).
-    pub sites: Vec<(SharedString, bool)>,
-    pub connected: bool,
-    /// Whether the Space has a tab the user doesn't hold.
-    pub tabs: bool,
-}
-
 #[derive(Clone, Default)]
 pub struct Split {
     pub tabs: Vec<u64>,

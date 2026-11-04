@@ -496,35 +496,12 @@ impl Browser for Engine {
         agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
     }
 
-    fn agent_permissions(&self, space: u64, cx: &App) -> shell::AgentGrants {
-        let agent = name(bc::bc_space_agent, space);
-        let Some(agents) = browser::agents::global(cx) else {
-            return Default::default();
-        };
-        let agents = agents.read(cx);
-        let client = browser::agents::Client::from_id(&agent);
-        shell::AgentGrants {
-            sites: agents.grants(&agent),
-            connected: client.is_some_and(|client| agents.is_connected(client)),
-            tabs: !agents.tabs_to_take(&agent, cx).is_empty(),
-        }
-    }
-
-    fn revoke_agent(&self, space: u64, site: Option<SharedString>, _: &mut App) {
-        let agent = name(bc::bc_space_agent, space);
-        agents_core::update(move |agents, cx| agents.revoke(&agent, site.as_deref(), cx));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }
 
     fn hand_back(&self, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.hand_back(tab, cx));
-    }
-
-    fn give_to_agent(&self, tab: u64, space: u64, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.give(tab, space, cx));
     }
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
@@ -556,18 +533,6 @@ impl Browser for Engine {
         let width = (2. * browser::tokens::shell::conversation::PICTURE_WIDTH) as i32;
         let height = (2. * browser::tokens::shell::conversation::PICTURE_HEIGHT) as i32;
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
-    }
-
-    fn disconnect_agent(&self, space: u64, _: &mut App) {
-        let agent = name(bc::bc_space_agent, space);
-        if let Some(client) = browser::agents::Client::from_id(&agent) {
-            agents_core::update(move |agents, cx| agents.disconnect(client, cx));
-        }
-    }
-
-    fn take_back_agent_tabs(&self, space: u64, _: &mut App) {
-        let agent = name(bc::bc_space_agent, space);
-        agents_core::update(move |agents, cx| agents.take_back_all(&agent, cx));
     }
 
     fn show_page_dialog(&self, shown: Option<shell::ShownPageDialog>, cx: &mut App) {
@@ -1533,10 +1498,6 @@ impl Browser for Engine {
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_on(on, cx));
         }
-    }
-
-    fn agent_activity(&self, cx: &mut App) {
-        settings::show_agents(cx);
     }
 
     fn new_window(&self, cx: &mut App) {

@@ -10,8 +10,7 @@
 # the same link again brings that window back to the front. On Windows one sent to the Store's MSIX,
 # which Windows activates for it, opens the same way, once (#1427). Sent
 # instead to the Space in front, one opens as a new tab in the Space the window in front shows. With
-# an agent's Space shown, it goes in the user's Space the window showed before, which comes back;
-# with a private window in front, in the regular window, which comes to the front. Settings › Links
+# a private window in front, it goes in the regular window, which comes to the front. Settings › Links
 # makes rules: a link whose URL holds a rule's text, or is its page, opens in the rule's Space, or
 # Little ilo, the first rule that matches winning, a drag reorders them, everything else goes to
 # the Space picked, and the trash takes a rule away, which ⌘Z brings back until Settings closes;
@@ -356,14 +355,6 @@ if [ "$driven" = 1 ]; then
   expect "^browser: create space $second work\$" "return didn't name the second Space"
   send key 1 ctrl
   expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
-  # With an agent's Space shown, the link goes in the user's, which the window shows again.
-  send agentspace claude-code Claude Code
-  expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
-  agent=$(grep '^browser: made space' "$log" | tail -1 | cut -d' ' -f4)
-  send key 3 ctrl
-  expect "^browser: space $agent\( in .*\)\{0,1\}\$" "⌃2 didn't show the agent's Space"
-  open_link "?agent" "$first" "$window"
-  [ "$(space)" = "$first" ] || fail "the window shows Space $(space), not the user's $first"
   # With a private window in front, the link goes to the regular window, which comes to the front.
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
@@ -627,7 +618,7 @@ import json, os, sys
 path, pattern, allow = sys.argv[1], sys.argv[2], sys.argv[3] == "allow"
 prefs = {}
 if os.path.exists(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         prefs = json.load(f)
 sites = prefs.setdefault("profile", {}).setdefault("content_settings", {})
 sites = sites.setdefault("exceptions", {}).setdefault("notifications", {})
@@ -636,7 +627,7 @@ if allow:
 else:
     sites.pop(pattern, None)
 os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
+with open(path, "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 PY
   }
@@ -671,10 +662,10 @@ fi
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
-  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, in the user's Space when an agent's is shown, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is its page whatever the query, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is its page whatever the query, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
 else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
-  echo "skip: the launch with no link while the window is minimized, the agent's Space, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
+  echo "skip: the launch with no link while the window is minimized, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
 fi
 [ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
   "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."

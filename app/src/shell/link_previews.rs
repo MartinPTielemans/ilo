@@ -9,7 +9,7 @@ use crate::link_preview::Closed;
 use crate::shell::{Command, Folders, Shell, page_menu::made_up, recorder::Recorder};
 
 /// A pinned tab and a favorite keep their own site, so their links to others preview. A Today
-/// tab's go where they lead, and nothing previews in an agent's Space.
+/// tab's go where they lead, and an agent's tab, in a Space the window never shows, previews none.
 #[gpui::test]
 fn pinned_tabs_and_favorites_preview_links(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
@@ -49,11 +49,6 @@ fn pinned_tabs_and_favorites_preview_links(cx: &mut TestAppContext) {
         assert!(!shell.previews_links_of(11));
         // A tab of a Space not shown isn't in this window.
         assert!(!shell.previews_links_of(20));
-    });
-    shell.update(cx, |shell, cx| shell.set_space(2, cx));
-    shell.read_with(cx, |shell, _| {
-        assert!(!shell.previews_links_of(20));
-        assert!(!shell.previews_links_of(30));
     });
 }
 
@@ -203,7 +198,8 @@ fn menu(host: &Recorder) -> Vec<String> {
 
 /// A link ⇧-clicked in any tab's page, here a Today tab's to a call, opens in a link preview over
 /// the window, growing from the link: link rules and meeting links route only a plain click's. A
-/// page the window doesn't show, or an agent's, gets none, and the core opens the link as it would.
+/// page the window doesn't show, as an agent's never is, gets none, and the core opens the link as
+/// it would.
 #[gpui::test]
 fn a_link_asked_for_opens_in_a_preview_from_any_tab(cx: &mut TestAppContext) {
     let (shell, host, cx) = window_showing_today_tab(cx);
@@ -217,12 +213,6 @@ fn a_link_asked_for_opens_in_a_preview_from_any_tab(cx: &mut TestAppContext) {
         [format!("open preview over 11 {CALL} from {x},{y}")]
     );
     assert!(!ask(&shell, 12, at, cx), "a tab the window doesn't show");
-    shell.update(cx, |shell, cx| {
-        shell.set_space(2, cx);
-        shell.set_selected(20, cx);
-    });
-    assert!(shell.read_with(cx, |shell, _| shell.shows(20)));
-    host.take();
     assert!(!ask(&shell, 20, at, cx), "an agent's tab");
     assert_eq!(host.take(), Vec::<String>::new());
 }

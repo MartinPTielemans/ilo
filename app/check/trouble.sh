@@ -182,7 +182,7 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
-port = open(sys.argv[1]).read().split()[0]
+port = open(sys.argv[1], encoding="utf-8").read().split()[0]
 targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list"))
 url = next(t["webSocketDebuggerUrl"] for t in targets
            if t["type"] == "page" and t["url"].startswith(sys.argv[2]))

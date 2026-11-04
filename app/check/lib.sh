@@ -204,10 +204,26 @@ quit_app() {
   if windows; then
     python3 -I check/app-windows.py close "$(cat "/proc/$pid/winpid")"
   elif [ "$(uname)" = Linux ]; then
-    kill -INT "$pid"
+    kill -INT "$(app_pid)"
   else
     osascript -e "tell application id \"$app_id\" to quit"
   fi
+}
+# The app's own process: the one started, or in the Flatpak, where that's flatpak's, the browser
+# process in its sandbox, as the host numbers it, the chrome process that isn't a helper.
+app_pid() {
+  if [ -z "${BROWSER_FLATPAK:-}" ]; then
+    echo "$pid"
+    return
+  fi
+  for p in $(pgrep -f '^/app/ilo/chrome( |$)'); do
+    tr '\0' '\n' < "/proc/$p/cmdline" 2>/dev/null | grep -q '^--type=' || { echo "$p"; return; }
+  done
+  echo "$pid"
+}
+# The number the app's windows carry as theirs (_NET_WM_PID): in a sandbox its own there.
+window_pid() {
+  awk '/^NSpid:/ { print $NF }' "/proc/$(app_pid)/status"
 }
 # Turns the Mac's appearance dark (true) or light (false), as System Settings › Appearance does.
 appearance() {
@@ -560,12 +576,13 @@ forget_engine_sites() {
   [ -e "$prefs" ] || return 0
   python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+# Chrome writes it as UTF-8, which Windows' Python doesn't read by default.
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 engine = prefs.get("browser_core", {}).get("system_engine", {})
 for kind in ("sites", "closed_notes", "listed_off"):
     engine.pop(kind, None)
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the profile's sites for Safari's engine couldn't be reset"
 }

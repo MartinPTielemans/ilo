@@ -42,9 +42,10 @@ use gpui::{
 pub use crate::settings_rows::Look;
 use crate::settings_rows::{
     SLIDE, button, checked_row, detailed_row, drawn, end, frame, glyph_plate, group, primary, row,
-    switch,
+    switch, text as words,
 };
 use crate::theme::Theme;
+use crate::tokens::radius;
 use crate::tokens::settings::{
     BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
     CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, ROW_X, STEP,
@@ -422,6 +423,27 @@ enum Step {
     Done(SharedString),
 }
 
+/// What the first launch shows over the view, and around it, for the state it shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Guide {
+    pub title: String,
+    pub line: String,
+    /// Its one button's words, which press() does, if the state has one.
+    pub button: Option<String>,
+    pub corner: Corner,
+}
+
+/// What the first launch's corner says Esc does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Corner {
+    /// Goes on without importing.
+    Skip,
+    /// Goes back to the list (escape).
+    Back,
+    /// Nothing to say: Esc is the view's Cancel there.
+    None,
+}
+
 /// What a browser picked has, read as it's picked, so its choices say how much of each comes.
 pub(crate) struct Picked {
     found: Found,
@@ -516,6 +538,10 @@ pub struct ImportView {
     /// Whether its host draws the heading over it, as Settings does, naming the browser or file
     /// it's inside of after it (crumb), so the view doesn't say it again.
     headed: bool,
+    /// Whether its host draws its title, its one button and the corner (guided).
+    guided: bool,
+    /// The browser the guided list has picked, by its row.
+    picked_row: usize,
     /// The browser or file the step shown is from, from Import… until Done.
     crumb: Option<String>,
     /// The browser last picked, and what was switched on for it, which going back keeps for the
@@ -565,6 +591,8 @@ impl ImportView {
             suggested: None,
             runs: 0,
             headed: false,
+            guided: false,
+            picked_row: 0,
             crumb: None,
             kept: None,
             focus: None,
@@ -620,9 +648,10 @@ impl ImportView {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if matches!(self.step, Step::List | Step::Done(_)) {
             let (suggested, runs, focus) = (self.suggested.take(), self.runs, self.focus.take());
-            let headed = self.headed;
+            let (headed, guided) = (self.headed, self.guided);
             *self = ImportView::new(self.host.clone(), self.skip).look(self.look);
-            (self.suggested, self.runs, self.focus, self.headed) = (suggested, runs, focus, headed);
+            (self.suggested, self.runs, self.focus) = (suggested, runs, focus);
+            (self.headed, self.guided) = (headed, guided);
             cx.notify();
         }
     }
@@ -684,14 +713,127 @@ impl ImportView {
     }
 
     /// What Esc does: from what comes from a browser, or the wait for Full Disk Access, back to
-    /// the list. Says whether it did anything, as elsewhere Esc is the host's.
+    /// the list, and, guided, from an import that can still stop, Cancel. Says whether it did
+    /// anything, as elsewhere Esc is the host's, which on the first launch's list skips the step.
     pub fn escape(&mut self, cx: &mut Context<Self>) -> bool {
-        if !matches!(self.step, Step::Pick { .. } | Step::NoAccess { .. }) {
-            return false;
+        match &self.step {
+            Step::Pick { .. } | Step::NoAccess { .. } => {
+                log!("browser: import escape");
+                self.back(cx);
+                true
+            }
+            Step::Running { run, .. } if self.guided && !run.placed => {
+                log!("browser: import escape");
+                self.cancel(cx);
+                true
+            }
+            _ => false,
         }
-        log!("browser: import escape");
-        self.back(cx);
-        true
+    }
+
+    /// Leaves the view's title, its one button and the corner to its host, as the first launch
+    /// draws them for each state (guide): the list picks one browser, the used-last, rather than
+    /// give each its Import…, and the browser's choices and the wait for access have no buttons
+    /// of their own.
+    pub fn guided(mut self) -> ImportView {
+        self.guided = true;
+        self
+    }
+
+    /// What the first launch says over the view for the state it shows, and what its button and
+    /// its corner do.
+    pub fn guide(&self) -> Guide {
+        let here = match self.os {
+            Os::Mac => "this Mac",
+            _ => "this computer",
+        };
+        let name = |source: usize| {
+            self.sources
+                .get(source)
+                .map(Source::name)
+                .unwrap_or_default()
+        };
+        let app = env!("APP_NAME");
+        let (title, line, button, corner) = match &self.step {
+            Step::List => (
+                "Bring your stuff.".to_string(),
+                format!(
+                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
+                ),
+                (!self.sources.is_empty())
+                    .then(|| format!("Import from {}", name(self.picked_row))),
+                Corner::Skip,
+            ),
+            Step::Pick { source, .. } => (
+                format!("What comes from {}.", name(*source)),
+                "All of it, unless you turn something off. Tabs load when you first open them."
+                    .to_string(),
+                Some("Import".to_string()),
+                Corner::Back,
+            ),
+            Step::NoAccess { source, .. } => (
+                format!("Let {app} read {}.", name(*source)),
+                format!(
+                    "macOS keeps {}'s bookmarks and history from other apps until you turn on \
+                     Full Disk Access.",
+                    name(*source)
+                ),
+                Some("Open System Settings".to_string()),
+                Corner::Back,
+            ),
+            // Esc there is Cancel, which the view offers itself, so the corner says nothing.
+            Step::Running {
+                source: Some(source),
+                run,
+                ..
+            } if !run.placed => (
+                "Here it comes.".to_string(),
+                format!(
+                    "From {}. It goes on by itself once your Spaces are in.",
+                    name(*source)
+                ),
+                None,
+                Corner::None,
+            ),
+            _ => (
+                "Bring your stuff.".to_string(),
+                format!(
+                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
+                ),
+                None,
+                Corner::Skip,
+            ),
+        };
+        Guide {
+            title,
+            line,
+            button,
+            corner,
+        }
+    }
+
+    /// What the first launch's button does in the state shown: the list's brings the browser
+    /// picked, the choices' imports, and the wait for access's opens System Settings.
+    pub fn press(&mut self, cx: &mut Context<Self>) {
+        match &self.step {
+            Step::List if self.picked_row < self.sources.len() => self.pick(self.picked_row, cx),
+            Step::Pick { .. } => self.import(cx),
+            Step::NoAccess { .. } => self.host.open_full_disk_access(),
+            _ => {}
+        }
+    }
+
+    /// Moves the list's pick `by` rows, stopping at its ends, as ↑ and ↓ do.
+    pub fn move_pick(&mut self, by: isize, cx: &mut Context<Self>) {
+        if !matches!(self.step, Step::List) || self.sources.is_empty() {
+            return;
+        }
+        let last = self.sources.len() - 1;
+        let to = (self.picked_row as isize + by).clamp(0, last as isize) as usize;
+        if to != self.picked_row {
+            self.picked_row = to;
+            cx.notify();
+        }
     }
 
     /// The favorites the last import offers from the history it read, the sites visited most;
@@ -1655,13 +1797,18 @@ impl ImportView {
             .flex()
             .flex_col()
             .gap(px(BOX_GAP))
-            .child(line(format!(
-                "macOS keeps {name}'s bookmarks and history from other apps until you turn on \
-                 Full Disk Access."
-            )))
+            // Guided, the host's title and line say it, and its button is Open System Settings.
+            .when(!self.guided, |view| {
+                view.child(line(format!(
+                    "macOS keeps {name}'s bookmarks and history from other apps until you turn on \
+                     Full Disk Access."
+                )))
+            })
             .child(group(look, steps))
             .child(status)
-            .child(buttons([back.into_any_element(), open.into_any_element()]))
+            .when(!self.guided, |view| {
+                view.child(buttons([back.into_any_element(), open.into_any_element()]))
+            })
             .into_any_element()
     }
 
@@ -1683,9 +1830,11 @@ impl ImportView {
             false => list.child(self.browsers(cx)),
         };
         let extensions = self.extensions_box(cx);
-        list.children(extensions)
-            .child(self.files(cx))
-            .into_any_element()
+        let files = match self.guided {
+            true => self.file_links(cx),
+            false => self.files(cx),
+        };
+        list.children(extensions).child(files).into_any_element()
     }
 
     /// The extensions the last import listed, each with Add…, which opens its Web Store page, and
@@ -1859,6 +2008,9 @@ impl ImportView {
                 format!("import-from {}", source.name()),
                 self.drawn_at.clone(),
             );
+            if self.guided {
+                return self.guided_row(index, source, &profiles, at, cx);
+            }
             let choose = button(look, ("import-from", index), "Import…")
                 .relative()
                 .child(at)
@@ -1870,6 +2022,86 @@ impl ImportView {
             }
         });
         group(look, rows)
+    }
+
+    /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
+    /// the ↩ that brings it at its end.
+    fn guided_row(
+        &self,
+        index: usize,
+        source: &Source,
+        profiles: &[&str],
+        at: gpui::Canvas<()>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let picked = index == self.picked_row;
+        let enter = picked.then(|| {
+            svg()
+                .path("icons/corner-down-left.svg")
+                .size(px(DISCLOSURE_GLYPH))
+                .text_color(look.detail)
+                .into_any_element()
+        });
+        let line = (!profiles.is_empty()).then(|| profiles.join(", ").into());
+        let row = frame()
+            .child(words(look, source.name(), line))
+            .children(enter.map(|enter| end([enter])));
+        let hovered = look.hovered;
+        div().child(
+            div()
+                .id(("import-from", index))
+                .relative()
+                .rounded(px(radius::ROW))
+                .when(picked, |row| row.bg(look.control))
+                .when(!picked, |row| row.hover(move |row| row.bg(hovered)))
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.picked_row = index;
+                    cx.notify();
+                }))
+                .child(row)
+                .child(at),
+        )
+    }
+
+    /// The guided list's files, as one quiet line: a bookmarks file or a passwords file, each a
+    /// link, in the ink, to the system's open panel.
+    fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
+        let range = |part: &str| {
+            let start = said.find(part).unwrap_or_default();
+            start..start + part.len()
+        };
+        let links = vec![range("bookmarks file"), range("passwords file")];
+        let ink = gpui::HighlightStyle {
+            color: Some(look.ink.into()),
+            ..Default::default()
+        };
+        let styled = gpui::StyledText::new(said).with_highlights(
+            links
+                .iter()
+                .map(|link| (link.clone(), ink))
+                .collect::<Vec<_>>(),
+        );
+        let view = cx.entity().downgrade();
+        let text = gpui::InteractiveText::new("import-files", styled).on_click(
+            links,
+            move |link, _, cx| {
+                view.update(cx, |view, cx| match link {
+                    0 => view.choose_bookmarks(cx),
+                    _ => view.choose_passwords(cx),
+                })
+                .ok();
+            },
+        );
+        div()
+            .px(px(ROW_X))
+            .flex()
+            .justify_center()
+            .text_size(px(text::SMALL))
+            .text_color(look.detail)
+            .child(text)
     }
 
     /// The rows for the files a browser exports, after the browsers: bookmarks, for one that isn't
@@ -2013,7 +2245,7 @@ impl ImportView {
             .note()
             .map(|note| marked(look, &note).mt_0().px(px(ROW_X)));
         // Its host's heading says where it's from, if it has one.
-        let named = (!self.headed).then(|| line(format!("From {}", from.name())));
+        let named = (!self.headed && !self.guided).then(|| line(format!("From {}", from.name())));
         div()
             .flex()
             .flex_col()
@@ -2022,10 +2254,13 @@ impl ImportView {
             .child(group(look, rows))
             .children(note)
             .children(chooser)
-            .child(buttons([
-                back.into_any_element(),
-                import.into_any_element(),
-            ]))
+            // Guided, the host's Import and Back are the step's.
+            .when(!self.guided, |view| {
+                view.child(buttons([
+                    back.into_any_element(),
+                    import.into_any_element(),
+                ]))
+            })
             .into_any_element()
     }
 
