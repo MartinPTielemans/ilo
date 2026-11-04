@@ -102,6 +102,28 @@ arrow-tile = 0.04
 # A command's keys, as chips.
 chip-radius = 6.0
 
+[command-bar.site-colors]
+# In the site searches a new profile has, the chip and the selected row are in the site's own
+# colour, as Arc's are (#1397), and the palette moves each along its lightness until it reads on
+# the bar and Ink or Paper reads on it (ours: Arc's colours and glow aren't ilo's look). GitHub's,
+# X's and Wikipedia's marks are black and white, so they keep the chip and the Space's accent, as
+# a site search the user adds does.
+google-drive = 0xfbbc04
+gmail = 0xea4335
+google-maps = 0x34a853
+google-calendar = 0x4285f4
+google-docs = 0x4285f4
+dropbox = 0x0061ff
+amazon = 0xff9900
+figma = 0xa259ff
+youtube = 0xff0033
+reddit = 0xff4500
+soundcloud = 0xff5500
+asana = 0xf06a6a
+linkedin = 0x0a66c2
+apple-music = 0xfa243c
+spotify = 0x1ed760
+
 [dialog]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Renaming and deleting). The card is centred
 # in the window. Its text is inset 38 from its top and left, and its buttons 28 from its right

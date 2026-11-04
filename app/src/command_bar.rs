@@ -2,9 +2,9 @@
 //! own that the host shows over the browser window, as its child. Under its input it lists the
 //! core's suggestions for what's typed, and the window grows down to fit them. While the first is
 //! selected, the input completes what's typed to it, as Chrome's address bar does. Its size and
-//! rows are Arc's (docs/ux-spec.md › Command bar). Tab on a row that hints a search engine, or a
-//! space after the engine's keyword, searches only with that engine until ⌫ leaves, as Chrome's
-//! keyword mode does. A click on the sidebar's URL field opens a narrower panel over the field,
+//! rows are Arc's (docs/ux-spec.md › Command bar). Tab on a row that hints a search engine
+//! searches only with that engine until ⌫ leaves, as Chrome's keyword mode does, and only Tab, as
+//! Arc's. A click on the sidebar's URL field opens a narrower panel over the field,
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
 use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
@@ -95,6 +95,7 @@ use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
+use crate::tokens::command_bar::site_colors;
 use crate::tokens::text;
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
 /// What its input says for Search Tabs (ours, after the command's name).
@@ -464,7 +465,29 @@ struct Site {
     /// Tab entered it and nothing has been typed since, so leaving puts the keyword back without
     /// the space after it, as Chrome does.
     tabbed: bool,
+    /// The site's own colour, which its chip and the selected row are in, if it has one.
+    color: Option<u32>,
 }
+
+/// The colours of the site searches a new profile has (core/site_searches.cc), by keyword, for those
+/// whose brand has one.
+pub(crate) const SITE_COLORS: [(&str, u32); 15] = [
+    ("drive.google.com", site_colors::GOOGLE_DRIVE),
+    ("mail.google.com", site_colors::GMAIL),
+    ("maps.google.com", site_colors::GOOGLE_MAPS),
+    ("calendar.google.com", site_colors::GOOGLE_CALENDAR),
+    ("docs.google.com", site_colors::GOOGLE_DOCS),
+    ("dropbox.com", site_colors::DROPBOX),
+    ("amazon.com", site_colors::AMAZON),
+    ("figma.com", site_colors::FIGMA),
+    ("youtube.com", site_colors::YOUTUBE),
+    ("reddit.com", site_colors::REDDIT),
+    ("soundcloud.com", site_colors::SOUNDCLOUD),
+    ("asana.com", site_colors::ASANA),
+    ("linkedin.com", site_colors::LINKEDIN),
+    ("music.apple.com", site_colors::APPLE_MUSIC),
+    ("spotify.com", site_colors::SPOTIFY),
+];
 
 /// Where the bar shows the page chosen.
 #[derive(Clone, Copy)]
@@ -1239,19 +1262,6 @@ impl CommandBar {
         if slashed && self.site.is_none() && self.lists_commands() {
             return self.enter_commands("/ ", window, cx);
         }
-        // A space typed after the keyword the first row hints enters its engine's site search, or
-        // an ideographic one, as Japanese input types, as in Chrome.
-        let hint = self.rows.first().filter(|row| {
-            self.site.is_none()
-                && self.suggested == self.asked
-                && !row.keyword.is_empty()
-                && row.keyword == self.asked
-        });
-        let spaced = typing && text.strip_suffix([' ', '\u{3000}']) == Some(self.asked.as_str());
-        if let Some(row) = hint.filter(|_| spaced) {
-            let (keyword, name) = (row.keyword.clone(), row.site.clone());
-            return self.enter_site(keyword, name, String::new(), false, window, cx);
-        }
         if let Some(site) = self.site.as_mut().filter(|_| !text.is_empty()) {
             site.tabbed = false;
         }
@@ -1399,27 +1409,31 @@ impl CommandBar {
         }
     }
 
-    /// Enters the site search of the engine whose keyword is `keyword`, by Tab if `tabbed`, else
-    /// by Space, with `query` in the input.
+    /// Enters the site search of the engine whose keyword is `keyword`, by Tab, with `query` in
+    /// the input. A space after the keyword is only a space, as in Arc, where it once entered too,
+    /// as in Chrome, and took a search like "github issues" from a plain one (#1397).
     fn enter_site(
         &mut self,
         keyword: String,
         name: SharedString,
         query: String,
-        tabbed: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // check.sh reads this line.
-        let by = if tabbed { "tab" } else { "space" };
-        log!("browser: command bar site search {keyword} by {by}");
+        log!("browser: command bar site search {keyword} by tab");
         let placeholder = format!("Search {name}").into();
         self.input
             .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        let color = SITE_COLORS
+            .iter()
+            .find(|(site, _)| *site == keyword)
+            .map(|&(_, color)| color);
         self.site = Some(Site {
             keyword,
             name,
-            tabbed,
+            tabbed: true,
+            color,
         });
         self.completion.clear();
         let caret = query.len();
@@ -1473,7 +1487,7 @@ impl CommandBar {
             let query = typed
                 .split_once(char::is_whitespace)
                 .map_or("", |(_, rest)| rest.trim_start());
-            return self.enter_site(keyword, name, query.to_string(), true, window, cx);
+            return self.enter_site(keyword, name, query.to_string(), window, cx);
         }
         if self.may_ask(cx) {
             return self.enter_ask(window, cx);
@@ -1760,19 +1774,17 @@ impl CommandBar {
     /// first row. They're those whose title or site has a word that two letters or more typed
     /// start, at most TABS_RISEN: a renamed tab whose own name what's typed starts first, as Arc
     /// boosts a custom title's start, then the most recently shown (ours: Arc's weights aren't
-    /// recoverable). Chrome's first row stays when the typing reads as a URL or the row hints a
-    /// site search, and a first row completing to an open tab's page becomes that tab's row. An
-    /// address typed that's an open tab's page keeps its row first, where ↩ goes, and the tab's
-    /// comes second, as Arc's does.
+    /// recoverable). The one on top takes the site search the first row hints, as that follows
+    /// what's typed rather than the row (#1397). Chrome's first row stays when the typing reads as
+    /// a URL, and a first row completing to an open tab's page becomes that tab's row. An address
+    /// typed that's an open tab's page keeps its row first, where ↩ goes, and the tab's comes
+    /// second, as Arc's does.
     fn take_open_tabs(
         &self,
         text: &str,
         rows: &mut Vec<Suggestion>,
     ) -> (Option<Suggestion>, Vec<Suggestion>) {
         let first = rows.first();
-        if first.is_some_and(|row| !row.keyword.is_empty()) {
-            return (None, Vec::new());
-        }
         let typed = text.trim().to_lowercase();
         let address = typed.contains(['.', ':', '/']);
         if let Some(first) = first.filter(|row| !row.completion.is_empty() || address) {
@@ -1805,19 +1817,34 @@ impl CommandBar {
         named.sort_by_key(|tab| !(tab.renamed && tab.title.to_lowercase().starts_with(&typed)));
         named.truncate(TABS_RISEN);
         // Each in place of the core's row for it, where the core listed one.
-        let mut risen =
-            named
-                .into_iter()
-                .map(|tab| match rows.iter().position(|row| row.tab == tab.tab) {
-                    Some(at) => rows.remove(at),
-                    None => tab.clone().into(),
-                });
-        let first = risen.next();
-        if let Some(first) = &first {
-            // check.sh reads this line.
-            log!("browser: command bar puts tab {} first", first.tab);
+        let mut risen: Vec<Suggestion> = named
+            .into_iter()
+            .map(|tab| match rows.iter().position(|row| row.tab == tab.tab) {
+                Some(at) => rows.remove(at),
+                None => tab.clone().into(),
+            })
+            .collect();
+        if risen.is_empty() {
+            return (None, risen);
         }
-        (first, risen.collect())
+        let mut open = risen.remove(0);
+        if let Some(first) = rows.first_mut().filter(|row| !row.keyword.is_empty()) {
+            open.keyword = std::mem::take(&mut first.keyword);
+            open.site = std::mem::take(&mut first.site);
+        }
+        // check.sh reads this line.
+        log!("browser: command bar puts tab {} first", open.tab);
+        (Some(open), risen)
+    }
+
+    /// The selected row's fill and its label, and the chip's in a site search: the site's own
+    /// colour, made to read on the bar, where it has one, else the Space's accent.
+    fn accent(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
+        let (fill, label) = match self.site.as_ref().and_then(|site| site.color) {
+            Some(color) => palette.site_accent(gpui::rgb(color)),
+            None => (palette.accent, palette.accent_label),
+        };
+        (fill.into(), label.into())
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -2089,8 +2116,9 @@ impl CommandBar {
     /// the two read as one kind.
     fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
+        let (accent, label) = self.accent(&palette);
         let (tile, color) = match selected {
-            true => (Hsla::from(palette.accent_label), Hsla::from(palette.accent)),
+            true => (label, accent),
             false => (palette.plate(ARROW_TILE), palette.on_overlay(ARROW)),
         };
         div()
@@ -2510,8 +2538,7 @@ impl CommandBar {
         // The selected row keeps its accent under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
-        let accent = Hsla::from(palette.accent);
-        let label = Hsla::from(palette.accent_label);
+        let (accent, label) = self.accent(&palette);
         let (title, dim) = match selected {
             true => (label, label.opacity(SELECTED_DIM)),
             false => (palette.on_overlay(TITLE), palette.on_overlay(DIM)),
@@ -2808,6 +2835,13 @@ impl Render for CommandBar {
                                 let favicon = page.map(|(url, _)| {
                                     self.favicon(url, CHIP_FAVICON, palette.ink.into())
                                 });
+                                // A site search with a colour of its own is in it.
+                                let colored =
+                                    self.site.as_ref().is_some_and(|site| site.color.is_some());
+                                let (fill, label) = match colored {
+                                    true => self.accent(&palette),
+                                    false => (palette.plate(CHIP), palette.ink.into()),
+                                };
                                 line.child(
                                     div()
                                         .flex_none()
@@ -2818,7 +2852,8 @@ impl Render for CommandBar {
                                         .px(px(6.))
                                         .py(px(2.))
                                         .rounded(px(CHIP_RADIUS))
-                                        .bg(palette.plate(CHIP))
+                                        .bg(fill)
+                                        .text_color(label)
                                         .text_size(px(text::BODY))
                                         .children(favicon)
                                         .child(div().min_w_0().truncate().child(name)),

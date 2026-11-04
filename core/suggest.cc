@@ -10,12 +10,14 @@
 #include "base/memory/ref_counted.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
 #include "browser_core/popular_sites.h"
 #include "browser_core/search.h"
+#include "browser_core/site_searches.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -434,7 +436,7 @@ void Suggestions::Report() {
   if (!window || !Host().window_suggestions) {
     return;
   }
-  const TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
+  TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile_);
   struct Row {
     std::string url, text, detail, completion;
     bc_id tab = 0;
@@ -487,6 +489,14 @@ void Suggestions::Report() {
   if (auto search = std::ranges::find_if(rows, &Row::typed_search);
       search != rows.end() && search != rows.begin()) {
     std::rotate(rows.begin() + 1, search, search + 1);
+  }
+  // A word typed hints the site search it starts on the first row, where Tab looks, whatever that
+  // row is; one with a space keeps Chrome's, whose first word is the keyword itself.
+  if (!rows.empty() && keyword_.empty() &&
+      std::ranges::none_of(text_, [](char16_t c) { return base::IsUnicodeWhitespace(c); })) {
+    const TemplateURL* engine = SiteStarted(engines, text_);
+    rows.front().keyword = engine ? base::UTF16ToUTF8(engine->keyword()) : std::string();
+    rows.front().site = engine ? base::UTF16ToUTF8(engine->short_name()) : std::string();
   }
   // Then well-known sites, in the rows Chrome's address bar leaves empty, so a new profile lists
   // more than the search. They never go above the profile's own, or first, where ↩ goes, and a
