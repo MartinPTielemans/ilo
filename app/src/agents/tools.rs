@@ -20,7 +20,9 @@ pub const INSTRUCTIONS: &str = concat!(
      select, by the option's text. Each action waits for its element to be \
      ready and for the page to settle before it answers, and says when the page was still busy. \
      Use read_page for a long page's text and screenshot when the layout matters. Where a site's \
-     page uses an API, request sends its HTTP requests from the tab, signed in as the page is.\n\n\
+     page uses an API, request sends its HTTP requests from the tab, signed in as the page is. split_tabs shows two or \
+     three of your tabs side by side in a split view, add_to_split adds one to it, separate_tab \
+     takes one out, and list_split says which are together.\n\n\
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
@@ -203,6 +205,7 @@ fn shared() -> Value {
         "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
+    let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     json!([
         {
             "name": "list_tabs",
@@ -238,6 +241,53 @@ fn shared() -> Value {
                 "destructiveHint": true,
                 "openWorldHint": false,
             },
+        },
+        {
+            "name": "split_tabs",
+            "title": "Split tabs",
+            "description": "Show two or three tabs of your Space side by side in a split view, left to right in the order given, as one row in the sidebar. A tab in another split leaves it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tabs": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "minItems": 2,
+                        "maxItems": SPLIT_TABS,
+                        "description": "The tabs' ids, from list_tabs or open_tab, left to right.",
+                    },
+                },
+                "required": ["tabs"],
+            },
+            "annotations": tabs,
+        },
+        {
+            "name": "add_to_split",
+            "title": "Add to split view",
+            "description": "Add a tab of your Space to a split view, at its right end. A split view holds three tabs at most.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": "The tab to add, from list_tabs or open_tab." },
+                    "split": { "type": "integer", "description": "A tab of the split view." },
+                },
+                "required": ["tab", "split"],
+            },
+            "annotations": tabs,
+        },
+        {
+            "name": "separate_tab",
+            "title": "Separate from split view",
+            "description": "Take a tab out of its split view, to just below the tabs left in it. The split view goes once one tab is left.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab }, "required": ["tab"] },
+            "annotations": tabs,
+        },
+        {
+            "name": "list_split",
+            "title": "List split view",
+            "description": "The tabs in a tab's split view, left to right, or that it's in none.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
             "name": "navigate",
@@ -460,6 +510,8 @@ pub const STEPS: [&str; 8] = [
     "scroll",
     "wait",
 ];
+/// The tabs a split view holds at most, as the core keeps it (bc_tab_split_with).
+pub const SPLIT_TABS: usize = 3;
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
 /// What a wait step until "quiet" waits for, as its title says it.
@@ -485,6 +537,21 @@ pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String 
     lines.collect::<Vec<_>>().join("\n")
 }
 
+/// list_split's answer, and what split_tabs, add_to_split and separate_tab answer with: the tabs
+/// shown with `tab`, left to right, as the core lists them (bc_tab_split).
+pub fn split_list(tab: u64, split: &[u64]) -> String {
+    match split.len() > 1 {
+        true => {
+            let tabs: Vec<String> = split.iter().map(u64::to_string).collect();
+            format!(
+                "Tab {tab}'s split view, left to right: {}.",
+                tabs.join(", ")
+            )
+        }
+        false => format!("Tab {tab} is in no split view."),
+    }
+}
+
 /// read_page's answer: which page it is, then its text, cut at `MAX_TEXT` bytes.
 pub fn page_text(tab: &TabInfo, text: &str) -> String {
     let mut end = text.len().min(MAX_TEXT);
@@ -508,9 +575,16 @@ pub fn page_text(tab: &TabInfo, text: &str) -> String {
 pub fn tab_argument(arguments: &Value) -> Result<Option<u64>, String> {
     match arguments.get("tab") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number.as_u64().map(Some).ok_or_else(not_a_tab),
-        Some(Value::String(text)) => text.trim().parse().map(Some).map_err(|_| not_a_tab()),
-        Some(_) => Err(not_a_tab()),
+        Some(id) => tab_id(id).map(Some).ok_or_else(not_a_tab),
+    }
+}
+
+/// A tab's id, as a number or a string of one.
+pub fn tab_id(id: &Value) -> Option<u64> {
+    match id {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
     }
 }
 
@@ -652,6 +726,30 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't remove",
             site("a pinned tab"),
         ),
+        "split_tabs" => (
+            "Putting",
+            "Put",
+            "Couldn't put",
+            format!("{} in a split view", site("tabs")),
+        ),
+        "add_to_split" => (
+            "Adding",
+            "Added",
+            "Couldn't add",
+            format!("{} to a split view", site("a tab")),
+        ),
+        "separate_tab" => (
+            "Separating",
+            "Separated",
+            "Couldn't separate",
+            format!("{} from its split view", site("a tab")),
+        ),
+        "list_split" => (
+            "Looking over",
+            "Looked over",
+            "Couldn't look over",
+            "a split view".to_string(),
+        ),
         "hand_off" => (
             "Handing you",
             "Handed you",
@@ -695,9 +793,8 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
             step_title(&on("pages"), tense)
         }
-        "close_tab" | "pin_tab" | "unpin_tab" | "remove_tab" | "hand_off" | "ask_for_tab" => {
-            step_title(&on("tabs"), tense)
-        }
+        "close_tab" | "pin_tab" | "unpin_tab" | "remove_tab" | "hand_off" | "ask_for_tab"
+        | "split_tabs" | "add_to_split" | "separate_tab" => step_title(&on("tabs"), tense),
         _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
 }
@@ -714,9 +811,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "screenshot" => "icons/eye.svg",
         "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
-        "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" => {
-            "icons/app-window.svg"
-        }
+        "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
+        | "add_to_split" | "separate_tab" | "list_split" => "icons/app-window.svg",
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "thought" => "icons/lightbulb.svg",
@@ -813,6 +909,10 @@ pub fn describe(action: &str) -> &'static str {
         "pin_tab" => "Pinned a tab",
         "unpin_tab" => "Unpinned a tab",
         "remove_tab" => "Removed a pinned tab",
+        "split_tabs" => "Put tabs in a split view",
+        "add_to_split" => "Added a tab to a split view",
+        "separate_tab" => "Separated a tab from its split view",
+        "list_split" => "Looked over a split view",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

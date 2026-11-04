@@ -229,6 +229,13 @@ pub trait Browser {
     /// Removes the pinned `tab` from its Space, as its row's remove button does: unpinned, then
     /// closed with its split, to the archive.
     fn remove_pinned(&self, tab: u64, cx: &mut App);
+    /// The tabs shown with `tab`, left to right: its split view's, else `tab` alone (bc_tab_split).
+    fn split(&self, tab: u64, cx: &App) -> Vec<u64>;
+    /// Puts `tab` in a split view with `with`, at its right end, as the user's New Split View and
+    /// Add to Split View do (bc_tab_split_with): false if `with`'s split has three tabs already.
+    fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool;
+    /// Takes `tab` out of its split view, as the user's Separate does (bc_tab_separate).
+    fn separate(&self, tab: u64, cx: &mut App);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -1274,6 +1281,98 @@ impl Agents {
                 };
                 let discard = arguments.get("discard").and_then(Value::as_bool) == Some(true);
                 self.close_tab(&agent, id, tab, discard, reply, cx);
+            }
+            // Split views, through the core calls the user's own take, each tab checked first.
+            "split_tabs" => {
+                let tabs = arguments.get("tabs").and_then(Value::as_array);
+                let tabs: Option<Vec<u64>> =
+                    tabs.and_then(|tabs| tabs.iter().map(tools::tab_id).collect());
+                let tabs = tabs.filter(|tabs| {
+                    let distinct = tabs.iter().collect::<HashSet<_>>().len();
+                    (2..=tools::SPLIT_TABS).contains(&tabs.len()) && distinct == tabs.len()
+                });
+                let Some(tabs) = tabs else {
+                    _ = reply.send(ToolResult::error(
+                        "tabs is two or three different tabs' ids, from list_tabs or open_tab.",
+                    ));
+                    return;
+                };
+                for &tab in &tabs {
+                    if !self.act(&agent, tab, "split_tabs", &reply, cx) {
+                        return;
+                    }
+                }
+                let first = tabs[0];
+                if let Some(&full) =
+                    (tabs[1..].iter()).find(|&&tab| !self.browser.split_with(tab, first, cx))
+                {
+                    _ = reply.send(ToolResult::error(format!(
+                        "Tab {full} couldn't join tab {first}: a split view holds {} tabs at most.",
+                        tools::SPLIT_TABS
+                    )));
+                    return;
+                }
+                let split = self.browser.split(first, cx);
+                _ = reply.send(ToolResult::text(tools::split_list(first, &split)));
+            }
+            "add_to_split" => {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
+                    return;
+                };
+                let Some(split) = arguments.get("split").and_then(tools::tab_id) else {
+                    _ = reply.send(ToolResult::error(
+                        "split is a tab of the split view, a number from list_tabs.",
+                    ));
+                    return;
+                };
+                if !self.act(&agent, split, "add_to_split", &reply, cx)
+                    || !self.act(&agent, tab, "add_to_split", &reply, cx)
+                {
+                    return;
+                }
+                if self.browser.split(split, cx).len() < 2 {
+                    _ = reply.send(ToolResult::error(format!(
+                        "Tab {split} is in no split view. Make one with split_tabs."
+                    )));
+                    return;
+                }
+                if !self.browser.split(split, cx).contains(&tab)
+                    && !self.browser.split_with(tab, split, cx)
+                {
+                    _ = reply.send(ToolResult::error(format!(
+                        "Tab {split}'s split view holds {} tabs already.",
+                        tools::SPLIT_TABS
+                    )));
+                    return;
+                }
+                let split = self.browser.split(tab, cx);
+                _ = reply.send(ToolResult::text(tools::split_list(tab, &split)));
+            }
+            "separate_tab" => {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
+                    return;
+                };
+                if !self.act(&agent, tab, "separate_tab", &reply, cx) {
+                    return;
+                }
+                if self.browser.split(tab, cx).len() < 2 {
+                    _ = reply.send(ToolResult::error(format!("Tab {tab} is in no split view.")));
+                    return;
+                }
+                self.browser.separate(tab, cx);
+                _ = reply.send(ToolResult::text(format!(
+                    "Tab {tab} is out of its split view."
+                )));
+            }
+            "list_split" => {
+                let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
+                    return;
+                };
+                if !self.act(&agent, tab, "list_split", &reply, cx) {
+                    return;
+                }
+                let split = self.browser.split(tab, cx);
+                _ = reply.send(ToolResult::text(tools::split_list(tab, &split)));
             }
             "ask_for_tab" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {

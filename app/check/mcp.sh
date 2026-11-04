@@ -14,6 +14,8 @@
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A frame nested two sites deep and one the page adds after its load are in the page's outline
 # and text too, and an empty helper frame is in neither.
+# It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
+# activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
 # field. Its text leaves out a frame an extension puts in
@@ -390,6 +392,63 @@ PICTURE
   await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
   await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
 }
+
+# Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
+# and separates one, each through the core's split calls and checked by its rules, with its entry
+# in the activity log. A tab of the user's is refused, and the split stays as it was.
+for page in a b c; do
+  printf '%s' "<title>Split $page</title><p>Split page $page</p>" > "$out/site/split-$page.html"
+done
+split_tab() {
+  call open_tab "{\"url\":\"localhost:$port/split-$1.html\"}" |
+    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p'
+}
+split_a=$(split_tab a)
+split_b=$(split_tab b)
+split_c=$(split_tab c)
+[ -n "$split_a" ] && [ -n "$split_b" ] && [ -n "$split_c" ] ||
+  fail "open_tab didn't open the split view's pages: $split_a $split_b $split_c"
+refused=$(call split_tabs "{\"tabs\":[$split_a,$user_tab]}")
+[ "$refused" = "error: The tab isn't in the agent's own Space." ] ||
+  fail "a split with the user's tab answered: $refused"
+await_log "^browser: agent activity mcp-client $user_tab split_tabs refused: The tab isn't in the agent's own Space\.\$" \
+  "the refused split didn't reach the activity log"
+listed=$(call list_split "{\"tab\":$split_a}")
+[ "$listed" = "Tab $split_a is in no split view." ] ||
+  fail "the refused split made one anyway: $listed"
+split=$(call split_tabs "{\"tabs\":[$split_a,$split_b]}")
+[ "$split" = "Tab $split_a's split view, left to right: $split_a, $split_b." ] ||
+  fail "split_tabs answered: $split"
+await_log "^browser: agent activity mcp-client $split_b split_tabs\$" \
+  "the split didn't reach the activity log"
+added=$(call add_to_split "{\"tab\":$split_c,\"split\":$split_a}")
+[ "$added" = "Tab $split_c's split view, left to right: $split_a, $split_b, $split_c." ] ||
+  fail "add_to_split answered: $added"
+await_log "^browser: agent activity mcp-client $split_c add_to_split\$" \
+  "adding to the split didn't reach the activity log"
+refused=$(call add_to_split "{\"tab\":$user_tab,\"split\":$split_a}")
+[ "$refused" = "error: The tab isn't in the agent's own Space." ] ||
+  fail "adding the user's tab to the split answered: $refused"
+await_log "^browser: agent activity mcp-client $user_tab add_to_split refused: The tab isn't in the agent's own Space\.\$" \
+  "the refused add didn't reach the activity log"
+listed=$(call list_split "{\"tab\":$split_b}")
+[ "$listed" = "Tab $split_b's split view, left to right: $split_a, $split_b, $split_c." ] ||
+  fail "list_split answered: $listed"
+await_log "^browser: agent activity mcp-client $split_b list_split\$" \
+  "listing the split didn't reach the activity log"
+separated=$(call separate_tab "{\"tab\":$split_b}")
+[ "$separated" = "Tab $split_b is out of its split view." ] || fail "separate_tab answered: $separated"
+await_log "^browser: agent activity mcp-client $split_b separate_tab\$" \
+  "separating the tab didn't reach the activity log"
+listed=$(call list_split "{\"tab\":$split_a}")
+[ "$listed" = "Tab $split_a's split view, left to right: $split_a, $split_c." ] ||
+  fail "after separate_tab, list_split answered: $listed"
+refused=$(call separate_tab "{\"tab\":$user_tab}")
+[ "$refused" = "error: The tab isn't in the agent's own Space." ] ||
+  fail "separating the user's tab answered: $refused"
+await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: The tab isn't in the agent's own Space\.\$" \
+  "the refused separate didn't reach the activity log"
+
 send click $page_point
 driven=$active
 if [ "$driven" = 1 ]; then
