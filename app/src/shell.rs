@@ -4217,7 +4217,7 @@ impl Shell {
             .flex_col()
             .when(room > 0., |page| page.child(div().flex_none().h(px(room))))
             .child(
-                name_box(&self.palette, icon.is_some())
+                name_box(&self.palette, icon.is_some(), false)
                     .children(icon)
                     .child(div().truncate().child(space.name.clone())),
             )
@@ -4705,14 +4705,20 @@ fn row_box() -> gpui::Div {
 }
 
 /// The row with the Space's name, over its tabs, with room before the name for the Space's icon if
-/// it has one.
-fn name_box(palette: &Palette, icon: bool) -> gpui::Div {
+/// it has one. A Blank Window's name, `on_titles`, starts on the tab titles' column, where a
+/// Space's starts 2 before them (Arc).
+fn name_box(palette: &Palette, icon: bool, on_titles: bool) -> gpui::Div {
+    let x = match (on_titles, icon) {
+        (true, _) => FAVICON_X + FAVICON_SIZE + TITLE_GAP,
+        (false, true) => NAME_X,
+        (false, false) => ICONLESS_NAME_X,
+    };
     div()
         .flex_none()
         .h(px(NAME_HEIGHT))
         .flex()
         .items_center()
-        .pl(px(if icon { NAME_X } else { ICONLESS_NAME_X }))
+        .pl(px(x))
         .pr(px(FAVICON_X))
         .text_size(px(text::BODY))
         .font_weight(FontWeight::SEMIBOLD)

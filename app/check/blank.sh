@@ -43,6 +43,43 @@ first=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}notes.txt\$|\1|p" "$log" | 
 expect "^browser: window $blank shows $first\$" "the Blank Window didn't show its page"
 expect "^browser: today \(.* \)\{0,1\}$first\( .*\)\{0,1\}\$" "the Blank Window's tab isn't in its own Today"
 ../tools/window-screenshot.sh "$pid" "$out/blank.png" || fail "no window to capture"
+# Its name row's words start on the tab titles' column, within 1 pt, the square glyph before them
+# where a Space's icon goes (#669): the first ink of the name, at y 104–120, and of New Tab's, on the
+# titles' column at y 160–176, both straight-stemmed capitals, from x 36, against each row's ground.
+send layout
+content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+  sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+if windows; then
+  to_bmp "$out/blank.png" "$out/blank.bmp" || fail "PowerShell couldn't read $out/blank.png"
+elif [ "$(uname)" = Linux ]; then
+  magick "$out/blank.png" BMP3:"$out/blank.bmp" || fail "ImageMagick couldn't read $out/blank.png"
+else
+  sips -s format bmp "$out/blank.png" --out "$out/blank.bmp" > /dev/null || fail "sips couldn't read $out/blank.png"
+fi
+inks=$(python3 -I - "$out/blank.bmp" "$content" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+scale = width / float(sys.argv[2])
+stride = (bits * width + 31) // 32 * 4
+def at(x, y):
+    row = y if height < 0 else abs(height) - 1 - y
+    b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+    return r + g + b
+def first_ink(top, bottom):
+    ys = range(int(top * scale), int(bottom * scale))
+    ground = at(int(36 * scale), int((top + bottom) / 2 * scale))
+    for x in range(int(36 * scale), int(90 * scale)):
+        if any(abs(at(x, y) - ground) > 150 for y in ys):
+            return x / scale
+    return -1
+print("%.1f %.1f" % (first_ink(104, 120), first_ink(160, 176)))
+PY
+)
+set -- $inks
+awk "BEGIN { d = $1 - $2; exit !(d <= 1 && d >= -1) }" ||
+  fail "the Blank Window's name starts at x $1, not on the tab titles' column at x $2"
 
 # A second tab in it, which goes in the archive with the window.
 send key t cmd

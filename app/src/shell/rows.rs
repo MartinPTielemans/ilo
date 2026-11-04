@@ -1353,7 +1353,7 @@ impl Shell {
             .map(|space| space.name.clone())
             .unwrap_or_default();
         // A heading VoiceOver can jump to, whose menu is the Space's.
-        let row = name_box(&self.palette, room)
+        let row = name_box(&self.palette, room, self.blank)
             .id("space-name")
             // Lit while the pinned rows are collapsed, where Arc's turns bold.
             .when(shut, |row| {
