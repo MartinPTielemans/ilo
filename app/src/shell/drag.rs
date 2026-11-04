@@ -372,6 +372,7 @@ impl Shell {
             held: false,
             space: self.space,
             edge: None,
+            paged: None,
             alt_click: false,
         });
     }
@@ -654,6 +655,7 @@ impl Shell {
                     let now = Instant::now();
                     if let Some(drag) = &mut shell.drag {
                         drag.edge = Some((right, now));
+                        drag.paged = Some(space);
                     }
                     // check.sh waits for this line.
                     log!("browser: drag paged to space {space}");
