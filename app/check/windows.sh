@@ -505,9 +505,10 @@ send window 1
 # A tab's row dragged out of its window (#1798), the Mac's alone so far. Over the other window's list
 # it moves there where the line marks, its page live with what was typed in it, and let go where
 # nothing takes it, it opens in a window of its own under the pointer, which ⌘Z there closes,
-# sending the tab back. With no real button holding it, the system's drag ends at the driver's next
-# event, which AppKit hands only to the window it started in, so that event is the drop, over the
-# page there. The windows sit side by side, their lists in the open.
+# sending the tab back. AppKit's drag of the tab only moves within the window it started in, with no
+# real button holding it, so the driver hands the other window's list the tab's drag itself, as it
+# hands another app's, and the drag let go over its own window's page, which takes no tab, is the
+# one let go where nothing takes it. The windows sit side by side, their lists in the open.
 if [ "$(uname)" = Darwin ]; then
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for the tab's drag"
@@ -557,12 +558,14 @@ if [ "$(uname)" = Darwin ]; then
   send dragto $1 $(($2 + 10))
   send dragto $1 705
   expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
-  send dragto 600 400
+  # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
+  # driver's done till then: the move over the page is posted, and the release ends it there.
+  post dragto 600 400
+  send release 600 400
   expect "^browser: tab $c window drag to a new window\$" "let go where nothing took it, the tab's drag opened no window"
   expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go where nothing took it"
   seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
   expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
-  send release 600 400
   driven_seventh=$(grep -c '^browser: window opened ' "$log")
   # Under the pointer, at 960 + 600, 40 + 400 on the screen, as near as the screen lets it.
   send order
