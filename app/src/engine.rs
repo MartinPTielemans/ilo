@@ -1332,6 +1332,11 @@ impl Browser for Engine {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn on_active_space(&self) -> bool {
+        unsafe { platform::host_window_on_active_space(self.ui_view) }
+    }
+
     fn full_screen_note(&self, shown: bool, cx: &mut App) {
         match shown {
             true => with_overlays(toast::show_full_screen, cx),
@@ -1792,7 +1797,9 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
             (windows.iter().find(|w| w.id == id)).and_then(|w| w.shell.upgrade())
         })
     };
-    let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    // Not on Windows yet, where the core's full screen doesn't take a window just opened.
+    let full_screen = cfg!(not(target_os = "windows"))
+        && shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
             shell.open_bar_when_shown(asked, full_screen);

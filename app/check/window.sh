@@ -293,23 +293,27 @@ send state
 in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed +'s menu"
 # ⌘N with the page's keyboard, in full screen, opens a window that goes full screen too, then opens
 # ⌘T's command bar in it, whose URL loads there (Arc). The window it came from shows what it did.
-send key n cmd
-expect '^browser: command new-window via ' "⌘N in full screen with the page's keyboard didn't run New Window"
-expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
-full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
-expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
-expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
-expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
-# The bar takes the note on leaving full screen away as it opens, settled or not.
-expect_late '^browser: toast \(settled\|hidden\)$' "the new full-screen window's note didn't show"
-../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
-send insert "${site}notes.txt"
-send key return
-expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
-# Its own full screen ends as the first's does, by the green button, and it closes.
-send key w cmd shift
-expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
-send window 1
+if windows; then
+  echo "skip: ⌘N in full screen: on Windows the core's full screen doesn't take a window just opened yet, so it opens windowed."
+else
+  send key n cmd
+  expect '^browser: command new-window via ' "⌘N in full screen with the page's keyboard didn't run New Window"
+  expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+  full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
+  expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
+  expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
+  # The bar takes the note on leaving full screen away as it opens, settled or not.
+  expect_late '^browser: toast \(settled\|hidden\)$' "the new full-screen window's note didn't show"
+  ../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
+  send insert "${site}notes.txt"
+  send key return
+  expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
+  # Its own full screen ends as the first's does, by the green button, and it closes.
+  send key w cmd shift
+  expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+  send window 1
+fi
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 check_layout "after full screen"

@@ -562,6 +562,10 @@ void host_press_window_button(void* ui_view, int button);
 // there itself. Returns whether it was.
 bool host_enter_full_screen(void* ui_view);
 
+// Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
+// full screen isn't until macOS has moved to its desktop. Off the Mac, always.
+bool host_window_on_active_space(void* ui_view);
+
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with
 // the pointer until the button that's down comes up, as a drag on a title bar does, and whether

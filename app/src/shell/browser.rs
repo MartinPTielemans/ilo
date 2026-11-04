@@ -530,6 +530,11 @@ pub trait Browser {
     /// does, unless it is already, which it returns: AppKit takes a window opened from a
     /// full-screen one there itself.
     fn enter_full_screen(&self, cx: &mut App) -> bool;
+    /// Whether the window is on the macOS desktop shown: one AppKit takes full screen isn't until
+    /// macOS has moved there, and an overlay opened before is left on the desktop it came from.
+    fn on_active_space(&self) -> bool {
+        true
+    }
     /// Shows the note that `tab`'s page stopped answering in the toast, with Wait and Reload, until
     /// one is pressed or it's taken away (`shown` false).
     fn hang_note(&self, tab: u64, shown: bool, cx: &mut App);

@@ -75,6 +75,11 @@ impl Shell {
             // can hear it, so the shell takes it from here: its layout and the note follow.
             self.set_full_screen(true, cx);
         }
+        // Over the window's desktop: macOS moves there after the window's full screen begins.
+        if !self.browser.on_active_space() {
+            window.request_animation_frame();
+            return;
+        }
         if self.opening.take().is_some_and(|opening| opening.entering) {
             // check.sh reads this line.
             log!("browser: new window went full screen");

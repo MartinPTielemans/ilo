@@ -4594,6 +4594,11 @@ void host_day_starts(double starts[4]) {
   }
 }
 
+bool host_window_on_active_space(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  return !browser || !browser->window || browser->window.onActiveSpace;
+}
+
 bool host_enter_full_screen(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser || !browser->window) {
