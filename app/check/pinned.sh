@@ -1,8 +1,7 @@
 # ⌘D pins the tab shown, from the page and from the UI, at the bottom of the pinned tabs, and unpins
 # it to the top of Today. ⌘1–⌘9 count the pinned tabs first. ⌘W, the − under the pointer, on the
 # tab shown or not, or a middle-click on its row, unloads a pinned tab and keeps its row, and shows
-# the top Today tab, else the nearest pinned tab still loaded, else no page, as closing the last
-# Today tab does. The unloaded row has a remove button in the −'s place, which takes the tab out of
+# the tab shown before it that's still open, whose row it rings for a moment, else no page. The unloaded row has a remove button in the −'s place, which takes the tab out of
 # the pinned tabs and not into Today, and ⌘Z pins it again at its place. Shown again, the tab loads. A link in its page takes it away from
 # its pinned URL, and ⌘↩ from the page and the UI, and a click on its favicon, go back there. An
 # address typed into it opens in a Today tab of its own, as in Arc, and closing that shows the
@@ -21,7 +20,8 @@
 # but a link that isn't a web link doesn't open. A split made with a pinned tab is pinned, by ⌥-click
 # on its link or by dragging one pinned tab onto another. Away from
 # its pinned URL, Pinned URL › Replace Pinned URL with Current and Edit… change its pinned URL,
-# which ⌘Z gives back, and ⌘-click on its favicon goes back keeping the page in a new tab. Export
+# which ⌘Z gives back, and ⌘-click on its favicon goes back keeping the page in a new tab. Pinned at
+# another host than its page's, its row names the page's host under its title. Export
 # Space as Markdown… saves the Space's folders, pinned tabs and Today tabs as a list of links. The
 # chevron after the Space's name collapses the pinned rows but the tab shown's, which the tabs'
 # order then skips, and the command bar and the View menu expand and collapse them. Launched again,
@@ -121,14 +121,17 @@ none_since '^browser: dragged' || fail "a drag escape put back dropped its row"
 none_since '^browser: selected' || fail "letting go of a drag escape put back showed its tab"
 [ "$(pinned)" = "$c $a" ] || fail "a drag escape put back moved a tab: the pinned tabs are \"$(pinned)\""
 
-# ⌘W on a pinned tab unloads it and shows the top Today tab, and showing it again loads it.
+# ⌘W on a pinned tab unloads it and shows the tab shown before it, a pinned one still loaded ahead
+# of the top Today tab, and rings its row for a moment. Showing it again loads it.
 switch "2 cmd" "$a"
 send key w cmd
-expect "^browser: selected $b\$" "⌘W on a pinned tab didn't show the top Today tab"
+expect "^browser: selected $c in " "⌘W on a pinned tab didn't show the tab shown before it"
+expect "^browser: sidebar ring $c at " "⌘W on a pinned tab didn't ring the row of the tab it showed"
 expect "^browser: page $a unloaded 1\$" "⌘W on a pinned tab didn't unload it"
 none_since "^browser: tab $a closed\$" || fail "⌘W closed a pinned tab"
 [ "$(pinned)" = "$c $a" ] || fail "⌘W on a pinned tab took its row: the pinned tabs are \"$(pinned)\""
 ../tools/window-screenshot.sh "$pid" "$out/pinned.png" || fail "no window to capture"
+expect '^browser: sidebar ring hidden$' "the ring stayed on the tab ⌘W showed"
 send click $(pinned_row 1)
 expect "^browser: selected $a in " "a click on the unloaded pinned tab didn't show it"
 expect "^browser: loaded $a $site\$" "the unloaded pinned tab didn't load once shown"
@@ -154,12 +157,12 @@ expect "^browser: selected $c in " "a click where an unloaded pinned tab's − w
 none_since '^browser: command close-tab' || fail "an unloaded pinned tab showed its −"
 none_since '^browser: command remove-tab' || fail "a second click on the − removed the pinned tab"
 expect "^browser: loaded $c https://example.org/\$" "the pinned tab didn't load once shown"
-# Shown, its − unloads it too and shows the top Today tab.
+# Shown, its − unloads it too and shows the tab shown before it.
 expect "^browser: hover tab $c close − favicon none\$" "the pinned tab shown didn't draw −"
 send click $(pinned_close 0)
 expect '^browser: command close-tab via sidebar$' "a click on a pinned tab's − didn't run Close Tab"
 expect "^browser: page $c unloaded 1\$" "the − didn't unload the pinned tab"
-expect "^browser: selected $b\$" "the − on a pinned tab didn't show the top Today tab"
+expect "^browser: selected $a in " "the − on a pinned tab didn't show the tab shown before it"
 [ "$(pinned)" = "$c $a" ] || fail "the − took the pinned tab's row: pinned tabs are \"$(pinned)\""
 send click $(pinned_row 0)
 expect "^browser: selected $c in " "a click on the unloaded pinned tab didn't show it"
@@ -173,14 +176,15 @@ send click $(pinned_row 1)
 expect "^browser: selected $a in " "a click on the pinned tab a middle-click unloaded didn't show it"
 expect "^browser: loaded $a $site\$" "the pinned tab a middle-click unloaded didn't load once shown"
 
-# Without Today tabs, closing shows the nearest pinned tab still loaded, else no page.
+# Without Today tabs, closing the last shows the nearest pinned tab still loaded, and closing a pinned
+# tab shows the one shown before it still loaded, else no page.
 switch "3 cmd" "$b"
 send key w cmd
 expect "^browser: tab $b closed\$" "⌘W didn't close the last Today tab"
 expect_lists "$c $a" " *" "after closing the last Today tab"
 expect "^browser: selected $a\$" "closing the last Today tab didn't show the lowest pinned tab still loaded"
 send key w cmd
-expect "^browser: selected $c\$" "⌘W on a pinned tab without Today tabs didn't show the other one loaded"
+expect "^browser: selected $c in " "⌘W on a pinned tab without Today tabs didn't show the other one loaded"
 expect "^browser: page $a unloaded 1\$" "⌘W didn't unload the pinned tab"
 send key w cmd
 expect '^browser: selected 0$' "⌘W on the last pinned tab loaded didn't leave the window without a page"
@@ -353,6 +357,18 @@ expect "^browser: page $c away 0\$" "the pinned URL typed in Edit… didn't take
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the pinned URL typed"
 expect "^browser: page $c away 1\$" "⌘Z didn't give the pinned tab back the pinned URL Edit… replaced"
+# Pinned at another host than its page's, here the same server's other name, its row names the
+# page's host under its title (Arc), and ⌘Z, giving back its pinned URL, takes the line away.
+post rightclick $(pinned_row 0)
+expect "^browser: menu shown $(cased 'Unpin Tab, ')" "a right-click on the pinned tab didn't show its menu"
+send choose "$(cased 'Pinned URL › Edit…')"
+expect "^browser: edit pinned url $c\$" "Edit… didn't show the pinned URL in a field"
+send type "$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')"
+send key return
+expect "^browser: page $c left pinned host 1\$" "a pinned tab off its pinned URL's host didn't name the host"
+../tools/window-screenshot.sh "$pid" "$out/pinned-host.png" || fail "no window to capture"
+send key z cmd
+expect "^browser: page $c left pinned host 0\$" "⌘Z gave the pinned URL back but kept the host line"
 # ⌘-click on its favicon goes back too, keeping the page it's at in a new tab at the top of Today,
 # opened first, which shows (Arc).
 # Its row draws −, shown or not.
@@ -690,32 +706,31 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate')
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
-# Export… in Settings › Advanced, in the box under the four switch rows, writes the Space's pinned
+# Export… in Settings › Import & Export, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
+send clickkey $(drawn "toolbar Import & Export")
+expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+settings_drew 'Import & Export'
 # Copy All Links' toast is mostly still up, and the click lands all the same (#1134): a toast lets
 # clicks through, but on its plate while it has buttons, which this one hasn't. A slow run says
 # when the toast had gone first, so the click didn't have one to go past.
 shown=$(grep -n '^browser: toast shown Copied Links as Markdown$' "$log" | tail -1 | cut -d: -f1)
-advanced=$(grep -n '^browser: settings tab Advanced$' "$log" | tail -1 | cut -d: -f1)
+section=$(grep -n '^browser: settings tab Import & Export$' "$log" | tail -1 | cut -d: -f1)
 hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | head -1 | cut -d: -f1)
-if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$advanced" ]; then
-  echo "skip: the click on Advanced with a toast up, as Copy All Links' toast had gone first (#1134)."
+if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
+  echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-# On the Mac and Linux, where the host hears ⌥ alone, its switch row is 42 under the other four.
-case $(uname) in Darwin | Linux) option_row=42 ;; *) option_row=0 ;; esac
-send clickkey 575 $((302 + option_row))
+send clickkey $(drawn "export spaces")
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"

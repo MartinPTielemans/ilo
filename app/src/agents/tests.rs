@@ -2142,16 +2142,47 @@ mod tasks {
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
-    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers.
+    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
+    /// is in a folder of its own: tests running at once that shared one would rewrite the script
+    /// under each other's CLI, and each CLI's start would empty the other's `.in`.
     #[cfg(unix)]
     fn fake_cli(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ilo-tasks-{}-{name}", std::process::id()));
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("ilo-tasks-{}-{name}-{made}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("claude");
         std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run_once_free(&program);
         program
+    }
+
+    /// Runs the fake CLI just written, with nothing to read, until it starts. Another test's thread
+    /// that forked while the script was open for writing hands its child that handle until the
+    /// child runs its own program, and the script won't run meanwhile: "Text file busy" (ETXTBSY).
+    /// Once it has run, no such handle is left and none can come, as ours is closed, so the task's
+    /// own start can't meet it. A retry, as cargo's and Go's spawns do; writing every fake before
+    /// any thread forks isn't possible from inside the test binary.
+    #[cfg(unix)]
+    fn run_once_free(program: &std::path::Path) {
+        for _ in 0..100 {
+            match crate::child::command(program)
+                .stdin(std::process::Stdio::null())
+                .status()
+            {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                ran => {
+                    ran.expect("the fake CLI didn't run");
+                    return;
+                }
+            }
+        }
+        panic!("the fake CLI stayed busy for a second");
     }
 
     /// Agents on, with Claude signed in at `program`, and the user's Space 1.

@@ -108,6 +108,53 @@ fn another_toast_starts_the_time_again(cx: &mut TestAppContext) {
     assert_eq!(after(cx, &host, 1. + LEAVE), ["hide"]);
 }
 
+/// Asked for again while it's in place, as a second ⌘↩ in the command bar asks for New Tab Created
+/// again, it stays where it is and bumps to 1.044 of its size in 40 ms and back by 0.2 s, rather
+/// than come in again; not before it's on screen, nor under Reduce Motion.
+#[gpui::test]
+fn a_toast_asked_for_again_in_place_bumps(cx: &mut TestAppContext) {
+    let rest_pose = Pose {
+        scale: 1.,
+        opacity: 1.,
+    };
+    assert_eq!(rest_pose.bumped(0.), rest_pose);
+    assert!((rest_pose.bumped(BUMP_UP).scale - BUMP).abs() < 1e-4);
+    let falling = rest_pose.bumped((BUMP_UP + BUMP_TIME) / 2.).scale;
+    assert!(falling > 1. && falling < BUMP, "{falling}");
+    assert_eq!(rest_pose.bumped(BUMP_TIME), rest_pose);
+    assert_eq!(bump(BUMP_TIME), None);
+
+    open_toast(cx);
+    let bumped = |cx: &mut TestAppContext| {
+        let window = cx.update(|cx| cx.global::<ToastWindow>().0);
+        cx.update(|cx| {
+            window
+                .read(cx)
+                .unwrap()
+                .shown
+                .as_ref()
+                .unwrap()
+                .bumped
+                .is_some()
+        })
+    };
+    show_deleted(cx);
+    // As AppKit hasn't put its window on screen yet.
+    let window = cx.update(|cx| cx.global::<ToastWindow>().0);
+    let unseen = |toast: &mut Toast, _: &mut Window, _: &mut Context<Toast>| {
+        toast.shown.as_mut().unwrap().shown = None;
+    };
+    cx.update(|cx| window.update(cx, unseen)).unwrap();
+    show_deleted(cx);
+    assert!(!bumped(cx), "not yet on screen, it comes in once");
+    rest(cx);
+    show_deleted(cx);
+    assert!(bumped(cx), "in place, it bumps");
+    cx.update(|cx| cx.set_reduce_motion(true));
+    show_deleted(cx);
+    assert!(!bumped(cx), "under Reduce Motion it doesn't scale");
+}
+
 #[gpui::test]
 fn it_overshoots_its_size_as_arcs_does(_: &mut TestAppContext) {
     let peak = (0..60)

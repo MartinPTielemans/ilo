@@ -1645,7 +1645,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..ba08fc21b3 100644
+index 2d40cf7fa9..dae191aac7 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2013,6 +2013,15 @@ index 2d40cf7fa9..ba08fc21b3 100644
              }
              data_source.offer(state.clipboard.self_mime());
              data_device.set_selection(Some(&data_source), serial.as_raw());
+@@ -1517,7 +1680,7 @@ impl WaylandConnection {
+ 
+         let client_state = self.0.borrow();
+         let active_window = client_state.keyboard_focused_window.as_ref();
+-        inner(active_window.map(|aw| aw.surface()))
++        inner(active_window.and_then(|aw| aw.toplevel_surface()))
+     }
+ }
+ 
 @@ -1617,7 +1780,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                      state.wl_seat.release();
                      state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
@@ -3273,7 +3282,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..3cda5c06c5 100644
+index 8d92234ef1..34233b64c3 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3447,7 +3456,7 @@ index 8d92234ef1..3cda5c06c5 100644
              presentation: PresentationState::Unpresented,
              pending_frame_callback: None,
              in_progress_window_controls: None,
-@@ -896,6 +971,271 @@ impl WaylandWindowStatePtr {
+@@ -896,6 +971,285 @@ impl WaylandWindowStatePtr {
          self.state.borrow().surface.clone()
      }
  
@@ -3521,6 +3530,20 @@ index 8d92234ef1..3cda5c06c5 100644
 +    pub fn embedded_parent_surface(&self) -> Option<wl_surface::WlSurface> {
 +        match &self.state.borrow().surface_state {
 +            WaylandSurfaceState::Sub(_, parent) => Some(parent.clone()),
++            _ => None,
++        }
++    }
++
++    /// The toplevel this window shows in, for a portal's dialog to be parented to: its own, or
++    /// the embedder's for a window in or over it. Exporting a surface that isn't a toplevel is a
++    /// protocol error, which ends the connection the embedder shares.
++    pub fn toplevel_surface(&self) -> Option<wl_surface::WlSurface> {
++        let state = self.state.borrow();
++        match &state.surface_state {
++            WaylandSurfaceState::Xdg(_) => Some(state.surface.clone()),
++            WaylandSurfaceState::Sub(_, parent) | WaylandSurfaceState::Over(_, parent) => {
++                Some(parent.clone())
++            }
 +            _ => None,
 +        }
 +    }
@@ -3719,7 +3742,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
          self.state.borrow().surface_state.toplevel().cloned()
      }
-@@ -936,6 +1276,21 @@ impl WaylandWindowStatePtr {
+@@ -936,6 +1290,21 @@ impl WaylandWindowStatePtr {
      }
  
      pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -3741,7 +3764,7 @@ index 8d92234ef1..3cda5c06c5 100644
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
-@@ -966,7 +1321,8 @@ impl WaylandWindowStatePtr {
+@@ -966,7 +1335,8 @@ impl WaylandWindowStatePtr {
          let mut state = self.state.borrow_mut();
  
          let frame_loop = self.frame_loop.get();
@@ -3751,7 +3774,7 @@ index 8d92234ef1..3cda5c06c5 100644
              return;
          }
  
-@@ -1024,6 +1380,12 @@ impl WaylandWindowStatePtr {
+@@ -1024,6 +1394,12 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3764,7 +3787,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn retry_timer_fired(&self, signal_at: Instant) {
          if self.frame_loop.get() == FrameLoop::RetryScheduled {
              self.frame(
-@@ -1060,6 +1422,10 @@ impl WaylandWindowStatePtr {
+@@ -1060,6 +1436,10 @@ impl WaylandWindowStatePtr {
      }
  
      fn update_ime_enabled(&self) {
@@ -3775,7 +3798,7 @@ index 8d92234ef1..3cda5c06c5 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1859,17 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1873,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3793,7 +3816,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1975,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1989,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3823,7 +3846,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2288,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2302,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -3836,7 +3859,7 @@ index 8d92234ef1..3cda5c06c5 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2413,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2427,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -3850,7 +3873,7 @@ index 8d92234ef1..3cda5c06c5 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2455,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2469,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -3862,7 +3885,7 @@ index 8d92234ef1..3cda5c06c5 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2622,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2636,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {

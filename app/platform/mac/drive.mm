@@ -56,6 +56,7 @@
 //                                         "browser: drag dropped" or "browser: drag refused"
 //   dragleave                             takes the drag away, as cancelled
 //   resize <width> <height>               resizes the window, keeping its top-left corner
+//   resizekey <width> <height>            as resize, the key window's content, such as Settings
 //   fullscreen                            enters or leaves full screen, like the green button
 //   display add <width> <height> [main]   plugs in a second display of that size in points, a
 //                                         virtual one, the main one with the menu bar if main
@@ -267,6 +268,10 @@ NSStatusBarButton* HostLittleStatusButton();
 - (BOOL)applySettings:(CGVirtualDisplaySettings*)settings;
 @end
 
+// host.mm's: where this driver's pointer last was, which host_pointer answers.
+extern NSPoint g_driven_pointer;
+extern bool g_driven_pointer_known;
+
 namespace {
 
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
@@ -459,12 +464,20 @@ NSWindow* MainWindow() {
   return window.visible ? window : nil;
 }
 
+// Where the driver's pointer last was, on screen, AppKit's way up, which host_pointer answers in a
+// driven run: its events move no real pointer, which stays wherever the desktop's is.
+void Pointed(NSWindow* window, NSPoint location) {
+  g_driven_pointer = [window convertPointToScreen:location];
+  g_driven_pointer_known = true;
+}
+
 void PostMouse(NSWindow* window,
                NSEventType type,
                double x,
                double y,
                int count,
                NSEventModifierFlags flags = 0) {
+  Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
                                  modifierFlags:flags
@@ -1390,6 +1403,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSView* content = target.contentView;
     NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
                                                           fromView:nil]];
+    Pointed(target, move.locationInWindow);
     [hit mouseMoved:move];
     TrackMove(content, move, hit);
     [NSApp postEvent:move atStart:NO];
@@ -1816,6 +1830,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   NSWindow* key_window = NSApp.keyWindow ?: window;
+  if (action == "resizekey") {
+    double width, height;
+    if (!(words >> width >> height)) {
+      return false;
+    }
+    NSRect frame = key_window.frame;
+    NSSize size = [key_window frameRectForContentRect:NSMakeRect(0, 0, width, height)].size;
+    [key_window setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - size.height, size.width,
+                                    size.height)
+                 display:YES];
+    done();
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;

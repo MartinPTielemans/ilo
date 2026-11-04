@@ -19,6 +19,7 @@ use browser::link_preview;
 use browser::log;
 use browser::menu;
 use browser::palette::{self, Palette, Tone};
+use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
     Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, WindowButton,
@@ -1307,6 +1308,15 @@ impl Browser for Fake {
     // The targets' window is the app's, over the page, which the preview has neither of.
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
 
+    // The preview has no page for the pointer to be over.
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        None
+    }
+
+    fn over_page_blends(&self) -> bool {
+        true
+    }
+
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
@@ -2490,16 +2500,29 @@ fn preview_site() -> Site {
     }
 }
 
-/// Settings › Sync alone, framed as Settings frames a tab, in a window of Settings' size.
+/// Settings › Sync alone, on the card as Settings shows a section, in a window of Settings' size.
 fn preview_account(state: &str, cx: &mut App) {
     use account::{Device, State, Status};
     use browser::tokens::settings::{HEIGHT, WIDTH};
     account::bind_keys(cx);
+    // PREVIEW_SIZE=<width>x<height> as for the browser's window, Settings' own size by default.
+    let (width, height) = std::env::var("PREVIEW_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.parse().ok()?, height.parse().ok()?))
+        })
+        .unwrap_or((WIDTH, HEIGHT));
+    // PREVIEW_SCROLL=<points> scrolls the card that far down once it's drawn.
+    let scroll: f32 = std::env::var("PREVIEW_SCROLL")
+        .ok()
+        .and_then(|points| points.parse().ok())
+        .unwrap_or(0.);
     let (mut x, mut y) = (0., 0.);
-    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    unsafe { host_centered(width as f64, height as f64, &mut x, &mut y) };
     let bounds = Bounds::new(
         point(px(x as f32), px(y as f32)),
-        size(px(WIDTH), px(HEIGHT)),
+        size(px(width), px(height)),
     );
     let status = match state {
         "words" => Status::FirstDevice,
@@ -2553,9 +2576,22 @@ fn preview_account(state: &str, cx: &mut App) {
                 }
                 account
             });
-            AccountPage { account, dialog }
+            AccountPage {
+                account,
+                dialog,
+                card: Card::default(),
+            }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
+        if scroll > 0. {
+            let scrolled = page.clone();
+            window.on_next_frame(move |_, cx| {
+                scrolled.update(cx, |page, cx| {
+                    page.card.scroll.set_offset(point(px(0.), px(-scroll)));
+                    cx.notify();
+                });
+            });
+        }
         page
     });
     if let Err(error) = opened {
@@ -2563,11 +2599,12 @@ fn preview_account(state: &str, cx: &mut App) {
     }
 }
 
-/// The account's view on Settings' background, in from its sides as Settings' tabs are, with the
-/// dialog it asks in over all of it, as Settings has on Linux.
+/// The account's view on Settings' card, beside Settings' column with Sync lit, with the dialog
+/// it asks in over all of it, as Settings has on Linux.
 struct AccountPage {
     account: gpui::Entity<Account>,
     dialog: gpui::Entity<dialog::Dialog>,
+    card: Card,
 }
 
 impl gpui::Render for AccountPage {
@@ -2576,17 +2613,43 @@ impl gpui::Render for AccountPage {
         _: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        use browser::tokens::settings::{BACKGROUND, FIRST, SIDE, TEXT};
+        use browser::palette::PAPER;
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::Look;
+        use browser::tokens::palette::STAND_IN;
+        use browser::tokens::settings::NAME;
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
+        let look = Look::settings(true);
+        let column = settings_column::column(
+            Section::Sync,
+            true,
+            Rc::default(),
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+        );
+        let colors = Colors {
+            line: look.line,
+            name: rgb(PAPER).opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw(
+            Section::Sync.name(),
+            div().child(self.account.clone()),
+            true,
+            colors,
+        );
         div()
             .relative()
             .size_full()
-            .bg(rgb(BACKGROUND))
+            .flex()
+            .bg(rgb(STAND_IN))
             .font_family(browser::face::UI)
             .text_size(px(text::BODY))
-            .text_color(rgb(TEXT))
-            .child(div().px(px(SIDE)).py(px(FIRST)).child(self.account.clone()))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
             .children(dialog::cover(&self.dialog, cx))
     }
 }

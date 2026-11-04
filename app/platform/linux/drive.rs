@@ -13,8 +13,8 @@
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
 //! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 //! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
-//! keydown, keyup, flags, type, resize, place, order, layout, state, title, pasteboard, front, menu,
-//! menubar, choose, dismiss, window, agentspace, agentmayact,
+//! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
+//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
 //! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
 //! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
 //! them, cmd with Ctrl and alt with Alt. flags presses and lets
@@ -52,7 +52,7 @@ use std::{
     io::BufRead,
     rc::Rc,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -80,13 +80,25 @@ use crate::{
 
 unsafe extern "C" {
     // GLib's, from chrome, whose main loop is GLib's.
-    fn g_idle_add(function: extern "C" fn(*mut c_void) -> c_int, data: *mut c_void) -> c_uint;
+    fn g_idle_add_full(
+        priority: c_int,
+        function: extern "C" fn(*mut c_void) -> c_int,
+        data: *mut c_void,
+        notify: *mut c_void,
+    ) -> c_uint;
     fn g_timeout_add(
         interval: c_uint,
         function: extern "C" fn(*mut c_void) -> c_int,
         data: *mut c_void,
     ) -> c_uint;
 }
+
+/// GLib's G_PRIORITY_LOW, below its idle priority.
+const G_PRIORITY_LOW: c_int = 300;
+/// How long, in milliseconds, a command waits for the loop to be free before it runs anyway: past
+/// the longest wait seen while windows animate on a loaded machine, about 110, so it only runs
+/// early while frames draw without a break.
+const IDLE_WAIT: c_uint = 250;
 
 /// Starts reading commands from stdin.
 pub fn start() {
@@ -128,16 +140,31 @@ pub fn start() {
     });
 }
 
-/// Runs `task` on the main thread once nothing more urgent is ready, such as the X events Chromium
-/// and GPUI have to read: GLib's idle priority is below their sources'.
+/// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
+/// have to read, and the tasks Chromium has posted. Those run at GLib's idle priority, a few a turn,
+/// so a command there could come between them, as a key between the browser window becoming active
+/// and the page taking the keyboard back, which reached no page (#1621). Frames drawn without a
+/// break, as a shimmer's under software rendering, keep the loop from ever being free, as their
+/// sources are above the idle priority, so after IDLE_WAIT the task runs anyway (#1700).
 fn idle(task: Box<dyn FnOnce() + Send>) {
+    type Slot = Mutex<Option<Box<dyn FnOnce() + Send>>>;
     extern "C" fn run(data: *mut c_void) -> c_int {
-        // SAFETY: the box `idle` leaked, which runs once.
-        let task = unsafe { Box::from_raw(data as *mut Box<dyn FnOnce() + Send>) };
-        task();
+        // SAFETY: one of the two references `idle` leaked, each taken back once. The first to run
+        // takes the task.
+        let slot = unsafe { Arc::from_raw(data as *const Slot) };
+        let task = slot.lock().ok().and_then(|mut task| task.take());
+        if let Some(task) = task {
+            task();
+        }
         0
     }
-    unsafe { g_idle_add(run, Box::into_raw(Box::new(task)) as *mut c_void) };
+    let slot: Arc<Slot> = Arc::new(Mutex::new(Some(task)));
+    let free = Arc::into_raw(slot.clone()) as *mut c_void;
+    let late = Arc::into_raw(slot) as *mut c_void;
+    unsafe {
+        g_idle_add_full(G_PRIORITY_LOW, run, free, std::ptr::null_mut());
+        g_timeout_add(IDLE_WAIT, run, late);
+    }
 }
 
 /// Has the command running go on after it returns, with `rest`, which gets what reports the
@@ -2108,6 +2135,23 @@ fn run_command(line: &str) -> Option<()> {
             // The window manager gives the window its size a moment later, and the UI follows,
             // where the Mac's resize is done at once (#1065).
             resizing(browser.gpui as usize, width, height);
+            x.0.flush().ok()
+        }
+        // Settings with the keyboard, as resize does the driven browser window.
+        "resizekey" => {
+            let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
+            let &[width, height] = numbers.as_slice() else {
+                return None;
+            };
+            let Some(Keyboard::Settings(settings, _)) = keyboard_window() else {
+                return None;
+            };
+            let scale = scale();
+            let aux = ConfigureWindowAux::new()
+                .width((width * scale) as u32)
+                .height((height * scale) as u32);
+            let x = server()?;
+            x.0.configure_window(settings, &aux).ok()?;
             x.0.flush().ok()
         }
         "order" => {

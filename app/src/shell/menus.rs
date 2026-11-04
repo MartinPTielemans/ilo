@@ -417,6 +417,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         chosen(index, shell, cx);
+                        shell.settle_recent_downloads(cx);
                     })
                     .ok();
             }),

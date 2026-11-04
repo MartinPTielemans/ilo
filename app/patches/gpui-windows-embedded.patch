@@ -1,3 +1,20 @@
+diff --git a/crates/gpui_windows/src/dialog.rs b/crates/gpui_windows/src/dialog.rs
+index 16866cfc35..659fa75c23 100644
+--- a/crates/gpui_windows/src/dialog.rs
++++ b/crates/gpui_windows/src/dialog.rs
+@@ -93,7 +93,11 @@ pub(crate) fn show_dialog<T: Send + 'static>(
+         sender.send(Err(anyhow!("dialog owner has closed"))).ok();
+         return receiver;
+     }
+-    let hwnd = owner.as_ref().map(|owner| SafeHwnd::from(owner.hwnd));
++    // An embedded window's top-level window owns the dialog, which Windows disables while it shows.
++    let hwnd = owner.as_ref().map(|owner| {
++        let root = unsafe { GetAncestor(owner.hwnd, GA_ROOT) };
++        SafeHwnd::from(if root.is_invalid() { owner.hwnd } else { root })
++    });
+     executor
+         .spawn(async move {
+             // Let Windows manage enabling and activating the owner. Overlapping
 diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
 index 4ad4cc77b3..44d7b2ce80 100644
 --- a/crates/gpui_windows/src/direct_manipulation.rs
@@ -479,10 +496,30 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..972fd91b7e 100644
+index 095e009e23..b1cd3624a5 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -587,6 +587,11 @@ impl Platform for WindowsPlatform {
+@@ -372,10 +372,17 @@ impl WindowsPlatform {
+         if active_window_hwnd.is_invalid() {
+             return None;
+         }
+-        self.raw_window_handles
+-            .read()
++        let windows = self.raw_window_handles.read();
++        windows
+             .iter()
+             .find(|hwnd| hwnd.as_raw() == active_window_hwnd)
++            // A window embedded in the host's active window, which then owns its dialogs: unowned,
++            // a dialog left the window usable under it and outlived it as the app quit.
++            .or_else(|| {
++                windows.iter().find(|hwnd| unsafe {
++                    IsChild(active_window_hwnd, hwnd.as_raw()).as_bool()
++                })
++            })
+             .map(|hwnd| hwnd.as_raw())
+     }
+ 
+@@ -587,6 +594,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -494,7 +531,7 @@ index 095e009e23..972fd91b7e 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1637,10 +1642,43 @@ fn file_save_dialog(
+@@ -1637,10 +1649,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -539,7 +576,7 @@ index 095e009e23..972fd91b7e 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2018,12 @@ mod tests {
+@@ -1980,3 +2025,12 @@ mod tests {
          );
      }
  }

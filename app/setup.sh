@@ -50,7 +50,7 @@ vendor() {
   git -C ".deps/$1" init -q
   git -C ".deps/$1" config core.autocrlf false
   git -C ".deps/$1" add -A
-  git -C ".deps/$1" -c user.name=setup -c user.email=setup@localhost commit -qm upstream
+  git -C ".deps/$1" -c user.name=setup -c user.email=setup@localhost commit -s -qm upstream
   git -C ".deps/$1" apply "$PWD/patches/$4"
 }
 vendor accesskit_macos 0.26.3 ce02dc63b43f0c9296af9ac946312a2dc8814427d7a64d2d600971dac55b6076 \
