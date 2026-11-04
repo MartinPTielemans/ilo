@@ -321,11 +321,14 @@ impl Shell {
                 .overflow_hidden()
                 // Opaque, so the rows it opens over don't show through, under the plate's ink.
                 .bg(self.window_fill_at(1.))
-                .child(div().absolute().size_full().bg(self.palette.plate(if open {
-                    HOVERED
-                } else {
-                    PRESSED
-                })))
+                // Rounded too, as a clip keeps a child's square corners.
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded(px(PLATE_RADIUS))
+                        .bg(self.palette.plate(if open { HOVERED } else { PRESSED })),
+                )
                 // check.sh moves onto it and clicks it where it's drawn.
                 .child(card_listener("update banner", &self.update_drawn, 0))
                 .child(match open {
