@@ -614,7 +614,7 @@ if [ "$(uname)" = Darwin ] || windows; then
     # as the window draws it, at the window's scale. The driver can't hold the drag itself (#1583),
     # so it has the host make the picture and write it to a file.
     set -- $(row_of $c)
-    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -w "$out/windows-tab-picture.bmp")"
+    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
     expect '^browser: tab picture [1-9][0-9]*x[1-9][0-9]*$' "the host made no picture of the tab's row"
     picture=$(grep '^browser: tab picture ' "$log" | tail -1 | cut -d' ' -f4)
     echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 40 && $1 / $2 > 5.6 && $1 / $2 < 5.8) }' ||

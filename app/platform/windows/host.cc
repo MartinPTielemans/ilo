@@ -4256,7 +4256,8 @@ bool host_trash(const char* path) {
 
 // The part of |ui_view|'s browser window at (|x|, |y|), |width| by |height| points from the UI's
 // top-left corner, as it's drawn: GPUI's frame as DWM composites it, which PrintWindow's full
-// content gives, in a 32-bit top-down DIB, opaque, at the window's scale. Null if it can't.
+// content gives, else the screen's pixels there, as the window is in front while its row is
+// dragged, in a 32-bit top-down DIB, opaque, at the window's scale. Null if it can't.
 static HBITMAP WindowPart(void* ui_view, double x, double y, double width, double height,
                           SIZE* size) {
   HWND view = Hwnd(ui_view);
@@ -4284,12 +4285,17 @@ static HBITMAP WindowPart(void* ui_view, double x, double y, double width, doubl
   info.bmiHeader = {sizeof(BITMAPINFOHEADER), part_width, -part_height, 1, 32, BI_RGB};
   void* bits = nullptr;
   HBITMAP part = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
-  if (part && printed) {
+  const int from_x = static_cast<int>(std::lround(x * scale));
+  const int from_y = static_cast<int>(std::lround(y * scale));
+  bool copied = false;
+  if (part) {
     HDC part_dc = CreateCompatibleDC(screen);
     HGDIOBJ part_was = SelectObject(part_dc, part);
-    BitBlt(part_dc, 0, 0, part_width, part_height, whole_dc,
-           origin.x - window.left + static_cast<int>(std::lround(x * scale)),
-           origin.y - window.top + static_cast<int>(std::lround(y * scale)), SRCCOPY);
+    copied = printed ? BitBlt(part_dc, 0, 0, part_width, part_height, whole_dc,
+                              origin.x - window.left + from_x, origin.y - window.top + from_y,
+                              SRCCOPY)
+                     : BitBlt(part_dc, 0, 0, part_width, part_height, screen, origin.x + from_x,
+                              origin.y + from_y, SRCCOPY);
     GdiFlush();
     // GDI leaves the alpha at 0, which a drag image draws as nothing.
     for (int i = 0; i < part_width * part_height; i++) {
@@ -4302,7 +4308,7 @@ static HBITMAP WindowPart(void* ui_view, double x, double y, double width, doubl
   DeleteObject(whole);
   DeleteDC(whole_dc);
   ReleaseDC(nullptr, screen);
-  if (!printed && part) {
+  if (!copied && part) {
     DeleteObject(part);
     part = nullptr;
   }
@@ -4320,6 +4326,7 @@ extern "C" bool host_drive_window_part(void* hwnd, double x, double y, double wi
   SIZE size{};
   HBITMAP part = WindowPart(hwnd, x, y, width, height, &size);
   if (!part) {
+    fprintf(stderr, "browser: drive: no picture of that part of the window\n");
     return false;
   }
   const DWORD bytes = static_cast<DWORD>(size.cx * size.cy * 4);
@@ -4336,6 +4343,7 @@ extern "C" bool host_drive_window_part(void* hwnd, double x, double y, double wi
   file.bfSize = file.bfOffBits + bytes;
   FILE* out = _wfopen(Wide(path).c_str(), L"wb");
   if (!out) {
+    fprintf(stderr, "browser: drive: can't write %s\n", path);
     return false;
   }
   fwrite(&file, sizeof file, 1, out);
