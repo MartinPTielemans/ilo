@@ -125,6 +125,7 @@ fi
 send key n cmd
 expect '^browser: command new-window via ' "⌘N didn't run New Window"
 expect '^browser: window opened [0-9]' "⌘N didn't open a window"
+new_window_bar
 second=$(windows_opened | tail -1)
 send window 2
 send place "$(at 320 140 900 640)"
@@ -140,6 +141,7 @@ expect "^browser: renamed space $reading reading\$" "the core didn't rename the 
   fail "the second window didn't show its Space"
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a third window"
+new_window_bar
 third=$(windows_opened | tail -1)
 send window 3
 send key w cmd shift
@@ -147,6 +149,7 @@ expect "^browser: window closed $third\$" "⇧⌘W didn't close the third window
 send window 1
 send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
+new_window_bar
 send window 2
 if [ "$(uname)" = Linux ]; then
   echo "skip: the windows' order before the quit: on X11 a new window opens behind the one in front (#712)."
@@ -197,6 +200,7 @@ two="window on screen $(launch_at 'window on screen') ms, first frame $(launch_a
 send window 1
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window over the two brought back"
+new_window_bar
 cascaded=$(windows_opened | tail -1)
 read -r x y width height <<EOF
 $(frame_of "$cascaded")
@@ -209,6 +213,7 @@ EOF
 # open at another frame doesn't.
 send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
+new_window_bar
 send window 4
 send place "$(at 500 300 700 500)"
 send window 2

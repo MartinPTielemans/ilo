@@ -2454,6 +2454,10 @@ void host_show_overlay(int index,
     [overlay->view.layer displayIfNeeded];
     PlaceOverlayShadow(*overlay);
     overlay->shadow.alphaValue = 1;
+    // Last shown over a window on another desktop, such as a full-screen one that ⌘N's opened
+    // from, it would take macOS back there as it comes on screen.
+    ToActiveSpace(overlay->window);
+    ToActiveSpace(overlay->shadow);
     if (overlay->shadow.parentWindow != window) {
       [overlay->shadow.parentWindow removeChildWindow:overlay->shadow];
       AddOver(window, overlay->shadow);
@@ -4598,6 +4602,29 @@ void host_day_starts(double starts[4]) {
   for (int i = 0; i < 4; i++) {
     starts[i] = dates[i].timeIntervalSince1970 * 1000;
   }
+}
+
+bool host_window_on_active_space(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  return !browser || !browser->window || browser->window.onActiveSpace;
+}
+
+bool host_enter_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || !browser->window) {
+    return false;
+  }
+  NSWindow* window = browser->window;
+  // AppKit sets the mask as the transition starts.
+  if (window.styleMask & NSWindowStyleMaskFullScreen) {
+    return true;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!(window.styleMask & NSWindowStyleMaskFullScreen)) {
+      [window toggleFullScreen:nil];
+    }
+  });
+  return false;
 }
 
 // The browser windows Window › Stay On Top keeps over other apps' windows.

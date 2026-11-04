@@ -84,6 +84,7 @@ mod menu_bar;
 mod menus;
 mod naming;
 mod new_space;
+mod new_window;
 mod onboarding;
 mod page_dialog;
 mod page_menu;
@@ -1207,6 +1208,11 @@ pub struct Shell {
     new_tab: bool,
     /// When the card started to show no page, for the line on it to fade in from.
     empty_since: Option<Instant>,
+    /// Whether the command bar this window opened is up, over the card while it shows no page,
+    /// which then draws nothing: its one offer, New Tab, is the bar.
+    bar_over_card: bool,
+    /// When the bar last left the card, for its content to fade in again from.
+    card_back: Option<Instant>,
     /// The fade has ended and said so.
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
@@ -1270,6 +1276,8 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
+    opening: Option<new_window::Opening>,
     /// Whether Window › Stay On Top keeps it over other apps' windows.
     on_top: bool,
     /// The Esc presses its page has had first in full screen, which leave held or twice.
@@ -1662,6 +1670,8 @@ impl Shell {
             clearing: Vec::new(),
             new_tab: false,
             empty_since: None,
+            bar_over_card: false,
+            card_back: None,
             empty_settled: false,
             welcome: false,
             onboarding: None,
@@ -1691,6 +1701,7 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            opening: None,
             on_top: false,
             escapes: Default::default(),
             maximized: false,
@@ -2703,6 +2714,7 @@ impl Shell {
                 .browser
                 .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
         self.set_new_tab(new_tab, cx);
+        self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
@@ -2731,6 +2743,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
             self.lay_out_page(cx);
@@ -3057,6 +3070,10 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
+        // A new window waiting for its full screen opens its bar at the next frame.
+        if self.opening.is_some() {
+            cx.notify();
+        }
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -3517,6 +3534,7 @@ impl Render for Shell {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.full_screen_step("drawn", window.viewport_size());
+        self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
         // to what's drawn.

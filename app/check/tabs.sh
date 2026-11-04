@@ -1287,6 +1287,7 @@ FRAME
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
   send key t cmd
   expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
   post key f4 ctrl

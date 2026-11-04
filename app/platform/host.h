@@ -558,6 +558,15 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
 // Does what a click on the close (0), minimize (1) or zoom (2) button of |ui_view|'s window does.
 void host_press_window_button(void* ui_view, int button);
 
+// The Mac's: puts the browser window of |ui_view| full screen as its green button does, unless
+// it's full screen already or on its way, as AppKit takes a window opened from a full-screen one
+// there itself. Returns whether it was.
+bool host_enter_full_screen(void* ui_view);
+
+// Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
+// full screen isn't until macOS has moved to its desktop. Off the Mac, always.
+bool host_window_on_active_space(void* ui_view);
+
 // Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
 // or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
 // while the window is full screen, and takes it up again after. Under Wayland, which gives a client
