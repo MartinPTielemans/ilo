@@ -554,8 +554,9 @@ send key m
 expect "^browser: menu highlights $(cased 'Move to') at " "typing m didn't select Move to, past Mute dimmed"
 send key right
 expect "^browser: menu submenu $(cased 'Move to') shown at " "→ didn't open the Move to submenu"
-send key r
-expect '^browser: menu highlights .*reading 日本語 at ' "typing r didn't select the second Space"
+# The submenu opens on the first Space, the Space shown, with the second under it.
+send key down
+expect '^browser: menu highlights .*reading 日本語 at ' "↓ didn't select the second Space"
 send key right
 expect '^browser: menu submenu reading 日本語 shown at ' "→ didn't open the second Space's submenu"
 ../tools/window-screenshot.sh "$pid" "$out/move-to-folder.png" || fail "no window to capture"
