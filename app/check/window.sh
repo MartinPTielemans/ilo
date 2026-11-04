@@ -16,12 +16,13 @@
 # button hide the sidebar and the window's buttons, and the card takes its place, through a resize;
 # ⌘S brings them back, and the core hears the page moves for each motion and is still after it. The
 # pointer kept at the window's edge brings the hidden sidebar out, and one passing it doesn't. A tab
-# opened with the sidebar hidden says so in a toast, and a click on it brings the sidebar back. The
-# sidebar's edge drags its width between 164 and 500, stopping at them, and dragged on past half the
-# narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
-# page that hasn't drawn yet shows the card's colour, not white. In a check VM, the sidebar over grey
-# backdrops is Dia's composite, dark and then light, with the Mac's appearance, and View ›
-# Appearance turns the light window dark and back.
+# opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it
+# brings the sidebar back. The sidebar's edge drags its width between 164 and 500, stopping at
+# them, and dragged on past half the narrowest it hides the sidebar, keeping its width; a
+# double-click on it puts the width back. A page that hasn't drawn yet shows black, or white with
+# View › Appearance on Light. In a check VM, the sidebar over grey backdrops is Dia's composite,
+# dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
+# and back.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
 page=$(base64 << 'HTML' | tr -d '\n'
@@ -92,7 +93,10 @@ step=0
 rm -f "$saved" "$launch_frame"
 serve
 url="data:text/html;base64,$page#${site}wait"
-BROWSER_DRIVE=1 BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
+# With the motion GitHub's hosted Mac reduces, for the toast recorded below.
+motion=
+[ "$(uname)" = Darwin ] && motion=full
+BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -164,33 +168,49 @@ resized_once() {
 check_layout "at launch"
 check_buttons "at launch"
 
-# A page shows the card's colour until its first frame, never white, and its tab is loading from the
-# start. The page's w opens one whose server never answers, so it never commits, and its URL, which
-# a page asked for, stays hidden until it does.
+# A page shows black until its first frame while websites are told the appearance is dark, and
+# white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
+# from the start. The page's w opens one whose server never answers, so it never commits, and its
+# URL, which a page asked for, stays hidden until it does. A page already waiting as the appearance
+# changes keeps its colour on the Mac until it draws, so each colour gets a page opened after it.
 first=$(today)
-send click $page_point
-send key w
-expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
-tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
-  "a tab opened to a page that hasn't come doesn't say it's loading"
-# Whether the colour "r g b" is the card's (tokens.toml › shell › card): dark on a dark window, as
-# the Mac's check VM runs it, and on a light one, as Linux's is, white at 0.7 over any colour, but
-# never the white of a page.
-card_color() {
-  [ "$(grep '^browser: window light ' "$log" | tail -1)" = "browser: window light true" ] ||
-    { dark "$1"; return; }
-  set -- $1
-  [ "$1" -ge 179 ] && [ "$2" -ge 179 ] && [ "$3" -ge 179 ] && [ "$1 $2 $3" != "255 255 255" ]
+# Whether the colour "r g b" is black, or white with $2 light, as near as the capture keeps them.
+unpainted() {
+  set -- $1 $2
+  case $4 in
+  light) [ "$1" -ge 251 ] && [ "$2" -ge 251 ] && [ "$3" -ge 251 ] ;;
+  *) [ "$1" -le 4 ] && [ "$2" -le 4 ] && [ "$3" -le 4 ] ;;
+  esac
 }
-for _ in $(seq 20); do
-  ../tools/window-screenshot.sh "$pid" "$out/before-paint.png" || fail "no window to capture"
-  color=$(pixel "$out/before-paint.png" 0.6 0.5)
-  card_color "$color" && break
+unpainted_seen=
+for scheme in light dark; do
+  item=Light hex=ffffff
+  [ $scheme = light ] || item=Dark hex=000000
+  send menu "Appearance › $item"
+  expect "^browser: appearance $scheme\$" "View › Appearance › $item didn't change the appearance"
+  send click $page_point
+  send key w
+  expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
+  tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+    "a tab opened to a page that hasn't come doesn't say it's loading"
+  for _ in $(seq 20); do
+    ../tools/window-screenshot.sh "$pid" "$out/before-paint-$scheme.png" ||
+      fail "no window to capture"
+    seen=$(pixel "$out/before-paint-$scheme.png" 0.6 0.5)
+    unpainted "$seen" $scheme && break
+  done
+  unpainted "$seen" $scheme ||
+    fail "with View › Appearance › $item, a page that hasn't drawn shows $seen, not #$hex"
+  [ "$(grep '^browser: page color ' "$log" | tail -1)" = "browser: page color $hex" ] ||
+    fail "with View › Appearance › $item, the core wasn't given #$hex for a page not yet drawn"
+  unpainted_seen="$unpainted_seen $scheme $seen,"
+  send key w cmd
+  expect_tabs "$first" "$first" "after closing the tab of the page that hasn't come"
 done
-card_color "$color" || fail "a page that hasn't drawn shows $color, not the card's colour"
-send key w cmd
-expect_tabs "$first" "$first" "after closing the tab of the page that hasn't come"
+send menu "Appearance › Automatic"
+expect '^browser: appearance automatic$' \
+  "View › Appearance › Automatic didn't give back the system's appearance"
 send click $page_point
 
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
@@ -407,6 +427,15 @@ together() {
 windowed_again() {
   check_layout "after the page's display went away $1"
   check_buttons "after the page's display went away $1"
+  # As the window's way out ends, macOS can make another app active, and the app takes it back
+  # (host.mm). The sidebar's material is the active window's only once it has.
+  for _ in $(seq 30); do
+    [ "$active" = 1 ] && break
+    sleep 0.1
+    send state
+  done
+  [ "$active" = 1 ] ||
+    fail "Browser wasn't the active app again after the page's display went away $1, so its window isn't key"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"
   sidebar_back "$out/$2.png" ||
     fail "after the page's display went away $1 the sidebar is $sidebar_now, not $sidebar: the page still covers it"
@@ -719,30 +748,51 @@ none_since '^browser: reveal by option$' ||
   fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
-# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen, and its Show
-# brings the sidebar back.
+# With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
+# for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
+# reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on
+# GitHub's hosted Mac. Its Show brings the sidebar back.
 send key s cmd
 toggle page hidden "⌘S from the page before opening a tab"
-before=$(today)
-send key t cmd
-expect '^browser: command bar shown$' "⌘T with the sidebar hidden didn't open the command bar"
-send type example.org
-send key return
-expect "^browser: today [0-9][0-9]* $before\$" "the tab for example.org didn't open at the top of Today"
-expect '^browser: toast shown New Tab Created \[show\]$' \
-  "a tab opened with the sidebar hidden had no toast"
-expect '^browser: toast settled$' "the new tab's toast didn't settle"
-../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
-# A click on Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is
-# logged in the toast's window, whose width comes after it, at the content's right.
+record new-tab-toast 6
+for site_name in example.org example.com; do
+  before=$(today)
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T with the sidebar hidden didn't open the command bar"
+  send type $site_name
+  send key return
+  # The plate is told once, at the first toast's rest: the second keeps it where it is.
+  [ "$site_name" = example.org ] && toast_step=$step
+  expect "^browser: today [0-9][0-9]* $before\$" \
+    "the tab for $site_name didn't open at the top of Today"
+  expect '^browser: toast shown New Tab Created \[show\]$' \
+    "a tab opened with the sidebar hidden, for $site_name, had no toast"
+  expect '^browser: toast settled$' "the new tab's toast, for $site_name, didn't settle"
+done
+if [ "$(last 'reduce motion')" = on ]; then
+  none_since '^browser: toast bumped$' || fail "under Reduce Motion, the toast asked for again bumped"
+else
+  logged '^browser: toast bumped$' || fail "the toast asked for again while in place didn't bump"
+fi
+# Show, the chip at the plate's right end: 13.5 in from it and about 50 wide. The plate is logged
+# in the toast's window, whose width comes after it, at the content's right. The pointer goes on it
+# before the recording's end is waited for, which outlasts the toast's 4.8 s, as a toast with the
+# pointer on its buttons stays past its time; the window is captured with it there. The toast's
+# window lets the pointer through until a move over its plate, which goes to the window under it,
+# so the first move has it take the pointer and the toast hears the second, as a real one's next.
 expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
-  "the new tab's toast didn't tell where its plate is"
+  "the new tab's toast didn't tell where its plate is" "$toast_step"
 set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
 send layout
 content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
   sed 's/^browser: layout content \([0-9]*\)x[0-9]*,.*/\1/')
 show="$((content - $5 + $1 + $3 - 14 - 25)) $(($2 + $4 / 2))"
 send move $show
+first_move=$step
+send move $show
+expect '^browser: toast hovered true$' "the pointer at $show wasn't on the new tab's toast" "$first_move"
+recorded
+../tools/window-screenshot.sh "$pid" "$out/new-tab-toast.png" || fail "no window to capture"
 send click $show
 expect '^browser: toast button show$' "a click on the new tab's toast's Show at $show didn't take"
 expect '^browser: sidebar shown$' "the new tab's toast's Show didn't bring the sidebar back"
@@ -801,6 +851,7 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
+  opaque=
   # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
   for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
     tone=${pass%% *}
@@ -853,6 +904,12 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
       }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
+      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
+      # material, as Reduce Transparency draws it, reads the same over both.
+      case $level in
+      0) over_black=${line%% *} ;;
+      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      esac
       material="$material$tone over $level $line; "
     done
   done
@@ -866,10 +923,19 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   expect '^browser: window light true$' "View › Appearance › Automatic didn't give back the Mac's light"
   appearance true || fail "System Events didn't turn the Mac dark again"
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
-  [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  [ -z "$opaque" ] ||
+    fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
+  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
+  # the run goes on, saying so, and the check VMs keep the comparison.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+  else
+    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+  fi
   material="over grey ${material%; }"
 fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows the card's colour ($color). Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint.png${light_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png${light_shots:-}"

@@ -159,6 +159,11 @@ b=$(today)
 expect "^browser: selected $b\$" "the new Space's tab wasn't shown"
 expect "^browser: loaded $b https://example.com/\$" "example.com didn't load in the new Space's tab"
 
+# How a name's field last lost the keyboard, if it did, for a field that ended unasked (#1664).
+lost_keyboard() {
+  grep '^browser: field lost the keyboard' "$log" | tail -1 | grep . || echo "it never lost it"
+}
+
 # $1 is the driver's key or click, $2 the command it runs, $3 where the UI hears it from, and $4
 # the Space it shows, with its tab $5.
 show_space() {
@@ -867,14 +872,16 @@ none_since "^browser: menu shown $(cased 'Change Space Icon…')" || fail "the r
 send choose "$(cased 'Select All')"
 send type gone
 send key escape
-expect '^browser: rename cancelled$' "escape in the name's field didn't cancel"
+expect '^browser: rename cancelled$' \
+  "escape in the name's field didn't cancel: $(lost_keyboard)"
 none_since '^browser: renamed space' || fail "escape in the name's field renamed the Space"
 # Rename Space in the Spaces menu turns the name of the Space shown into a field too.
 send menu Rename Space
 expect '^browser: command rename-space via ui$' "Rename Space in the menu didn't run rename-space"
 expect "^browser: rename space $first\$" "Rename Space in the menu didn't open the name's field"
 send key escape
-expect '^browser: rename cancelled$' "escape in the name's field didn't cancel"
+expect '^browser: rename cancelled$' \
+  "escape in the name's field didn't cancel: $(lost_keyboard)"
 # Change Icon… in the Space's menu opens the icon picker under the Space's name, its arrow at the
 # icon's slot, on the Icon tab for a Space with no emoji. It's a child window with the keyboard, so
 # its clicks go to the key window, in points from its top left. Escape closes it with no change,
@@ -886,6 +893,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "the icon picker didn't show"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 # 273 wide, with the arrow's tip 13 in, under the icon's middle at x 26.
 [ "$(echo "$at" | awk '{ print $1, $3, $4 }')" = "13 273 286" ] ||
@@ -899,6 +907,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name offered Remove Icon without an icon"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-icon-picker.png" || fail "no window to capture"
 # A click on a glyph is the Space's icon at once and closes the picker: the bolt, fifth in the first
 # row, the grid's first column 27.75 in and its first row 76.25 down.
@@ -914,6 +923,7 @@ send click 23 112
 expect "^browser: icon picker for $first on icon\$" \
   "a click on the Space's icon didn't open the picker"
 expect '^browser: icon picker shown$' "a click on the Space's icon didn't show the picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 92.5 39.5
 expect '^browser: icon picker on emoji$' "a click on Emoji didn't show the Emoji tab"
 send insert fox
@@ -931,6 +941,7 @@ send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on emoji\$" \
   "Change Icon… didn't open the picker on the Emoji tab for a Space with an emoji"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 ../tools/window-screenshot.sh "$pid" "$out/space-emoji-grid.png" all || fail "no window to capture"
 send clickkey 197 39.5
 expect "^browser: iconed space $first none\$" "the icon picker's trash didn't take the icon away"
@@ -942,6 +953,7 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Icon after the trash"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send clickkey 151.75 76.25
 expect "^browser: iconed space $first glyph:bolt\$" \
   "a click on a glyph didn't become the Space's icon"
@@ -1023,7 +1035,8 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Theme Color without a colour"
 send choose Rename Space…
 send key escape
-expect '^browser: rename cancelled$' "escape in the name's field didn't cancel"
+expect '^browser: rename cancelled$' \
+  "escape in the name's field didn't cancel: $(lost_keyboard)"
 # Deleting a Space with tabs asks first, in a dialog over the window, and a click around it cancels.
 # Return deletes the Space once the dialog has gone. Its tabs close with it, and ⇧⌘T reopens them
 # here.
@@ -1145,7 +1158,8 @@ New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)"
   "the last Space's menu offered Delete"
 send choose Rename Space…
 send key escape
-expect '^browser: rename cancelled$' "escape in the name's field didn't cancel"
+expect '^browser: rename cancelled$' \
+  "escape in the name's field didn't cancel: $(lost_keyboard)"
 # The page shown is hidden while its window is minimized, and while the app is hidden, as Chrome's
 # is, and visible once they're back. Last, as the app may not be active after it's been hidden.
 # Today is the tab ⇧⌘T reopened over the page's.

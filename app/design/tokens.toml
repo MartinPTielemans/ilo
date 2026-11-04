@@ -704,6 +704,11 @@ check-glyph = 12.0
 check-tick = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
+# Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
+# of the control's fill, and the dot before a line that waits, or before an Arc Space's name in the
+# colour of its theme.
+step = 20.0
+dot = 7.0
 # The views Settings shows from the library, Sync and Import, put a heading 8 over a group and 20
 # under the one before, and their groups 10 apart.
 header-gap = 7.0
@@ -965,10 +970,14 @@ cancel-height = 15.0
 # black, darker than any Space and without its colour (ours: Arc's and Dia's private look isn't
 # recorded).
 private-shade = 0.35
-# Dia's card, #121212 at 0.5 on a dark window and white at 0.7 on a light one: what shows before
-# a page first paints.
+# Dia's card, #121212 at 0.5 on a dark window and white at 0.7 on a light one, under the page.
 card = 0x1212_1280
 light-card = 0xffff_ffb3
+# What a page shows until its first frame: black while websites are told the appearance is dark,
+# white while it's light (Arc 1.171, measured by an outside reverse-engineering, #1404), the
+# colour a page in that appearance most likely draws.
+unpainted = 0x0000_00ff
+light-unpainted = 0xffff_ffff
 # Everything below is an alpha of the palette's ink, Ink or Paper (palette.rs): text and glyphs
 # through its floors, plates in Paper's terms. Arc's row tokens (docs/ux-spec.md › Tab rows): the
 # tab shown is 0.2, a row under the pointer 0.12 and a pressed one 0.065, with no line or shadow.

@@ -1848,6 +1848,9 @@ impl Render for TalkView {
         }) else {
             return div().into_any_element();
         };
+        // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
+        let placeholder = look.palette.text(FORM_PLACEHOLDER);
+        (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
         // end, as the scroll keeps its distance from the top.
