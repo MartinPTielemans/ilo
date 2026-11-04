@@ -125,11 +125,12 @@ void host_activate(void* ui_view);
 void host_set_window_shown(void* ui_view, bool shown);
 bool host_window_shown(void* ui_view);
 
-// Adds Little ilo's items to the Dock icon's menu, the engine's, after its New Window, as Arc's:
+// Puts ilo's items in the Dock icon's menu, the engine's, in place of its New Window and New
+// Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
 // window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
-// Show All, 2 Hide All. Once the app has finished launching, as the engine's delegate is set then.
+// Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
 // Off the Mac, which has no Dock menu, nothing.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
@@ -565,6 +566,12 @@ bool host_enter_full_screen(void* ui_view);
 // Whether the browser window of |ui_view| is on the macOS desktop shown, as a window AppKit takes
 // full screen isn't until macOS has moved to its desktop. Off the Mac, always.
 bool host_window_on_active_space(void* ui_view);
+
+// Keeps the browser window of |ui_view| over other apps' windows, its overlays over it as before,
+// or with |on| false lets it go back among them (Window › Stay On Top). The Mac sets it aside
+// while the window is full screen, and takes it up again after. Under Wayland, which gives a client
+// no way, nothing.
+void host_set_window_on_top(void* ui_view, bool on);
 
 #ifdef _WIN32
 // Windows' alone, whose browser window has no title bar for these: moves |ui_view|'s window with

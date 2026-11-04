@@ -127,7 +127,7 @@ use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
-    KeepName, Match, Run, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
+    KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
     shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
@@ -1276,6 +1276,8 @@ pub struct Shell {
     full_screen: bool,
     /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
     opening: Option<new_window::Opening>,
+    /// Whether Window › Stay On Top keeps it over other apps' windows.
+    on_top: bool,
     /// The Esc presses its page has had first in full screen, which leave held or twice.
     escapes: full_screen_escape::EscapeToLeave,
     /// On Linux, whether the window is maximized, which its third button shows.
@@ -1698,6 +1700,7 @@ impl Shell {
             text_system: None,
             full_screen: false,
             opening: None,
+            on_top: false,
             escapes: Default::default(),
             maximized: false,
             window_for_page: false,
@@ -2799,13 +2802,21 @@ impl Shell {
         }
     }
 
-    /// The row with the selected plate: the tab shown's, or its split's.
-    fn selected_row(&self) -> Row {
-        if self.new_tab {
-            Row::NewTab
-        } else {
-            Row::Tab(self.row_of(self.selected))
+    /// The row with the selected plate: the tab shown's, or its split's, or New Tab's while ⌘T's
+    /// bar is open. None while a task has the page area, as its card has the plate then.
+    fn selected_row(&self) -> Option<Row> {
+        match self.new_tab {
+            true => Some(Row::NewTab),
+            false => self
+                .shown_has_plate()
+                .then(|| Row::Tab(self.row_of(self.selected))),
         }
+    }
+
+    /// Whether the tab shown has the selected plate, on its row or its tile: not while ⌘T's bar
+    /// gives it to New Tab, or while a task's conversation or page is in the page area.
+    fn shown_has_plate(&self) -> bool {
+        !self.new_tab && self.task_area.is_none()
     }
 
     fn shown(&mut self, tab: u64, cx: &mut App) {
@@ -3356,7 +3367,7 @@ impl Shell {
 
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
-        if row == self.selected_row() {
+        if Some(row) == self.selected_row() {
             self.unhovered.push((row, Instant::now()));
         }
     }
