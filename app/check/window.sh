@@ -455,6 +455,8 @@ windowed_again() {
 }
 if [ "$(uname)" = Linux ]; then
   echo "skip: second display: the Linux driver can't add one yet."
+elif windows; then
+  echo "skip: second display: the Windows driver can't add one yet."
 else
   send order
   frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
