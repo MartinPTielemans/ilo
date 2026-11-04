@@ -46,13 +46,15 @@ log="$out/calls.log"
 step=0
 # A profile of the run's own, whose WebRTC may use the computer's own addresses, so the page's two
 # peers find each other: ungoogled-chromium's default sends WebRTC only through a proxy, and the
-# runner has none. Without mDNS names for those addresses, as a runner has no mDNS resolver.
+# runner has none. Without mDNS names for those addresses, as a runner has no mDNS resolver, and
+# with the app's own disabled feature, which this switch would otherwise replace.
 profile_dir="$PWD/$out/calls/profile"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir/Default"
 printf '%s' '{"webrtc": {"ip_handling_policy": "default"}}' > "$profile_dir/Default/Preferences"
 BROWSER_DRIVE=1 BROWSER_URL="${site}calls.html" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-  --use-fake-device-for-media-stream --disable-features=WebRtcHideLocalIpsWithMdns \
+  --use-fake-device-for-media-stream \
+  --disable-features=MacAppCodeSignClone,WebRtcHideLocalIpsWithMdns \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
