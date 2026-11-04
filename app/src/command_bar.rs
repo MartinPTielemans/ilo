@@ -548,6 +548,8 @@ pub struct CommandBar {
     commands: Option<&'static str>,
     /// What Settings' search reads of its rows, read once since the bar opened.
     settings_index: Option<Rc<Vec<settings_search::Entry>>>,
+    /// When the bar was asked to open, until its first frame on screen logs how long it took.
+    opened_at: Option<Instant>,
     /// The agents ⇥ asks, as last learned, read as the bar opens and as they change.
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
@@ -678,6 +680,7 @@ pub fn open_at(
                 site: None,
                 commands: None,
                 settings_index: None,
+                opened_at: None,
                 task_agents: None,
                 ask: None,
                 favicons: HashMap::new(),
@@ -830,6 +833,7 @@ fn reset(
             bar.site_left(cx);
             bar.commands = None;
             bar.settings_index = None;
+            bar.opened_at = Some(Instant::now());
             bar.end_ask(cx);
             // What the browser last learned, read in memory: nothing about tasks runs as it opens.
             bar.task_agents = bar.learned_agents(cx);
@@ -1030,6 +1034,7 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
     };
     window
         .update(cx, |bar, window, cx| {
+            let started = Instant::now();
             // Older text's come after the bar has asked about newer, and Search Tabs asks for none.
             // The commands-only list asks for none either, nor does an ask.
             if text != bar.request()
@@ -1095,6 +1100,11 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                         .is_some_and(|url| url == row.url);
             }
             bar.set_rows(bar.asked.clone(), rows, window, cx);
+            // The performance gate reads this line: what the rows cost the frame they come in.
+            log!(
+                "browser: command bar rows for \"{text}\" in {:.1} ms",
+                started.elapsed().as_secs_f64() * 1000.
+            );
         })
         .ok();
 }
@@ -2766,6 +2776,15 @@ impl Render for CommandBar {
             "browser: command bar drew \"{}\"",
             self.input.read(cx).text()
         );
+        if window.is_visible()
+            && let Some(opened) = self.opened_at.take()
+        {
+            // The performance gate reads this line: from ⌘T to the bar's first frame on screen.
+            log!(
+                "browser: command bar first frame in {:.1} ms",
+                opened.elapsed().as_secs_f64() * 1000.
+            );
+        }
         let remove = self.hovered.and_then(|index| {
             let row = self.rows.get(index).filter(|row| row.removable)?;
             Some((index, row.url.clone()))

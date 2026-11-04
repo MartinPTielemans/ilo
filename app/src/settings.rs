@@ -2953,13 +2953,37 @@ impl Settings {
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        let mut blocks = vec![
-            Block::Rows(vec![master]),
-            Block::Heading("Tasks".into()),
-            Block::Group(self.tasks(agents, cx)),
-            Block::Heading("Apps that connect".into()),
-            Block::Group(group(look, clients)),
-        ];
+        // Asking your own Claude from ⌘T and letting an app connect are two trust decisions, so
+        // tasks have their switch under agents', shown while agents are on.
+        let tasks_on = agents.read(cx).tasks_on();
+        let tasks = on.then(|| {
+            let switch = {
+                let agents = agents.clone();
+                let set = move |on, cx: &mut App| {
+                    agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
+                };
+                self.toggle("agent tasks", tasks_on, set, accent, cx)
+            };
+            let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
+            let bar = shell::keystroke_label("cmd-t");
+            let line = match tasks_on {
+                true => format!("{tab} in {bar} gives what you typed to Claude or Codex here."),
+                false => format!("Off: {tab} in {bar} makes no task. Apps that connect still can."),
+            };
+            nested(setting(
+                look,
+                "Tasks from the command bar",
+                Some(line.into()),
+                vec![switch],
+            ))
+        });
+        let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
+        if tasks_on {
+            blocks.push(Block::Heading("Tasks".into()));
+            blocks.push(Block::Group(self.tasks(agents, cx)));
+        }
+        blocks.push(Block::Heading("Apps that connect".into()));
+        blocks.push(Block::Group(group(look, clients)));
         // A list for each agent, as each has its own Space (decision 8): what the user let it do
         // or never do on a site, to revoke, then what it did.
         let model = agents.read(cx);

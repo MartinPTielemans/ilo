@@ -64,6 +64,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         concat!("Little ", env!("APP_NAME")) => &["little arc", "small window"],
         "Block ads and trackers" => &["ad blocker", "content blocker"],
         "Reopen your windows and tabs" => &["restore session"],
+        "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
         "Show what's new after an update" => &["release notes", "changelog"],
