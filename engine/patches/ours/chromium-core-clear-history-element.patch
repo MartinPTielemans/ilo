@@ -1,0 +1,24 @@
+Clearing browsing history from Clear browsing data tells the BrowserView's element, which Chrome
+CHECKs is there. A window of the core's has no BrowserView, so Delete with history ticked
+crashed the browser (#1821). The event is skipped when there's no element.
+
+--- a/chrome/browser/ui/webui/settings/settings_clear_browsing_data_handler.cc
++++ b/chrome/browser/ui/webui/settings/settings_clear_browsing_data_handler.cc
+@@ -301,10 +301,13 @@
+     ui::TrackedElement* const browser_element =
+         ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+             kBrowserViewElementId, context);
+-    CHECK(browser_element);
+-    ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+-        browser_element,
+-        browsing_data_important_sites_util::kClearBrowsingDataHistoryEventId);
++    // browser_core: a window of the core's has no BrowserView, so there's no
++    // element to tell, and the history is cleared all the same.
++    if (browser_element) {
++      ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
++          browser_element,
++          browsing_data_important_sites_util::kClearBrowsingDataHistoryEventId);
++    }
+   }
+ 
+   ResolveJavascriptCallback(base::Value(webui_callback_id), result);
