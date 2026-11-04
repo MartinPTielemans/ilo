@@ -976,6 +976,45 @@ if [ "$(uname)" = Darwin ]; then
 else
   echo "skip: Esc held in full screen, as off the Mac the host can't tell a held key's repeats from presses, which leave as twice."
 fi
+
+# With two windows, only the key window's hidden sidebar comes out at its edge, as Arc 1.171's: a
+# window behind leaves its edge to the pointer on its way to the one in front (#1402). The driver
+# sends the window behind its moves without bringing it forward, as dialogs' hover card behind
+# shows they reach it; once in front, the same moves bring its sidebar out. Linux's driver can't
+# drive a window behind another.
+if [ "$(uname)" = Linux ]; then
+  echo "skip: the edge of a window behind another, which Linux's driver can't drive without bringing it forward."
+else
+  send click 110 400
+  send key s cmd
+  toggle ui hidden "⌘S before the window behind's edge"
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+  second_window=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # The driver counts every window opened, closed ones too.
+  driven_second=$(grep -c '^browser: window opened ' "$log")
+  send window 1 behind
+  behind=$step
+  send move 400 300
+  send move 3 300
+  send move 3 306
+  # The window's wait starts as the pointer moves in its edge, logged then, so none by the time the
+  # driver brings it forward means it never started.
+  send window 1
+  sed -n "/^browser: drive $behind: /,/^browser: drive $step: /p" "$log" |
+    grep -q '^browser: reveal \(waits\|shown\)$' &&
+    fail "the pointer at the edge of the window behind brought its sidebar out"
+  reveal_at_edge "the pointer at the edge of the first window, in front, didn't bring its sidebar out"
+  check_reveal "with the first window's sidebar out in front of the second" shown
+  send move 400 300
+  expect '^browser: reveal hidden$' "the pointer past the first window's sidebar out didn't send it away"
+  send window "$driven_second"
+  send key w cmd shift
+  expect "^browser: window closed $second_window\$" "⇧⌘W didn't close the second window"
+  send window 1
+  send key s cmd
+  toggle ui shown "⌘S after the window behind's edge"
+fi
 exec 3>&-
 quit
 echo "edge: $edge"
