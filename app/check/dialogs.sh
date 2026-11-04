@@ -181,7 +181,9 @@ if windows; then
   sleep 2
   powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' > /dev/null 2>&1
   look "3b display change, 1920x1080 to 1600x900 and back"
-  # 4. Links into the main window's Space, the main window in front.
+  # 4. Links into the main window's Space, the main window in front, the second back at 100%.
+  send window 2
+  send dpi 100
   send window 1
   look "4a main window in front"
   from_app "${site}?main1"
