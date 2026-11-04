@@ -5,7 +5,7 @@ and Settings › About opens each. Chromium's own, for the engine and what it's 
 browser, at chrome://credits.
 
 Ardia (https://github.com/mantrakp04/ardia), Apache License 2.0
-Used in docs/ux-spec.md, docs/ux-parity.md, core/browser_window_stand_in.{h,cc},
+Used in docs/ux-spec.md, docs/ux-parity/, core/browser_window_stand_in.{h,cc},
 engine/patches/ours/chromium-core-browser-window.patch,
 engine/patches/ours/chromium-core-embedded-view.patch and the patches in engine/patches/ardia/.
 
@@ -33,11 +33,11 @@ paintbrush, palette, panel-left, paw-print, pencil, piano, picture-in-picture-2,
 plus, printer, puzzle, receipt, rotate-ccw-clock, rotate-ccw, rotate-cw, save, search, settings,
 shapes, share, shield, shopping-basket, skull, sliders-horizontal, sparkles, speaker, square-check,
 square-mouse-pointer, square-terminal, square, star, sun, terminal, text-align-start, text-search,
-thumbs-up, train-front, trash, triangle, type, undo-2, usb, user, users, utensils, vibrate, video,
-volume-2, volume-x, wrench, x, zap, zoom-in and zoom-out, and rotate-cw and x scaled as nav-reload
-and nav-stop; and camera's path, drawn as Capture's pointer, in app/platform/mac/host.mm; at commit
-7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke width is 2.25 where Lucide's is 2
-(app/design/tokens.toml); palette's four dots and key-round's one lose their fill.
+thumbs-up, train-front, trash, triangle, type, undo-2, ungroup, usb, user, users, utensils, vibrate,
+video, volume-2, volume-x, wrench, x, zap, zoom-in and zoom-out, and rotate-cw and x scaled as
+nav-reload and nav-stop; and camera's path, drawn as Capture's pointer, in app/platform/mac/host.mm;
+at commit 7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke width is 2.25 where Lucide's
+is 2 (app/design/tokens.toml); palette's four dots and key-round's one lose their fill.
 
   ISC License
 
@@ -93,6 +93,33 @@ agent-context-budget.yml and ci.yml, .github/actions/ci-changes/action.yml and
   MIT License
 
   Copyright (c) 2026 T3 Tools Inc.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+cra (https://github.com/VictorKildahl/cra), MIT License
+Used in app/src/import/fixture-cra/, a made-up Arc profile from Tests/Fixtures/Arc at commit
+ac48c03f823eebc77e357fae8b75e1d97651da2a, with Space colours after docs/arc-reverse-engineering.md
+at commit 51edf6df08ebbe6b35beca2b44823a60dead400c. The tests read it; no build carries it.
+
+  MIT License
+
+  Copyright (c) 2026 Victor Kildahl
 
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal

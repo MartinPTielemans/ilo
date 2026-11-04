@@ -443,6 +443,8 @@ double g_tooltip_left = 0;
 double g_tooltip_top = 0;
 // How far its window reaches past the plate, for the shadow.
 double g_tooltip_margin = 0;
+// The overlay holding what it names, which it shows over, as a command bar row's button, or -1.
+int g_tooltip_overlay = -1;
 unsigned g_tooltip_changes = 0;
 void (*g_tooltip_away)(void);
 
@@ -651,6 +653,61 @@ void WatchMainWindow() {
                   }];
 }
 
+// A display going away under a full-screen browser window, as a monitor unplugged mid-video, ends
+// with AppKit taking the window out on another display, and as that ends macOS can slide to a
+// Space without the window and make another app active, though the user never left ilo (#1554).
+// The app takes back the activation it had, until a second after that window's way out ends.
+void WatchDisplayGone() {
+  static bool watching = false;
+  if (watching) {
+    return;
+  }
+  watching = true;
+  static bool active_as_display_went = false;
+  static CFTimeInterval reclaim_until = 0;
+  void (^reclaim)(void) = ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (NSApp.active) {
+        return;
+      }
+      // check.sh reads this line.
+      fprintf(stderr, "browser: active again after its display went away\n");
+      [NSApp activateIgnoringOtherApps:YES];
+    });
+  };
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  [center addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    for (NSWindow* window in NSApp.windows) {
+                      if (NSApp.active && BrowserOf(window) &&
+                          (window.styleMask & NSWindowStyleMaskFullScreen)) {
+                        active_as_display_went = true;
+                      }
+                    }
+                  }];
+  [center addObserverForName:NSWindowDidExitFullScreenNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification* notification) {
+                    if (!active_as_display_went || !BrowserOf(notification.object)) {
+                      return;
+                    }
+                    active_as_display_went = false;
+                    reclaim_until = CACurrentMediaTime() + 1;
+                    reclaim();
+                  }];
+  [center addObserverForName:NSApplicationDidResignActiveNotification
+                      object:nil
+                       queue:nil
+                  usingBlock:^(NSNotification*) {
+                    if (CACurrentMediaTime() < reclaim_until) {
+                      reclaim();
+                    }
+                  }];
+}
+
 // GPUI gives a window a title bar. Keeping it (transparent) keeps the system's rounded corners;
 // only its buttons go. A child window stays above its parent, so it doesn't need GPUI's floating
 // level, which would also put it above other apps' windows.
@@ -809,10 +866,12 @@ void PlaceToast() {
             display:NO];
 }
 
-// Where the UI asked, which it has kept inside the browser window: its window is wider than the
-// tooltip it holds, so clamping the window here would move the tooltip off the tile it names.
+// Where the UI asked, which it has kept inside the browser window, or the overlay it shows over:
+// its window is wider than the tooltip it holds, so clamping the window here would move the
+// tooltip off the tile it names.
 void PlaceTooltip() {
-  NSWindow* window = g_tooltip_over->window;
+  Overlay* overlay = OverlayAt(g_tooltip_overlay);
+  NSWindow* window = overlay ? overlay->window : g_tooltip_over->window;
   NSRect content = [window contentRectForFrameRect:window.frame];
   NSSize size = g_tooltip.frame.size;
   [g_tooltip setFrameOrigin:NSMakePoint(NSMinX(content) + g_tooltip_left - g_tooltip_margin,
@@ -1458,6 +1517,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   WatchMenus();
   WatchMainWindow();
+  WatchDisplayGone();
   WatchHeldEscape();
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
@@ -1598,8 +1658,13 @@ size_t host_screens(double* frames, size_t count) {
   return screens.count;
 }
 
+// Where drive.mm's pointer last was, which a driven run's pointer is, as its events move no real
+// one.
+NSPoint g_driven_pointer;
+bool g_driven_pointer_known = false;
+
 bool host_pointer(double* x, double* y) {
-  const NSPoint point = NSEvent.mouseLocation;
+  const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
   *x = point.x;
   // AppKit's y runs up from the bottom of the main display, the core's down from its top.
   *y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
@@ -2209,8 +2274,15 @@ void host_set_overlay_radius(int index, double radius) {
   [overlay->shadow setFrame:NSZeroRect display:NO];
 }
 
+// From host_set_overlays_still: Reduce Motion, under which an overlay's growth is a fade alone.
+static bool g_overlays_still = false;
+
+void host_set_overlays_still(bool still) {
+  g_overlays_still = still;
+}
+
 // |overlay| at near nothing about its growth point, as a sublayer transform of the layer holding
-// its blur and drawing.
+// its blur and drawing; at its size under Reduce Motion.
 static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   NSView* container = overlay.view.superview;
   CALayer* layer = container.layer;
@@ -2221,7 +2293,8 @@ static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   const double y = (container.isFlipped ? overlay.grow_y : size.height - overlay.grow_y) -
                    layer.anchorPoint.y * size.height;
   CATransform3D shrunk = CATransform3DMakeTranslation(x, y, 0);
-  shrunk = CATransform3DScale(shrunk, 0.05, 0.05, 1);
+  const double scale = g_overlays_still ? 1 : 0.05;
+  shrunk = CATransform3DScale(shrunk, scale, scale, 1);
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 
@@ -2433,6 +2506,13 @@ void host_hide_overlay(int index) {
     return;
   }
   overlay->shown = false;
+  // Its tooltip goes with it, at once, not left over the page as it fades.
+  if (g_tooltip_shown && g_tooltip_overlay == index) {
+    host_hide_tooltip(0);
+    if (g_tooltip_away) {
+      g_tooltip_away();
+    }
+  }
   Browser* browser = overlay->over;
   if (overlay->shrinks && overlay->grows && overlay->window.visible) {
     ShrinkOverlay(*overlay, browser->window);
@@ -3624,18 +3704,23 @@ void FadeTooltip(double alpha, double seconds, void (^done)(void)) {
       completionHandler:done];
 }
 
-void host_show_tooltip(void* ui_view, double left, double top, double fade) {
+void host_show_tooltip(void* ui_view, int overlay, double left, double top, double fade) {
   Browser* browser = BrowserWithView(ui_view);
-  if (!g_tooltip || !browser || !browser->window) {
+  Overlay* owner = overlay >= 0 ? OverlayAt(overlay) : nullptr;
+  if (!g_tooltip || !browser || !browser->window ||
+      (overlay >= 0 && (!owner || !owner->shown || owner->over != browser))) {
     return;
   }
   if (g_tooltip_shown && g_tooltip_over != browser) {
     host_hide_tooltip(0);
   }
+  // Over the browser window again after an overlay, the overlays go back over it.
+  const bool left_overlay = overlay < 0 && g_tooltip_overlay >= 0;
   g_tooltip_left = left;
   g_tooltip_top = top;
   g_tooltip_shown = true;
   g_tooltip_over = browser;
+  g_tooltip_overlay = overlay;
   const unsigned change = ++g_tooltip_changes;
   // After the UI's update that asked, since the window draws here, before it shows or moves, since
   // it keeps the last frame it drew, the last name.
@@ -3645,9 +3730,9 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
     }
     PlaceTooltip();
     {
-      // Where the window really is, from the browser window's content top left, for check.sh to
-      // compare with where the UI asked.
-      NSWindow* over = browser->window;
+      // Where the window really is, from the content top left of the window it shows over, for
+      // check.sh to compare with where the UI asked.
+      NSWindow* over = owner ? owner->window : browser->window;
       NSRect content = [over contentRectForFrameRect:over.frame];
       fprintf(stderr, "browser: tooltip window at %g %g\n",
               NSMinX(g_tooltip.frame) - NSMinX(content) + g_tooltip_margin,
@@ -3656,10 +3741,17 @@ void host_show_tooltip(void* ui_view, double left, double top, double fade) {
     [g_tooltip_view.layer setNeedsDisplay];
     [g_tooltip_view.layer displayIfNeeded];
     // Still fading out over this window, it goes back to full, as Arc's shows in one frame.
-    if (g_tooltip.parentWindow != browser->window) {
+    const bool reparented = g_tooltip.parentWindow != browser->window;
+    if (reparented) {
       [g_tooltip.parentWindow removeChildWindow:g_tooltip];
       g_tooltip.alphaValue = 0;
       AddOver(browser->window, g_tooltip);
+    }
+    // The overlays go over a tooltip from the browser window, but the one holding what it names
+    // goes under it: a sibling child window at the same level, so it's put above that by name.
+    if (owner) {
+      [g_tooltip orderWindow:NSWindowAbove relativeTo:owner->window.windowNumber];
+    } else if (reparented || left_overlay) {
       RaiseOverlays(browser, g_tooltip);
     }
     // Peek's buttons have tooltips, and Peek is a sibling child window at the same level, so the
@@ -4624,8 +4716,9 @@ void host_focus(void* view) {
 void host_add_settings(void* settings_view) {
   g_settings_view = (__bridge NSView*)settings_view;
   g_settings = g_settings_view.window;
-  // Its controls are drawn dark, as the browser's are.
-  g_settings.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  // It follows NSApp.appearance, as View › Appearance sets it, and has nothing to zoom to: its
+  // close alone does anything, as the Linux and Windows windows have it.
+  [g_settings standardWindowButton:NSWindowZoomButton].enabled = NO;
   g_settings.tabbingMode = NSWindowTabbingModeDisallowed;
   g_settings.collectionBehavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
 }

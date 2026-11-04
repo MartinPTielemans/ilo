@@ -13,12 +13,12 @@ use gpui::{App, AppContext, Entity, TestAppContext};
 use super::arc;
 use super::chromium;
 use super::extensions::{self, Extension};
-use super::session;
-use super::suggested;
 use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Tab};
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
+use super::session;
 use super::sources::{self, Os, Roots};
+use super::suggested;
 use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords, STALL};
 use super::{firefox, safari};
 use crate::link_rules::{Condition, Rule};
@@ -31,8 +31,11 @@ fn fixture() -> PathBuf {
 fn sidebar() -> Found {
     let arc = fixture().join("Library/Application Support/Arc");
     let routing = fs::read_to_string(arc.join("StorableLinkRouting.json")).unwrap();
-    arc::parse(&fs::read_to_string(arc.join("StorableSidebar.json")).unwrap(), Some(&routing))
-        .unwrap()
+    arc::parse(
+        &fs::read_to_string(arc.join("StorableSidebar.json")).unwrap(),
+        Some(&routing),
+    )
+    .unwrap()
 }
 
 /// The fixture's sidebar, with its Spaces or its favorites left out.
@@ -119,27 +122,47 @@ fn arcs_theme_becomes_the_spaces_theme() {
     let sidebar = sidebar();
     let personal = sidebar.spaces[0].theme.unwrap();
     assert_eq!(personal.count, 3);
-    assert_eq!((personal.colors()[2], personal.texture), (0x33cc99, Texture::Dust));
+    assert_eq!(
+        (personal.colors()[2], personal.texture),
+        (0x33cc99, Texture::Dust)
+    );
     assert_eq!(
         personal.main_color(),
         Theme::of_color(0x3366cc).main_color()
     );
     // Arc's second, (1.1, 0.5, -0.05), is orange's hue and lightness, not the main one's opposite.
     let ((x, y), orange) = (personal.handle(1), Theme::of_color(0xff8000));
-    assert!((x - orange.x).abs() < 1e-3 && (y - orange.y).abs() < 1e-3, "at {x}, {y}");
+    assert!(
+        (x - orange.x).abs() < 1e-3 && (y - orange.y).abs() < 1e-3,
+        "at {x}, {y}"
+    );
     // The third's handle is where its teal is, the window taking the teal itself.
     let ((x, y), teal) = (personal.handle(2), Theme::of_color(0x33cc99));
-    assert!((x - teal.x).abs() < 1e-3 && (y - teal.y).abs() < 1e-3, "at {x}, {y}");
+    assert!(
+        (x - teal.x).abs() < 1e-3 && (y - teal.y).abs() < 1e-3,
+        "at {x}, {y}"
+    );
     assert_eq!((personal.intensity, personal.grain), (0.6, 0.3));
-    assert_eq!((personal.appearance, personal.dark), (Appearance::Dark, None));
+    assert_eq!(
+        (personal.appearance, personal.dark),
+        (Appearance::Dark, None)
+    );
     let work = sidebar.spaces[1].theme.unwrap();
     assert_eq!(work.count, 1);
     assert_eq!(work.main_color(), Theme::of_color(0xe699b3).main_color());
     assert_eq!(work.appearance, Appearance::Automatic);
     let dark = work.shown(true);
     assert_eq!(dark.main_color(), Theme::of_color(0x1a1a33).main_color());
-    assert_eq!((dark.count, dark.grain), (1, 0.), "a basic colour has no grain");
-    assert_eq!((work.texture, work.third), (Texture::Noise, None), "Arc's base as our noise");
+    assert_eq!(
+        (dark.count, dark.grain),
+        (1, 0.),
+        "a basic colour has no grain"
+    );
+    assert_eq!(
+        (work.texture, work.third),
+        (Texture::Noise, None),
+        "Arc's base as our noise"
+    );
     assert_eq!(work.shown(false).main_color(), work.main_color());
 }
 
@@ -159,17 +182,32 @@ fn arcs_appearance_comes_from_its_window_appearance_else_its_look() {
         arc::parse(&json, None).unwrap().spaces[0].theme.unwrap()
     };
     let one = |color: &str, forced: &str| {
-        theme_of(format!(r#"{{{forced} "background": {{"single": {{"_0": {}}}}}}}"#, look(color)))
+        theme_of(format!(
+            r#"{{{forced} "background": {{"single": {{"_0": {}}}}}}}"#,
+            look(color)
+        ))
     };
-    assert_eq!(one(pink, "").appearance, Appearance::Light, "its translucency style");
+    assert_eq!(
+        one(pink, "").appearance,
+        Appearance::Light,
+        "its translucency style"
+    );
     assert_eq!(one(three, "").appearance, Appearance::Automatic);
     assert_eq!(one(three, "").count, 3);
     let forced = r#""windowAppearance": {"single": {"_0": "dark"}},"#;
     assert_eq!(one(pink, forced).appearance, Appearance::Dark);
-    let both = format!(r#""background": {{"appearanceBased": {{"light": {}, "dark": {}}}}}"#, look(pink), look(navy));
+    let both = format!(
+        r#""background": {{"appearanceBased": {{"light": {}, "dark": {}}}}}"#,
+        look(pink),
+        look(navy)
+    );
     let dark = theme_of(format!(r#"{{{forced} {both}}}"#));
     assert_eq!((dark.appearance, dark.dark), (Appearance::Dark, None));
-    assert_eq!(dark.main_color(), Theme::of_color(0x1a1a33).main_color(), "a dark theme takes its dark look");
+    assert_eq!(
+        dark.main_color(),
+        Theme::of_color(0x1a1a33).main_color(),
+        "a dark theme takes its dark look"
+    );
     let auto = theme_of(format!("{{{both}}}"));
     assert_eq!(auto.appearance, Appearance::Automatic);
     assert!(auto.dark.is_some());
@@ -300,7 +338,10 @@ fn linux_finds_each_browser_where_it_keeps_its_profiles() {
 
 /// The names the browsers found under `roots` are listed by, the one used last first.
 fn listed(roots: &Roots) -> Vec<String> {
-    sources::find(roots).iter().map(sources::Source::name).collect()
+    sources::find(roots)
+        .iter()
+        .map(sources::Source::name)
+        .collect()
 }
 
 /// A Chromium user data folder with its default profile, used `ago` seconds ago.
@@ -310,7 +351,10 @@ fn chromium_dir(dir: PathBuf, ago: u64) {
 
 /// A Firefox folder with one profile, used `ago` seconds ago.
 fn firefox_dir(dir: PathBuf, ago: u64) {
-    write(dir.join("profiles.ini"), "[Profile0]\nName=default\nPath=p.default\n");
+    write(
+        dir.join("profiles.ini"),
+        "[Profile0]\nName=default\nPath=p.default\n",
+    );
     used(&write(dir.join("p.default/places.sqlite"), ""), ago);
 }
 
@@ -327,7 +371,10 @@ fn linux_finds_flatpak_snap_and_xdg_installs() {
     chrome(".config/google-chrome", 40);
     firefox_dir(home.join("snap/firefox/common/.mozilla/firefox"), 50);
     firefox_dir(home.join(".config/zen"), 60);
-    chrome(".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser", 70);
+    chrome(
+        ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+        70,
+    );
     chrome("snap/opera/current/.config/opera", 80);
     chrome(".var/app/com.vivaldi.Vivaldi/config/vivaldi", 90);
     chrome(".var/app/com.microsoft.Edge/config/microsoft-edge", 100);
@@ -371,7 +418,10 @@ fn windows_finds_the_chromium_family_operas_profile_and_store_installs() {
         20,
     );
     used(
-        &write(home.join("AppData/Roaming/Opera Software/Opera Stable/Preferences"), "{}"),
+        &write(
+            home.join("AppData/Roaming/Opera Software/Opera Stable/Preferences"),
+            "{}",
+        ),
         30,
     );
     chrome("Microsoft/Edge/User Data", 40);
@@ -433,8 +483,14 @@ fn the_passwords_box_names_exports_for_the_system() {
         let name = |place: &String| place.split(':').next().unwrap().to_string();
         places.iter().map(name).collect()
     };
-    assert_eq!(names(super::export_places(&[], Os::Mac)), ["Arc", "Chrome", "Firefox", "Safari"]);
-    assert_eq!(names(super::export_places(&[], Os::Windows)), ["Chrome", "Edge", "Firefox", "Arc"]);
+    assert_eq!(
+        names(super::export_places(&[], Os::Mac)),
+        ["Arc", "Chrome", "Firefox", "Safari"]
+    );
+    assert_eq!(
+        names(super::export_places(&[], Os::Windows)),
+        ["Chrome", "Edge", "Firefox", "Arc"]
+    );
     assert_eq!(
         names(super::export_places(&[], Os::Linux)),
         ["Firefox", "Chrome", "Chromium", "Brave"]
@@ -702,7 +758,11 @@ impl Host for Browser {
     }
 
     fn add_today(&self, space: u64, tab: &Tab) {
-        self.state.borrow_mut().space(space).today.insert(0, tab.clone());
+        self.state
+            .borrow_mut()
+            .space(space)
+            .today
+            .insert(0, tab.clone());
     }
 
     fn add_link_rules(&self, rules: &[Rule]) {
@@ -750,8 +810,8 @@ impl Host for Browser {
         let mut state = self.state.borrow_mut();
         let mut added = 0;
         for address in addresses {
-            let had = (state.addresses.iter())
-                .any(|(each, had)| *each == profile && had == address);
+            let had =
+                (state.addresses.iter()).any(|(each, had)| *each == profile && had == address);
             if address.fields.is_empty() || had {
                 continue;
             }
@@ -901,7 +961,12 @@ fn arcs_link_rules_read_as_ours() {
     assert_eq!(sidebar().link_rules, rules);
     let arc = fixture().join("Library/Application Support/Arc");
     let json = fs::read_to_string(arc.join("StorableSidebar.json")).unwrap();
-    assert!(arc::parse(&json, Some("not json")).unwrap().link_rules.is_empty());
+    assert!(
+        arc::parse(&json, Some("not json"))
+            .unwrap()
+            .link_rules
+            .is_empty()
+    );
 }
 
 /// Arc's link rules go after the user's, each to the Space its Arc Space became, and one the
@@ -1104,6 +1169,123 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
     });
 }
 
+/// Each state's one button, the one that does what it's for, is in the host's accent: Settings'
+/// green, or the first launch's Signal. The list has none, as each browser's Import… is one of
+/// many, and an import going on by itself none until a profile hasn't opened, when it's Try Again.
+/// At the end it's Add Favorites while there are favorites to add, else Done.
+#[gpui::test]
+fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
+    let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
+    let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
+    assert_eq!(ground.accent, signal);
+    assert_eq!(
+        Look::settings(false).accent,
+        gpui::rgb(crate::palette::NO_THEME_ACCENT)
+    );
+    let primary = |view: &Entity<ImportView>, cx: &mut TestAppContext| {
+        view.read_with(cx, |view, _| view.primary())
+    };
+
+    // Arc's import, which waits for its Work profile.
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false).look(ground));
+    view.read_with(cx, |view, _| assert_eq!(view.look.accent, signal));
+    assert_eq!(primary(&view, cx), None);
+    view.update(cx, |view, cx| view.pick(0, cx));
+    assert_eq!(primary(&view, cx), Some("Import"));
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        primary(&view, cx),
+        None,
+        "an import under way goes on by itself"
+    );
+    cx.executor().advance_clock(STALL);
+    cx.run_until_parked();
+    assert_eq!(primary(&view, cx), Some("Try Again"));
+    cx.update(|cx| browser.load(cx));
+    assert_eq!(
+        says(&view, cx),
+        "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+    );
+    assert_eq!(
+        primary(&view, cx),
+        Some("Done"),
+        "Arc's favorites come with it, so none are offered"
+    );
+
+    // Chrome's, whose end offers the favorites its history visits most.
+    let made = chrome("chrome-primary", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    import_first(&view, cx);
+    cx.update(|cx| browser.added(cx));
+    assert_eq!(primary(&view, cx), Some("Add Favorites"));
+    view.update(cx, |view, cx| view.add_ticked(cx));
+    assert_eq!(
+        primary(&view, cx),
+        Some("Done"),
+        "the offer ends once they're added"
+    );
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// Esc in a browser's choices goes back to the list, as Back does, and keeps the browser picked
+/// with what was switched off, so its Import… shows them as they were left. On the list, Esc is
+/// left to the host.
+#[gpui::test]
+fn escape_from_the_choices_goes_back_to_the_list_keeping_the_pick(cx: &mut TestAppContext) {
+    let made = chrome("chrome-escape", &[("Default", "Me")], SystemTime::now());
+    let host: Rc<dyn Host> = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut view = ImportView::new(host, false).headed();
+        view.take_keys(cx);
+        view
+    });
+    let focus = view.read_with(cx, |view, _| view.keys().unwrap());
+    cx.update(|window, cx| window.focus(&focus, cx));
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.toggle(Kind::History, cx);
+    });
+    let picked = |view: &ImportView| match &view.step {
+        super::Step::Pick { picked, .. } => Some(picked.clone()),
+        _ => None,
+    };
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.crumb().as_deref(), Some("Chrome"));
+        assert!(view.under_way());
+    });
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(view.step, super::Step::List),
+            "Esc stayed in the choices"
+        );
+        assert_eq!((view.kept(), view.crumb()), (Some(0), None));
+        assert!(!view.under_way());
+    });
+    view.update(cx, |view, cx| view.pick(0, cx));
+    view.read_with(cx, |view, _| {
+        let picked = picked(view).unwrap();
+        assert!(
+            !picked.contains(&Kind::History),
+            "History came back on: {picked:?}"
+        );
+        assert!(picked.contains(&Kind::Bookmarks));
+    });
+    // Back keeps it too; on the list Esc does nothing of the view's.
+    view.update(cx, |view, cx| view.back(cx));
+    cx.simulate_keystrokes("escape");
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List));
+        assert_eq!(view.kept(), Some(0));
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// What the view says, as the user reads it: how the import under way goes, or what came in.
 fn says(view: &Entity<ImportView>, cx: &mut TestAppContext) -> String {
     view.read_with(cx, |view, _| match &view.step {
@@ -1122,9 +1304,10 @@ fn import_first(view: &Entity<ImportView>, cx: &mut TestAppContext) {
     cx.run_until_parked();
 }
 
-/// Cancel while the import reads stops it, and what it read never comes in.
+/// Back while the browser picked is still read, with Import pressed meanwhile, leaves it: what
+/// the read finds never comes in.
 #[gpui::test]
-fn cancel_stops_an_import_while_it_reads(cx: &mut TestAppContext) {
+fn back_while_the_pick_reads_brings_nothing_in(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
     let host: Rc<dyn Host> = browser.clone();
     let view = cx.new(|_| ImportView::new(host, false));
@@ -1132,11 +1315,13 @@ fn cancel_stops_an_import_while_it_reads(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| {
         view.pick(0, cx);
         view.import(cx);
+        assert_eq!(view.primary(), Some("Import"), "it went on before its read");
+        view.back(cx);
     });
-    assert_eq!(says(&view, cx), "Importing from Arc…");
-    view.update(cx, |view, cx| view.cancel(cx));
     cx.run_until_parked();
-    assert_eq!(says(&view, cx), "Stopped. Nothing came in from Arc.");
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     assert_eq!(browser.spaces().len(), spaces);
 }
 
@@ -1155,7 +1340,11 @@ fn cancel_while_a_profile_opens_leaves_its_spaces_to_fill(cx: &mut TestAppContex
     cx.update(|cx| browser.load(cx));
     cx.run_until_parked();
     assert_eq!(says(&view, cx), stopped);
-    assert!(browser.spaces()[1..].iter().all(|space| space.rows.is_empty()));
+    assert!(
+        browser.spaces()[1..]
+            .iter()
+            .all(|space| space.rows.is_empty())
+    );
     view.update(cx, |view, cx| view.done(cx));
     import_first(&view, cx);
     assert_eq!(
@@ -1180,7 +1369,9 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let stalled = "The Work profile hasn't opened, so the import can't go on.";
     assert_eq!(says(&view, cx), stalled);
-    view.read_with(cx, |view, _| assert_eq!(view.running().as_deref(), Some(stalled)));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.running().as_deref(), Some(stalled))
+    });
     let asked = browser.state.borrow().loading.len();
     view.update(cx, |view, cx| view.try_again(cx));
     assert_eq!(browser.state.borrow().loading.len(), asked + 1);
@@ -1422,7 +1613,10 @@ fn chrome(name: &str, profiles: &[(&str, &str)], now: SystemTime) -> PathBuf {
         web_data(
             &profile.join("Web Data"),
             "address_type_tokens",
-            &[("a", NAME_FULL, "Ada Lovelace", 4), ("a", CITY, "London", 4)],
+            &[
+                ("a", NAME_FULL, "Ada Lovelace", 4),
+                ("a", CITY, "London", 4),
+            ],
         );
     }
     home
@@ -1494,14 +1688,15 @@ fn a_profiles_addresses_come_from_its_web_data() {
     );
     // Before version 134, the user's own and their account's were apart.
     let old = home.join("Old Web Data");
-    web_data(&old, "local_addresses_type_tokens", &[("a", CITY, "Oslo", 2)]);
+    web_data(
+        &old,
+        "local_addresses_type_tokens",
+        &[("a", CITY, "Oslo", 2)],
+    );
     web_data(&old, "contact_info_type_tokens", &[("b", CITY, "Rome", 3)]);
     assert_eq!(
         chromium::addresses(&old).unwrap(),
-        [
-            address(&[(CITY, "Oslo", 2)]),
-            address(&[(CITY, "Rome", 3)])
-        ]
+        [address(&[(CITY, "Oslo", 2)]), address(&[(CITY, "Rome", 3)])]
     );
     fs::remove_dir_all(home).unwrap();
 }
@@ -1529,7 +1724,10 @@ fn session_file(version: i32, commands: &[(u8, Vec<u8>)]) -> Vec<u8> {
 }
 
 fn ints(values: &[i32]) -> Vec<u8> {
-    values.iter().flat_map(|value| value.to_le_bytes()).collect()
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }
 
 /// An UpdateTabNavigation's pickle: the tab, the page's index, its URL and title, and the start of
@@ -1585,7 +1783,10 @@ fn a_session_reads_as_the_tabs_it_had_open() {
     commands.extend([
         (NAVIGATION, navigation(15, 0, "https://kept.example.com/")),
         (NAVIGATION, navigation(15, 1, "https://pruned.example.com/")),
-        (NAVIGATION, navigation(15, 2, "https://pruned-too.example.com/")),
+        (
+            NAVIGATION,
+            navigation(15, 2, "https://pruned-too.example.com/"),
+        ),
         (SET_SELECTED_NAVIGATION_INDEX, ints(&[15, 2])),
         (PRUNED, ints(&[15, 1, 2])),
     ]);
@@ -1632,12 +1833,24 @@ fn a_session_chromium_wouldnt_restore_is_passed_over() {
     let mut unfinished = open("https://unfinished.example.com/");
     unfinished.pop();
     let files = [
-        ("Tabs_500", session_file(3, &open("https://closed.example.com/"))),
+        (
+            "Tabs_500",
+            session_file(3, &open("https://closed.example.com/")),
+        ),
         ("Session_400", b"not a session".to_vec()),
-        ("Session_300", session_file(5, &open("https://encrypted.example.com/"))),
+        (
+            "Session_300",
+            session_file(5, &open("https://encrypted.example.com/")),
+        ),
         ("Session_200", session_file(3, &unfinished)),
-        ("Session_100", session_file(3, &open("https://older.example.com/"))),
-        ("Session_99", session_file(3, &open("https://oldest.example.com/"))),
+        (
+            "Session_100",
+            session_file(3, &open("https://older.example.com/")),
+        ),
+        (
+            "Session_99",
+            session_file(3, &open("https://oldest.example.com/")),
+        ),
     ];
     for (name, bytes) in files {
         fs::write(sessions.join(name), bytes).unwrap();
@@ -1754,42 +1967,38 @@ fn a_machine_with_no_browser_is_empty(cx: &mut TestAppContext) {
     fs::remove_dir_all(home).unwrap();
 }
 
-/// On a host's ground, the rows' lines, controls and grey text are its ink over it by as much as
-/// Settings' are over theirs, so Settings' own fill and text give back Settings' look.
+/// On a host's ground, the rows' lines, controls and grey text are its ink over it, edged so the
+/// groups stand off a ground with no card, light or dark.
 #[test]
 fn rows_on_a_hosts_ground_mix_its_ink() {
-    use crate::tokens::settings::{BOX, TEXT};
-    let settings = Look::settings();
-    let mixed = Look::on(gpui::rgb(BOX), gpui::rgb(TEXT));
-    let near = |a: gpui::Rgba, b: gpui::Rgba| {
-        [(a.r, b.r), (a.g, b.g), (a.b, b.b)]
-            .iter()
-            .all(|(a, b)| (a - b).abs() < 2. / 255.)
-    };
-    for (a, b) in [
-        (mixed.line, settings.line),
-        (mixed.detail, settings.detail),
-        (mixed.control, settings.control),
-        (mixed.hovered, settings.hovered),
-        (mixed.pressed, settings.pressed),
-        (mixed.switch_off, settings.switch_off),
-    ] {
-        assert!(near(a, b), "{a:?} {b:?}");
-    }
-    let light = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
-    assert!(light.line.r < 1. && light.control.r > light.detail.r);
+    let light = Look::on(
+        gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
+        gpui::rgb(crate::palette::INK),
+        gpui::rgb(crate::tokens::shell::onboarding::SIGNAL),
+    );
+    assert!(light.line.r < light.surface.r && light.control.r > light.detail.r);
+    assert_eq!(light.edge, Some(light.line));
 }
 
-/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' dark
-/// boxes and on a light ground alike, so it shows it can be clicked and a press still shows more.
+/// A control under the pointer is a quiet step toward pressed and short of it, on Settings' card
+/// and on a host's ground alike, so it shows it can be clicked and a press still shows more.
 #[test]
 fn a_control_under_the_pointer_is_a_step_short_of_pressed() {
     let light = |color: gpui::Rgba| color.r + color.g + color.b;
-    let dark = Look::settings();
+    let dark = Look::settings(true);
     assert!(light(dark.control) < light(dark.hovered) && light(dark.hovered) < light(dark.pressed));
-    let paper = Look::on(gpui::rgb(0xffffff), gpui::rgb(0x000000));
+    let paper = Look::settings(false);
     assert!(
         light(paper.control) > light(paper.hovered) && light(paper.hovered) > light(paper.pressed)
+    );
+    let ground = Look::on(
+        gpui::rgb(crate::tokens::palette::DIALOG_LIGHT),
+        gpui::rgb(crate::palette::INK),
+        gpui::rgb(crate::tokens::shell::onboarding::SIGNAL),
+    );
+    assert!(
+        light(ground.control) > light(ground.hovered)
+            && light(ground.hovered) > light(ground.pressed)
     );
 }
 
@@ -2226,11 +2435,153 @@ pub(crate) fn let_read(home: &Path) {
     fs::set_permissions(bookmarks, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
-/// Safari's files kept from the app ask for Full Disk Access, and the import goes on when the
-/// user comes back to the app with it given; Back leaves it, and coming back then does nothing.
+/// Picking a browser reads it, away from the UI, and its choices then say how much of each kind
+/// comes, with the profiles it goes into: Arc's Spaces by name, a new profile for its Work, and
+/// Chrome's bookmarks, open tabs, history and address. Until the read is in, each says it's
+/// counting, and Import pressed then goes on once it is.
+#[gpui::test]
+fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.pick(0, cx));
+    view.read_with(cx, |view, _| {
+        let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(counting, ["Counting…"; 5]);
+        assert_eq!(view.note(), None);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.choices(),
+            [
+                (
+                    Kind::Spaces,
+                    "**2 Spaces** with **6 pinned tabs** in 2 folders, and 3 link rules".into()
+                ),
+                (
+                    Kind::Favorites,
+                    "**3**, at the top of each profile's Spaces".into()
+                ),
+                (Kind::History, "No pages from the last 90 days".into()),
+                (
+                    Kind::Addresses,
+                    "No saved addresses. Cards never come.".into()
+                ),
+                (
+                    Kind::Extensions,
+                    "None to add from the Chrome Web Store".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            view.note().as_deref(),
+            Some(
+                "Into **Default** and a new profile, **Work**, as Arc has it. Logins don't \
+                 come: you sign in to each site again."
+            )
+        );
+    });
+
+    let made = chrome("chrome-counts", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.toggle(Kind::OpenTabs, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|cx| browser.added(cx));
+    // Import pressed while it counted went on once it had, without what was switched off.
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 3 pinned tabs, 2 pages of history and 1 address came in from Chrome."
+    );
+    view.update(cx, |view, cx| {
+        view.done(cx);
+        view.pick(0, cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(
+            said,
+            [
+                "**3 bookmarks** in 1 folder, as a Space's pinned tabs",
+                "**2 tabs**, as that Space's Today tabs",
+                "**2** pages from the last 90 days, kept on this computer",
+                "**1** saved address. Cards never come.",
+                "None to add from the Chrome Web Store",
+            ]
+        );
+        assert_eq!(
+            view.note().as_deref(),
+            Some("Into **Default**. Logins don't come: you sign in to each site again.")
+        );
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// Reading everything a browser offers as it's picked, then leaving out what's switched off,
+/// gives what reading what's switched on alone would, for each set of Arc's and Chrome's kinds.
+#[test]
+fn what_is_left_of_a_whole_read_is_what_a_read_of_the_picked_gives() {
+    let made = chrome("chrome-keep", &[("Default", "Me")], SystemTime::now());
+    let now = SystemTime::now();
+    let arc = Roots::under(&fixture(), Os::Mac);
+    for roots in [arc, Roots::under(&made, Os::Linux)] {
+        let source = super::importable(&roots).remove(0);
+        let kinds = read::kinds(&source);
+        let whole = read::read(&source, kinds, now).unwrap();
+        for mask in 0..1u32 << kinds.len() {
+            let picked: Vec<Kind> = (kinds.iter().enumerate())
+                .filter(|(at, _)| mask & 1 << at != 0)
+                .map(|(_, kind)| *kind)
+                .collect();
+            assert_eq!(
+                read::keep(&whole, &source, &picked),
+                Some(read::read(&source, &picked, now).unwrap()),
+                "{} {picked:?}",
+                source.name()
+            );
+        }
+    }
+    fs::remove_dir_all(made).unwrap();
+}
+
+/// The counts read as people read them: thousands apart, and one of a thing in the singular.
+#[test]
+fn counts_read_with_their_thousands_apart() {
+    let tally = read::Tally {
+        spaces: 1,
+        pinned: 1,
+        pages: 12408,
+        ..read::Tally::default()
+    };
+    assert_eq!(
+        super::kind_line(Kind::Spaces, &tally, "this Mac"),
+        "**1 Space** with **1 pinned tab**"
+    );
+    assert_eq!(
+        super::kind_line(Kind::History, &tally, "this Mac"),
+        "**12,408** pages from the last 90 days, kept on this Mac"
+    );
+    let two = [("Personal".to_string(), true), ("Work".to_string(), true)];
+    assert_eq!(
+        super::into_note(&two, "Arc"),
+        "Into two new profiles, **Personal** and **Work**, as Arc has them. Logins don't come: \
+         you sign in to each site again."
+    );
+}
+
+/// Picking Safari, whose files the system keeps from the app, asks for Full Disk Access at once,
+/// before its choices, with Open System Settings the one thing to do and a line saying it waits.
+/// Nothing has started, so the view says nothing has ended either.
 #[cfg(unix)]
 #[gpui::test]
-fn safari_waits_for_full_disk_access(cx: &mut TestAppContext) {
+fn a_read_that_needs_access_shows_full_disk_access(cx: &mut TestAppContext) {
     let Some(home) = safari("safari-access") else {
         return;
     };
@@ -2252,48 +2603,74 @@ fn safari_waits_for_full_disk_access(cx: &mut TestAppContext) {
             [Kind::Bookmarks, Kind::ReadingList, Kind::History]
         );
     });
-    let import = |cx: &mut TestAppContext| {
-        view.update(cx, |view, cx| {
-            view.pick(0, cx);
-            view.import(cx);
-        });
-        cx.run_until_parked();
-    };
-    let waiting = |cx: &mut TestAppContext| {
-        view.read_with(cx, |view, _| {
-            matches!(view.step, super::Step::NoAccess { .. })
-        })
-    };
-    import(cx);
-    assert!(waiting(cx));
-    // It needs the user still, so it hasn't started going on by itself.
-    assert_eq!(
-        *events.borrow(),
-        [ImportEvent::Finished("Safari needs Full Disk Access.".into())]
-    );
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::NoAccess { .. }));
+        assert_eq!(view.primary(), Some("Open System Settings"));
+        assert_eq!(view.access().as_deref(), Some("Waiting for access…"));
+        assert_eq!(view.crumb().as_deref(), Some("Safari"));
+    });
+    assert!(events.borrow().is_empty(), "{:?}", events.borrow());
+    // Back leaves it, and coming back to the app then reads nothing.
     view.update(cx, |view, cx| view.back(cx));
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         assert!(matches!(view.step, super::Step::List))
     });
-    import(cx);
-    assert!(waiting(cx));
-    // Back without it, the import still waits.
+    fs::remove_dir_all(home).unwrap();
+}
+
+/// Back in the app with access still off, the wait says so and what to do; once access is on,
+/// coming back shows Safari's choices with their counts, and Import brings them in.
+#[cfg(unix)]
+#[gpui::test]
+fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext) {
+    let Some(home) = safari("safari-still") else {
+        return;
+    };
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
-    assert!(waiting(cx));
+    let still = format!(
+        "Still no access. If you turned it on, quit {} and open it again.",
+        env!("APP_NAME")
+    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.access(), Some(still.clone()));
+        assert_eq!(view.primary(), Some("Open System Settings"));
+    });
+    // Still off, it says so again, and keeps waiting.
+    cx.update(|cx| browser.activate(cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| assert_eq!(view.access(), Some(still.clone())));
     let_read(&home);
     cx.update(|cx| browser.activate(cx));
     cx.run_until_parked();
-    cx.update(|cx| browser.added(cx));
-    view.read_with(cx, |view, _| match &view.step {
-        super::Step::Done(said) => assert_eq!(
-            said.as_ref(),
-            "1 Space, 6 pinned tabs and 1 page of history came in from Safari."
-        ),
-        _ => panic!("still waiting"),
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.access(), None);
+        let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(
+            said,
+            [
+                "**5 bookmarks** in 3 folders, as a Space's pinned tabs",
+                "**1 page**, as a folder in that Space",
+                "**1** page from the last 90 days, kept on this Mac",
+            ]
+        );
     });
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    cx.update(|cx| browser.added(cx));
+    assert_eq!(
+        says(&view, cx),
+        "1 Space, 6 pinned tabs and 1 page of history came in from Safari."
+    );
     assert_eq!(browser.spaces()[1].name, "Safari");
     fs::remove_dir_all(home).unwrap();
 }
@@ -2347,14 +2724,20 @@ fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppCo
     // Cancelling the panel imports nothing.
     view.update(cx, |view, cx| view.choose_passwords(cx));
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     assert!(browser.importing.borrow().is_none());
 
     let file = write(home("passwords").join("Chrome Passwords.csv"), PASSWORDS);
     *browser.passwords_file.borrow_mut() = Some(file.clone());
     view.update(cx, |view, cx| view.choose_passwords(cx));
     cx.run_until_parked();
-    let given = browser.importing.borrow().as_ref().map(|(file, _)| file.clone());
+    let given = browser
+        .importing
+        .borrow()
+        .as_ref()
+        .map(|(file, _)| file.clone());
     assert_eq!(given, Some(file.clone()));
     view.read_with(cx, |view, _| {
         assert_eq!(view.running().as_deref(), Some("Importing passwords…"));
@@ -2383,11 +2766,16 @@ fn a_passwords_file_comes_in_and_the_view_offers_to_delete_it(cx: &mut TestAppCo
         let super::Step::Done(shown) = &view.step else {
             panic!()
         };
-        assert_eq!(shown.as_ref(), format!("{said} Chrome Passwords.csv is deleted."));
+        assert_eq!(
+            shown.as_ref(),
+            format!("{said} Chrome Passwords.csv is deleted.")
+        );
         assert_eq!(view.passwords_file, None);
     });
     view.update(cx, |view, cx| view.done(cx));
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
 
@@ -2461,7 +2849,12 @@ fn chrome_extensions(home: &Path) -> PathBuf {
     write(profile.join("Preferences"), pinned);
     let named = format!(r#"{{"name": "__MSG_appName__", "default_locale": "en", {STORE}}}"#);
     let messages = r#"{"APPNAME": {"message": "Dark Reader"}}"#;
-    extension(&profile, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &named, Some(messages));
+    extension(
+        &profile,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &named,
+        Some(messages),
+    );
     let plain = format!(r#"{{"name": "Bitwarden", {STORE}}}"#);
     extension(&profile, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &plain, None);
     let blocker = format!(r#"{{"name": "uBlock Origin", {STORE}}}"#);
@@ -2481,16 +2874,27 @@ fn a_profiles_extensions_come_with_their_pins() {
     let home = home("extensions");
     let profile = chrome_extensions(&home);
     let read = extensions::read(&profile);
-    let listed: Vec<_> = read.iter().map(|e| (e.name.as_str(), e.pinned, e.blocks_ads())).collect();
+    let listed: Vec<_> = read
+        .iter()
+        .map(|e| (e.name.as_str(), e.pinned, e.blocks_ads()))
+        .collect();
     assert_eq!(
         listed,
-        [("Bitwarden", false, false), ("Dark Reader", true, false), ("uBlock Origin", false, true)]
+        [
+            ("Bitwarden", false, false),
+            ("Dark Reader", true, false),
+            ("uBlock Origin", false, true)
+        ]
     );
     assert_eq!(
         read[1].store_page(),
         "https://chromewebstore.google.com/detail/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
-    let named = |name: &str| Extension { id: "x".into(), name: name.into(), pinned: false };
+    let named = |name: &str| Extension {
+        id: "x".into(),
+        name: name.into(),
+        pinned: false,
+    };
     assert!(named("AdGuard AdBlocker").blocks_ads() && named("Total Adblock").blocks_ads());
     assert!(!named("Grammarly").blocks_ads());
     fs::remove_dir_all(home).unwrap();
@@ -2523,7 +2927,11 @@ fn chromes_extensions_are_listed_to_add_and_keep_their_pins(cx: &mut TestAppCont
         );
     });
     let ids = || -> Vec<String> {
-        extensions::listed().extensions.iter().map(|each| each.id.clone()).collect()
+        extensions::listed()
+            .extensions
+            .iter()
+            .map(|each| each.id.clone())
+            .collect()
     };
     assert_eq!(extensions::listed().from, "Chrome");
     assert_eq!(ids().len(), 3, "the ad blocker is kept to add anyway");
@@ -2553,7 +2961,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     let now = SystemTime::now();
     let home = chrome("chrome-folders", &[("Default", "Me")], now);
     let source = &super::importable(&Roots::under(&home, Os::Linux))[0];
-    assert_eq!(read::folders(source, now).unwrap(), ["Bookmarks Bar", "Other bookmarks"]);
+    assert_eq!(
+        read::folders(source, now).unwrap(),
+        ["Bookmarks Bar", "Other bookmarks"]
+    );
     let mut found = read::read(source, &[Kind::Bookmarks], now).unwrap();
     read::leave_out(&mut found, &["Bookmarks Bar".into()], source.browser.family);
     let nodes = node_shape(&found.spaces[0].pinned);
@@ -2561,7 +2972,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     let mut found = read::read(source, &[Kind::Bookmarks], now).unwrap();
     let both = ["Bookmarks Bar".into(), "Other bookmarks".into()];
     read::leave_out(&mut found, &both, source.browser.family);
-    assert!(found.spaces.is_empty(), "a Space with nothing left doesn't come");
+    assert!(
+        found.spaces.is_empty(),
+        "a Space with nothing left doesn't come"
+    );
 
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
     let host: Rc<dyn Host> = browser.clone();
@@ -2573,7 +2987,10 @@ fn a_bookmark_folder_unticked_stays_out(cx: &mut TestAppContext) {
     cx.run_until_parked();
     view.update(cx, |view, cx| {
         let names = view.folders.names.clone();
-        assert_eq!(names.as_deref(), Some(&["Bookmarks Bar".into(), "Other bookmarks".into()][..]));
+        assert_eq!(
+            names.as_deref(),
+            Some(&["Bookmarks Bar".into(), "Other bookmarks".into()][..])
+        );
         view.toggle_folder("Other bookmarks", cx);
         view.import(cx);
     });
@@ -2610,11 +3027,21 @@ fn the_sites_visited_most_are_offered_as_favorites() {
         page("file:///Users/me/notes.html", 40),
     ];
     let skip = ["https://mail.example.net/".to_string()];
-    let urls: Vec<String> =
-        suggested::favorites(&history, &skip).into_iter().map(|tab| tab.url).collect();
-    assert_eq!(urls, ["https://www.example.com/", "https://news.example.org/"]);
-    assert_eq!(suggested::site_name("https://www.example.com/"), "example.com");
-    let many: Vec<Page> = (0..12).map(|n| page(&format!("https://site{n}.example/"), 3)).collect();
+    let urls: Vec<String> = suggested::favorites(&history, &skip)
+        .into_iter()
+        .map(|tab| tab.url)
+        .collect();
+    assert_eq!(
+        urls,
+        ["https://www.example.com/", "https://news.example.org/"]
+    );
+    assert_eq!(
+        suggested::site_name("https://www.example.com/"),
+        "example.com"
+    );
+    let many: Vec<Page> = (0..12)
+        .map(|n| page(&format!("https://site{n}.example/"), 3))
+        .collect();
     assert_eq!(suggested::favorites(&many, &[]).len(), suggested::MOST);
 }
 
@@ -2634,7 +3061,12 @@ fn an_import_offers_favorites_from_its_history(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        let urls: Vec<&str> = view.suggested().unwrap().iter().map(|t| t.url.as_str()).collect();
+        let urls: Vec<&str> = view
+            .suggested()
+            .unwrap()
+            .iter()
+            .map(|t| t.url.as_str())
+            .collect();
         assert_eq!(urls, ["https://example.com/"]);
     });
     fs::remove_dir_all(home).unwrap();
@@ -2756,7 +3188,10 @@ fn a_long_bar_in_a_bookmarks_file_comes_as_a_folder() {
 fn a_file_that_isnt_bookmarks_says_so() {
     let error = super::html::bookmarks("url,username,password\n").unwrap_err();
     assert_eq!(error, "it isn't a bookmarks file a browser exported");
-    assert_eq!(super::html::bookmarks("<!DOCTYPE NETSCAPE-Bookmark-file-1>").unwrap(), []);
+    assert_eq!(
+        super::html::bookmarks("<!DOCTYPE NETSCAPE-Bookmark-file-1>").unwrap(),
+        []
+    );
 }
 
 /// Bookmarks from a file come in as a Space named Bookmarks, in the profile this browser started
@@ -2775,14 +3210,26 @@ fn a_bookmarks_file_comes_in_once(cx: &mut TestAppContext) {
     // Cancelling the panel imports nothing.
     view.update(cx, |view, cx| view.choose_bookmarks(cx));
     cx.run_until_parked();
-    view.read_with(cx, |view, _| assert!(matches!(view.step, super::Step::List)));
+    view.read_with(cx, |view, _| {
+        assert!(matches!(view.step, super::Step::List))
+    });
 
-    let file = write(home("bookmarks-file").join("bookmarks.html"), CHROME_BOOKMARKS_HTML);
+    let file = write(
+        home("bookmarks-file").join("bookmarks.html"),
+        CHROME_BOOKMARKS_HTML,
+    );
     *browser.bookmarks_file.borrow_mut() = Some(file.clone());
     view.update(cx, |view, cx| view.choose_bookmarks(cx));
     cx.run_until_parked();
-    assert_eq!(said(cx), "1 Space and 3 pinned tabs came in from bookmarks.html.");
-    let space = browser.spaces().into_iter().find(|space| space.name == "Bookmarks").unwrap();
+    assert_eq!(
+        said(cx),
+        "1 Space and 3 pinned tabs came in from bookmarks.html."
+    );
+    let space = browser
+        .spaces()
+        .into_iter()
+        .find(|space| space.name == "Bookmarks")
+        .unwrap();
     assert_eq!(space.profile, 1);
     assert_eq!(
         shape(&space.rows),
@@ -2824,7 +3271,12 @@ fn the_end_of_an_import_offers_its_favorites(cx: &mut TestAppContext) {
         cx.update(|cx| browser.added(cx));
     };
     let ticked = |cx: &mut TestAppContext| {
-        view.read_with(cx, |view, _| view.ticked().into_iter().map(|tab| tab.url).collect::<Vec<_>>())
+        view.read_with(cx, |view, _| {
+            view.ticked()
+                .into_iter()
+                .map(|tab| tab.url)
+                .collect::<Vec<_>>()
+        })
     };
     let said = |cx: &mut TestAppContext| {
         view.read_with(cx, |view, _| match &view.step {
@@ -2834,11 +3286,18 @@ fn the_end_of_an_import_offers_its_favorites(cx: &mut TestAppContext) {
     };
     import(cx);
     assert_eq!(ticked(cx), ["https://example.com/"]);
-    view.update(cx, |view, cx| view.toggle_favorite("https://example.com/", cx));
+    view.update(cx, |view, cx| {
+        view.toggle_favorite("https://example.com/", cx)
+    });
     assert!(ticked(cx).is_empty());
     view.update(cx, |view, cx| view.add_ticked(cx));
-    assert!(browser.state.borrow().favorites.is_empty(), "none ticked, none added");
-    view.update(cx, |view, cx| view.toggle_favorite("https://example.com/", cx));
+    assert!(
+        browser.state.borrow().favorites.is_empty(),
+        "none ticked, none added"
+    );
+    view.update(cx, |view, cx| {
+        view.toggle_favorite("https://example.com/", cx)
+    });
     view.update(cx, |view, cx| view.add_ticked(cx));
     let favorites: Vec<(u64, String)> = (browser.state.borrow().favorites.iter())
         .map(|(profile, tab)| (*profile, tab.url.clone()))
@@ -2857,7 +3316,10 @@ fn the_end_of_an_import_offers_its_favorites(cx: &mut TestAppContext) {
     import(cx);
     assert_eq!(ticked(cx), ["https://example.com/"]);
     view.update(cx, |view, cx| view.done(cx));
-    let file = write(home("offer-passwords").join("Chrome Passwords.csv"), PASSWORDS);
+    let file = write(
+        home("offer-passwords").join("Chrome Passwords.csv"),
+        PASSWORDS,
+    );
     *browser.passwords_file.borrow_mut() = Some(file.clone());
     view.update(cx, |view, cx| view.choose_passwords(cx));
     cx.run_until_parked();

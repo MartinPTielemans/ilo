@@ -51,7 +51,9 @@ const CTRL: (u32, u32) = (29, 4);
 const SHIFT: (u32, u32) = (42, 1);
 
 fn settle() -> Duration {
-    let ms = std::env::var("VKBD_SETTLE").ok().and_then(|v| v.parse().ok());
+    let ms = std::env::var("VKBD_SETTLE")
+        .ok()
+        .and_then(|v| v.parse().ok());
     Duration::from_millis(ms.unwrap_or(500))
 }
 
@@ -182,7 +184,8 @@ fn code(c: char) -> Option<u32> {
     if let Some(i) = "-;./,=".find(c) {
         return Some([12, 39, 52, 53, 51, 13][i]);
     }
-    ROWS.iter().find_map(|(row, first)| row.find(c).map(|i| first + i as u32))
+    ROWS.iter()
+        .find_map(|(row, first)| row.find(c).map(|i| first + i as u32))
 }
 
 fn memfd() -> std::fs::File {

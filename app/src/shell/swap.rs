@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
+    AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,
     prelude::*, px, size, svg,
 };
 
@@ -86,10 +86,17 @@ impl Swaps {
                 // The glyph coming in leaves from as far as it had come.
                 let left = 1. - arrived(was.to, was.elapsed(now));
                 let back = left * LEAVE;
-                start = now.checked_sub(Duration::from_secs_f32(back)).unwrap_or(now);
+                start = now
+                    .checked_sub(Duration::from_secs_f32(back))
+                    .unwrap_or(now);
             }
         }
-        self.0.push(Swap { what, from, to, start });
+        self.0.push(Swap {
+            what,
+            from,
+            to,
+            start,
+        });
     }
 
     /// Starts what a report on `tab`'s page changes: the header's reload or stop, only for the tab
@@ -117,7 +124,12 @@ impl Swaps {
     pub(super) fn folders_changed(&mut self, before: &Folders, after: &Folders, now: Instant) {
         for (&folder, &(_, open)) in &after.folders {
             if let Some(&(_, was)) = before.folders.get(&folder) {
-                self.start(Swapped::Folder(folder), folder_glyph(was), folder_glyph(open), now);
+                self.start(
+                    Swapped::Folder(folder),
+                    folder_glyph(was),
+                    folder_glyph(open),
+                    now,
+                );
             }
         }
     }
@@ -160,18 +172,29 @@ impl Swaps {
         path: &'static str,
         side: f32,
         color: Hsla,
+        cx: &App,
     ) -> AnyElement {
-        let Some(swap) = self.0.iter().find(|swap| swap.what == what && swap.to == path) else {
+        let Some(swap) = self
+            .0
+            .iter()
+            .find(|swap| swap.what == what && swap.to == path)
+        else {
             return match path {
                 NONE => div().flex_none().size(px(side)).into_any_element(),
-                _ => svg().path(path).size(px(side)).text_color(color).into_any_element(),
+                _ => svg()
+                    .path(path)
+                    .size(px(side))
+                    .text_color(color)
+                    .into_any_element(),
             };
         };
         let elapsed = swap.elapsed(Instant::now());
+        // Under Reduce Motion the glyphs cross-fade at their size.
         let glyph = |path: &'static str, opacity: f32, scale: f32| {
             if path == NONE {
                 return div().into_any_element();
             }
+            let scale = crate::motion::scale(scale, cx);
             svg()
                 .absolute()
                 .size_full()
@@ -197,7 +220,11 @@ impl Swaps {
 
 /// A folder's icon, open or closed.
 pub(super) fn folder_glyph(open: bool) -> &'static str {
-    if open { "icons/folder-open.svg" } else { "icons/folder.svg" }
+    if open {
+        "icons/folder-open.svg"
+    } else {
+        "icons/folder.svg"
+    }
 }
 
 /// How long a change to `to` takes.
@@ -244,7 +271,10 @@ fn ease(t: f32) -> f32 {
 /// The points of Lucide's check drawn `way` of its length along, from its left end, in its 24 box.
 fn check_line(way: f32) -> Vec<(f32, f32)> {
     let length = |(ax, ay): (f32, f32), (bx, by): (f32, f32)| (bx - ax).hypot(by - ay);
-    let total: f32 = CHECK_LINE.windows(2).map(|pair| length(pair[0], pair[1])).sum();
+    let total: f32 = CHECK_LINE
+        .windows(2)
+        .map(|pair| length(pair[0], pair[1]))
+        .sum();
     let mut left = way.clamp(0., 1.) * total;
     let mut line = vec![CHECK_LINE[0]];
     for pair in CHECK_LINE.windows(2) {
@@ -300,9 +330,7 @@ fn drawing_check(way: f32, color: Hsla) -> impl IntoElement {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{
-        COME, LEAVE, Page, SWAP, Swapped, Swaps, check_line, coming, grown, leaving,
-    };
+    use super::{COME, LEAVE, Page, SWAP, Swapped, Swaps, check_line, coming, grown, leaving};
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
         (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
@@ -315,7 +343,11 @@ mod tests {
         assert_eq!(check_line(0.), vec![(4., 12.)]);
         let down = check_line(5. / 32.);
         assert_eq!(down.len(), 2);
-        assert!(near(down[1], (6.5, 14.5)), "half way down it's at {:?}", down[1]);
+        assert!(
+            near(down[1], (6.5, 14.5)),
+            "half way down it's at {:?}",
+            down[1]
+        );
         let point = check_line(5. / 16.);
         assert!(near(*point.last().unwrap(), (9., 17.)), "{point:?}");
         let up = check_line(5. / 16. + 11. / 32.);
@@ -343,7 +375,10 @@ mod tests {
     fn only_a_change_on_the_tab_shown_moves_its_reload() {
         let now = Instant::now();
         let idle = Page::default();
-        let loading = Page { loading: true, ..Page::default() };
+        let loading = Page {
+            loading: true,
+            ..Page::default()
+        };
         let mut swaps = Swaps::default();
         swaps.page_changed(2, 1, &idle, &loading, now);
         assert!(!swaps.changing(Swapped::Reload(2)));
@@ -351,12 +386,25 @@ mod tests {
         assert!(swaps.changing(Swapped::Reload(1)));
         assert!(!swaps.changing(Swapped::Reload(2)));
         swaps.page_changed(1, 1, &loading, &loading, now);
-        assert!(swaps.changing(Swapped::Reload(1)), "a report that changes nothing keeps it");
+        assert!(
+            swaps.changing(Swapped::Reload(1)),
+            "a report that changes nothing keeps it"
+        );
 
-        let audible = Page { audible: true, ..Page::default() };
-        let muted = Page { audible: true, muted: true, ..Page::default() };
+        let audible = Page {
+            audible: true,
+            ..Page::default()
+        };
+        let muted = Page {
+            audible: true,
+            muted: true,
+            ..Page::default()
+        };
         swaps.page_changed(3, 1, &idle, &muted, now);
-        assert!(!swaps.changing(Swapped::Speaker(3)), "a speaker that just came shows at once");
+        assert!(
+            !swaps.changing(Swapped::Speaker(3)),
+            "a speaker that just came shows at once"
+        );
         swaps.page_changed(3, 1, &audible, &muted, now);
         assert!(swaps.changing(Swapped::Speaker(3)));
     }
@@ -374,6 +422,10 @@ mod tests {
         let swap = &swaps.0[0];
         assert_eq!((swap.from, swap.to), ("b", "a"));
         let gone = leaving(swap.elapsed(back));
-        assert!((1. - gone - came).abs() < 1e-3, "it came {came} and is {} there", 1. - gone);
+        assert!(
+            (1. - gone - came).abs() < 1e-3,
+            "it came {came} and is {} there",
+            1. - gone
+        );
     }
 }

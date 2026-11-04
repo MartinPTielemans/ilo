@@ -34,6 +34,7 @@ impl Settling {
 
     /// Whether the card has been on screen long enough to take an answer.
     pub fn settled(&self, cx: &App) -> bool {
-        self.from.is_some_and(|from| cx.background_executor().now() >= from)
+        self.from
+            .is_some_and(|from| cx.background_executor().now() >= from)
     }
 }
