@@ -76,6 +76,21 @@ pub fn also(name: &str) -> &'static [&'static str] {
 /// at the starts of words, in any order. Only when none does are the rows' lines read, so a word
 /// a setting is named by finds that setting and not every line that mentions it.
 pub fn find(typed: &str, entries: &[Entry]) -> Vec<usize> {
+    let found = named(typed, entries);
+    if !found.is_empty() || typed.trim().is_empty() {
+        return found;
+    }
+    let lined = |entry: &Entry| {
+        (entry.line.as_deref()).is_some_and(|line| shell::shortcut_found(typed, line, None))
+    };
+    (0..entries.len())
+        .filter(|&index| lined(&entries[index]))
+        .collect()
+}
+
+/// The entries whose name, other names or keys have `typed`'s words at the starts of words, in
+/// any order, in their order: what the command bar finds settings by, and the search first.
+pub fn named(typed: &str, entries: &[Entry]) -> Vec<usize> {
     if typed.trim().is_empty() {
         return Vec::new();
     }
@@ -85,17 +100,8 @@ pub fn find(typed: &str, entries: &[Entry]) -> Vec<usize> {
                 .iter()
                 .any(|other| shell::shortcut_found(typed, other, None))
     };
-    let found: Vec<usize> = (0..entries.len())
-        .filter(|&index| named(&entries[index]))
-        .collect();
-    if !found.is_empty() {
-        return found;
-    }
-    let lined = |entry: &Entry| {
-        (entry.line.as_deref()).is_some_and(|line| shell::shortcut_found(typed, line, None))
-    };
     (0..entries.len())
-        .filter(|&index| lined(&entries[index]))
+        .filter(|&index| named(&entries[index]))
         .collect()
 }
 

@@ -144,6 +144,19 @@ impl command_bar::Host for Bar {
         shell::bar_commands(text, cx)
     }
 
+    fn settings_index(&self, cx: &mut App) -> Vec<browser::settings_search::Entry> {
+        crate::settings::index(cx)
+    }
+
+    fn show_setting(
+        &self,
+        section: browser::settings_column::Section,
+        name: SharedString,
+        cx: &mut App,
+    ) {
+        crate::settings::show_row(section, name, cx);
+    }
+
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
