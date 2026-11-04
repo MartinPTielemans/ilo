@@ -420,6 +420,30 @@ PICTURE
   await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
 }
 
+send click $page_point
+driven=$active
+if [ "$driven" = 1 ]; then
+  # A click on the card opens its conversation, its steps in its agent's place.
+  read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  send click $((px + pw / 2)) $((py + ph / 2))
+  expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
+  # Its one page so far opens on Talk, and the header's Pages shows its grid, each page a picture
+  # to watch it from (#1080).
+  await_log "^browser: task $session opens on talk\$" "the client's card with one page didn't open on Talk"
+  await_log '^browser: task pages at ' "the conversation's header drew no Pages"
+  read -r gx gy gw gh <<CHIP
+$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
+CHIP
+  send click $((gx + gw / 2)) $((gy + gh / 2))
+  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
+  picture "$agent_tab" > /dev/null
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
+  watch "$agent_tab"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
+fi
+
 # Split views (#1597): the agent puts two tabs of its own side by side, adds a third, lists them
 # and separates one, each through the core's split calls and checked by its rules, with its entry
 # in the activity log. A tab of the user's is refused, and the split stays as it was.
@@ -476,28 +500,7 @@ refused=$(call separate_tab "{\"tab\":$user_tab}")
 await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: The tab isn't in the agent's own Space\.\$" \
   "the refused separate didn't reach the activity log"
 
-send click $page_point
-driven=$active
 if [ "$driven" = 1 ]; then
-  # A click on the card opens its conversation, its steps in its agent's place.
-  read -r px py pw ph <<PLATE
-$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
-PLATE
-  send click $((px + pw / 2)) $((py + ph / 2))
-  expect "^browser: task $session shown\$" "a click on the client's card didn't show its conversation"
-  # Its one page so far opens on Talk, and the header's Pages shows its grid, each page a picture
-  # to watch it from (#1080).
-  await_log "^browser: task $session opens on talk\$" "the client's card with one page didn't open on Talk"
-  await_log '^browser: task pages at ' "the conversation's header drew no Pages"
-  read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-  send click $((gx + gw / 2)) $((gy + gh / 2))
-  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
-  picture "$agent_tab" > /dev/null
-  ../tools/window-screenshot.sh "$pid" "$out/agent-pages.png" || fail "no window to capture"
-  watch "$agent_tab"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-watched.png" || fail "no window to capture"
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
   listed=$(call list_tabs '{}')
   case "$listed" in
