@@ -403,6 +403,9 @@ fn copy_url_s_toast_shares_the_page(cx: &mut TestAppContext) {
     });
     assert_eq!(host.toasts.take(), ["Copied URL as Markdown"]);
     assert!(host.toast_share.take().is_none());
+    // The URL field's button shows ⇧⌘C's toast, Share and all.
+    shell.update(cx, |shell, cx| shell.copy_url_from_button(cx));
+    assert_eq!(host.toasts.take(), ["Copied Current URL [share]"]);
 }
 
 /// The password manager's key shows after the host of the tab it's for. A press on it brings back
