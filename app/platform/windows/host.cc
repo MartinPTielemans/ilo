@@ -1170,6 +1170,26 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
+// The browser window Capture shows over, and the size of its client area then.
+HWND g_capture_over = nullptr;
+SIZE g_capture_size = {};
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND root) {
+  RECT client = {};
+  if (root != g_capture_over || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      !GetClientRect(root, &client) ||
+      (client.right - client.left == g_capture_size.cx &&
+       client.bottom - client.top == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
+}
+
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
@@ -1593,6 +1613,9 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     Moved(hwnd);
+    if (~flags & SWP_NOSIZE) {
+      CaptureWindowSized(hwnd);
+    }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -1809,6 +1832,88 @@ ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
   CoTaskMemFree(pidl);
   return data;
 }
+
+// The exe the registry's App Paths names for |name|, such as chrome.exe, the user's before the
+// machine's: the path alone, as the shell's icon is all the import reads of another browser.
+std::wstring AppPath(const std::wstring& name) {
+  const std::wstring key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + name;
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    wchar_t path[MAX_PATH] = {};
+    DWORD bytes = sizeof path;
+    if (RegGetValueW(root, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, path, &bytes) ==
+            ERROR_SUCCESS &&
+        path[0]) {
+      std::wstring found(path);
+      // Some installers quote it.
+      if (found.size() > 1 && found.front() == L'"' && found.back() == L'"') {
+        found = found.substr(1, found.size() - 2);
+      }
+      return found;
+    }
+  }
+  return {};
+}
+
+}  // namespace
+
+// The shell's icon for an exe, by its path or its name in App Paths, |size| pixels square, as
+// premultiplied RGBA (host.h). A browser whose exe isn't there has none, and its row the globe.
+bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
+  std::wstring path = Wide(app);
+  if (path.find_first_of(L"/\\") == std::wstring::npos) {
+    path = AppPath(path);
+  }
+  // The shell parses Windows' separators alone, and the import joins its paths with /.
+  std::replace(path.begin(), path.end(), L'/', L'\\');
+  if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES || !size) {
+    return false;
+  }
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  bool ok = false;
+  {
+    ComPtr<IShellItemImageFactory> factory;
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmap> source;
+    ComPtr<IWICBitmapScaler> scaler;
+    HBITMAP bitmap = nullptr;
+    const UINT pixels = static_cast<UINT>(size);
+    const HRESULT item =
+        SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory));
+    const HRESULT image =
+        SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
+                                            SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
+                        : item;
+    if (FAILED(image) || !bitmap) {
+      // check.sh shows this line when a row it gave an icon has none.
+      fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
+              static_cast<unsigned long>(image));
+    }
+    if (SUCCEEDED(image) && bitmap &&
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapUsePremultipliedAlpha,
+                                               &source)) &&
+        SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+        SUCCEEDED(scaler->Initialize(source.Get(), pixels, pixels,
+                                     WICBitmapInterpolationModeHighQualityCubic)) &&
+        SUCCEEDED(scaler->CopyPixels(nullptr, pixels * 4, pixels * pixels * 4, rgba))) {
+      // The shell's is BGRA.
+      for (size_t at = 0; at < size * size * 4; at += 4) {
+        std::swap(rgba[at], rgba[at + 2]);
+      }
+      ok = true;
+    }
+    if (bitmap) {
+      DeleteObject(bitmap);
+    }
+  }
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  return ok;
+}
+
+namespace {
 
 // Encodes the shell's thumbnail or icon for |path| as a PNG, off the main thread. An image (or any
 // file Windows makes a thumbnail for) gets its thumbnail scaled to fit 96 px, its aspect kept; the
@@ -3271,6 +3376,10 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
+  g_capture_over = Root(ui_view);
+  RECT client = {};
+  GetClientRect(g_capture_over, &client);
+  g_capture_size = {client.right - client.left, client.bottom - client.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
