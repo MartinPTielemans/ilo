@@ -434,11 +434,11 @@ pump(lambda: shown, 20)
 own.wait()
 seen_own = len(shown)
 shown.clear()
-with open(ready, "w") as file:
+with open(ready, "w", encoding="utf-8") as file:
     file.write(f"ready {seen_own}\n")
 pump(lambda: os.path.exists(stop), 600)
 pump(lambda: False, 1)
-with open(report, "w") as file:
+with open(report, "w", encoding="utf-8") as file:
     file.write("".join(line + "\n" for line in shown))
 EOF
   rm -f "$out/consoles-stop" "$out/consoles-ready" "$out/consoles"
