@@ -1359,6 +1359,7 @@ fn tab(tab: u64, url: &str) -> shell::BarTab {
         url: url.to_string().into(),
         favicon: None,
         renamed: false,
+        switched: 0.0,
     }
 }
 
@@ -1669,6 +1670,24 @@ fn the_tabs_named_rise_a_renamed_one_starting_with_the_typing_first(cx: &mut Tes
     assert_eq!(rows[4].0, "https://conv.test/");
     bar.keys("enter");
     assert_eq!(bar.calls(), ["select 5", "hide"]);
+}
+
+/// Among the tabs the typing names, those the user switched to more rise first, after a renamed
+/// one its own name starts, and the most recently shown leads among equals (#1396).
+#[gpui::test]
+fn the_tabs_named_rise_by_how_often_they_were_switched_to(cx: &mut TestAppContext) {
+    let switched = |tab: shell::BarTab, switched| shell::BarTab { switched, ..tab };
+    let tabs = vec![
+        titled(2, "Convex docs", "https://docs.convex.dev/"),
+        switched(titled(4, "Projects | Convex", CONVEX), 3.0),
+        renamed(5, "Conv board", "https://board.test/"),
+        switched(titled(6, "Convert units", "https://units.test/"), 0.5),
+    ];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![searching("conv")]);
+    let ids: Vec<u64> = bar.rows().iter().map(|(_, tab)| *tab).collect();
+    assert_eq!(ids, [5, 0, 4, 6]);
 }
 
 /// An address typed whose page an open tab shows keeps its row first, where ↩ goes, and the

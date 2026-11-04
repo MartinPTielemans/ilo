@@ -350,6 +350,9 @@ title-line = 18.0
 title = 0.9
 host-size = 11.0
 host = 0.55
+# A page Battery Saver froze says so in the host's place (#686): Lucide's pause at the host's size,
+# then the words, this far after it.
+paused-gap = 5.0
 # The actions, beside the host: control-sized buttons, inset from the card's right and bottom
 # edges by as much as keeps their corners concentric with its: 16 - 10.
 button = 28.0
@@ -1050,6 +1053,13 @@ close-hovered = 0.12
 url-field = 0.1
 new-tab = 0.62
 new-tab-plus = 0.45
+# The update banner over the footer (#678), as Arc's: a pill this tall at rest, this far over the
+# footer and under the list, its glyph this size in the rows' icon column and its words on their
+# title column; under the pointer it opens upward to this height, in the dialog's timing.
+update-banner = 24.0
+update-banner-gap = 6.0
+update-banner-glyph = 14.0
+update-banner-open = 86.0
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
 # The edges under the favorites while the list is scrolled and at its foot while rows are hidden

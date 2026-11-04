@@ -44,6 +44,7 @@ use gpui::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 mod agents_core;
+mod bar_picks_host;
 mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -157,6 +158,8 @@ mod updates_host;
 use updates_host::*;
 mod quitting;
 use quitting::*;
+mod battery_saver_host;
+use battery_saver_host::*;
 
 use browser::bc;
 
@@ -888,6 +891,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         #[cfg(target_os = "linux")]
         window_option_tapped: Some(window_option_tapped),
         addresses_added: Some(addresses_added),
+        battery_saver_changed: Some(battery_saver_changed),
+        tab_frozen: Some(tab_frozen),
         ..Default::default()
     };
     (args, host)

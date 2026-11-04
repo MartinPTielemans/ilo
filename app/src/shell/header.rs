@@ -546,6 +546,55 @@ impl Shell {
                         .text_color(self.palette.glyph(NAV)),
                 )
         });
+        // While Battery Saver is on, its leaf, before the tools and in that place while they're
+        // gone, so it says so whether or not the pointer's over the sidebar. A press shows its
+        // toast again, with Turn Off (battery.rs).
+        let slots = if self.page(self.field_tab()).developer_mode {
+            3.
+        } else {
+            2.
+        };
+        let leaf_end = end + slots * TOOL_PITCH;
+        let leaf = self.battery_saver.map(|_| {
+            let drawn = self.battery_leaf_drawn.clone();
+            let frame = canvas(
+                move |bounds, _, _| {
+                    if drawn.replace(Some(bounds)) != Some(bounds) {
+                        let (origin, size) = (bounds.origin, bounds.size);
+                        // check.sh reads this line.
+                        log!(
+                            "browser: battery saver leaf at {} {} {} {}",
+                            f32::from(origin.x),
+                            f32::from(origin.y),
+                            f32::from(size.width),
+                            f32::from(size.height),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full();
+            self.field_tool("battery-saver", leaf_end)
+                .opacity(1.)
+                .when(self.a11y, |button| button.button_named("Battery Saver"))
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.show_battery_notice(cx);
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("icons/leaf.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.accent),
+                )
+                .child(frame)
+        });
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -581,6 +630,10 @@ impl Shell {
             true => end + TOOL_PITCH + URL_BUTTON_SIZE,
             false if actions.is_empty() => URL_FIELD_TEXT_X - PLATE_INSET,
             false => URL_BUTTON_INSET + buttons_width,
+        };
+        let text_end = match leaf {
+            Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
+            None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
@@ -623,6 +676,7 @@ impl Shell {
             )
             .children(engine)
             .children(key)
+            .children(leaf)
             .children(devtools)
             .children(copy)
             .children(site_controls)

@@ -24,6 +24,7 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
@@ -180,6 +181,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   // Chrome has just set its crash keys again, with the switches about:flags added.
   void PreCreateThreads() override {
     crash_reports::LeaveOutFolders();
+    // Before Chrome's performance manager makes its battery sampler, as its threads are made.
+    InstallBatteryForTesting();
 #if BUILDFLAG(IS_WIN)
     // A work account whose organisation requires a compliant device signs in only with Windows'
     // own Microsoft sign-in, which Chromium leaves off unless a policy turns it on (#1345). It's
@@ -228,6 +231,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
       UseProfile(profile);
     }
     sync::Start();
+    WatchBatterySaver();
     // Once the Spaces the last launch saved are read, and so once the run loop is running.
     LoadSession(base::BindOnce([] {
       if (g_host.started) {

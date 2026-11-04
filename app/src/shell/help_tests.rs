@@ -111,6 +111,7 @@ fn check_for_updates_reads_restart_to_update_once_one_is_ready(cx: &mut TestAppC
     struct Updater;
     impl crate::updates::Host for Updater {
         fn check(&self, _: &mut gpui::App) {}
+        fn show(&self, _: &mut gpui::App) {}
         fn restart(&self, _: &mut gpui::App) {}
         fn follow(&self, _: crate::updates::Track, _: &mut gpui::App) {}
     }

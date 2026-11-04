@@ -1690,6 +1690,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         url: url.into(),
         favicon: None,
         renamed: false,
+        switched: 0.0,
     })
     .collect();
     let (typed, rows) = match mode {

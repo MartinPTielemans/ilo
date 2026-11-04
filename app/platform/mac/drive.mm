@@ -166,6 +166,8 @@
 //                                         later, for the next tab shown to unload those
 //                                         bc_unload_idle_tabs lets go. From then each check logs
 //                                         "browser: idle tabs checked" once it's done
+//   battery <percent> plugged|unplugged   the battery reads that from now, with
+//                                         --battery-for-testing (core/battery_saver.h)
 //
 // Clicks, drags and moves go to the app's window on top at that point of the browser window
 // driven, such as the sidebar reveal over its edge, scrolls and layout to the browser window
@@ -1634,6 +1636,16 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     bc_age_tabs_for_testing(seconds);
+    done();
+    return true;
+  }
+  if (action == "battery") {
+    int percent;
+    std::string power;
+    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
+      return false;
+    }
+    bc_battery_for_testing(percent, power == "plugged");
     done();
     return true;
   }

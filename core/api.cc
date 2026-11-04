@@ -22,6 +22,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/battery_saver.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
 #include "browser_core/autofill_menu.h"
@@ -1515,6 +1516,26 @@ void bc_set_unload_idle_tabs(bool unload) {
 
 void bc_age_tabs_for_testing(double seconds) {
   browser_core::AgeTabsForTesting(base::Seconds(seconds));
+}
+
+bool bc_battery_saver_active(void) {
+  return browser_core::BatterySaverActive();
+}
+
+void bc_battery_saver_off_for_now(void) {
+  browser_core::TurnOffBatterySaverForNow();
+}
+
+bool bc_battery_saver_enabled(void) {
+  return browser_core::BatterySaverEnabled();
+}
+
+void bc_set_battery_saver_enabled(bool enabled) {
+  browser_core::SetBatterySaverEnabled(enabled);
+}
+
+void bc_battery_for_testing(int percent, bool plugged) {
+  browser_core::SetBatteryForTesting(percent, plugged);
 }
 
 bool bc_ad_blocking(void) {

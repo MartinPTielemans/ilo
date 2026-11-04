@@ -30,8 +30,8 @@ use crate::palette::{
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
 use crate::tokens::hover_card::{
     BUTTON, BUTTON_GAP, BUTTON_INSET, BUTTON_RADIUS, FAVICON, GLYPH, GLYPH_ALPHA, GROUND, HOST,
-    HOST_SIZE, PADDING, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS, RADIUS, RIM,
-    SPLIT_GAP, SPLIT_RING, TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
+    HOST_SIZE, PADDING, PAUSED_GAP, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS,
+    RADIUS, RIM, SPLIT_GAP, SPLIT_RING, TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
 };
 pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 
@@ -187,6 +187,8 @@ pub struct Card {
     pub icon: Icon,
     /// Whether it has a picture's box: not for the tab shown, whose page is on screen.
     pub pictured: bool,
+    /// Whether Battery Saver froze its page out of sight, which it says after the host.
+    pub paused: bool,
     pub actions: Vec<Action>,
     /// A favorite split's pages, each with what stands for it without a picture, which its box
     /// shows side by side, else none for a tab alone; the one focused last, and its ring's colour.
@@ -585,6 +587,10 @@ impl HoverCard {
                 "browser: hover card shown {tab} {} {picture}",
                 actions.join(" ")
             );
+            if self.shown.as_ref().is_some_and(|rest| rest.card.paused) {
+                // check.sh reads this line.
+                log!("browser: hover card {tab} says paused");
+            }
             events(tab, Event::Shown, cx);
         }
     }
@@ -838,7 +844,22 @@ impl Render for HoverCard {
             .items_center()
             .text_size(px(HOST_SIZE))
             .text_color(palette.on_overlay(HOST))
-            .child(div().truncate().child(card.host.clone()));
+            // Paused, the words take the host's place, which the row under the title still shows:
+            // beside the buttons there's no room for both.
+            .when(!card.paused, |host| {
+                host.child(div().truncate().child(card.host.clone()))
+            })
+            .when(card.paused, |host| {
+                host.child(
+                    svg()
+                        .path("icons/pause.svg")
+                        .flex_none()
+                        .mr(px(PAUSED_GAP))
+                        .size(px(HOST_SIZE))
+                        .text_color(palette.on_overlay(HOST)),
+                )
+                .child(div().truncate().child(crate::shell::PAUSED))
+            });
         let buttons = div()
             .absolute()
             .right(px(BUTTON_INSET))

@@ -230,6 +230,7 @@ impl Shell {
             icon: icon_of(focused),
             // The page shown is on screen beside it.
             pictured: !self.on_screen(tab) && !panes.iter().any(|&pane| self.on_screen(pane)),
+            paused: self.frozen(tab),
             actions: self.card_actions(tab),
             panes: panes.iter().map(|&pane| (pane, icon_of(pane))).collect(),
             focused,
@@ -271,15 +272,17 @@ impl Shell {
         self.selected != 0 && !self.new_tab && self.panes(self.selected).contains(&tab)
     }
 
-    fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
+    pub(super) fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
         match event {
             // A loaded tab's picture is taken again, as the page is now, and each of a favorite
-            // split's.
+            // split's. A page Battery Saver froze keeps the picture it had: taking one again would
+            // thaw it.
             Event::Shown => {
                 for tab in self.panes(tab) {
                     if self.tabs.contains_key(&tab)
                         && !self.on_screen(tab)
                         && !self.page(tab).unloaded
+                        && !self.frozen(tab)
                     {
                         self.browser.card_picture(tab, cx);
                     }

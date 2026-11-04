@@ -295,6 +295,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::SelectSpace(_) => "icons/layers.svg",
         Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
         Command::ToggleMute => "icons/volume-2.svg",
+        Command::TurnOffBatterySaver => "icons/leaf.svg",
         Command::ReopenClosedTab => "icons/undo-2.svg",
         Command::CopyUrl | Command::CopyMarkdownLink => "icons/link.svg",
         Command::PasteUrlAsTab => "icons/clipboard.svg",
@@ -1813,8 +1814,13 @@ impl CommandBar {
         }
         let named = |tab: &&shell::BarTab| !self.is_shown(tab.tab) && names_tab(tab, &typed);
         let mut named: Vec<&shell::BarTab> = self.tabs.iter().filter(named).collect();
-        // Stable, so the most recently shown stays first among equals.
-        named.sort_by_key(|tab| !(tab.renamed && tab.title.to_lowercase().starts_with(&typed)));
+        // A renamed tab whose name what's typed starts, then the tabs switched to more, as Arc's
+        // rank (#1396). Stable, so the most recently shown stays first among equals. A score is
+        // never negative, so its bits order as it does.
+        named.sort_by_cached_key(|tab| {
+            let prefix = tab.renamed && tab.title.to_lowercase().starts_with(&typed);
+            (!prefix, std::cmp::Reverse(tab.switched.to_bits()))
+        });
         named.truncate(TABS_RISEN);
         // Each in place of the core's row for it, where the core listed one.
         let mut risen: Vec<Suggestion> = named
@@ -2237,6 +2243,7 @@ impl CommandBar {
         // check.sh reads these lines.
         if let Some(command) = row.command {
             log!("browser: command bar runs {}", row.text);
+            shell::picked_in_bar(&row.text, command, cx);
             use shell::Command::{AddSplit, EditUrl, NewTab, SearchTabs};
             if !matches!(command, NewTab | SearchTabs | EditUrl | AddSplit) {
                 self.close();

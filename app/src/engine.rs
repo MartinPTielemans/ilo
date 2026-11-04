@@ -148,6 +148,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_set_pinned_open(space, open) };
     }
 
+    fn battery_saver_off_for_now(&self, _: &mut App) {
+        unsafe { bc::bc_battery_saver_off_for_now() };
+    }
+
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_folder_move(folder, to, index) };
     }
@@ -887,6 +891,14 @@ impl Browser for Engine {
 
     fn clear_browsing_data(&self, _: &mut App) {
         open_tab(self.window, CLEAR_BROWSING_DATA);
+    }
+
+    fn bar_picks(&self, profile: u64) -> String {
+        bar_picks_host::picks(profile)
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        bar_picks_host::set_picks(profile, text);
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {

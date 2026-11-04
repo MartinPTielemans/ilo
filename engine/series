@@ -63,3 +63,4 @@ ours/chromium-core-passkey-sign-in-wording.patch
 ours/chromium-core-frame-shown.patch
 ours/chromium-core-page-bubbles.patch
 ours/chromium-core-notification-click.patch
+ours/chromium-battery-saver-sampled-power.patch
