@@ -312,6 +312,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::Forward => "icons/arrow-right.svg",
         Command::Reload | Command::ForceReload => "icons/rotate-cw.svg",
         Command::Stop => "icons/x.svg",
+        Command::StayOnTop => "icons/pin.svg",
         Command::ZoomIn => "icons/zoom-in.svg",
         Command::ZoomOut => "icons/zoom-out.svg",
         Command::FlipSplit => "icons/arrow-left-right.svg",

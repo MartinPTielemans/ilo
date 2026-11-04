@@ -77,6 +77,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -1081,6 +1083,14 @@ impl Browser for Recorder {
 
     fn window_button_geometry(&self, _: &mut App) -> Option<super::WindowButtonGeometry> {
         self.window_buttons.get()
+    }
+
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
     }
 
     fn press_window_button(&self, button: WindowButton, _: &mut App) {

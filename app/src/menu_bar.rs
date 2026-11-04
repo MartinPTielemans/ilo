@@ -277,6 +277,7 @@ pub(crate) fn menus(
             "Window",
             vec![
                 MenuItem::action("Minimize Window", Minimize),
+                stay_on_top(bar.on_top),
                 MenuItem::separator(),
                 item("Open Library…", Command::ViewLibrary),
                 item("View Downloads…", Command::ViewDownloads),
@@ -307,6 +308,14 @@ pub(crate) fn menus(
 }
 
 /// View › Appearance's item for `appearance`, as Arc's names them.
+/// Window › Stay On Top, ticked while it's on, where the window can stay on top at all.
+fn stay_on_top(on: Option<bool>) -> MenuItem {
+    match on {
+        Some(on) => shell::menu_item(shell::STAY_ON_TOP, Command::StayOnTop).checked(on),
+        None => shell::menu_item(shell::STAY_ON_TOP, Command::StayOnTop).disabled(true),
+    }
+}
+
 pub(crate) fn appearance_title(appearance: Appearance) -> &'static str {
     match appearance {
         Appearance::Automatic => "Automatic",
