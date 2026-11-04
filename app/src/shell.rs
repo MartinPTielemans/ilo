@@ -467,6 +467,7 @@ use crate::tokens::shell::FORM_TEXT;
 use crate::tokens::shell::NAV;
 use crate::tokens::shell::NAV_DISABLED;
 use crate::tokens::shell::NAV_HOVERED;
+use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
 use crate::tokens::shell::SPACE_NAME;
 use crate::tokens::shell::SPACE_NAME_SHUT;

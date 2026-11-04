@@ -14,10 +14,10 @@ use gpui::{
 
 use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
-    NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, NAV_TRAIL,
-    PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED,
-    TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
+    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
+    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
+    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -304,11 +304,14 @@ impl Shell {
         }
     }
 
-    /// A header button's glyph colour: the disabled alpha while it's disabled, or the window isn't
-    /// the one the user is in.
+    /// A header button's glyph colour: the disabled alpha while it's disabled, raised to the glyph
+    /// floor, and the same alpha as it is, under the floor, while the window isn't the user's.
     pub(super) fn nav_glyph(&self, enabled: bool) -> Hsla {
-        let lit = enabled && self.window_main;
-        self.palette.glyph(if lit { NAV } else { NAV_DISABLED })
+        match (self.window_main, enabled) {
+            (false, _) => self.palette.faint(NAV_INACTIVE),
+            (true, true) => self.palette.glyph(NAV),
+            (true, false) => self.palette.glyph(NAV_DISABLED),
+        }
     }
 
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many

@@ -1035,9 +1035,13 @@ developer-outline-width = 1.0
 developer-selected = 0.26
 developer-tile = 0.16
 # The header's glyphs (docs/ux-spec.md › Header and URL field): 0.60, and 0.26 for back or forward
-# with nowhere to go, over a hover plate of 0.077.
+# with nowhere to go, over a hover plate of 0.077. In a window that isn't the user's they all take
+# the disabled 0.26 as it is, under the glyph floor (palette.rs), which would leave the dim unseen:
+# nobody reads them till they're back, as macOS greys the traffic lights, and WCAG's 1.4.11
+# exempts inactive controls. The active window's, a disabled back's too, keep the floor.
 nav = 0.6
 nav-disabled = 0.26
+nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name and the switcher's icons, on #320's ladder: 0.62, then 0.6 for the Space shown
 # and 0.35 for the others, 0.5 under the pointer (ours: Arc's isn't measured). The Space shown's

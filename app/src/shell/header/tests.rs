@@ -14,9 +14,9 @@ use gpui::{
 use crate::{
     passwords::Key,
     shell::{
-        Command, FOOTER_HEIGHT, Folders, NAV_DISABLED, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP,
-        PRESS_TIME, Page, SIDEBAR_BUTTON_X, Shell, beside::AtRest, header::nav_places,
-        history::HOLD, library::LIBRARY_BACK_INSET, recorder::Recorder,
+        Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE, NAV_TOP, PRESS_TIME, Page,
+        SIDEBAR_BUTTON_X, Shell, beside::AtRest, header::nav_places, history::HOLD,
+        library::LIBRARY_BACK_INSET, recorder::Recorder,
     },
     site_controls::Place,
 };
@@ -685,62 +685,52 @@ fn devtools_rests_in_the_url_field_in_developer_mode(cx: &mut TestAppContext) {
     assert_eq!(at(false, cx), AtRest::Field);
 }
 
-/// The header's glyphs take the disabled alpha, nav-disabled's 0.26, while the host says the window
-/// isn't the one the user is in, as Arc's do, and 0.60 again once it is. A Space whose colours need
-/// more for a glyph to read lifts it to that floor, as it does back's with no history. GPUI's
-/// window losing the keyboard, as it does to the window's own page on X11 and to its command bar or
-/// menu on the Mac, leaves them lit, and so does the command bar open over it.
+/// The header's glyphs take the disabled alpha, 0.26, as it is while the host says the window isn't
+/// the one the user is in, as Arc's do, under the glyph floor that would leave the dim unseen, and
+/// 0.60 again once it is. In the user's window a disabled glyph, as back's with no history, keeps
+/// the floor. GPUI's window losing the keyboard, as it does to the window's own page on X11 and to
+/// its command bar or menu on the Mac, leaves them lit, and so does the command bar open over it.
 #[gpui::test]
 fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppContext) {
     let (shell, cx, host) = drawn_shell(cx);
     let round = |alpha: f32| (alpha * 100.).round() / 100.;
-    let drawn = |cx: &mut VisualTestContext| {
+    let alphas = |cx: &mut VisualTestContext| {
         shell.update(cx, |_, cx| cx.notify());
         cx.run_until_parked();
         shell.read_with(cx, |shell, _| {
-            (shell.nav_dimmed_drawn.get(), round(shell.nav_glyph(true).a))
+            let [lit, disabled] = [true, false].map(|enabled| round(shell.nav_glyph(enabled).a));
+            (shell.nav_dimmed_drawn.get(), lit, disabled)
         })
     };
     let set_main = |main: bool, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| shell.set_window_main(main, cx));
     };
-    let floor = shell.read_with(cx, |shell, _| shell.palette.glyph_floor);
-    let dimmed = round(NAV_DISABLED.max(floor));
+    let floor = round(shell.read_with(cx, |shell, _| shell.palette.glyph_floor));
+    assert!(
+        floor > 0.26,
+        "the test's Space needs a floor over 0.26, not {floor}"
+    );
+    let lit = (Some(false), 0.6, floor);
     cx.update(|window, _| window.activate_window());
-    assert_eq!(drawn(cx), (Some(false), 0.6), "dimmed in the user's window");
+    assert_eq!(alphas(cx), lit, "not lit in the user's window");
     // The page or an overlay has the keyboard: GPUI's window isn't active, the host's still main.
     cx.deactivate_window();
     assert_eq!(
-        drawn(cx),
-        (Some(false), 0.6),
+        alphas(cx),
+        lit,
         "dimmed as the page or an overlay took the keys"
     );
     host.bar_open.set(true);
-    assert_eq!(
-        drawn(cx),
-        (Some(false), 0.6),
-        "dimmed under the window's command bar"
-    );
+    assert_eq!(alphas(cx), lit, "dimmed under the window's command bar");
     host.bar_open.set(false);
-    // Another window came to the front.
+    // Another window came to the front: 0.26 for every glyph, under the floor.
     set_main(false, cx);
-    assert_eq!(drawn(cx), (Some(true), dimmed), "lit behind another window");
     assert_eq!(
-        shell.read_with(cx, |shell, _| round(shell.nav_glyph(false).a)),
-        dimmed,
-        "not the alpha of a disabled glyph"
+        alphas(cx),
+        (Some(true), 0.26, 0.26),
+        "not 0.26 behind another window"
     );
-    // Where the colours need no more, that's 0.26.
-    let unfloored = shell.update(cx, |shell, _| {
-        shell.palette.glyph_floor = 0.;
-        round(shell.nav_glyph(true).a)
-    });
-    assert_eq!(unfloored, 0.26);
     // Back, by a click in its page, which doesn't give GPUI's window the keys.
     set_main(true, cx);
-    assert_eq!(
-        drawn(cx),
-        (Some(false), 0.6),
-        "still dimmed once it's the user's again"
-    );
+    assert_eq!(alphas(cx), lit, "not lit once it's the user's again");
 }
