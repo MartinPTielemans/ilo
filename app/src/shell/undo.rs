@@ -1006,7 +1006,7 @@ impl Shell {
         }
         let before = self.put_back(tab);
         let moving = self.favorites.contains(&tab);
-        self.browser.move_to_favorites(tab, index, cx);
+        self.make_favorite(tab, index, cx);
         self.keep(
             if moving {
                 What::MOVE_FAVORITE
@@ -1016,6 +1016,15 @@ impl Shell {
             before,
             cx,
         );
+    }
+
+    /// Makes `tab` the favorite at `index`, with the rest of its split view, which is one favorite,
+    /// or moves the favorite there.
+    fn make_favorite(&self, tab: u64, index: usize, cx: &mut Context<Self>) {
+        match self.panes(tab).len() > 1 && !self.favorites.contains(&tab) {
+            true => self.browser.move_split_to_favorites(tab, index, cx),
+            false => self.browser.move_to_favorites(tab, index, cx),
+        }
     }
 
     /// Moves `tab` (or the folder `tab`) to `index` of the pinned tabs, `folder`'s, or Today's.
@@ -1157,6 +1166,15 @@ impl Shell {
 
     /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
     /// the pages keep their order in the list.
+    /// Takes the favorite split `tab`'s pages but its first out of it, to the top of Today, its
+    /// first staying the favorite.
+    pub(super) fn separate_favorite(&mut self, tab: u64, cx: &mut Context<Self>) {
+        for &each in self.panes(tab)[1..].iter().rev() {
+            self.browser.separate(each, cx);
+            self.browser.move_tab(each, false, 0, 0, cx);
+        }
+    }
+
     pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
         for &each in self.panes(tab)[1..].iter().rev() {
             self.separate_tab(each, cx);
@@ -1385,7 +1403,7 @@ impl Shell {
             }
         }
         match spot.at {
-            At::Favorite(index) => self.browser.move_to_favorites(tab, index, cx),
+            At::Favorite(index) => self.make_favorite(tab, index, cx),
             At::Pinned { folder, index } => match self.is_folder_anywhere(tab) {
                 true => self.browser.move_folder(tab, folder, index, cx),
                 false => self.browser.move_tab(tab, true, folder, index, cx),

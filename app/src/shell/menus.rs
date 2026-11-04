@@ -700,10 +700,21 @@ impl Shell {
             (
                 MenuEntry::new("Remove from Favorites", true),
                 "remove-from-favorites",
-                // To the top of Today.
+                // To the top of Today, a split whole.
                 Box::new(move |shell, cx| shell.move_tab_to(tab, false, 0, 0, cx)),
             ),
         ];
+        // A split's first page stays the favorite, and the others go to the top of Today.
+        if self.favorite_split(tab).is_some() {
+            items.insert(
+                3,
+                (
+                    MenuEntry::new("Separate All Tabs", true),
+                    "separate-split",
+                    Box::new(move |shell, cx| shell.separate_favorite(tab, cx)),
+                ),
+            );
+        }
         items.push((
             MenuEntry::new("Change Icon…", true),
             "change-icon",
@@ -713,11 +724,17 @@ impl Shell {
             items.push(remove_icon(tab));
         }
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
-        // One closed already has nothing to close.
+        // One closed already has nothing to close. A split's pages all go, and its tile stays, as
+        // a pinned split's do.
+        let split = self.favorite_split(tab).is_some();
+        let open = self
+            .panes(tab)
+            .iter()
+            .any(|&pane| !self.page(pane).unloaded);
         items.push((
-            MenuEntry::new("Close Tab", !page.unloaded).shortcut(Command::CloseTab, keys),
+            MenuEntry::new("Close Tab", open).shortcut(Command::CloseTab, keys),
             "close-tab",
-            Box::new(move |shell, cx| shell.close_tab(tab, false, cx)),
+            Box::new(move |shell, cx| shell.close_tab(tab, split, cx)),
         ));
         items
     }

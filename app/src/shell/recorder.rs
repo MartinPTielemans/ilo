@@ -355,6 +355,11 @@ impl Browser for Recorder {
         self.moves.set(self.moves.get() + 1);
     }
 
+    fn move_split_to_favorites(&self, tab: u64, index: usize, _: &mut App) {
+        self.edit(format!("favorite split {tab} {index}"));
+        self.moves.set(self.moves.get() + 1);
+    }
+
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, _: &mut App) {
         self.edit(format!("move {tab} {pinned} {folder} {index}"));
         self.moves.set(self.moves.get() + 1);

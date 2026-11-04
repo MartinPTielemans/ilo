@@ -1064,6 +1064,10 @@ pub struct Shell {
     /// profile whose tab it is. The ids come from one counter, so a Space's never is a profile's.
     all_favorites: Vec<u64>,
     favorite_holders: HashMap<u64, u64>,
+    /// The favorites that are split views, each one favorite, its first tab's tile, and the tab of
+    /// each focused last, by its first, which showing it shows focused in any Space.
+    favorite_splits: Vec<Split>,
+    favorite_focus: HashMap<u64, u64>,
     /// The profiles, by id and name, the one the browser started with first.
     profiles: Vec<(u64, SharedString)>,
     /// The tabs of every Space, and the favorites.
@@ -1596,6 +1600,8 @@ impl Shell {
             outline_changed: false,
             favorites: Vec::new(),
             all_favorites: Vec::new(),
+            favorite_splits: Vec::new(),
+            favorite_focus: HashMap::new(),
             favorite_holders: HashMap::new(),
             profiles: Vec::new(),
             tabs: HashMap::new(),
@@ -1962,14 +1968,26 @@ impl Shell {
             .map_or_else(|| slots(&[], &[]), Space::slots)
     }
 
-    /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
+    /// The favorite split holding `tab`, if it's in one.
+    pub(super) fn favorite_split(&self, tab: u64) -> Option<&Split> {
+        (self.favorite_splits.iter()).find(|split| split.tabs.contains(&tab))
+    }
+
+    /// The tabs shown with `tab` in the Space shown, in their order: its split's, a favorite's
+    /// split's too, else `tab` alone.
     fn panes(&self, tab: u64) -> Vec<u64> {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.tabs.clone();
+        }
         self.shown_space()
             .map_or_else(|| vec![tab], |space| space.panes(tab))
     }
 
     /// Whether `tab`'s split view in the Space shown is stacked.
     fn stacked(&self, tab: u64) -> bool {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.stacked;
+        }
         self.shown_space().is_some_and(|space| space.stacked(tab))
     }
 
@@ -1981,7 +1999,23 @@ impl Shell {
 
     /// The tab of `tab`'s split view in the Space shown that took the card, else 0.
     fn expanded(&self, tab: u64) -> u64 {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.expanded;
+        }
         self.shown_space().map_or(0, |space| space.expanded(tab))
+    }
+
+    /// The tab a click on `tab`'s tile shows: the one its split focused last, else `tab`.
+    pub(super) fn favorite_focused(&self, tab: u64) -> u64 {
+        let Some(split) = self.favorite_split(tab) else {
+            return tab;
+        };
+        let lead = split.tabs[0];
+        let focused = self.favorite_focus.get(&lead).copied().unwrap_or(lead);
+        match split.tabs.contains(&focused) {
+            true => focused,
+            false => lead,
+        }
     }
 
     /// The shares of `tab`'s split view in the Space shown, or none while they're even. An
@@ -1998,9 +2032,12 @@ impl Shell {
                 };
                 panes::expanded_shares(panes.len(), focused, f32::from(length))
             }
-            None => self
-                .shown_space()
-                .map_or_else(Vec::new, |space| space.shares(tab)),
+            None => match self.favorite_split(tab) {
+                Some(split) => split.shares.clone(),
+                None => self
+                    .shown_space()
+                    .map_or_else(Vec::new, |space| space.shares(tab)),
+            },
         }
     }
 
@@ -2043,6 +2080,10 @@ impl Shell {
 
     /// The tab a row shows: the one of its split shown last, else the first.
     fn row_tab(&self, row: u64) -> u64 {
+        // A favorite split shows focused where it was focused last, in whichever Space.
+        if self.favorite_split(row).is_some() {
+            return self.favorite_focused(row);
+        }
         let panes = self.panes(row);
         self.recent
             .iter()
@@ -2557,10 +2598,34 @@ impl Shell {
 
     /// Every favorite, left to right, each with its holder: the Space it belongs to under Each
     /// Space (the core's `bc_favorite_space`), else its profile.
+    /// The favorites, as set_favorites takes them, with those that are split views and the tab of
+    /// each focused last, by its first.
+    pub fn set_split_favorites(
+        &mut self,
+        favorites: Vec<(u64, u64)>,
+        splits: Vec<Split>,
+        focus: HashMap<u64, u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.private || self.little.is_some() {
+            return;
+        }
+        self.favorite_splits = splits;
+        self.favorite_focus = focus;
+        self.set_favorites(favorites, cx);
+    }
+
     pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
         if self.private || self.little.is_some() {
             return;
         }
+        // A favorite split's tabs are favorites still.
+        self.favorite_splits.retain(|split| {
+            split
+                .tabs
+                .iter()
+                .all(|tab| favorites.iter().any(|f| f.0 == *tab))
+        });
         let tiles = self.drawn();
         self.all_favorites = favorites.iter().map(|&(tab, _)| tab).collect();
         self.favorite_holders = favorites.into_iter().collect();
@@ -2596,6 +2661,14 @@ impl Shell {
         // check.sh reads these lines.
         let ids: Vec<String> = self.favorites.iter().map(u64::to_string).collect();
         log!("browser: favorites {}", ids.join(" "));
+        let splits: Vec<String> = (self.favorites.iter())
+            .filter_map(|&tab| self.favorite_split(tab))
+            .map(|split| {
+                let tabs: Vec<String> = split.tabs.iter().map(u64::to_string).collect();
+                tabs.join("+")
+            })
+            .collect();
+        log!("browser: favorite splits {}", splits.join(" "));
     }
 
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
@@ -2674,6 +2747,11 @@ impl Shell {
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.task_tab_shown(tab, cx) {
             return;
+        }
+        // The page of a favorite split focused now is the one it shows focused next, in any Space,
+        // as the core keeps it.
+        if let Some(lead) = self.favorite_split(tab).map(|split| split.tabs[0]) {
+            self.favorite_focus.insert(lead, tab);
         }
         // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
         // tab's switch ends here.

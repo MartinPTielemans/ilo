@@ -10,6 +10,7 @@
 #include "base/functional/function_ref.h"
 #include "base/uuid.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/split_view.h"
 #include "components/sync/base/unique_position.h"
 #include "url/gurl.h"
 
@@ -263,19 +264,6 @@ class Space {
   void ForgetOpener(bc_id tab);
   // The first tab below |index| opened by |opener|, else the nearest above it. 0 if none.
   bc_id NearestOpenedBy(bc_id opener, size_t index) const;
-  struct SplitView {
-    // In their order, as they are in their list.
-    std::vector<bc_id> tabs;
-    bool stacked = false;
-    // Each tab's share of its length, or none while they're even.
-    std::vector<double> shares;
-    // The tab that took the card, else 0, while the others are kept at 220 pt.
-    bc_id expanded = 0;
-    // What the user named it and the emoji they gave it, else empty. They go with the split.
-    std::string name;
-    std::string icon;
-  };
-
   // The split holding |tab|, or splits_.end().
   std::vector<SplitView>::iterator SplitOf(bc_id tab);
   std::vector<SplitView>::const_iterator SplitOf(bc_id tab) const;

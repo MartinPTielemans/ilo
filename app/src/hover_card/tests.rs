@@ -53,6 +53,9 @@ fn card(tab: u64, pictured: bool) -> Card {
         icon: Icon::Favicon(None),
         pictured,
         actions: vec![Action::Pin, Action::Favorite, Action::Split],
+        panes: Vec::new(),
+        focused: tab,
+        ring: gpui::black(),
     }
 }
 

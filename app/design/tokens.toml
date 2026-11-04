@@ -333,6 +333,11 @@ picture-default = 0.625
 # A tab with no picture shows its favicon on a ground of the ink at this.
 ground = 0.05
 favicon = 24.0
+# A favorite split's card shows its pages side by side in the picture's box, as the window does
+# with the split's gap scaled down to this, and the page focused last ringed this wide in the
+# Space's colour (ours, from the mock the owner took, #689).
+split-gap = 4.0
+split-ring = 1.0
 # The card starts this far right of the row's plate, and stays this far inside the window.
 gap = 8.0
 edge = 8.0
@@ -843,6 +848,10 @@ tile-gap = 8.0
 tile-min = 47.0
 tile-columns = 4
 tile-radius = 12.0
+# A favorite split's tile holds each tab's favicon in a segment of its own behind the split row's
+# line; a segment narrower than a favicon and 6, as three in a 47 pt tile are, takes this smaller
+# one (ours, from the mock the owner took, #689: Arc's tile isn't recorded).
+split-tile-favicon = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
 tile-mark = 12.0

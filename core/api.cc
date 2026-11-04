@@ -1101,12 +1101,17 @@ void bc_set_favorites_scope(int scope) {
 
 size_t bc_tab_split(bc_id id, bc_id* tabs, size_t capacity) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space) {
-    return 0;
-  }
-  const std::vector<bc_id> panes = space->Panes(id);
+  const std::vector<bc_id> panes =
+      space ? space->Panes(id) : browser_core::Favorites::Panes(id);
   std::copy_n(panes.begin(), std::min(capacity, panes.size()), tabs);
   return panes.size();
+}
+
+bc_id bc_tab_split_focused(bc_id id) {
+  if (browser_core::Favorites::Has(id)) {
+    return browser_core::Favorites::Focused(id);
+  }
+  return browser_core::Space::Holding(id) ? id : 0;
 }
 
 bool bc_tab_split_with(bc_id id, bc_id with, bool left) {
@@ -1123,13 +1128,16 @@ bool bc_tab_split_with(bc_id id, bc_id with, bool left) {
 void bc_tab_separate(bc_id id) {
   if (browser_core::Space* space = browser_core::Space::Holding(id)) {
     space->Separate(id);
-    browser_core::Window::PanesChanged();
+  } else {
+    browser_core::Favorites::Separate(id);
   }
+  browser_core::Window::PanesChanged();
 }
 
 bool bc_tab_move_in_split(bc_id id, size_t index) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->MoveInSplit(id, index)) {
+  if (!(space ? space->MoveInSplit(id, index)
+              : browser_core::Favorites::MoveInSplit(id, index))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1137,25 +1145,33 @@ bool bc_tab_move_in_split(bc_id id, size_t index) {
 }
 
 bool bc_tab_split_stacked(bc_id id) {
-  browser_core::Space* space = browser_core::Space::Holding(id);
-  return space && space->Stacked(id);
+  if (browser_core::Space* space = browser_core::Space::Holding(id)) {
+    return space->Stacked(id);
+  }
+  const browser_core::SplitView* split = browser_core::Favorites::SplitOf(id);
+  return split && split->stacked;
 }
 
 double bc_tab_split_share(bc_id id) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  std::vector<bc_id> panes = space ? space->Panes(id) : std::vector<bc_id>();
+  const browser_core::SplitView* favorite =
+      space ? nullptr : browser_core::Favorites::SplitOf(id);
+  std::vector<bc_id> panes = space      ? space->Panes(id)
+                             : favorite ? favorite->tabs
+                                        : std::vector<bc_id>();
   if (panes.size() < 2) {
     return 0;
   }
-  std::vector<double> shares = space->Shares(id);
+  std::vector<double> shares = space ? space->Shares(id) : favorite->shares;
   return shares.empty() ? 1.0 / panes.size() : shares[std::ranges::find(panes, id) - panes.begin()];
 }
 
 bool bc_tab_set_split_shares(bc_id id, const double* shares, size_t count) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space ||
-      !space->SetShares(id, shares ? std::vector<double>(shares, shares + count)
-                                   : std::vector<double>())) {
+  std::vector<double> given =
+      shares ? std::vector<double>(shares, shares + count) : std::vector<double>();
+  if (!(space ? space->SetShares(id, std::move(given))
+              : browser_core::Favorites::SetShares(id, std::move(given)))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1163,13 +1179,17 @@ bool bc_tab_set_split_shares(bc_id id, const double* shares, size_t count) {
 }
 
 bc_id bc_tab_split_expanded(bc_id id) {
-  browser_core::Space* space = browser_core::Space::Holding(id);
-  return space ? space->Expanded(id) : 0;
+  if (browser_core::Space* space = browser_core::Space::Holding(id)) {
+    return space->Expanded(id);
+  }
+  const browser_core::SplitView* split = browser_core::Favorites::SplitOf(id);
+  return split ? split->expanded : 0;
 }
 
 bool bc_tab_set_split_expanded(bc_id id, bool expanded) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->SetExpanded(id, expanded)) {
+  if (!(space ? space->SetExpanded(id, expanded)
+              : browser_core::Favorites::SetExpanded(id, expanded))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1198,7 +1218,8 @@ bool bc_tab_set_split_icon(bc_id id, const char* icon) {
 
 bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->SetStacked(id, stacked)) {
+  if (!(space ? space->SetStacked(id, stacked)
+              : browser_core::Favorites::SetStacked(id, stacked))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1977,6 +1998,10 @@ void bc_tab_set_pinned(bc_id id, bool pinned) {
 
 void bc_tab_move_to_favorites(bc_id id, size_t index) {
   browser_core::Window::MoveToFavorites(id, index);
+}
+
+void bc_tab_move_split_to_favorites(bc_id id, size_t index) {
+  browser_core::Window::MoveSplitToFavorites(id, index);
 }
 
 void bc_tab_move(bc_id id, bool pinned, bc_id folder, size_t index) {

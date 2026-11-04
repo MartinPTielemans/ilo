@@ -138,6 +138,15 @@ source_set("sidebar_backups") {
   deps = [ "//base" ]
 }
 
+# The splits' rules a Space and the favorites share, and how the favorites' scopes match a split
+# across their lists, apart so browser_core_unittests tests them alone.
+source_set("split_view") {
+  sources = [
+    "split_view.cc",
+    "split_view.h",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -276,6 +285,7 @@ source_set("browser_core") {
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
+    ":split_view",
     ":sync_guard",
     ":sync_keys",
     "//base",
@@ -541,6 +551,7 @@ test("browser_core_unittests") {
     "space.cc",
     "space_default_unittest.cc",
     "space_unittest.cc",
+    "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
   ]
@@ -549,6 +560,7 @@ test("browser_core_unittests") {
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
+    ":split_view",
     ":sync_guard",
     ":sync_keys",
     "//base",

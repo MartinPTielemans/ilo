@@ -1304,9 +1304,11 @@ impl Shell {
                         self.close_chosen(cx);
                     } else if self.selected != 0 {
                         // A pinned split's pages all go, and it stays a pinned split, as its −
-                        // does (Arc 1.171).
+                        // does (Arc 1.171), and so do a favorite split's, its tile kept.
                         let tab = self.selected;
-                        let split = self.pinned().contains(&tab) && self.panes(tab).len() > 1;
+                        let kept =
+                            self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
+                        let split = kept && self.panes(tab).len() > 1;
                         self.close_tab(tab, split, cx);
                     } else {
                         self.browser.close_window(cx);
