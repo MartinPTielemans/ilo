@@ -221,15 +221,24 @@ allowed=${ids% *}
 not_allowed=${ids#* }
 exec 3>&-
 quit
+# Off Linux, Chrome keeps the extensions' settings in Secure Preferences, under a MAC a check can't
+# sign, so there only chrome://extensions' switch allows one in Incognito.
+status=0
 python3 -I -c '
 import json, sys
 path = sys.argv[1] + "/Default/Preferences"
 prefs = json.load(open(path))
-settings = prefs["extensions"]["settings"]
+settings = prefs.get("extensions", {}).get("settings", {})
+if sys.argv[2] not in settings or sys.argv[3] not in settings:
+    sys.exit(3)
 settings[sys.argv[2]]["incognito"] = True
 settings[sys.argv[3]]["incognito"] = False
-json.dump(prefs, open(path, "w"))' "$incognito/profile" "$allowed" "$not_allowed" ||
-  fail "couldn't allow Check Allowed in Incognito"
+json.dump(prefs, open(path, "w"))' "$incognito/profile" "$allowed" "$not_allowed" || status=$?
+if [ "$status" = 3 ]; then
+  echo "skip: private's extensions allowed in Incognito: Chrome keeps the extensions' settings in Secure Preferences, under a MAC, so only chrome://extensions' switch allows one."
+  exit 0
+fi
+[ "$status" = 0 ] || fail "couldn't allow Check Allowed in Incognito"
 incognito_launch private-extensions
 send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
