@@ -2448,6 +2448,10 @@ void host_show_overlay(int index,
     [overlay->view.layer displayIfNeeded];
     PlaceOverlayShadow(*overlay);
     overlay->shadow.alphaValue = 1;
+    // Last shown over a window on another desktop, such as a full-screen one that ⌘N's opened
+    // from, it would take macOS back there as it comes on screen.
+    ToActiveSpace(overlay->window);
+    ToActiveSpace(overlay->shadow);
     if (overlay->shadow.parentWindow != window) {
       [overlay->shadow.parentWindow removeChildWindow:overlay->shadow];
       AddOver(window, overlay->shadow);
