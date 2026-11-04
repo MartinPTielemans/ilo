@@ -556,6 +556,11 @@ impl Shell {
     /// at the edge ends as one the pointer passed. On Linux and Windows the page is Chromium's
     /// window, whose moves the shell doesn't hear, so its leave is how the shell knows.
     pub(super) fn pointer_left(&mut self) {
+        log!(
+            "browser: diag pointer left, revealed {} wait {}",
+            self.revealed,
+            self.reveal_wait.is_some()
+        );
         if !self.revealed {
             self.reveal_wait = None;
             self.reveal_strip = None;
