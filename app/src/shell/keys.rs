@@ -157,11 +157,17 @@ const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
 /// which is ⌥⌘N's Little ilo Window (#669).
 const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
 
+/// Whether SHORTCUTS' `key` is a key on the Mac, or off it if `off_the_mac`.
+fn applies(key: &str, off_the_mac: bool) -> bool {
+    match off_the_mac {
+        true => !MAC_ONLY.contains(&key),
+        false => !OFF_THE_MAC_ONLY.contains(&key),
+    }
+}
+
 fn defaults(command: Command) -> Vec<String> {
     (SHORTCUTS.iter())
-        .filter(|&&(_, each, _)| each == command)
-        .filter(|&&(key, ..)| OFF_THE_MAC || !OFF_THE_MAC_ONLY.contains(&key))
-        .filter(|&&(key, ..)| !OFF_THE_MAC || !MAC_ONLY.contains(&key))
+        .filter(|&&(key, each, _)| each == command && applies(key, OFF_THE_MAC))
         .map(|&(key, ..)| key.to_string())
         .collect()
 }
@@ -497,9 +503,15 @@ impl UserKeys {
 
     /// Each key and the command it runs.
     fn bindings(&self) -> Vec<(&str, Command)> {
+        self.bindings_on(OFF_THE_MAC)
+    }
+
+    /// Each key and the command it runs, on the Mac or off it: as defaults(), without the keys
+    /// that would press there as another of ours, as ⌃⌘N's Blank Window would as ⌥⌘N's Little ilo.
+    fn bindings_on(&self, off_the_mac: bool) -> Vec<(&str, Command)> {
         let defaults = SHORTCUTS
             .iter()
-            .filter(|&&(_, command, _)| !self.is_set(command));
+            .filter(|&&(key, command, _)| !self.is_set(command) && applies(key, off_the_mac));
         let user = (self.set.iter())
             .flat_map(|(command, keys)| keys.iter().map(|key| (key.as_str(), *command)));
         (defaults.map(|&(key, command, _)| (key, command)))
@@ -893,6 +905,48 @@ mod tests {
                 .track_focus(&self.0)
                 .size_full()
         }
+    }
+
+    /// Off the Mac, Ctrl+Alt+N in the UI opens Little ilo, as ⌥⌘N does on the Mac, and Blank
+    /// Window's ⌃⌘N, which would press as the same key there, has no binding to take it (#669).
+    #[gpui::test]
+    fn off_the_mac_ctrl_alt_n_opens_little_ilo(cx: &mut TestAppContext) {
+        let ran: Rc<RefCell<Vec<Command>>> = Rc::default();
+        let runs = ran.clone();
+        let little = pressed_off_the_mac("alt-cmd-n");
+        assert_eq!(little, pressed_off_the_mac("ctrl-cmd-n"));
+        cx.update(|cx| {
+            let context = KeyBindingContextPredicate::parse(KEY_CONTEXT)
+                .ok()
+                .map(Rc::new);
+            let mut bindings = Vec::new();
+            for (key, command) in UserKeys::default().bindings_on(true) {
+                assert_ne!(
+                    command,
+                    Command::NewBlankWindow,
+                    "{key} is bound off the Mac"
+                );
+                for key in pressed_off_the_mac(key) {
+                    let run = Box::new(Run(command));
+                    bindings
+                        .extend(KeyBinding::load(&key, run, context.clone(), false, None, cx).ok());
+                }
+            }
+            cx.bind_keys(bindings);
+            cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
+        });
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    Root(focus)
+                })
+            })
+        });
+        let mut cx = VisualTestContext::from_window(window.unwrap().into(), cx);
+        cx.simulate_keystrokes(&little[0]);
+        assert_eq!(ran.take(), [Command::NewLittleWindow]);
     }
 
     /// GPUI's bindings follow a change at once: the new key runs the command, the old one
