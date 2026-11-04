@@ -844,11 +844,12 @@ if [ "$driven" = 1 ]; then
     "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&
     fail "the client's receipt counted its pages, which Open counts: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
   # The agent is at work in the tab it last acted in, the bank's it opened.
   at=$(grep '^browser: agent mcp-client at work in ' "$log" | tail -1 | awk '{print $NF}')
   await_log "^browser: agent mcp-client done in $at\$" "the tab still shows a gone agent at work"
   await_log "^browser: agent question $pending gone\$" "a gone agent's question stayed open"
+  # The card on its receipt, its status rolled in by now.
+  ../tools/window-screenshot.sh "$pid" "$out/agent-receipt.png" || fail "no window to capture"
 
   # Reconnected, the client's next call on a tab is a card of its own. Its conversation's Stop
   # answers the call under way that the user stopped it, then closes the client's connection,
