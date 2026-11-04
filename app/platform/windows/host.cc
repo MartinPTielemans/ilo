@@ -4373,11 +4373,11 @@ bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width
   }
   // The row as it's drawn, held where the pointer pressed it, as the Mac's drag shows it. The
   // helper keeps the picture with the data, and the app's drop targets and Explorer draw it.
-  SIZE size{};
-  if (HBITMAP picture = WindowPart(ui_view, x, y, width, height, &size)) {
+  SIZE picture_size{};
+  if (HBITMAP picture = WindowPart(ui_view, x, y, width, height, &picture_size)) {
     ComPtr<IDragSourceHelper> helper;
     const double scale = Scale(Hwnd(ui_view));
-    SHDRAGIMAGE image{size,
+    SHDRAGIMAGE image{picture_size,
                       {static_cast<LONG>(std::lround(grab_x * scale)),
                        static_cast<LONG>(std::lround(grab_y * scale))},
                       picture, CLR_NONE};
@@ -4386,7 +4386,7 @@ bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width
         SUCCEEDED(helper->InitializeFromBitmap(&image, data.Get()))) {
       // check.sh reads this line.
       fprintf(stderr, "browser: tab %llu drag picture %ldx%ld\n",
-              static_cast<unsigned long long>(tab), size.cx, size.cy);
+              static_cast<unsigned long long>(tab), picture_size.cx, picture_size.cy);
     } else {
       DeleteObject(picture);
     }
