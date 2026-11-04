@@ -1066,6 +1066,7 @@ else
   send move 400 300
   send move 3 300
   send move 3 306
+  ../tools/window-screenshot.sh "$pid" "$out/reveal-behind.png" all || fail "no window to capture"
   # The window's wait starts as the pointer moves in its edge, logged then, so none by the time the
   # driver brings it forward means it never started.
   send window 1
