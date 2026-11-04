@@ -32,6 +32,8 @@ mod agent_bar;
 mod agent_pointer;
 mod agent_question;
 mod assets;
+#[cfg(test)]
+mod bar_commands_tests;
 mod bar_usage;
 #[cfg(test)]
 mod bar_usage_tests;

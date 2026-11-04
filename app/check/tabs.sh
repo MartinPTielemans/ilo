@@ -1301,6 +1301,30 @@ FRAME
   bar_gone "Esc in the command bar after Alt+F4 closed the window it was over"
 fi
 
+# Arc's bar commands that call what the menus do: Mute All Tabs mutes every tab, and Unmute All
+# Tabs, listed while one is muted, unmutes them; Enter Full Screen puts the window full screen and
+# reads Exit Full Screen there, which takes it out; and there Exit, View › Exit's, with ⎋'s key,
+# takes it out too.
+send click $page_point
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar for Mute All Tabs"
+send type 'all tabs'
+expect '^browser: command bar commands "all tabs": Mute All Tabs' "the command bar didn't find Mute All Tabs first"
+../tools/window-screenshot.sh "$pid" "$out/bar-mute-all.png" || fail "no window to capture"
+send key return
+expect '^browser: command mute-all-tabs via command bar$' "Mute All Tabs didn't run from the command bar"
+expect '^browser: page [0-9]* audible [01] muted 1$' "Mute All Tabs muted no tab"
+bar_command unmute-all-tabs "Unmute All Tabs" unmute
+expect '^browser: page [0-9]* audible [01] muted 0$' "Unmute All Tabs unmuted no tab"
+bar_command toggle-full-screen "Enter Full Screen" "enter full"
+expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"
+bar_command toggle-full-screen "Exit Full Screen" "exit full"
+expect '^browser: window left full screen$' "Exit Full Screen didn't take the window out"
+bar_command toggle-full-screen "Enter Full Screen" "enter full"
+expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen again"
+bar_command exit Exit escape
+expect '^browser: window left full screen$' "Exit didn't take the window out of full screen"
+
 exec 3>&-
 # Chrome writes the trace before it quits, once every process has started tracing or 10 s have
 # passed, so a renderer that closed early can hold the quit that long.
