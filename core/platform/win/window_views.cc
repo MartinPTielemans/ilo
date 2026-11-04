@@ -411,8 +411,12 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
+  // The window's scale: the DPI the last WM_DPICHANGED carried, which Windows sends as the window
+  // moves to a display of another scale, or its display's until one comes. The display's alone
+  // laid the pages out with the old display's scale as the window crossed (#1823).
   float Scale() const {
-    return display::win::GetScreenWin()->GetScaleFactorForHWND(window());
+    return dpi_ ? dpi_ / static_cast<float>(USER_DEFAULT_SCREEN_DPI)
+                : display::win::GetScreenWin()->GetScaleFactorForHWND(window());
   }
 
   // The window's content, in DIPs.
@@ -564,8 +568,22 @@ class WindowViews : public views::WidgetObserver,
       }
     } else if (message == WM_SIZE) {
       SizeChanged(w_param);
+    } else if (message == WM_DPICHANGED) {
+      // The pages go again at the new scale once Chromium has taken it and the window's new rect,
+      // as the window's size in DIPs may stay the same, which lays nothing out (#1823).
+      dpi_ = LOWORD(w_param);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&WindowViews::ScaleChanged, weak_factory_.GetWeakPtr()));
     }
     return false;
+  }
+
+  void ScaleChanged() {
+    if (held_) {
+      SizeUI();
+    } else {
+      LayOut();
+    }
   }
 
  private:
@@ -598,6 +616,8 @@ class WindowViews : public views::WidgetObserver,
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   HWND had_keyboard_ = nullptr;
+  // The DPI the last WM_DPICHANGED carried, 0 before one comes (Scale).
+  UINT dpi_ = 0;
   bool minimized_ = false;
   // The pages DrawUnseen holds.
   aura::WindowTracker unseen_;

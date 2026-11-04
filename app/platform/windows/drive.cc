@@ -12,7 +12,9 @@
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
 // menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
-// age, and Windows' own maximize, which the Mac's has no command for, and placement, which logs the
+// age, and Windows' own maximize, which the Mac's has no command for, dpi <percent>, which tells
+// the browser window it moved to a display of that scale as Windows does (WM_DPICHANGED), keeping
+// its size in pixels, and placement, which logs the
 // window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
 // lists the windows on screen over the app's browser windows; stack, which lists every app's
 // windows over the driven one, front first; and reshow, which shows those of the UI's that are
@@ -1510,6 +1512,22 @@ bool Run(const std::string& line) {
   }
   if (action == "layout") {
     LogLayout(Driven());
+    return true;
+  }
+  // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
+  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  if (action == "dpi") {
+    int percent = 0;
+    if (!(words >> percent) || percent < 100 || percent > 500) {
+      return false;
+    }
+    g_steps.push_back({[percent] {
+      HWND root = Driven();
+      RECT rect{};
+      GetWindowRect(root, &rect);
+      const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
+      SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+    }, 300});
     return true;
   }
   if (action == "state") {
