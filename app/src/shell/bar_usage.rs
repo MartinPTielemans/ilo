@@ -24,7 +24,7 @@ impl Global for BarUsage {}
 impl Shell {
     /// The profile whose use the command bar learns from in this window, None in a private one.
     fn learning_profile(&self) -> Option<u64> {
-        let space = self.shown_space().filter(|_| !self.private)?;
+        let space = self.shown_space().filter(|_| !self.one_space())?;
         Some(space.profile)
     }
 
@@ -71,7 +71,7 @@ impl Shell {
     /// A closed tab's switches go with it. A private window hears only its own tabs, so it leaves
     /// the others' alone.
     pub(super) fn forget_switches(&self, open: impl Fn(&u64) -> bool, cx: &mut App) {
-        if self.private {
+        if self.one_space() {
             return;
         }
         if cx.has_global::<BarUsage>() {

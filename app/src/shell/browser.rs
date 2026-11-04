@@ -755,6 +755,11 @@ pub trait Browser {
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
+    /// Opens a Blank Window in the shown Space's profile, after this one's draw.
+    fn new_blank_window(&self, cx: &mut App);
+    /// Moves `tab`, a Blank Window's, to the top of the user's `space`'s Today, where the regular
+    /// window showing that Space, else the one in front, shows it live; the Blank Window stays.
+    fn move_out_of_blank(&self, tab: u64, space: u64, cx: &mut App);
     /// Closes this window. Its tabs go to the window that was in front before it, live.
     fn close_window(&self, cx: &mut App);
     /// Opens an empty Little ilo window (docs/ux-spec.md › Little Arc) for the user's Space

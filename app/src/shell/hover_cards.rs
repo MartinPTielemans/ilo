@@ -257,7 +257,7 @@ impl Shell {
     pub(super) fn card_actions(&self, tab: u64) -> Vec<Action> {
         let mut actions = Vec::new();
         let favorite = self.favorites.contains(&tab);
-        if !self.private {
+        if !self.one_space() {
             match favorite {
                 true => actions.push(Action::Unfavorite),
                 false if self.pinned().contains(&tab) => actions.push(Action::Unpin),

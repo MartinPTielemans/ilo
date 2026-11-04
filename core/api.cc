@@ -2253,6 +2253,15 @@ bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
   return window ? window->id() : 0;
 }
 
+bc_id bc_window_open_blank(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  Profile* profile = LoadedProfile(profile_id);
+  browser_core::Window* window =
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kBlank)
+              : nullptr;
+  return window ? window->id() : 0;
+}
+
 bc_id bc_window_take_tab(bc_id window_id, bc_id tab) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
   return window ? window->TakeTab(tab) : 0;

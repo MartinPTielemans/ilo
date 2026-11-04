@@ -1528,6 +1528,14 @@ impl Browser for Recorder {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_blank_window(&self, _: &mut App) {
+        self.record("new blank window".into())
+    }
+
+    fn move_out_of_blank(&self, tab: u64, space: u64, _: &mut App) {
+        self.record(format!("move {tab} out of blank to {space}"))
+    }
+
     fn new_little_window(&self, home: u64, _: &mut App) {
         self.record(format!("new little window {home}"))
     }

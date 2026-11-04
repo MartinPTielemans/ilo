@@ -2791,6 +2791,17 @@ BC_EXPORT bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id prof
 // user's alone, as a private window is: bc_windows leaves it out, and agents get none.
 BC_EXPORT bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile);
 
+// Opens a Blank Window at |bounds|, as bc_window_open does: Arc's Blank Window, from ⌃⌘N, for tabs
+// the user doesn't want kept or shown in other windows. It shows a Space of its own in |profile|,
+// which no other window shows, holds Today tabs alone and is never saved or listed by bc_spaces,
+// reported by window_space_shown, and no page until one opens. The tabs its pages open stay in it.
+// bc_tab_move_to_space moves a tab to one of the user's Spaces, and bc_window_select then shows it
+// live in the window that selects it. Closing it puts its tabs in the archive, as a closed Today
+// tab goes, though not among the closed tabs ⇧⌘T reopens. Returns 0 if |profile| isn't loaded or
+// Chromium is quitting. The user's alone, as a private window is: bc_windows leaves it out, and
+// agents get none.
+BC_EXPORT bc_id bc_window_open_blank(bc_rect bounds, void* ui_view, bc_id profile);
+
 // Moves |tab|, a Today tab of one of the user's Spaces, into the Little ilo window |window|'s own
 // Space while that holds no tab, and shows its page there live, with its history, as ⌥⌘-click on
 // a sidebar tab does (Arc). A window that showed it shows what its Space would once the tab

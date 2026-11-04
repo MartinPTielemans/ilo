@@ -40,6 +40,8 @@ pub enum Command {
     NewPrivateWindow,
     /// Opens a Little ilo window, Arc's Little Arc, for the user's Space shown.
     NewLittleWindow,
+    /// Opens a Blank Window, Arc's: one list of tabs that aren't kept or shown in other windows.
+    NewBlankWindow,
     /// A Little ilo window's ⌘O: its page goes to the main window, live.
     OpenInMainWindow,
     /// Closes the window, its tabs going to the window in front of the others.
@@ -280,6 +282,7 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-n", Command::NewWindow, true),
     ("shift-cmd-n", Command::NewPrivateWindow, true),
     ("alt-cmd-n", Command::NewLittleWindow, true),
+    ("ctrl-cmd-n", Command::NewBlankWindow, true),
     ("cmd-o", Command::OpenInMainWindow, false),
     ("shift-cmd-w", Command::CloseWindow, true),
     ("shift-cmd-t", Command::ReopenClosedTab, true),
@@ -505,6 +508,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "New Little ilo Window",
         Command::NewLittleWindow,
         &["little arc", "small window"],
+    ),
+    (
+        "New Blank Window",
+        Command::NewBlankWindow,
+        &["empty window", "unsaved"],
     ),
     (
         "Open in Main Window",
@@ -1089,6 +1097,7 @@ impl Command {
             Command::NewWindow => "new-window",
             Command::NewPrivateWindow => "new-private-window",
             Command::NewLittleWindow => "new-little-window",
+            Command::NewBlankWindow => "new-blank-window",
             Command::OpenInMainWindow => "open-in-main-window",
             Command::CloseWindow => "close-window",
             Command::EditUrl => "edit-url",
@@ -1347,7 +1356,7 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return;
         }
         if self.little.is_some() && !little_runs(command) {
@@ -1446,6 +1455,7 @@ impl Shell {
             }
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
+            Command::NewBlankWindow => return self.browser.new_blank_window(cx),
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
                 return self.browser.new_little_window(home, cx);
@@ -2032,7 +2042,7 @@ impl Shell {
 
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return false;
         }
         if self.little.is_some() && !little_runs(command) {
@@ -2119,6 +2129,7 @@ impl Shell {
             | Command::NewWindow
             | Command::NewPrivateWindow
             | Command::NewLittleWindow
+            | Command::NewBlankWindow
             | Command::CloseWindow
             | Command::ToggleSidebar
             | Command::NewSpace
@@ -2227,7 +2238,7 @@ impl Shell {
     /// theirs, as their menu's, for the Spaces it lists and the folders. A private window has one
     /// Space and no folders.
     pub(super) fn named_bar_rows(&self) -> Vec<NamedRow> {
-        if self.private {
+        if self.one_space() {
             return Vec::new();
         }
         let chosen = !self.chosen.is_empty();

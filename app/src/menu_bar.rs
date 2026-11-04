@@ -108,6 +108,7 @@ pub(crate) fn menus(
                 item("New Window", Command::NewWindow),
                 item("New Little ilo Window", Command::NewLittleWindow),
                 item("New Incognito Window", Command::NewPrivateWindow),
+                item("Blank Window", Command::NewBlankWindow),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),

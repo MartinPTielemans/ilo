@@ -216,7 +216,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // A private window's Space has nothing to change.
-        if self.private {
+        if self.one_space() {
             return;
         }
         let items = self.space_items(space, true, cx);
@@ -241,7 +241,7 @@ impl Shell {
             }),
         )];
         // A private window's Space has no folders, and nothing to change.
-        if !self.private {
+        if !self.one_space() {
             let new_folder =
                 MenuEntry::new("New Folder…", true).shortcut(Command::NewFolder, user_keys(cx));
             items.push((
@@ -759,7 +759,7 @@ impl Shell {
             (MenuEntry::line(), "", Box::new(|_, _| {}))
         };
         // A private window's tabs are Today's alone, and stay in it.
-        if self.private {
+        if self.one_space() {
             return vec![copy, line(), close];
         }
         let pin = if self.chosen_pin() {
@@ -1127,9 +1127,29 @@ impl Shell {
             "duplicate-tab",
             Box::new(move |shell, cx| shell.duplicate_row(tab, cx)),
         ));
+        // A Blank Window's tab moves out to one of the user's Spaces of its profile, its way out
+        // (Arc's Move to › Space), and shows there; a private window's stay in it.
+        if self.blank {
+            let profile = self.shown_space().map_or(0, |space| space.profile);
+            let targets: Vec<(u64, SharedString)> = (self.blank_targets.iter())
+                .filter(|(_, _, each)| *each == profile)
+                .map(|(space, name, _)| (*space, name.clone()))
+                .collect();
+            if !targets.is_empty() {
+                let move_to = items.len();
+                items.push((MenuEntry::new("Move to", true), "", Box::new(|_, _| {})));
+                for (space, name) in targets {
+                    items.push((
+                        MenuEntry::named(name, true).under(move_to),
+                        "move-to-space",
+                        Box::new(move |shell, cx| shell.browser.move_out_of_blank(tab, space, cx)),
+                    ));
+                }
+            }
+        }
         // A private window's tabs stay in it. The others: every one of the user's Spaces, the
         // tab's checked, then a new one.
-        if !self.private {
+        if !self.one_space() {
             self.push_add_to_folder(vec![tab], &mut items);
             let move_to = items.len();
             items.push((MenuEntry::new("Move to", true), "", Box::new(|_, _| {})));
@@ -1245,7 +1265,7 @@ impl Shell {
         ));
         // Every one of the user's Spaces, the split's checked, then a new one, each taking the
         // whole split. A private window's tabs stay in it.
-        if !self.private {
+        if !self.one_space() {
             let move_to = items.len();
             items.push((MenuEntry::new("Move to", true), "", Box::new(|_, _| {})));
             for (space, name, shown) in self.spaces_to_move_to(true) {
@@ -1524,7 +1544,7 @@ impl Shell {
             true => &[("Add File or Folder…", true, true)],
             false => &[("Add Files…", true, false), ("Add Folder…", false, true)],
         };
-        if !self.private {
+        if !self.one_space() {
             entries.push(MenuEntry::line());
             entries.extend(disk.iter().map(|&(title, ..)| MenuEntry::new(title, true)));
         }
