@@ -1,0 +1,35 @@
+# What the browser connects to on its own, host by host: every host check/hosts.sh may see in
+# Chromium's net log of a launch, an idle past the security components' first check, a page and
+# a search typed in the command bar. One pattern a line, * for any part of a name, then why, in
+# the words of ilobrowser.com/privacy (#684). A host not here fails the run, and one added here
+# goes on that page in the same change.
+
+# The run's own server.
+127.0.0.1         the run's own pages
+localhost         the run's own pages
+
+# Security components: the component updater's check and its downloads (engine/README.md › What
+# reaches Google).
+update.googleapis.com   security components' update check
+dl.google.com           security components' downloads
+*.gvt1.com              security components' downloads
+
+# uBlock Origin's lists, weekly and at a launch past their expiry, from the hosts its assets.json
+# names (core/ad_block.cc, app/ublock.ini).
+ublockorigin.github.io     ad and tracker blocking lists
+ublockorigin.pages.dev     ad and tracker blocking lists
+cdn.jsdelivr.net           ad and tracker blocking lists
+raw.githubusercontent.com  ad and tracker blocking lists
+pgl.yoyo.org               ad and tracker blocking lists
+malware-filter.gitlab.io   ad and tracker blocking lists
+malware-filter.pages.dev   ad and tracker blocking lists
+curbengh.github.io         ad and tracker blocking lists
+publicsuffix.org           ad and tracker blocking lists
+
+# The search engine's suggestions as the user types in the command bar: DuckDuckGo, the default
+# (core/search_default.cc).
+duckduckgo.com             search suggestions as you type
+
+# The system's proxy settings: where they say to find a proxy automatically, as Windows' do by
+# default, the name the local network may answer for a proxy configuration (WPAD).
+wpad                       automatic proxy discovery, on the local network
