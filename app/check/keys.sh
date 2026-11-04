@@ -172,6 +172,7 @@ expect '^browser: command new-window via ui$' "⌘N with the UI focused didn't r
 expect '^browser: window opened [0-9]' "⌘N with the UI focused didn't open a window"
 first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
 send click $(row 0)

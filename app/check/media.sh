@@ -410,6 +410,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $private\$" "the private window didn't open"
+new_window_bar
 send window 2
 # private_page <name>: opens the call page named <name> in the private window, as $p.
 private_page() {

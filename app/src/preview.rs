@@ -1393,6 +1393,8 @@ impl Browser for Fake {
 
     fn full_screen_note(&self, _: bool, _: &mut App) {}
 
+    fn enter_full_screen(&self, _: &mut App) {}
+
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
 

@@ -798,6 +798,7 @@ expect "^browser: pinned $p\$" "⌘D didn't pin the tab"
 open_from_bar example.com
 send key n cmd
 expect '^browser: window opened [0-9]*$' "⌘N didn't open a second window"
+new_window_bar
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew

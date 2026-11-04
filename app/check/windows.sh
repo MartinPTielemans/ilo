@@ -1,5 +1,5 @@
-# ⌘N opens another window on the same Spaces, showing the key window's Space with no page, whose
-# card shows its one line, and a click on the card with ⌘T's bar open only closes the bar. Settings
+# ⌘N opens another window on the same Spaces, showing the key window's Space with no page, with
+# ⌘T's command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
 # The Spaces menu acts on the window in front. A click on a row whose page another window shows
@@ -77,6 +77,7 @@ second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $second shows 0\$" "the new window showed a page"
 none_since "^browser: window $first shows" || fail "⌘N changed what the first window shows"
 shown_first=$(grep -c "^browser: window $first shows" "$log")
+new_window_bar "$out/new-window-bar.png"
 send window 2
 ../tools/window-screenshot.sh "$pid" "$out/windows-new.png" all || fail "no window to capture"
 # The new window's card shows its mark and line, and its URL field its placeholder, once the fade
@@ -334,6 +335,7 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for Safari's engine's page"
   fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $fourth shows 0\$" "the window for Safari's engine's page showed a page"
+  new_window_bar
   send window 4
   send click $(row 0)
   expect "^browser: window $fourth shows $d\$" \
@@ -458,6 +460,7 @@ first_size=$(grep '^browser: layout content ' "$log" | tail -1 | sed 's/^browser
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the moves"
 fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 driven_fourth=$(grep -c '^browser: window opened ' "$log")
 rm -f "$out/handover.txt"

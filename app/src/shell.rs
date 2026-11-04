@@ -80,6 +80,7 @@ mod menu_bar;
 mod menus;
 mod naming;
 mod new_space;
+mod new_window;
 mod onboarding;
 mod page_dialog;
 mod page_menu;
@@ -1268,6 +1269,8 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
+    opening: Option<new_window::Opening>,
     /// On Linux, whether the window is maximized, which its third button shows.
     maximized: bool,
     /// Whether the window went full screen for the page, so it comes back with it.
@@ -1683,6 +1686,7 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            opening: None,
             maximized: false,
             window_for_page: false,
             page_held: None,
@@ -3037,6 +3041,10 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
+        // A new window waiting for its full screen opens its bar at the next frame.
+        if self.opening.is_some() {
+            cx.notify();
+        }
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -3513,6 +3521,7 @@ impl Render for Shell {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.full_screen_step("drawn", window.viewport_size());
+        self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
         // to what's drawn.

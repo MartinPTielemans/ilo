@@ -8,7 +8,8 @@
 # both full screen or both out, and escape and the page's full screen work after; going away while
 # the page takes the window full screen leaves both windowed. The footer's menu
 # flips up at the screen's bottom in full screen.
-# The command bar opens in full screen and keeps the keyboard when a page commits under it, then
+# ⌘N in full screen, with the page's keyboard, opens a window that goes full screen too and then
+# opens ⌘T's command bar, whose URL loads there. The command bar opens in full screen and keeps the keyboard when a page commits under it, then
 # gives the keyboard to the new page, and scrolling a long page doesn't stutter. Dragging the
 # window's background moves the window, and the buttons, URL field and rows keep their presses. A
 # double-click there zooms it, and one in the
@@ -290,6 +291,24 @@ expect '^browser: menu closed$' "escape didn't close the +'s menu in full screen
 send click $page_point
 send state
 in_browser RenderWidgetHostViewCocoa "after a click on the page under the closed +'s menu"
+# ⌘N with the page's keyboard, in full screen, opens a window that goes full screen too, then opens
+# ⌘T's command bar in it, whose URL loads there (Arc). The window it came from shows what it did.
+send key n cmd
+expect '^browser: command new-window via ' "⌘N in full screen with the page's keyboard didn't run New Window"
+expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window in full screen drew no frame"
+expect_late '^browser: new window went full screen$' "⌘N's window from full screen didn't go full screen"
+expect_late '^browser: command bar shown$' "⌘N's full-screen window didn't open the command bar"
+expect_late '^browser: toast settled$' "the new full-screen window's note didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/new-window-full-screen.png" || fail "no window to capture"
+send insert "${site}notes.txt"
+send key return
+expect "^browser: window $full_new shows [1-9][0-9]*\$" "the URL typed in ⌘N's command bar didn't show in its window"
+# Its own full screen ends as the first's does, by the green button, and it closes.
+send key w cmd shift
+expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+send window 1
 send fullscreen
 expect '^browser: window left full screen$' "the window didn't leave full screen"
 check_layout "after full screen"
