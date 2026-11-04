@@ -127,7 +127,7 @@ pub use commands::{
     BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
     KeepName, Match, Run, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
     find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
-    shown_tab, task_page_shown, with_named_rows,
+    shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::dropped_urls;
@@ -1904,9 +1904,7 @@ impl Shell {
         browser: Rc<dyn Browser>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let key = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone());
+        let key = commands::key_shell(cx);
         let shell = Self::seeded_from(from, browser, cx);
         if let Some(key) = key {
             cx.set_global(ShellHandle(key));
@@ -3148,10 +3146,7 @@ impl Shell {
     /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
     /// the user's, so its dot is the icon's own.
     fn follow_dock(&self, cx: &mut Context<Self>) {
-        if cx
-            .try_global::<ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity())
-        {
+        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
         }
     }

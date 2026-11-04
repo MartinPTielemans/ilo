@@ -725,9 +725,7 @@ pub struct BarTab {
 
 /// The commands that do something now that match `typed`, best first.
 pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     let Some(shell) = shell else {
         return Vec::new();
     };
@@ -955,10 +953,7 @@ pub fn key_name(key: &str, off_the_mac: bool) -> String {
 /// Copies `text`, a sum's result chosen in the command bar, once the bar has gone, and says so in
 /// the toast.
 pub fn copy_from_bar(text: &str, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -972,10 +967,7 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
     let url = clean_link(url);
-    let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    else {
+    let Some(shell) = key_shell(cx) else {
         return;
     };
     if !url.is_empty() {
@@ -987,10 +979,7 @@ pub fn copy_url_of_preview(url: &str, cx: &mut App) {
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
 pub fn run_from_bar(command: Command, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -1159,6 +1148,20 @@ pub(super) struct ShellHandle(pub(super) WeakEntity<Shell>);
 
 impl Global for ShellHandle {}
 
+/// The shell of the browser window last key, which the browser's shortcuts and menus act on.
+pub(super) fn key_shell(cx: &App) -> Option<WeakEntity<Shell>> {
+    cx.try_global::<ShellHandle>()
+        .map(|handle| handle.0.clone())
+}
+
+/// A browser window became key, as the host says from inside AppKit's update that made it so,
+/// where the app can't change (#819): what the shell does about it, for once that update is over.
+pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 'static {
+    move |cx| {
+        shell.update(cx, |shell, cx| shell.became_key(cx)).ok();
+    }
+}
+
 /// The key context at the root of the browser's windows, where its shortcuts apply. GPUI ranks a
 /// binding with no context above every other, so without one the shortcuts would take keys a
 /// focused field binds for itself, such as escape and ⌘←.
@@ -1186,10 +1189,7 @@ pub fn bind_keys(cx: &mut App) {
         if run.0.opens_field() {
             gpui_linux::hold_keys(None);
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.run(run.0, "ui", cx))
                 .ok();
@@ -1205,10 +1205,7 @@ pub fn bind_keys(cx: &mut App) {
 /// room of the pane being added, if one is, so the split view shows at its place at once. ⌘Z takes
 /// `tab` back out, or closes it if it was `opened` for the split.
 pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 if shell.adding_pane.take().is_some() {
@@ -1226,18 +1223,14 @@ pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
 
 /// The tab the window shows, or 0.
 pub fn shown_tab(cx: &App) -> u64 {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     shell.map_or(0, |shell| shell.read(cx).selected)
 }
 
 /// Whether `tab` is a task's page the window shows in place, which the user may edit the address
 /// of but which stays in the task's Space.
 pub fn task_page_shown(tab: u64, cx: &App) -> bool {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
 }
 
@@ -2742,6 +2735,68 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// A shell with one Space and Today tabs `tabs`, on a host that records what it asks.
+    fn shell_with_today(
+        cx: &mut gpui::TestAppContext,
+        tabs: Vec<u64>,
+    ) -> (
+        gpui::Entity<Shell>,
+        std::rc::Rc<super::super::recorder::Recorder>,
+    ) {
+        use gpui::AppContext;
+        let host = std::rc::Rc::new(super::super::recorder::Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Default::default(), cx);
+            shell.set_space(1, cx);
+        });
+        (shell, host)
+    }
+
+    /// A shortcut acts on the window just made key, though the shell hears of the change only
+    /// once AppKit's update that made it is over: a click into another window and ⌘2 right away
+    /// show that window's second tab, not the one behind's.
+    #[gpui::test]
+    fn a_shortcut_acts_on_the_window_just_made_key(cx: &mut gpui::TestAppContext) {
+        cx.update(bind_keys);
+        let (first, first_host) = shell_with_today(cx, vec![11, 12]);
+        // Made last, it's the one the shortcuts act on, as a window just opened is.
+        let (_second, second_host) = shell_with_today(cx, vec![21, 22]);
+        cx.run_until_parked();
+        first_host.take();
+        second_host.take();
+
+        // As the host's key change does, and the press comes before the executor's next turn.
+        let later = window_became_key(first.downgrade());
+        cx.update(|cx| cx.dispatch_action(&Run(Command::SelectTab(1))));
+        let asked = |host: &super::super::recorder::Recorder| -> Vec<String> {
+            let calls = host.take();
+            calls
+                .into_iter()
+                .filter(|call| call.starts_with("select "))
+                .collect()
+        };
+        assert_eq!(
+            asked(&first_host),
+            ["select 12"],
+            "the window made key showed its tab"
+        );
+        assert!(
+            asked(&second_host).is_empty(),
+            "the window behind showed nothing"
+        );
+
+        cx.update(later);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::SelectTab(0))));
+        assert_eq!(
+            asked(&first_host),
+            ["select 11"],
+            "and still does once the shell has heard"
         );
     }
 }
