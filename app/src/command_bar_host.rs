@@ -131,6 +131,7 @@ impl command_bar::Host for Bar {
 
     fn dismiss(&self) {
         unsafe { platform::host_dismiss_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn take_keyboard(&self) {
@@ -295,5 +296,6 @@ pub(crate) fn rgba_u32(color: gpui::Rgba) -> u32 {
 /// The user left the command bar without choosing anything in it.
 pub(crate) extern "C" fn command_bar_dismissed() {
     update_app(command_bar::dismissed);
+    crate::settings::bar_hidden();
     update_window(front().0, |shell, cx| shell.command_bar_dismissed(cx));
 }
