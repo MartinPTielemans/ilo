@@ -86,7 +86,7 @@ Revisit the look if Arc users moving over say ilo doesn't feel like Arc continue
 
 ## 8. Agents: the user's own agents, in their real browser
 
-Agents drive the user's real browser through ilo's built-in MCP server, as a first-class, built-in capability. They come two ways, and both take that one path:
+Agents drive the user's real browser through ilo's built-in MCP server, as a first-class, built-in capability. They come two ways, and to the core both are agents alike, with the same tools, permission checks, confirmations and activity log:
 
 - **From outside.** Any MCP client (Claude Code, Codex, others) connects to the server.
 - **From ilo.** The user asks from ⌘T, and ilo runs the `claude` or `codex` CLI the user installed and signed into, with ilo's MCP server added for that task. The user's own subscription pays. ilo never handles their login, token or key, and when the CLI is missing or signed out it says how to fix that.
@@ -94,11 +94,10 @@ Agents drive the user's real browser through ilo's built-in MCP server, as a fir
 ilo has no assistant of its own: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes can reach. Cloud agents come later, through explicit pairing.
-- **Where the work shows.** Each agent works in a Space of its own that no window lists, and its work shows as a card at the sidebar's foot, without becoming tabs: its pages and its steps live in the card. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its own terminal. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
+- **Where the work shows.** Each agent works in a Space of its own that no window lists, its pages and steps on a card at the sidebar's foot, not among the tabs. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its terminal. An agent never takes the user's focus or cursor, and the user can watch, take over and hand back at any time.
 - **Engine-native page access.** The core serves the accessibility tree, a cleaned-up DOM, stable element references and screenshots straight from Chromium. No extension, and no remote-debugging port.
 - **Permissions per agent and per site,** plus an activity log. Defaults are conservative: no payments, no sending messages or forms on sensitive sites without confirmation, and no banking sites unless the user allows them.
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.
-- **Same rules either way.** To the core, a task asked from ilo is an agent like any other: the same tools, permission checks, confirmations and activity log.
 - **Browser tools only.** A CLI that ilo runs gets ilo's MCP tools and nothing else. Its shell, file and web tools, the user's other MCP servers, plugins, hooks and settings are all off, it runs in an empty folder, and ilo declines any other approval it asks for. Page text can steer an agent, and a shell would reach the user's files, keys included. A CLI that can't be limited this way isn't offered.
 - **Sessions, never secrets.** Agents act inside the user's logged-in sessions but can never read passwords, cookies or autofill data.
 
@@ -114,7 +113,7 @@ Revisit asking from ilo if Anthropic or OpenAI stop other apps from running thei
 Consequences now:
 
 - The core exposes one API that both the UI and agents use. Agents are not a bolt-on.
-- "Agent Space" is a kind of Space in the data model from the start, hidden from the user, who sees an agent's work on its card.
+- "Agent Space" is a kind of Space in the data model from the start.
 - The main risk is prompt injection from page content. Permissions and confirmations limit the damage but don't solve it, so confirmation UI and the activity log ship with the MCP server, never after it.
 
 ## 9. Crash reports: opt-in, to Sentry (EU region)
