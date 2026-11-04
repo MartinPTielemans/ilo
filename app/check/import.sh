@@ -10,7 +10,10 @@
 # password importer: the view says how many came in, deletes the file when asked, and a second file
 # with a login's password changed says it conflicted and kept the saved one. Settings' Passwords
 # tab lists what came in, and the app menu's Import from Other Browsers… shows Import again. With
-# the sidebar hidden, Arc's Spaces say so in a toast. Each step is captured, and the list and the
+# the sidebar hidden, Arc's Spaces say so in a toast. While an import runs, each Space it makes is
+# a card under its profile, captured waiting and then stalled (Arc's, with Work's profile held back
+# until the run releases it, recorded on the Mac) and ticked (Chrome's, as its history goes in). Once a browser has come in, its row says when,
+# that again brings only what's new, and Import Again…. Each step is captured, and the list and the
 # first browser's choices, read as it's picked and each kind counted, under Import › its name with
 # Import in the accent, at Settings' first size and its least, dark and light; Esc goes back from
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
@@ -42,10 +45,56 @@ elif windows; then
   arc_dir="$store/Arc"
   chrome="$home/AppData/Local/Google/Chrome/User Data"
   firefox="$home/AppData/Roaming/Mozilla/Firefox"
+  # Chrome installed for the user keeps chrome.exe beside its profiles, which is where the app
+  # looks in a made-up home. Here it's a copy of Windows' whoami.exe with its resources taken out
+  # and a plain icon of ours put in, a blue square, never Chrome's; it's never run.
+  mkdir -p "$home/AppData/Local/Google/Chrome/Application"
+  python3 -I -c '
+import ctypes, shutil, struct, sys, zlib
+from ctypes import wintypes
+size = 256
+rows = b"".join(b"\0" + bytes([40, 120, 220, 255]) * size for _ in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+# A group of one 256 px icon, 0 being 256, whose image is the PNG.
+group = struct.pack("<HHHBBBBHHIH", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 1)
+shutil.copyfile(sys.argv[1], sys.argv[2])
+kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel.BeginUpdateResourceW.restype = wintypes.HANDLE
+kernel.BeginUpdateResourceW.argtypes = [wintypes.LPCWSTR, wintypes.BOOL]
+kernel.UpdateResourceW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                   wintypes.WORD, ctypes.c_char_p, wintypes.DWORD]
+kernel.EndUpdateResourceW.argtypes = [wintypes.HANDLE, wintypes.BOOL]
+update = kernel.BeginUpdateResourceW(sys.argv[2], True)
+ok = bool(update)
+ok = ok and kernel.UpdateResourceW(update, 3, 1, 1033, png, len(png))
+ok = ok and kernel.UpdateResourceW(update, 14, 1, 1033, group, len(group))
+ok = ok and kernel.EndUpdateResourceW(update, False)
+sys.exit(0 if ok else "the icon did not go in: %d" % ctypes.get_last_error())
+' "$(cygpath -W)\\System32\\whoami.exe" \
+    "$(cygpath -w "$home/AppData/Local/Google/Chrome/Application/chrome.exe")" ||
+    fail "couldn't make the made-up Chrome's exe"
 else
   arc=
   chrome="$home/.config/google-chrome"
   firefox="$home/.mozilla/firefox"
+  # Chrome's desktop entry and a made-up icon in the made-up home, the one place the run's app
+  # looks for them, so its row has an app icon as a launcher finds it, and Firefox's the globe.
+  mkdir -p "$home/.local/share/applications" "$home/.local/share/icons/hicolor/64x64/apps"
+  printf '[Desktop Entry]\nName=Chrome\nIcon=google-chrome\n' \
+    > "$home/.local/share/applications/google-chrome.desktop"
+  python3 -I -c '
+import struct, sys, zlib
+size = 64
+rows = b"".join(b"\0" + bytes([40, 120, 220, 255]) * size for _ in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+' "$home/.local/share/icons/hicolor/64x64/apps/google-chrome.png" || fail "couldn't write the made-up icon"
 fi
 mkdir -p "$chrome/Default"
 printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$chrome/Local State"
@@ -146,10 +195,13 @@ web_data="$profile_dir/Default/Web Data"
 [ ! -e "$web_data" ] || sql "$web_data" "DELETE FROM addresses; DELETE FROM address_type_tokens;" ||
   fail "the check's profile kept its addresses"
 # The app on Windows takes Windows' paths, and starts in a folder of its own.
-BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
+# Arc's Work profile is held back from its Space until the run releases it, with Shift+F12, so the
+# captures show its card waiting and then stalled however fast the profile loads (import_host.rs).
+BROWSER_IMPORT_HOLD=Work BROWSER_IMPORT_HOME="$(native_path "$PWD/$home")" \
   BROWSER_IMPORT_PASSWORDS="$(native_path "$PWD/$passwords")" \
   BROWSER_IMPORT_BOOKMARKS="$(native_path "$PWD/$bookmarks")" BROWSER_DRIVE=1 BROWSER_URL="${site}import.html" \
-  "$browser" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --extension-mime-request-handling=always-prompt-for-install < "$out/drive" \
+  > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -190,6 +242,13 @@ settings_drew 'Import & Export'
 expect "^browser: import found $found\$" \
   "the import didn't find the fixture's $found, and only them: $(grep 'import found' "$log")"
 expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+# Each row's app icon is the system's, a plate's 28 points at the window's scale: on Linux and
+# Windows the made-up one for Chrome alone, from its desktop entry or its exe; on the Mac
+# whichever of the browsers the runner has installed, which the capture shows.
+if [ "$(uname)" = Linux ] || windows; then
+  await '^browser: import icons [0-9]* px: Chrome$' ||
+    fail "Chrome's row didn't get the made-up icon: $(grep 'import icon' "$log")"
+fi
 ../tools/window-screenshot.sh "$pid" "$out/import-list.png" || fail "no window to capture"
 # Settings at its first size and at its least, in its look and then the other, as
 # $out/import-settings-$1-<width>-<dark|light>.png, and back at its first size in its own look.
@@ -252,11 +311,32 @@ if [ -n "$arc" ]; then
   expect '^browser: import pick Arc$' "Import… on Arc's row didn't show what comes from it"
   expect '^browser: import drawn pick$' "Arc's choices didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/import-pick.png" || fail "no window to capture"
+  # The arrival, recorded on the Mac: a card a Space as the core makes it, under its profile, each
+  # waiting while Work's profile is held back from its Space.
+  record import-arrival 2
   click_drawn import-go
+  # What the Spaces' coming logs, from Import on, as the stall's steps come between.
+  go=$step
+  expect '^browser: import cards Personal, Work$' "Arc's Spaces didn't come as cards, Personal then Work"
+  expect '^browser: import holds space [0-9]* from profile [0-9]*$' "the run didn't hold Work's Space back"
+  expect '^browser: import drawn running$' "Arc's cards didn't draw"
+  # The still waits for the recording, as one taken while the window records ends it (ReplayKit's
+  # -5814); the cards wait on, as Work is held.
+  recorded
+  ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
   expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
     "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
   expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
   expect '^browser: added profile [0-9]* Work$' "Arc's Work profile didn't come in"
+  # Work's card stalls, dimmed with ⚠ and its rows waiting once Work opens, and Personal's waits
+  # with it, as the tabs go in together.
+  for _ in 1 2 3; do await '^browser: import stalled: ' && break; done
+  expect '^browser: import stalled: Work hasn.t opened' "Work's held profile didn't stall the import"
+  expect '^browser: import drawn stalled$' "the stalled import didn't draw"
+  send state
+  ../tools/window-screenshot.sh "$pid" "$out/import-stalled.png" || fail "no window to capture"
+  send key f12 shift
+  expect '^browser: import releases 1 Spaces to profile [0-9]*$' "Shift+F12 didn't release Work's Space"
   arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
@@ -271,9 +351,9 @@ seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
   ../tools/window-screenshot.sh "$pid" "$out/import-done.png" || fail "no window to capture"
-  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first"
+  expect "^browser: spaces $first [0-9]* [0-9]*\$" "the import didn't add Arc's two Spaces after the first" "$go"
   expect '^browser: toast shown Added 2 Spaces \[show\]$' \
-    "Arc's two Spaces made with the sidebar hidden had no toast"
+    "Arc's two Spaces made with the sidebar hidden had no toast" "$go"
   spaces=$(grep '^browser: spaces' "$log" | tail -1)
   personal=$(echo "$spaces" | cut -d' ' -f4)
   work=$(echo "$spaces" | cut -d' ' -f5)
@@ -306,14 +386,22 @@ expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
 click_drawn import-go
 expect '^browser: import from Chrome: 1 Spaces, 3 pinned tabs, 1 open tabs, 0 favorites, 2 pages, 1 addresses$' \
   "Import didn't plan Chrome's bookmarks, open tab, history and address"
+# Its card ticks once its tabs are in, as the core adds the history after: captured then, or at
+# the end if the core was quicker than the frame.
+expect '^browser: import cards Chrome$' "Chrome's Space didn't come as a card"
+expect '^browser: import \(drawn placed\|done: \)' "Chrome's tabs didn't go in"
+../tools/window-screenshot.sh "$pid" "$out/import-placed.png" || fail "no window to capture"
 await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Chrome's 2 pages"
 await '^browser: addresses added 1 to profile [0-9]*$' || fail "the core didn't add Chrome's address"
 expect '^browser: import done: 1 Space, 3 pinned tabs, 1 open tab, 2 pages of history and 1 address came in from Chrome\.$' \
   "the import didn't say what came from Chrome"
 ../tools/window-screenshot.sh "$pid" "$out/import-chrome.png" || fail "no window to capture"
+expect '^browser: import kept Chrome$' "Chrome's import wasn't kept as its last"
 expect '^browser: import drawn done$' "the import's end didn't draw"
 click_drawn import-done
 expect '^browser: import drawn list$' "Done didn't go back to the list"
+# Chrome's row says when it came in, that again brings only what's new, and Import Again….
+../tools/window-screenshot.sh "$pid" "$out/import-again-list.png" || fail "no window to capture"
 send clickkey $(drawn "import-from Chrome")
 expect '^browser: import pick Chrome$' "Import… didn't show Chrome's choices again"
 expect '^browser: import drawn pick$' "Chrome's choices didn't draw"
@@ -414,6 +502,132 @@ if [ -n "$arc" ]; then
     "Personal's pinned tabs and folders aren't the 7 rows Arc's are: $(pinned)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
+# The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
+# in after the others, which Settings finds as it shows again: its bookmarks in a bar, a folder of
+# the bar's and the other bookmarks, a Web Store extension it pinned and uBlock Origin. Choose
+# folders shows a box of the folders, each ticked; one unticked, the bar's Reading, stays out. Its end
+# lists the extension to add, with uBlock Origin left off in a line of its own, with Add Anyway.
+# Added from the list, and then from the run's own .crx, offline, the extension is pinned as it
+# was in Brave.
+if [ "$(uname)" = Darwin ]; then
+  brave="$home/Library/Application Support/BraveSoftware/Brave-Browser"
+elif windows; then
+  brave="$home/AppData/Local/BraveSoftware/Brave-Browser/User Data"
+else
+  brave="$home/.config/BraveSoftware/Brave-Browser"
+fi
+mkdir -p "$brave/Default"
+printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Brave Me"}}}}' > "$brave/Local State"
+cat > "$brave/Default/Bookmarks" << 'JSON'
+{"roots": {
+  "bookmark_bar": {"type": "folder", "name": "Bookmarks bar", "children": [
+    {"type": "url", "name": "Mail", "url": "https://brave-mail.example.org/"},
+    {"type": "folder", "name": "Reading", "children": [
+      {"type": "url", "name": "Read", "url": "https://brave-read.example.org/"}]}]},
+  "other": {"type": "folder", "name": "Other bookmarks", "children": [
+    {"type": "url", "name": "Docs", "url": "https://brave-docs.example.org/"}]},
+  "synced": {"type": "folder", "name": "Mobile bookmarks", "children": []}}, "version": 1}
+JSON
+# The extension's .crx, signed with a key of the run's own, which its id comes from, as
+# extensions.sh makes its own; the made-up Brave has it from the Web Store, pinned.
+pinned_src="$out/pinned-extension"
+rm -rf "$pinned_src"
+mkdir -p "$pinned_src/source"
+printf '%s' '{"manifest_version": 3, "name": "Check Pinned", "version": "1",
+ "action": {"default_title": "Check Pinned"}}' > "$pinned_src/source/manifest.json"
+pinned_id=$(python3 -I -c '
+import hashlib, io, os, struct, subprocess, sys, zipfile
+
+source, crx = sys.argv[1], sys.argv[2]
+key = os.path.join(os.path.dirname(source), "key.pem")
+subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
+public = subprocess.run(["openssl", "rsa", "-in", key, "-pubout", "-outform", "DER"],
+                        check=True, capture_output=True).stdout
+archive = io.BytesIO()
+with zipfile.ZipFile(archive, "w") as z:
+    for name in sorted(os.listdir(source)):
+        z.write(os.path.join(source, name), name)
+archive = archive.getvalue()
+
+# A length-delimited protobuf field.
+def field(number, data):
+    out = b""
+    for value in (number << 3 | 2, len(data)):
+        while value > 0x7f:
+            out += bytes([value & 0x7f | 0x80])
+            value >>= 7
+        out += bytes([value])
+    return out + data
+
+# CRX3 (components/crx_file/crx3.proto): the key, and its signature of the id and the zip.
+crx_id = hashlib.sha256(public).digest()[:16]
+signed = field(1, crx_id)
+signature = subprocess.run(
+    ["openssl", "dgst", "-sha256", "-sign", key], check=True, capture_output=True,
+    input=b"CRX3 SignedData\x00" + struct.pack("<I", len(signed)) + signed + archive).stdout
+header = field(2, field(1, public) + field(2, signature)) + field(10000, signed)
+with open(crx, "wb") as f:
+    f.write(b"Cr24" + struct.pack("<II", 3, len(header)) + header + archive)
+print("".join(chr(ord("a") + int(c, 16)) for c in crx_id.hex()))
+' "$pinned_src/source" "$out/site/pinned.crx") || fail "couldn't make the pinned extension's .crx"
+printf '{"extensions": {"pinned_extensions": ["%s"]}}' "$pinned_id" > "$brave/Default/Preferences"
+store_manifest() {
+  mkdir -p "$brave/Default/Extensions/$1/1_0"
+  printf '{"manifest_version": 3, "name": "%s", "version": "1", "update_url": "%s"}' "$2" \
+    "https://clients2.google.com/service/update2/crx" > "$brave/Default/Extensions/$1/1_0/manifest.json"
+}
+store_manifest "$pinned_id" "Check Pinned"
+store_manifest cjpalhdlnbpafiamejdnhcphjbkeiagm "uBlock Origin"
+send menu Import from Other Browsers…
+expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings again"
+settings_drew 'Import & Export'
+# Import & Export finds the browsers again as it's switched to.
+send clickkey $(drawn "toolbar Passwords")
+expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+settings_drew Passwords
+send clickkey $(drawn "toolbar Import & Export")
+expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+settings_drew 'Import & Export'
+expect '^browser: import found .*Brave' "Settings didn't find the made-up Brave once it showed again"
+send clickkey $(drawn "import-from Brave")
+expect '^browser: import pick Brave$' "Import… on Brave's row didn't show its choices"
+expect '^browser: import read Brave: ' "picking Brave didn't read it"
+# Choose folders, a box of a checkbox a folder, each ticked.
+send clickkey $(drawn import-choose-folders)
+expect '^browser: import folders .*Other bookmarks' "Choose folders didn't list Brave's folders"
+send state
+../tools/window-screenshot.sh "$pid" "$out/import-folders.png" || fail "no window to capture"
+# The bar's folder Reading unticked: its bookmark stays out, so 2 of the 3 come.
+send clickkey $(drawn "import-folder Reading")
+expect '^browser: import leaves out Reading$' "a click didn't untick Reading"
+# Closed again, which keeps what's unticked, Import is back in the card's sight.
+send clickkey $(drawn import-choose-folders)
+click_drawn import-go
+expect '^browser: import from Brave: 1 Spaces, 2 pinned tabs, 0 open tabs, 0 favorites, 0 pages, 0 addresses$' \
+  "the import didn't leave the unticked folder out: $(grep '^browser: import from Brave' "$log" | tail -1)"
+expect "^browser: import lists extensions .*$pinned_id" "Brave's import didn't list its extension"
+await '^browser: import done: .* from Brave' || fail "Brave's import didn't end"
+expect '^browser: import drawn done$' "Brave's import's end didn't draw"
+# Its end lists the extension, pinned in Brave, with Add…, and leaves uBlock Origin off the list in
+# a line of its own, with Add Anyway.
+send state
+../tools/window-screenshot.sh "$pid" "$out/import-extensions.png" || fail "no window to capture"
+if windows; then
+  echo "skip: adding the listed extension from a .crx: Windows' driver doesn't answer its install dialog yet."
+else
+  send clickkey $(drawn "import-add-extension $pinned_id")
+  expect "^browser: import add extension $pinned_id\$" "Add… didn't take the extension off the list"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  go_from_bar "${site}pinned.crx"
+  expect '^browser: dialog shown Add "Check Pinned"?$' "the .crx didn't ask to add Check Pinned"
+  expect '^browser: dialog takes input$' "the install dialog never took input"
+  send key return
+  expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
+  await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
+    fail "the extension Brave pinned wasn't pinned once it came in"
+  ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
+fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
@@ -428,7 +642,9 @@ echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
-echo "  $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
+echo "  $out/import-arriving.png and import-stalled.png (with Arc), $out/import-placed.png,"
+echo "  $out/import-folders.png, $out/import-extensions.png, $out/import-pinned-extension.png (not on Windows),"
+echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
 echo "  $out/import-passwords-conflict.png, $out/import-personal.png"

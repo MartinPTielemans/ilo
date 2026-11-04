@@ -188,14 +188,14 @@ fn a_tasks_space_is_never_listed(cx: &mut TestAppContext) {
             shell.set_page(tab, page, cx);
         }
     });
-    let searched = shell.read_with(cx, |shell, _| shell.open_tabs());
+    let searched = shell.read_with(cx, |shell, cx| shell.open_tabs(cx));
     let searched: Vec<u64> = searched.iter().map(|tab| tab.tab).collect();
     assert_eq!(
         searched,
         [11],
         "the agents' 20, 30 and 31 aren't the user's to search"
     );
-    let bar = shell.read_with(cx, |shell, _| shell.bar_tabs());
+    let bar = shell.read_with(cx, |shell, cx| shell.bar_tabs(cx));
     assert_eq!(bar.iter().map(|tab| tab.tab).collect::<Vec<_>>(), [11]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_tabs(3)), [30, 31]);
 }
@@ -598,13 +598,67 @@ fn the_url_field_is_the_page_watcheds(cx: &mut TestAppContext) {
         "it left the page"
     );
 
+    // Back in the conversation, the field shows no page, as nothing in the page area is one.
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
-    let field = shell.read_with(cx, |shell, _| shell.url(shell.field_tab()));
     assert_eq!(
-        field.as_ref(),
-        "https://en.wikipedia.org/wiki/Lisbon",
-        "the conversation's is the user's"
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
     );
+    assert_eq!(shell.read_with(cx, |shell, _| shell.field_tab()), 0);
+}
+
+/// While a task's conversation is in the page area, no page is: the URL field reads as an empty
+/// card's, with the command bar's placeholder, Copy URL copies nothing and Edit URL edits no tab,
+/// and the Space's tab gives up its selected plate, which the task's card has. Back on the tab,
+/// both are the tab's again.
+#[gpui::test]
+fn the_conversation_shows_no_page_in_the_url_field_or_the_rows(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://en.wikipedia.org/wiki/Lisbon".into(),
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    });
+    let words = |shell: &Shell| shell.url_field_words(&shell.url(shell.field_tab())).0;
+    assert_eq!(
+        shell.read_with(cx, |shell, _| words(shell)).as_ref(),
+        "en.wikipedia.org"
+    );
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(words(shell).as_ref(), crate::command_bar::PLACEHOLDER_TEXT);
+        assert!(
+            shell.selected_row().is_none(),
+            "the Space's tab kept its plate"
+        );
+    });
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyUrl, "ui", cx);
+        shell.run(Command::EditUrl, "ui", cx);
+    });
+    assert!(
+        host.copied.borrow().is_empty(),
+        "Copy URL copied the user's tab under the conversation"
+    );
+    assert_eq!(*host.bar_edits.borrow(), [None]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "Edit URL left it"
+    );
+
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(words(shell).as_ref(), "en.wikipedia.org");
+        assert!(
+            shell.selected_row() == Some(crate::shell::Row::Tab(10)),
+            "the tab didn't get its plate back"
+        );
+    });
 }
 
 /// ⌘R and Back act on the page watched; ⌘T opens the bar over the conversation, the core showing

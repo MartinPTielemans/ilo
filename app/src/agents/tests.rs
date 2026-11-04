@@ -2273,6 +2273,54 @@ mod tasks {
         assert_eq!(card.dot, Dot::Ended);
     }
 
+    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
+    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
+    /// apps that connect, and on again it's as it was.
+    #[gpui::test]
+    fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.state = State::Limit { resets: None };
+        });
+        assert!(card_of(&agents, cx).retry);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.read_with(cx, |agents, _| {
+            assert!(agents.is_on(), "tasks off turned agents off");
+            assert!(!agents.tasks_on());
+            assert!(
+                agents.ask_agents().is_empty(),
+                "⌘T's ask still lists agents"
+            );
+        });
+        let started = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Another", page(), 1, cx)
+        });
+        assert_eq!(started, None, "a task started with tasks off");
+        assert!(!card_of(&agents, cx).retry, "the card still offers Retry");
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("And a hotel".into()), cx);
+            agents.task_action(&agent, TaskAction::Retry, cx);
+        });
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached the task with tasks off"
+        );
+        assert!(matches!(
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
+            State::Limit { .. }
+        ));
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
+        assert!(card_of(&agents, cx).retry);
+    }
+
     #[gpui::test]
     fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
         let names = tools::names("task-1");
@@ -3958,6 +4006,67 @@ mod sessions {
         hello(&agents, "claude-code", "claude-code", cx);
         let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
         assert_eq!(claude, "Claude Code");
+    }
+
+    /// A session's card, once it ends, is its receipt (#1080): the orders the user allowed it, done,
+    /// and not the pages it worked in, which Open's button counts. An order refused, or allowed and
+    /// failed in the page, isn't one placed. A session with nothing of the kind says when it ended.
+    #[gpui::test]
+    fn a_sessions_receipt_counts_its_pages_and_the_orders_it_placed(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 1, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 1, cx);
+        let order = |id: u64, answer: Answer, cx: &mut TestAppContext| {
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser
+                .asked
+                .borrow()
+                .clone()
+                .expect("the order didn't ask");
+            assert_eq!(question.why, "It looks like a payment or an order.");
+            agents.update(cx, |agents, cx| agents.answer(question.id, answer, cx));
+            reply
+        };
+        let placed = order(2, Answer::Once, cx);
+        assert!(!page_done(&agents, &browser, placed, shop_tree(), cx).error);
+        answered(&agents, 2, cx);
+        let refused = order(3, Answer::Dismiss, cx);
+        assert!(refused.recv().unwrap().error);
+        answered(&agents, 3, cx);
+        let failed = order(4, Answer::Once, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| {
+            agents.page_done(request, "The button went away.".into(), true, cx)
+        });
+        assert!(failed.recv().unwrap().error);
+        answered(&agents, 4, cx);
+        assert_eq!(
+            cards(&agents, cx)[0].dot,
+            Dot::Working,
+            "the receipt came before the end"
+        );
+
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(
+            !card.status.contains('·'),
+            "a session that only looked has a receipt: {}",
+            card.status
+        );
     }
 
     /// A session with no call under way ends once IDLE passes without another, and a call before

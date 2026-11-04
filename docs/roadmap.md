@@ -30,7 +30,7 @@ GPUI and prebuilt CEF in windowed mode, in one Mac process. CEF stands in for Ch
 - Prebuilt engine downloads, so UI work never waits on a Chromium build.
 - CI compiles the core on Linux.
 
-**Done when** a prebuilt framework downloads and links into the spike (`spikes/gpui-core/` at abb8164, since removed).
+**Done when** a prebuilt framework downloads and links into the spike.
 
 ## Phase 3: daily-driver MVP on Mac (about 2–3 months)
 
@@ -46,7 +46,7 @@ Agents (decision 8): the built-in local MCP server, Agent Spaces (their hidden t
 
 ## Phase 5: Windows, then Linux
 
-Per platform: the platform layer, packaging, updater, signing. Linux first runs on X11, under XWayland on Wayland desktops, then on native Wayland (decision 3).
+Per platform: the platform layer, packaging, updater, signing. Linux runs on X11 and on native Wayland (decision 3). On wlroots' Xwayland its panels can't keep the keys, so use Wayland there (#1646).
 
 **Done when** each platform's build passes the parity checklist's MVP items and the performance gate, and on Linux that holds on native Wayland as well as X11.
 

@@ -359,6 +359,7 @@ if [ "$driven" = 1 ]; then
   send key n cmd shift
   expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
   private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
+  new_window_bar
   open_link "?private" "$first" "$window"
   await "^browser: key window $window\$" || fail "the regular window didn't come to the front"
   grep -q "^browser: link from another app .* of window $private\$" "$log" &&
@@ -618,7 +619,7 @@ import json, os, sys
 path, pattern, allow = sys.argv[1], sys.argv[2], sys.argv[3] == "allow"
 prefs = {}
 if os.path.exists(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         prefs = json.load(f)
 sites = prefs.setdefault("profile", {}).setdefault("content_settings", {})
 sites = sites.setdefault("exceptions", {}).setdefault("notifications", {})
@@ -627,7 +628,7 @@ if allow:
 else:
     sites.pop(pattern, None)
 os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
+with open(path, "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 PY
   }

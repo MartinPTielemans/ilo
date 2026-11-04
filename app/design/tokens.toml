@@ -557,6 +557,11 @@ intensity-floor = 0.2
 intensity-span = 0.55
 # A Space swatch's ring, a hairline.
 ring = 1.0
+# A Space swatch of two colours holds its main colour, the one the Space's accents take, solid
+# this far along its 135° diagonal, then reaches the second at its far edge: about two thirds of
+# the disc is nearer the main colour, where the window's own 75 % would leave it a third (ours,
+# #1849).
+swatch-main-to = 0.25
 # The accent under the pointer, each channel at this, darker as every filled button goes (the
 # owner, 2026-10-26); pressed, each channel at this, a step darker again, whatever the label (the
 # owner, #707); and a text selection, the accent at this.
@@ -612,6 +617,19 @@ section-shadow = 0x00000033
 section-hovered = 0.12
 foot-text = 0.55
 foot-glyph-alpha = 0.45
+# Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
+# 8 in, with the sections 12 under it. ⌘F sits at its end, quiet, until typing starts; then ✕ on an
+# 18 circle empties it. While it finds rows, the sections with none dim to 0.35, so where things
+# live stays readable, and a row a click on its section's name goes to flashes once: a plate under
+# it up to the sidebar's hovered 0.12 and back over 600 ms.
+search-gap = 12.0
+search-hint = 0.4
+search-clear = 18.0
+search-clear-glyph = 10.0
+search-clear-fill = 0.2
+search-dimmed = 0.35
+found-flash = 0.12
+found-flash-time = 0.6
 # The card the section shows on: 10 in from the window's top, right and bottom at the card's
 # radius, its rim in dark and its ring and shadow in light, and a fade into its fill over the last
 # 28 where rows go on under it.
@@ -997,6 +1015,13 @@ close-hovered = 0.12
 url-field = 0.1
 new-tab = 0.62
 new-tab-plus = 0.45
+# The update banner over the footer (#678), as Arc's: a pill this tall at rest, this far over the
+# footer and under the list, its glyph this size in the rows' icon column and its words on their
+# title column; under the pointer it opens upward to this height, in the dialog's timing.
+update-banner = 24.0
+update-banner-gap = 6.0
+update-banner-glyph = 14.0
+update-banner-open = 86.0
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
 # The edges under the favorites while the list is scrolled and at its foot while rows are hidden
@@ -1028,9 +1053,13 @@ developer-outline-width = 1.0
 developer-selected = 0.26
 developer-tile = 0.16
 # The header's glyphs (docs/ux-spec.md › Header and URL field): 0.60, and 0.26 for back or forward
-# with nowhere to go, over a hover plate of 0.077.
+# with nowhere to go, over a hover plate of 0.077. In a window that isn't the user's they all take
+# the disabled 0.26 as it is, under the glyph floor (palette.rs), which would leave the dim unseen:
+# nobody reads them till they're back, as macOS greys the traffic lights, and WCAG's 1.4.11
+# exempts inactive controls. The active window's, a disabled back's too, keep the floor.
 nav = 0.6
 nav-disabled = 0.26
+nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name and the switcher's icons, on #320's ladder: 0.62, then 0.6 for the Space shown
 # and 0.35 for the others, 0.5 under the pointer (ours: Arc's isn't measured). The Space shown's
@@ -1406,11 +1435,72 @@ swatch-edge = 0.12
 # ground, their boxes this much of the ink over it.
 import-width = 556.0
 import-surface = 0.05
+# Seconds the import step holds on its Spaces once they're in, so the user sees them tick, before
+# it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
+# after it, in the line at the bottom left.
+import-hold = 0.6
+# The line saying where the favorites go is this far under their tiles.
+tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.
 opt-in-width = 420.0
 opt-in-line = 18.0
+
+[shell.import]
+# Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
+# name of the profile it goes into, its count rolling up as its pinned tabs go in, and ticked once
+# they're in. A card 80 by 96 on the first launch's ground, 72 wide in Settings' group, 8 apart, at
+# the row radius; its glyph, name and count `card-inset` in, the name 12/16 medium and the count
+# 11/14 at 0.6 of the ink. Its colour runs from `card-tint-top` of it at the top to
+# `card-tint-bottom` at the bottom over the ground, and less on a light one.
+card-width = 80.0
+card-width-settings = 72.0
+card-height = 96.0
+card-gap = 8.0
+card-inset = 10.0
+card-glyph = 16.0
+card-name = 12.0
+card-name-line = 16.0
+card-count = 11.0
+card-count-line = 14.0
+card-count-alpha = 0.6
+card-tint-top = 0.42
+card-tint-bottom = 0.14
+card-tint-top-light = 0.38
+card-tint-bottom-light = 0.12
+# A card waiting on a profile that hasn't opened is drawn at this of itself, with ⚠ for its badge.
+card-held = 0.5
+# The badge, 16 across in the accent, `badge-inset` in from the card's top right, ticks once its
+# Space is in; until then a dot of the ink breathes there.
+badge = 16.0
+badge-inset = 8.0
+# A profile's cards sit under its name, 11/14, 6 above them; the profiles `profile-gap` apart,
+# wrapping at the view's width.
+profile-name = 11.0
+profile-name-line = 14.0
+profile-name-gap = 6.0
+# The favorites an import offers are tiles, `tiles-per-row` to a row across the view, `card-gap`
+# apart, at the row radius: the site's letter on a `tile-plate` plate at the control radius, 11 semibold, over its name,
+# 11/14, `tile-name-gap` under it, and the badge at the cards' place. A tile unticked loses its
+# fill for the line, and its letter and name are at `tile-unticked` of themselves.
+tile-height = 76.0
+tiles-per-row = 4
+tile-plate = 22.0
+tile-letter = 11.0
+tile-name = 11.0
+tile-name-line = 14.0
+tile-name-gap = 8.0
+tile-unticked = 0.4
+profile-gap = 24.0
+
+[shell.import.motion]
+# Seconds. A card comes as a task's chips do ([shell.task.motion] chips, chips-stagger,
+# chips-rise, on its ease), and its count rolls as a task's status ([shell.task.motion] roll,
+# roll-rise), once a roll at most. Its badge's check draws in `check`, ease-in-out (ux-spec, Check
+# draw), and its waiting dot breathes once in `breath` (ux-spec, Status dot breath).
+check = 0.25
+breath = 1.6
 
 [shell.permission]
 # Ours, as Arc's wasn't recorded: under the URL field, as wide as it, with the dialog's corners
@@ -1564,11 +1654,17 @@ foot-share = 0.5
 # The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
 # the task works, at this alpha, and goes to the middle, grown, while it asks; done, the ring
 # shrinks away for a tick; stopped, the dot goes and the ring shrinks, in the ink at `stopped`.
+# The rings are drawn at these values, under the floor text keeps (palette), as they're marks
+# beside a status that says the same in words. On the selected plate's fill, which Signal stands
+# out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
+# a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from a
+# card's own fill, over a black backdrop and a white one.
 glyph = 18.0
 glyph-top = 11.0
 ring = 5.25
 ring-stroke = 1.5
 ring-working = 0.28
+ring-working-selected = 0.5
 ring-done = 0.6
 ring-stopped = 0.65
 stopped = 0.45
@@ -1576,12 +1672,13 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
-# The status while it works: a highlight sweeping along it, from `shimmer-low` to the
-# `shimmer-high` alpha over `shimmer-reach` of the line's width either side of its middle, which
+# The status while it works: a highlight sweeping along it, from the status's own colour to the
+# ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
 # goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
-# the end for a while before the next sweep.
-shimmer-low = 0.5
-shimmer-high = 0.95
+# the end for a while before the next sweep. It's text, so it never dims under the floor text
+# keeps (palette), and the highlight goes from wherever that floor puts the status, to the full
+# ink, so it shows however far the window raises it: a dark window raises the status to 0.88.
+shimmer-high = 1.0
 shimmer-reach = 0.312
 shimmer-from = -0.3
 shimmer-to = 2.26
@@ -1672,13 +1769,20 @@ title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
 header-bottom = 14.0
-picture-width = 112.0
-picture-height = 72.0
+# Pages, the task's own view of its pages (#1080, the orchestrator's call): a grid of its pages'
+# pictures, up to `pictures-columns` across, as many as the area holds, each over its site, and the
+# agent's page's step, `pictures-row-gap` over the next row. The pictures are taken at twice this
+# size, when the agent acts.
+picture-width = 326.0
+picture-height = 204.0
 picture-radius = 6.0
-picture-gap = 10.0
+picture-gap = 16.0
+pictures-row-gap = 24.0
+pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-pictures-bottom = 18.0
+# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+views-gap = 4.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1713,8 +1817,9 @@ page-chip-fill = 0.08
 # it, each a line of its glyph, its title in secondary and, fainter, what it took from 1 s or why
 # it failed. A line that opens has its own chevron and, under the pointer, a plate hanging outside
 # its text, which then goes to the title's colour. A rule runs down the open trace, in from the
-# column's edge. The step under way shimmers: a band of near-white sweeps across its title, a pass
-# each period. A failed step's glyph is the find bar's red.
+# column's edge. The step under way shimmers: a band of the full ink sweeps across its title, a
+# pass each period, from wherever the floor text keeps puts the title, as the card's status does.
+# A failed step's line is the find bar's red: its glyph, its title and why.
 trace-line = 26.0
 trace-glyph = 14.0
 trace-glyph-alpha = 0.38
@@ -1735,7 +1840,7 @@ open-below = 6.0
 trace-picture-width = 150.0
 trace-picture-height = 94.0
 trace-picture-radius = 6.0
-shimmer = 0.95
+shimmer = 1.0
 shimmer-period = 1.6
 # Half the band, in the title's widths.
 shimmer-band = 0.3
@@ -1758,8 +1863,8 @@ lines-below = 16.0
 # curve. A line or a step rises the chips' distance over `rise`, as Thinking does, and Stop fades
 # in and out over it; Open comes as a question's chips do. A line's words crossfade, the old going over `swap` and the new coming
 # over the crossfade's rest; a finished step's note fades in over the task's `fade`. A page grows
-# into the pictures over `picture` as it fades in over `rise`, and the Signal ring slides to it
-# `ring-delay` later. As the turn ends its trace folds: its steps fade over `steps-fade` and it
+# into Pages over `picture` as it fades in over `rise`, and the Signal ring rings the page the
+# agent is on. As the turn ends its trace folds: its steps fade over `steps-fade` and it
 # closes over the task's `height`, its chevron turning over `chevron`. The answer comes once it
 # has folded, each block `stagger` after the one before and fading in over `stream`, as each run
 # of the words Claude writes does as it comes. A picked answer lands as a sent reply does; the
@@ -1768,7 +1873,6 @@ land = 0.26
 rise = 0.15
 swap = 0.09
 picture = 0.22
-ring-delay = 0.14
 steps-fade = 0.11
 chevron = 0.2
 stream = 0.16

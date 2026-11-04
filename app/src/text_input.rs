@@ -434,6 +434,18 @@ impl TextInput {
         self.marked_range.is_some()
     }
 
+    /// The field's text without what an input method is still composing in it.
+    pub fn committed(&self) -> String {
+        match &self.marked_range {
+            Some(marked) => format!(
+                "{}{}",
+                &self.content[..marked.start],
+                &self.content[marked.end..]
+            ),
+            None => self.content.to_string(),
+        }
+    }
+
     /// The field's own menu shows, which has its window's keyboard until it closes, so the field
     /// hasn't been left.
     pub fn menu_shown(&self) -> bool {

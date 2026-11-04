@@ -12,7 +12,6 @@ use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, pre
 use super::{
     CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
     NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
-    ShellHandle,
     undo::{Prop, Value},
 };
 use crate::{
@@ -330,9 +329,7 @@ impl Shell {
         }
         self.picker_pending = None;
         // The picker shows over the key window, which may have changed while the row moved.
-        let key = cx
-            .try_global::<ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity());
+        let key = super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity());
         if !key {
             return;
         }

@@ -43,7 +43,11 @@ use gpui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/active_window.rs"]
+mod active_window;
 mod agents_core;
+mod bar_picks_host;
 mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
@@ -86,6 +90,9 @@ mod menu_window;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/motion.rs"]
 mod motion;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/needs_you.rs"]
+mod needs_you;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
@@ -148,6 +155,7 @@ use menu_bar::*;
 mod hosts;
 use hosts::*;
 mod command_bar_host;
+mod needs_you_host;
 use command_bar_host::*;
 mod link_preview_host;
 use link_preview_host::*;
@@ -238,6 +246,15 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     });
     let repeat = unsafe { platform::host_key_repeated() };
     let now = Instant::now();
+    // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
+    if keystroke == "escape"
+        && update_tab_window(tab, |shell, cx| {
+            shell.escape_in_full_screen(repeat, now, cx)
+        })
+        .unwrap_or(false)
+    {
+        return (true, "escape in full screen");
+    }
     let shortcut = shortcut.flatten().is_some();
     if SECOND_PRESS.with_borrow_mut(|second| second.press(tab, &keystroke, shortcut, repeat, now)) {
         // check.sh reads this line.
@@ -267,7 +284,28 @@ fn open_saved_windows(cx: &mut App) {
         let Some(above) = WINDOWS.with_borrow(|windows| windows.last().cloned()) else {
             return;
         };
-        open_window_as(Some(above), None, Some(index), cx);
+        open_window_as(Some(above), None, Some(index), None, cx);
+    }
+}
+
+/// A window brought back in a Space an agent left, which this launch deletes once it has moved its
+/// tabs to the user's (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the
+/// user's Space of its profile instead. The pages the launch opens then go there and stay in front,
+/// where they went to the agent's Space and the window then showed another tab.
+fn leave_agent_space(window: bc::bc_id) {
+    let shown = unsafe { bc::bc_window_space(window) };
+    if shown == 0 || name(bc::bc_space_agent, shown).is_empty() {
+        return;
+    }
+    let profile = unsafe { bc::bc_space_profile(shown) };
+    let home = ids(bc::bc_spaces).into_iter().find(|&space| {
+        name(bc::bc_space_agent, space).is_empty()
+            && unsafe { bc::bc_space_profile(space) } == profile
+    });
+    if let Some(home) = home {
+        // check.sh reads this line.
+        log!("browser: window {window} left space {shown} of an agent for space {home}");
+        unsafe { bc::bc_window_show_space(window, home) };
     }
 }
 
@@ -288,6 +326,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
             "browser: restored in {:.1} ms",
             start.elapsed().as_secs_f64() * 1000.
         );
+        leave_agent_space(window);
     } else {
         unsafe { bc::bc_window_show_space(window, create_space("Space 1", 0)) };
     }
@@ -295,6 +334,7 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
     link_rules_host::read();
     let links = LAUNCH_LINKS.take().unwrap_or_default();
     let notes = UPDATE_NOTES.take().or_else(first_launch_notes);
+    let notes = browser::updates::notes_to_open(notes, std::path::Path::new(&profile_dir()));
     match std::env::var("BROWSER_URL") {
         Ok(url) => open_tab(window, &url),
         Err(_) if !restored && links.is_empty() && notes.is_none() => {
@@ -472,6 +512,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
             platform::host_since_launch()
         });
         dock_dot::open(Rc::new(DockDot), cx);
+        settings::read_switches(cx);
+        needs_you_host::start(cx);
         open_window(None, None, cx);
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium

@@ -34,16 +34,21 @@ index 54b72a63ec..cf7cd404f3 100644
      pub fn simulate_resize(&self, size: Size<Pixels>) {
          self.simulate_window_resize(self.window, size)
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..3643f9c59c 100644
+index a875ee0f37..129db9afc3 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -1415,8 +1415,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -1415,8 +1415,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
 -    #[cfg(any(test, feature = "test-support"))]
 -    fn render_to_image(&self, _scene: &Scene) -> Result<RgbaImage> {
-+    #[cfg(any(test, feature = "test-support", target_os = "windows"))]
++    #[cfg(any(
++        test,
++        feature = "test-support",
++        target_os = "windows",
++        target_os = "linux"
++    ))]
 +    fn render_to_image(&self, _scene: &Scene) -> Result<image::RgbaImage> {
          anyhow::bail!("render_to_image not implemented for this platform")
      }
@@ -259,10 +264,61 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..8397cab3b2 100644
+index c559412e56..f9733eb4c8 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -737,6 +737,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -360,6 +360,50 @@ thread_local! {
+ /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
+ /// message pumping in the Windows window procedure), instead of running a
+ /// nested draw or panicking on the already-borrowed App.
++/// Whether the App is in an update, as it is when Windows sends a window's move and size, or its
++/// activation's modifiers, from inside the update that moves or activates it.
++fn app_busy(cx: &crate::AsyncApp) -> bool {
++    (cx.app.upgrade()).is_some_and(|app| app.try_borrow_mut().is_err())
++}
++
++/// Says, for ilo's checks (check.sh), that a window's `kind` update was lost, as the App was still
++/// in an update once the update it came during was over.
++fn dropped(kind: &str, cx: &crate::AsyncApp) {
++    if app_busy(cx) {
++        eprintln!("browser: gpui dropped {kind}");
++    }
++}
++
++/// Tells `handle` its bounds changed, at once or, when that comes during an update, once it's over,
++/// one time for all that came during it.
++fn bounds_changed_now_or_after(
++    handle: AnyWindowHandle,
++    later: &Rc<Cell<bool>>,
++    kind: &'static str,
++    cx: &mut crate::AsyncApp,
++) {
++    if later.get()
++        || handle
++            .update(cx, |_, window, cx| window.bounds_changed(cx))
++            .is_ok()
++        || !app_busy(cx)
++    {
++        return;
++    }
++    later.set(true);
++    let later = later.clone();
++    cx.spawn(async move |cx| {
++        later.set(false);
++        if handle
++            .update(cx, |_, window, cx| window.bounds_changed(cx))
++            .is_err()
++        {
++            dropped(kind, cx);
++        }
++    })
++    .detach();
++}
++
+ fn draw_in_progress() -> bool {
+     CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
+ }
+@@ -737,6 +781,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -282,7 +338,7 @@ index c559412e56..8397cab3b2 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1247,6 +1260,10 @@ pub struct Window {
+@@ -1247,6 +1304,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -293,7 +349,7 @@ index c559412e56..8397cab3b2 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1681,7 @@ impl Window {
+@@ -1664,6 +1725,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -301,7 +357,7 @@ index c559412e56..8397cab3b2 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1773,6 +1791,7 @@ impl Window {
+@@ -1773,6 +1835,7 @@ impl Window {
              let mut cx = cx.to_async();
              let invalidator = invalidator.clone();
              let active = active.clone();
@@ -309,7 +365,7 @@ index c559412e56..8397cab3b2 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1830,7 +1849,10 @@ impl Window {
+@@ -1830,7 +1893,10 @@ impl Window {
                          && next_frame_callbacks.borrow().is_empty())
                  {
                      None
@@ -321,7 +377,70 @@ index c559412e56..8397cab3b2 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -2156,6 +2178,9 @@ impl Window {
+@@ -1964,21 +2030,16 @@ impl Window {
+                     .log_err();
+             }
+         }));
++        let bounds_later = Rc::new(Cell::new(false));
+         platform_window.on_resize(Box::new({
+             let mut cx = cx.to_async();
+-            move |_, _| {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
+-            }
++            let bounds_later = bounds_later.clone();
++            move |_, _| bounds_changed_now_or_after(handle, &bounds_later, "resize", &mut cx)
+         }));
+         platform_window.on_moved(Box::new({
+             let mut cx = cx.to_async();
+-            move || {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
+-                    .log_err();
+-            }
++            let bounds_later = bounds_later.clone();
++            move || bounds_changed_now_or_after(handle, &bounds_later, "move", &mut cx)
+         }));
+         platform_window.on_display_changed(Box::new({
+             let cx = cx.to_async();
+@@ -2053,10 +2114,31 @@ impl Window {
+         platform_window.on_input({
+             let mut cx = cx.to_async();
+             Box::new(move |event| {
+-                handle
+-                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
+-                    .log_err()
+-                    .unwrap_or(DispatchEventResult::default())
++                let modifiers = matches!(event, PlatformInput::ModifiersChanged(_));
++                match handle.update(&mut cx, |_, window, cx| window.dispatch_event(event, cx)) {
++                    Ok(result) => result,
++                    Err(_) => {
++                        // A window activated inside an update tells its modifiers then: once it's
++                        // over, the ones held by then, as a key may have gone up meanwhile.
++                        if modifiers && app_busy(&cx) {
++                            cx.spawn(async move |cx| {
++                                let told = handle.update(cx, |_, window, cx| {
++                                    let event =
++                                        PlatformInput::ModifiersChanged(ModifiersChangedEvent {
++                                            modifiers: window.platform_window.modifiers(),
++                                            capslock: window.platform_window.capslock(),
++                                        });
++                                    window.dispatch_event(event, cx)
++                                });
++                                if told.is_err() {
++                                    dropped("modifiers", cx);
++                                }
++                            })
++                            .detach();
++                        }
++                        DispatchEventResult::default()
++                    }
++                }
+             })
+         });
+         platform_window.on_hit_test_window_control({
+@@ -2156,6 +2238,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -331,17 +450,23 @@ index c559412e56..8397cab3b2 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +2909,8 @@ impl Window {
+@@ -2884,7 +2969,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
 -    #[cfg(any(test, feature = "test-support"))]
-+    // ilo takes the launch picture on Windows from the frame GPUI drew.
-+    #[cfg(any(test, feature = "test-support", target_os = "windows"))]
++    // ilo takes the launch picture on Windows, and a dragged tab's on Linux, from the frame GPUI
++    // drew.
++    #[cfg(any(
++        test,
++        feature = "test-support",
++        target_os = "windows",
++        target_os = "linux"
++    ))]
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3761,7 +3787,23 @@ impl Window {
+@@ -3761,7 +3853,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -366,7 +491,7 @@ index c559412e56..8397cab3b2 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4269,40 @@ impl Window {
+@@ -4227,6 +4335,40 @@ impl Window {
          result
      }
  
@@ -407,7 +532,7 @@ index c559412e56..8397cab3b2 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5654,8 @@ impl Window {
+@@ -5578,9 +5720,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -419,7 +544,7 @@ index c559412e56..8397cab3b2 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7172,24 @@ impl Window {
+@@ -7097,18 +7238,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
