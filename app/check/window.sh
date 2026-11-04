@@ -550,8 +550,9 @@ drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
-# On Windows the frame keeps its top edge, design/tokens.toml's card-inset less 2, as Windows'
-# windows resize by theirs (platform/windows/host.cc's FrameHit), and the margin under it moves.
+# On Windows the frame keeps the top 8 points, Windows' resize border (platform/windows/host.cc's
+# FrameHit), as Windows' windows resize by theirs, and the card's margin under it moves the window:
+# design/tokens.toml's card-inset is 10.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
   drag 600 9 moves "the card's top margin"
