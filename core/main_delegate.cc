@@ -78,6 +78,7 @@
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -338,6 +339,27 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         ChromeContentBrowserClient::CreateBrowserMainParts(is_integration_test);
     static_cast<ChromeBrowserMainParts*>(parts.get())->AddParts(std::make_unique<ExtraParts>());
     return parts;
+  }
+
+  // Chrome's, but a profile's session cookies, those with no expiry a sign-in often lives in, come
+  // back at every launch, as Chrome brings them back only when it restores the last session or
+  // after a crash (ProfileImpl::ShouldRestoreOldSessionCookies). ilo always brings its tabs back
+  // itself, with no startup preference for Chrome to read, so it keeps what they were signed in
+  // with too (#1934). Only where Chrome keeps them on disk at all: a profile's main partition, not
+  // an off-the-record profile's or an app's partition.
+  void ConfigureNetworkContextParams(
+      content::BrowserContext* context,
+      bool in_memory,
+      const base::FilePath& relative_partition_path,
+      network::mojom::NetworkContextParams* network_context_params,
+      cert_verifier::mojom::CertVerifierCreationParams* cert_verifier_creation_params) override {
+    ChromeContentBrowserClient::ConfigureNetworkContextParams(
+        context, in_memory, relative_partition_path, network_context_params,
+        cert_verifier_creation_params);
+    if (!in_memory && relative_partition_path.empty() &&
+        network_context_params->persist_session_cookies) {
+      network_context_params->restore_old_session_cookies = true;
+    }
   }
 
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
