@@ -20,7 +20,8 @@ use gpui::{
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
     MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, What,
+    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE,
+    URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
     clean_link, dashed_square,
     display_face::{cap_top, display_text},
@@ -121,6 +122,7 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
+use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
@@ -1502,8 +1504,6 @@ impl Shell {
     /// click shows the Space, and a right-click shows its menu.
     fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let id = space.id;
-        // An agent's Space keeps its tabs, and takes none, as the sidebar's drag leaves it.
-        let user = space.agent.is_empty();
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
@@ -1534,9 +1534,6 @@ impl Shell {
                 if panes.len() == 1 {
                     let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
                     let plate = plate(self.tab_icon_in(&palette, tab), label);
-                    if !user {
-                        return card_row(depth, plate);
-                    }
                     let dragged = CardTab {
                         tab,
                         space: id,
@@ -1565,6 +1562,39 @@ impl Shell {
             }
         });
         let field = self.card_field(space, &palette, window_at(0.), cx);
+        // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
+        // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
+        let half = URL_BUTTON_SIZE / 2.;
+        let more = div()
+            .id(("space-card-more", id))
+            .absolute()
+            .right(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .when(self.a11y, |more| {
+                more.button_named("Edit Space")
+                    .pressed_by_mouse_down(true, false)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    shell.space_menu(id, event.position, cx)
+                }),
+            )
+            .child(
+                svg()
+                    .path("icons/ellipsis.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            );
         div()
             .id(("space-card", id))
             .flex_none()
@@ -1582,11 +1612,9 @@ impl Shell {
                     shell.space_menu(id, event.position, cx)
                 }),
             )
-            .when(user, |card| {
-                card.on_drop(cx.listener(move |shell, dragged: &CardTab, _, cx| {
-                    shell.drop_on_card(*dragged, id, cx)
-                }))
-            })
+            .on_drop(cx.listener(move |shell, dragged: &CardTab, _, cx| {
+                shell.drop_on_card(*dragged, id, cx)
+            }))
             .group("space-card")
             // Over the gradient and under the rows, ringed while another card's tab is over it.
             .child(
@@ -1596,7 +1624,7 @@ impl Shell {
                     .rounded(px(CARD_RADIUS))
                     .group_hover("space-card", |style| style.bg(palette.plate(STATE_HOVERED)))
                     .can_drop(move |dragged, _, _| {
-                        user && dragged
+                        dragged
                             .downcast_ref::<CardTab>()
                             .is_some_and(|d| d.space != id)
                     })
@@ -1608,6 +1636,7 @@ impl Shell {
             )
             .child(field)
             .child(div().children(rows))
+            .child(more)
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon

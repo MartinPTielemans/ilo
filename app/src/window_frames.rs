@@ -59,6 +59,13 @@ pub fn place(saved: Frame, screens: &[Frame]) -> Option<Frame> {
     })
 }
 
+/// `point`, a window's origin, at the whole point nearest it. The core makes a frame the whole
+/// points around it, so a window placed at half a point would open a point bigger than it's meant
+/// to be, as the first window did centred on a screen of odd height (#1568).
+pub fn whole_point((x, y): (f64, f64)) -> (f64, f64) {
+    (x.round(), y.round())
+}
+
 /// Where a Little ilo window opens from `centered`, centred on its screen: a little above the
 /// middle, four tenths of the room over it rather than half, on the screen holding its centre
 /// (ux-spec.md › Little Arc). Unmoved with no screens, as under Wayland, or when the host didn't
@@ -75,13 +82,9 @@ pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
         return centered;
     }
     let room = (screen.height - centered.height).max(0.);
-    // At whole points: the core makes a frame the whole points around it, so a fractional one
-    // would open a point bigger, and each window after it bigger again, at the last one's size.
-    Frame {
-        x: centered.x.round(),
-        y: (screen.y + room * 0.4).round(),
-        ..centered
-    }
+    // At whole points, or each window after it would open bigger again, at the last one's size.
+    let (x, y) = whole_point((centered.x, screen.y + room * 0.4));
+    Frame { x, y, ..centered }
 }
 
 /// Where a Little ilo window of `size` opens on the screen holding `pointer`, as Arc's opens on the
@@ -248,6 +251,17 @@ mod tests {
         // At the screen's corner, where a host leaves it for the window manager to place.
         let placed = frame(0., 0., 900., 640.);
         assert_eq!(raised(placed, &[LAPTOP, DISPLAY]), placed);
+    }
+
+    /// The hosted Mac's 1920 by 971 visible frame centres a 1280 by 800 window at 116.5 down,
+    /// which the core made 116 and 801 tall; Windows' work area over its scale can be any fraction.
+    /// The origin goes to the nearest whole point, and one already whole stays (#1568).
+    #[test]
+    fn a_centred_window_opens_at_whole_points() {
+        assert_eq!(whole_point((320., 116.5)), (320., 117.));
+        assert_eq!(whole_point((319.6, 85.25)), (320., 85.));
+        assert_eq!(whole_point((-1280.5, 0.)), (-1281., 0.));
+        assert_eq!(whole_point((0., 0.)), (0., 0.));
     }
 
     /// A screen 674 tall under a 31-point menu bar, as the hosted Mac's, where a Little ilo window

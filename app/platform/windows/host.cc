@@ -4,6 +4,9 @@
 // window of its own that the browser window owns, which this places over it.
 
 #include <windows.h>
+
+#include <appmodel.h>
+#include <propsys.h>
 #include <windowsx.h>
 
 #include <commctrl.h>
@@ -17,8 +20,10 @@
 #include <wrl/client.h>
 
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.Notifications.h>
 
 #include <algorithm>
 #include <cstdarg>
@@ -446,18 +451,6 @@ void SystemFrame(HWND hwnd) {
 }
 
 void WatchOwner(HWND root);
-// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
-// The UI sizes its overlays from inside its update, where GPUI can't take the new size: its
-// renderer grows, but the UI goes on laying out at the old one, so what it adds, as the command
-// bar's suggestions, is drawn cut off. The size again after the update reaches it.
-void SizeAgainLater(HWND hwnd) {
-  Later([hwnd] {
-    RECT client{};
-    if (IsWindow(hwnd) && GetClientRect(hwnd, &client)) {
-      SendMessageW(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.right, client.bottom));
-    }
-  });
-}
 
 // The window at the end of |hwnd|'s owners, the browser window an overlay or a menu over it floats
 // over, or |hwnd| if it has no owner.
@@ -486,6 +479,7 @@ HWND InsertAfter(HWND hwnd) {
   return HWND_TOP;
 }
 
+// Puts |hwnd| at |x|, |y|, |width| by |height| over its browser window and on screen.
 void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate) {
   const HWND after = InsertAfter(hwnd);
   SetWindowPos(hwnd, after, x, y, width, height, SWP_NOACTIVATE);
@@ -501,7 +495,6 @@ void PlaceAndShow(HWND hwnd, int x, int y, int width, int height, bool activate)
     SetWindowPos(hwnd, after, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
   }
-  SizeAgainLater(hwnd);
 }
 
 // Whether one of the app's windows has the foreground, rather than another app's the user is in.
@@ -635,7 +628,6 @@ void Resize(Floating& floating, double height) {
   SetWindowPos(floating.hwnd, nullptr, 0, 0, rect.right - rect.left,
                static_cast<int>(std::lround(height * Scale(floating.hwnd))),
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-  SizeAgainLater(floating.hwnd);
 }
 
 // The UI views host_ui_view made, in order, for the watchers to find a browser window's.
@@ -703,6 +695,24 @@ std::vector<std::string> DraggedFiles(IDataObject* data) {
   return urls;
 }
 
+// The format of a tab host_drag_tab drags: this process's id and the tab's, as text, which only the
+// app's own targets take, so another app, or another ilo, leaves it be.
+CLIPFORMAT TabFormat() {
+  static const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"dev.ilo.browser.tab"));
+  return format;
+}
+
+// The app's tab |data| carries, else 0.
+uint64_t DraggedTab(IDataObject* data) {
+  const std::wstring text = DraggedText(data, TabFormat());
+  unsigned long pid = 0;
+  unsigned long long tab = 0;
+  if (swscanf(text.c_str(), L"%lu %llu", &pid, &tab) != 2 || pid != GetCurrentProcessId()) {
+    return 0;
+  }
+  return tab;
+}
+
 // The target the UI's holder registers for drags over it, from a page or another app, which hands
 // them to the UI with what they carry, as the Mac's HostUIView does: files, else a link, else text.
 // It has the shell draw the drag's image over the window, as Explorer's own windows do.
@@ -732,9 +742,10 @@ class DropTarget final : public IDropTarget {
   }
 
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD, POINTL at, DWORD* effect) override {
-    urls_ = DraggedFiles(data);
+    tab_ = DraggedTab(data);
+    urls_ = tab_ ? std::vector<std::string>() : DraggedFiles(data);
     files_ = !urls_.empty();
-    if (urls_.empty()) {
+    if (urls_.empty() && !tab_) {
       std::wstring url =
           DraggedText(data, static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_INETURLW)));
       // Text, which the UI opens only if it's a web link.
@@ -772,6 +783,7 @@ class DropTarget final : public IDropTarget {
     }
     Tell(HOST_DRAG_LEFT, at_, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -784,6 +796,7 @@ class DropTarget final : public IDropTarget {
     // After a drop too, as the Mac's draggingEnded, which the UI keeps.
     Tell(HOST_DRAG_LEFT, at, nullptr);
     urls_.clear();
+    tab_ = 0;
     return S_OK;
   }
 
@@ -795,20 +808,24 @@ class DropTarget final : public IDropTarget {
   }
 
   // Tells the UI, with where the pointer is in points from the holder's top-left corner, and
-  // answers the drag's source with a copy if the UI takes it.
+  // answers the drag's source with a copy if the UI takes it, or a move for a tab.
   void Tell(int phase, POINTL at, DWORD* effect) {
     at_ = at;
     POINT point{at.x, at.y};
     ScreenToClient(holder_, &point);
     const double scale = Scale(holder_);
     std::vector<host_dragged> items;
+    if (tab_) {
+      items.push_back({"", false, tab_});
+    }
     for (const std::string& url : urls_) {
-      items.push_back({url.c_str(), files_});
+      items.push_back({url.c_str(), files_, 0});
     }
     const bool taken = g_dragged && g_dragged(holder_, phase, point.x / scale, point.y / scale,
                                               items.data(), items.size());
     if (effect) {
       *effect = !taken                      ? DROPEFFECT_NONE
+                : tab_                      ? *effect & DROPEFFECT_MOVE
                 : *effect & DROPEFFECT_COPY ? DROPEFFECT_COPY
                 : *effect & DROPEFFECT_LINK ? DROPEFFECT_LINK
                                             : DROPEFFECT_NONE;
@@ -820,6 +837,8 @@ class DropTarget final : public IDropTarget {
   IDropTargetHelper* helper_ = nullptr;
   std::vector<std::string> urls_;
   bool files_ = false;
+  // The app's tab it carries instead, else 0.
+  uint64_t tab_ = 0;
   POINTL at_{};
 };
 
@@ -926,7 +945,40 @@ void (*g_became_active)(void) = nullptr;
 void (*g_reduce_motion_changed)(void) = nullptr;
 bool g_active = true;
 
+// Told whether a browser window is the one the user is in (host_watch_window_main).
+void (*g_window_main_changed)(void* ui_view, bool main) = nullptr;
+
+// Tells the app of each browser window that has become the one the user is in, or stopped being,
+// with |front| in front: the window in front, or the browser window that owns it, as an overlay's
+// or the link preview's does. Settings and the other apps' windows own none.
+void TellMain(HWND front) {
+  static auto* told = new std::map<HWND, bool>;
+  if (!g_window_main_changed) {
+    return;
+  }
+  DWORD process = 0;
+  GetWindowThreadProcessId(front, &process);
+  // GA_ROOTOWNER follows an owner only for a WS_POPUP window, which GPUI's overlays aren't.
+  HWND owner = front && process == GetCurrentProcessId() ? GetAncestor(front, GA_ROOT) : nullptr;
+  while (HWND next = owner ? GetWindow(owner, GW_OWNER) : nullptr) {
+    owner = next;
+  }
+  for (HWND view : UiViews()) {
+    if (!IsWindow(view)) {
+      told->erase(view);
+      continue;
+    }
+    const bool main = owner && GetAncestor(view, GA_ROOT) == owner;
+    if (auto it = told->find(view); it != told->end() && it->second == main) {
+      continue;
+    }
+    (*told)[view] = main;
+    g_window_main_changed(view, main);
+  }
+}
+
 void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWORD, DWORD) {
+  TellMain(hwnd);
   DWORD process = 0;
   GetWindowThreadProcessId(hwnd, &process);
   const bool ours = process == GetCurrentProcessId();
@@ -1145,6 +1197,26 @@ LRESULT CALLBACK LinkPreviewOwnerProc(HWND hwnd, UINT message, WPARAM wparam, LP
 }
 
 Floating g_capture;
+// The browser window Capture shows over, and the size of its client area then.
+HWND g_capture_over = nullptr;
+SIZE g_capture_size = {};
+
+// The window Capture shows over resized, which leaves it, as on the Mac and Linux: what it showed
+// of the page is no longer where the page is.
+void CaptureWindowSized(HWND root) {
+  RECT client = {};
+  if (root != g_capture_over || !g_capture.hwnd || !IsWindowVisible(g_capture.hwnd) ||
+      !GetClientRect(root, &client) ||
+      (client.right - client.left == g_capture_size.cx &&
+       client.bottom - client.top == g_capture_size.cy)) {
+    return;
+  }
+  host_hide_capture();
+  if (void (*dismissed)(void) = g_capture.dismissed) {
+    Later([dismissed] { dismissed(); });
+  }
+}
+
 Floating g_toast;
 Floating g_tooltip;
 double g_tooltip_margin = 0;
@@ -1196,7 +1268,6 @@ void PlaceToast() {
   ClientToScreen(root, &origin);
   SetWindowPos(g_toast.hwnd, nullptr, origin.x, origin.y, std::lround(width * scale),
                std::lround(height * scale), SWP_NOZORDER | SWP_NOACTIVATE);
-  SizeAgainLater(g_toast.hwnd);
 }
 
 // While the link target or a reveal shows, the pointer's moves over the app's windows.
@@ -1569,6 +1640,9 @@ LRESULT CALLBACK OwnerProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     Minimized(hwnd);
   } else if (message == WM_WINDOWPOSCHANGED && (~flags & (SWP_NOMOVE | SWP_NOSIZE))) {
     Moved(hwnd);
+    if (~flags & SWP_NOSIZE) {
+      CaptureWindowSized(hwnd);
+    }
   } else if (message == WM_ACTIVATE && LOWORD(wparam) != WA_INACTIVE) {
     KeepKeyboard(hwnd);
   } else if (message == WM_NCDESTROY) {
@@ -1747,6 +1821,7 @@ class FileDropSource : public IDropSource {
       LogIn("drag", "buttons %lu escape %d", keys, escape);
     }
     if (escape || (keys & MK_RBUTTON)) {
+      cancelled_ = true;
       return DRAGDROP_S_CANCEL;
     }
     if (!(keys & MK_LBUTTON)) {
@@ -1754,6 +1829,8 @@ class FileDropSource : public IDropSource {
     }
     return S_OK;
   }
+  // Whether Escape or the right button ended it, rather than the left button let go.
+  bool cancelled() const { return cancelled_; }
   HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
     if (effect != effect_) {
       effect_ = effect;
@@ -1766,6 +1843,7 @@ class FileDropSource : public IDropSource {
   ULONG refs_ = 1;
   DWORD keys_ = ~0ul;
   DWORD effect_ = ~0ul;
+  bool cancelled_ = false;
 };
 
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
@@ -1785,6 +1863,88 @@ ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
   CoTaskMemFree(pidl);
   return data;
 }
+
+// The exe the registry's App Paths names for |name|, such as chrome.exe, the user's before the
+// machine's: the path alone, as the shell's icon is all the import reads of another browser.
+std::wstring AppPath(const std::wstring& name) {
+  const std::wstring key = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + name;
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    wchar_t path[MAX_PATH] = {};
+    DWORD bytes = sizeof path;
+    if (RegGetValueW(root, key.c_str(), nullptr, RRF_RT_REG_SZ, nullptr, path, &bytes) ==
+            ERROR_SUCCESS &&
+        path[0]) {
+      std::wstring found(path);
+      // Some installers quote it.
+      if (found.size() > 1 && found.front() == L'"' && found.back() == L'"') {
+        found = found.substr(1, found.size() - 2);
+      }
+      return found;
+    }
+  }
+  return {};
+}
+
+}  // namespace
+
+// The shell's icon for an exe, by its path or its name in App Paths, |size| pixels square, as
+// premultiplied RGBA (host.h). A browser whose exe isn't there has none, and its row the globe.
+bool host_app_icon(const char* app, size_t size, uint8_t* rgba) {
+  std::wstring path = Wide(app);
+  if (path.find_first_of(L"/\\") == std::wstring::npos) {
+    path = AppPath(path);
+  }
+  // The shell parses Windows' separators alone, and the import joins its paths with /.
+  std::replace(path.begin(), path.end(), L'/', L'\\');
+  if (path.empty() || GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES || !size) {
+    return false;
+  }
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  bool ok = false;
+  {
+    ComPtr<IShellItemImageFactory> factory;
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmap> source;
+    ComPtr<IWICBitmapScaler> scaler;
+    HBITMAP bitmap = nullptr;
+    const UINT pixels = static_cast<UINT>(size);
+    const HRESULT item =
+        SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&factory));
+    const HRESULT image =
+        SUCCEEDED(item) ? factory->GetImage({static_cast<LONG>(pixels), static_cast<LONG>(pixels)},
+                                            SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap)
+                        : item;
+    if (FAILED(image) || !bitmap) {
+      // check.sh shows this line when a row it gave an icon has none.
+      fprintf(stderr, "browser: import icon for %s failed: 0x%08lx\n", app,
+              static_cast<unsigned long>(image));
+    }
+    if (SUCCEEDED(image) && bitmap &&
+        SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateBitmapFromHBITMAP(bitmap, nullptr, WICBitmapUsePremultipliedAlpha,
+                                               &source)) &&
+        SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+        SUCCEEDED(scaler->Initialize(source.Get(), pixels, pixels,
+                                     WICBitmapInterpolationModeHighQualityCubic)) &&
+        SUCCEEDED(scaler->CopyPixels(nullptr, pixels * 4, pixels * pixels * 4, rgba))) {
+      // The shell's is BGRA.
+      for (size_t at = 0; at < size * size * 4; at += 4) {
+        std::swap(rgba[at], rgba[at + 2]);
+      }
+      ok = true;
+    }
+    if (bitmap) {
+      DeleteObject(bitmap);
+    }
+  }
+  if (SUCCEEDED(com)) {
+    CoUninitialize();
+  }
+  return ok;
+}
+
+namespace {
 
 // Encodes the shell's thumbnail or icon for |path| as a PNG, off the main thread. An image (or any
 // file Windows makes a thumbnail for) gets its thumbnail scaled to fit 96 px, its aspect kept; the
@@ -1846,7 +2006,8 @@ constexpr uint32_t kIloGreen = 0x0B8045;
 
 // A round dot in |rgb| (0xRRGGBB) as a 32 px icon with a soft edge and a clear surround, for the
 // taskbar button's overlay. The caller destroys it.
-HICON DotIcon(uint32_t rgb) {
+// With |label|, a count, written white across it, as the tasks waiting for the user say.
+HICON DotIcon(uint32_t rgb, const wchar_t* label = nullptr) {
   const int size = 32;
   BITMAPINFO info{};
   info.bmiHeader.biSize = sizeof info.bmiHeader;
@@ -1875,6 +2036,43 @@ HICON DotIcon(uint32_t rgb) {
       pixel[1] = static_cast<uint8_t>(green * a);
       pixel[2] = static_cast<uint8_t>(red * a);
       pixel[3] = static_cast<uint8_t>(a * 255 + 0.5);
+    }
+  }
+  if (label) {
+    // GDI writes no alpha, so the label is drawn white on black apart, and its brightness is how
+    // much white each pixel of the dot takes.
+    uint8_t* text = nullptr;
+    HBITMAP written = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS,
+                                       reinterpret_cast<void**>(&text), nullptr, 0);
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (written && dc) {
+      HGDIOBJ old_bitmap = SelectObject(dc, written);
+      const bool two = wcslen(label) > 1;
+      HFONT font = CreateFontW(two ? -17 : -22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                               ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+      HGDIOBJ old_font = SelectObject(dc, font);
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, RGB(255, 255, 255));
+      RECT box{0, 0, size, size};
+      DrawTextW(dc, label, -1, &box, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      GdiFlush();
+      for (int at = 0; at < size * size; ++at) {
+        uint8_t* pixel = bits + at * 4;
+        const double white = text[at * 4 + 1] / 255.0;
+        for (int channel = 0; channel < 3; ++channel) {
+          pixel[channel] = static_cast<uint8_t>(pixel[channel] * (1 - white) + pixel[3] * white);
+        }
+      }
+      SelectObject(dc, old_font);
+      SelectObject(dc, old_bitmap);
+      DeleteObject(font);
+    }
+    if (dc) {
+      DeleteDC(dc);
+    }
+    if (written) {
+      DeleteObject(written);
     }
   }
   HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
@@ -1943,10 +2141,6 @@ void ShowShareSheet(HWND root, std::function<void(const wdt::DataPackage&)> fill
 }  // namespace
 
 namespace {
-
-#ifndef PW_RENDERFULLCONTENT
-#define PW_RENDERFULLCONTENT 0x00000002
-#endif
 
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts: the window's frame, the sidebar's picture and the sidebar's colour past it.
@@ -2054,49 +2248,6 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     }
   }
   return DefWindowProcW(hwnd, message, wparam, lparam);
-}
-
-// The left |width| pixels of |window|'s content, top-down BGRX, filling |high|.
-bool Sidebar(HWND window, LONG width, std::vector<uint8_t>* pixels, LONG* high) {
-  RECT client{};
-  GetClientRect(window, &client);
-  width = width < client.right ? width : client.right;
-  *high = client.bottom;
-  if (width < 1 || *high < 1) {
-    return false;
-  }
-  BITMAPINFO info{};
-  info.bmiHeader.biSize = sizeof info.bmiHeader;
-  info.bmiHeader.biWidth = client.right;
-  info.bmiHeader.biHeight = -*high;
-  info.bmiHeader.biPlanes = 1;
-  info.bmiHeader.biBitCount = 32;
-  info.bmiHeader.biCompression = BI_RGB;
-  uint8_t* bits = nullptr;
-  HDC screen = GetDC(nullptr);
-  HDC dc = CreateCompatibleDC(screen);
-  ReleaseDC(nullptr, screen);
-  HBITMAP bitmap =
-      CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&bits), nullptr, 0);
-  bool ok = false;
-  if (bitmap) {
-    HGDIOBJ old = SelectObject(dc, bitmap);
-    // The full content, as GPUI draws through DirectComposition, which a plain copy of the
-    // window's DC misses.
-    ok = PrintWindow(window, dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT);
-    GdiFlush();
-    if (ok) {
-      pixels->resize(static_cast<size_t>(width) * *high * 4);
-      for (LONG y = 0; y < *high; ++y) {
-        memcpy(pixels->data() + static_cast<size_t>(y) * width * 4,
-               bits + static_cast<size_t>(y) * client.right * 4, static_cast<size_t>(width) * 4);
-      }
-    }
-    SelectObject(dc, old);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(dc);
-  return ok;
 }
 
 // Writes |pixels|, |width| by |height| top-down BGRX, to |path| as a PNG. The caller has
@@ -2477,7 +2628,8 @@ void host_close_launch_window(void) {
   g_launch = {};
 }
 
-bool host_save_launch_picture(void* ui_view, const char* profile_dir, double width) {
+bool host_save_launch_pixels(void* ui_view, const char* profile_dir, const uint8_t* pixels,
+                             size_t columns, size_t rows) {
   HWND root = Root(ui_view);
   double x = 0, y = 0, frame_width = 0, frame_height = 0;
   // In the frame's terms, which the next launch's window opens at, and named for its size.
@@ -2493,22 +2645,15 @@ bool host_save_launch_picture(void* ui_view, const char* profile_dir, double wid
   }
   // Chromium's full screen takes the window's caption away.
   const bool full_screen = root && !(GetWindowLongPtrW(root, GWL_STYLE) & WS_CAPTION);
-  if (!framed || !IsWindowVisible(root) || full_screen || width < 1) {
+  if (!framed || !IsWindowVisible(root) || full_screen || !pixels || columns < 1 || rows < 1) {
     return false;
   }
-  // Only the sidebar: the page could be anything, and shouldn't be kept on disk.
-  std::vector<uint8_t> pixels;
-  LONG high = 0;
-  const LONG wide = static_cast<LONG>(std::lround(width * Scale(root)));
-  if (!Sidebar(root, wide, &pixels, &high)) {
-    return false;
-  }
-  const UINT columns = static_cast<UINT>(pixels.size() / 4 / high);
   // Encoded off the main thread, which the user is about to use elsewhere or quit.
   std::thread([path = LaunchPicturePath(profile_dir, frame_width, frame_height),
-               pixels = std::move(pixels), columns, high] {
+               pixels = std::vector<uint8_t>(pixels, pixels + columns * rows * 4),
+               columns = static_cast<UINT>(columns), rows = static_cast<UINT>(rows)] {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    WritePng(path, pixels, columns, static_cast<UINT>(high));
+    WritePng(path, pixels, columns, rows);
     if (SUCCEEDED(com)) {
       CoUninitialize();
     }
@@ -2749,6 +2894,14 @@ static std::map<void*, uint64_t>& WindowIds() {
 
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
+  // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
+  TellMain(GetForegroundWindow());
+}
+
+void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
+  g_window_main_changed = changed;
+  WatchForeground();
+  TellMain(GetForegroundWindow());
 }
 
 // Windows delivers a touchpad's swipes to the page as scrolls, which it takes, so there's nothing
@@ -3314,6 +3467,10 @@ void host_add_capture(void* view, void (*dismissed)(void)) {
 
 void host_show_capture(void* ui_view, double left, double top, double width, double height) {
   Show(g_capture, ui_view, left, top, width, height, true);
+  g_capture_over = Root(ui_view);
+  RECT client = {};
+  GetClientRect(g_capture_over, &client);
+  g_capture_size = {client.right - client.left, client.bottom - client.top};
   if (g_capture.hwnd && IsWindowVisible(g_capture.hwnd)) {
     // check.sh reads this line, as the Mac's and Linux's hosts log it.
     fprintf(stderr, "browser: capture shown at %g %g %g %g\n", left, top, width, height);
@@ -3882,6 +4039,12 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+void host_set_window_on_top(void* ui_view, bool on) {
+  // The overlays are windows it owns, which Windows makes topmost and back with it.
+  SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 void host_press_window_button(void* ui_view, int button) {
   HWND root = Root(ui_view);
   const WPARAM command = button == 0   ? SC_CLOSE
@@ -3980,19 +4143,141 @@ void host_dock_dot_launch(const char*) {}
 // Gives each browser window's taskbar button an overlay dot in |color| (0xRRGGBB), or ilo's green
 // without |colored|, the counterpart of the Mac's Dock dot. One colour for the app, as the Dock has
 // one icon; the taskbar makes its own copy, so the icon is freed after.
-void host_dock_dot(bool colored, uint32_t color) {
+// While tasks wait for the user, the dot carries their count (host_needs_you_badge).
+namespace {
+uint32_t g_dot_color = kIloGreen;
+int g_waiting = 0;
+
+void ShowOverlay() {
   ITaskbarList3* taskbar = Taskbar();
   if (!taskbar) {
     return;
   }
-  HICON dot = DotIcon(colored ? color : kIloGreen);
+  const std::wstring count = g_waiting > 9 ? L"9+" : std::to_wstring(g_waiting);
+  HICON dot = DotIcon(g_dot_color, g_waiting > 0 ? count.c_str() : nullptr);
+  const std::wstring described =
+      g_waiting == 1 ? L"A task needs you" : count + L" tasks need you";
   for (HWND view : UiViews()) {
     if (IsWindow(view)) {
-      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot, L"Space");
+      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot,
+                              g_waiting > 0 ? described.c_str() : L"Space");
     }
   }
   if (dot) {
     DestroyIcon(dot);
+  }
+}
+}  // namespace
+
+void host_dock_dot(bool colored, uint32_t color) {
+  g_dot_color = colored ? color : kIloGreen;
+  ShowOverlay();
+}
+
+void host_needs_you_badge(int count) {
+  g_waiting = count;
+  ShowOverlay();
+  // check.sh reads this line.
+  fprintf(stderr, "browser: taskbar badge %s\n",
+          count > 9 ? "9+" : count > 0 ? std::to_string(count).c_str() : "none");
+}
+
+bool host_app_active(void) {
+  return g_active;
+}
+
+namespace {
+
+void (*g_needs_you_clicked)(uint64_t) = nullptr;
+
+// The AppUserModelID Chromium gives the browser windows and its own toasts: the installer's
+// shortcut's, or an MSIX's package's. Windows shows a toast only under one it knows, as a Start menu
+// shortcut or a package registers it, so without one there's none to post under.
+std::wstring BrowserModelId() {
+  // PKEY_AppUserModel_ID, named here rather than linked from propsys.
+  constexpr PROPERTYKEY kAppId = {
+      {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+  for (HWND view : UiViews()) {
+    ComPtr<IPropertyStore> store;
+    if (!IsWindow(view) ||
+        FAILED(SHGetPropertyStoreForWindow(GetAncestor(view, GA_ROOT), IID_PPV_ARGS(&store)))) {
+      continue;
+    }
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    std::wstring id;
+    if (SUCCEEDED(store->GetValue(kAppId, &value)) && value.vt == VT_LPWSTR && value.pwszVal) {
+      id = value.pwszVal;
+    }
+    PropVariantClear(&value);
+    if (!id.empty()) {
+      return id;
+    }
+  }
+  UINT32 length = 0;
+  if (GetCurrentApplicationUserModelId(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER) {
+    std::wstring id(length, L'\0');
+    if (GetCurrentApplicationUserModelId(&length, id.data()) == ERROR_SUCCESS) {
+      id.resize(length - 1);
+      return id;
+    }
+  }
+  return {};
+}
+
+// Kept while they may be clicked, so the click's handler stays, the newest few.
+std::vector<winrt::Windows::UI::Notifications::ToastNotification>& Toasts() {
+  static auto* toasts = new std::vector<winrt::Windows::UI::Notifications::ToastNotification>;
+  return *toasts;
+}
+
+}  // namespace
+
+void host_watch_needs_you(void (*clicked)(uint64_t id)) {
+  g_needs_you_clicked = clicked;
+  // Later's window, made on this thread, takes the click's from Windows' own.
+  Later([] {});
+}
+
+// A toast with no sound, under the AppUserModelID Chromium posts its own under. Its click, while
+// ilo runs, comes to the toast's own handler.
+void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
+  namespace wun = winrt::Windows::UI::Notifications;
+  namespace wdx = winrt::Windows::Data::Xml::Dom;
+  try {
+    wdx::XmlDocument xml;
+    xml.LoadXml(
+        L"<toast><visual><binding template='ToastGeneric'><text/><text/></binding></visual>"
+        L"<audio silent='true'/></toast>");
+    auto texts = xml.GetElementsByTagName(L"text");
+    texts.Item(0).AppendChild(xml.CreateTextNode(Wide(title)));
+    texts.Item(1).AppendChild(xml.CreateTextNode(Wide(body)));
+    wun::ToastNotification toast(xml);
+    toast.Activated([id](const wun::ToastNotification&, const wf::IInspectable&) {
+      Later([id] {
+        if (g_needs_you_clicked) {
+          g_needs_you_clicked(id);
+        }
+      });
+    });
+    const std::wstring model = BrowserModelId();
+    if (model.empty()) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: needs you posted %llu: no AppUserModelID\n",
+              static_cast<unsigned long long>(id));
+      return;
+    }
+    wun::ToastNotificationManager::CreateToastNotifier(model).Show(toast);
+    Toasts().push_back(toast);
+    if (Toasts().size() > 8) {
+      Toasts().erase(Toasts().begin());
+    }
+    // check.sh reads this line.
+    fprintf(stderr, "browser: needs you posted %llu\n", static_cast<unsigned long long>(id));
+  } catch (const winrt::hresult_error& error) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: needs you posted %llu: %ls\n", static_cast<unsigned long long>(id),
+            error.message().c_str());
   }
 }
 
@@ -4027,6 +4312,174 @@ bool host_trash(const char* path) {
   operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
   return SHFileOperationW(&operation) == 0 ||
          GetFileAttributesW(Wide(path).c_str()) == INVALID_FILE_ATTRIBUTES;
+}
+
+// The part of |ui_view|'s browser window at (|x|, |y|), |width| by |height| points from the UI's
+// top-left corner, as it's drawn: GPUI's frame as DWM composites it, which PrintWindow's full
+// content gives, else the screen's pixels there, as the window is in front while its row is
+// dragged, in a 32-bit top-down DIB, opaque, at the window's scale. Null if it can't.
+static HBITMAP WindowPart(void* ui_view, double x, double y, double width, double height,
+                          SIZE* size) {
+  HWND view = Hwnd(ui_view);
+  HWND root = Root(ui_view);
+  if (!view || !root) {
+    return nullptr;
+  }
+  RECT window{};
+  GetWindowRect(root, &window);
+  POINT origin{0, 0};
+  ClientToScreen(view, &origin);
+  const double scale = Scale(view);
+  const int part_width = static_cast<int>(std::lround(width * scale));
+  const int part_height = static_cast<int>(std::lround(height * scale));
+  if (part_width < 1 || part_height < 1) {
+    return nullptr;
+  }
+  HDC screen = GetDC(nullptr);
+  HDC whole_dc = CreateCompatibleDC(screen);
+  HBITMAP whole =
+      CreateCompatibleBitmap(screen, window.right - window.left, window.bottom - window.top);
+  HGDIOBJ whole_was = SelectObject(whole_dc, whole);
+  const bool printed = PrintWindow(root, whole_dc, PW_RENDERFULLCONTENT);
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), part_width, -part_height, 1, 32, BI_RGB};
+  void* bits = nullptr;
+  HBITMAP part = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+  const int from_x = static_cast<int>(std::lround(x * scale));
+  const int from_y = static_cast<int>(std::lround(y * scale));
+  bool copied = false;
+  if (part) {
+    HDC part_dc = CreateCompatibleDC(screen);
+    HGDIOBJ part_was = SelectObject(part_dc, part);
+    copied = printed ? BitBlt(part_dc, 0, 0, part_width, part_height, whole_dc,
+                              origin.x - window.left + from_x, origin.y - window.top + from_y,
+                              SRCCOPY)
+                     : BitBlt(part_dc, 0, 0, part_width, part_height, screen, origin.x + from_x,
+                              origin.y + from_y, SRCCOPY);
+    GdiFlush();
+    // GDI leaves the alpha at 0, which a drag image draws as nothing.
+    for (int i = 0; i < part_width * part_height; i++) {
+      static_cast<BYTE*>(bits)[i * 4 + 3] = 255;
+    }
+    SelectObject(part_dc, part_was);
+    DeleteDC(part_dc);
+  }
+  SelectObject(whole_dc, whole_was);
+  DeleteObject(whole);
+  DeleteDC(whole_dc);
+  ReleaseDC(nullptr, screen);
+  if (!copied && part) {
+    DeleteObject(part);
+    part = nullptr;
+  }
+  if (part) {
+    *size = {part_width, part_height};
+  }
+  return part;
+}
+
+// The driver's (drive.cc): writes the picture host_drag_tab would show for the part of |hwnd|'s
+// window at (|x|, |y|), |width| by |height| points, to |path| as a BMP, with its size in pixels.
+extern "C" bool host_drive_window_part(void* hwnd, double x, double y, double width,
+                                       double height, const char* path, long* pixels_wide,
+                                       long* pixels_high) {
+  SIZE size{};
+  HBITMAP part = WindowPart(hwnd, x, y, width, height, &size);
+  if (!part) {
+    fprintf(stderr, "browser: drive: no picture of that part of the window\n");
+    return false;
+  }
+  const DWORD bytes = static_cast<DWORD>(size.cx * size.cy * 4);
+  std::vector<BYTE> pixels(bytes);
+  BITMAPINFO info{};
+  info.bmiHeader = {sizeof(BITMAPINFOHEADER), size.cx, -size.cy, 1, 32, BI_RGB};
+  HDC screen = GetDC(nullptr);
+  GetDIBits(screen, part, 0, size.cy, pixels.data(), &info, DIB_RGB_COLORS);
+  ReleaseDC(nullptr, screen);
+  DeleteObject(part);
+  BITMAPFILEHEADER file{};
+  file.bfType = 0x4D42;
+  file.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+  file.bfSize = file.bfOffBits + bytes;
+  FILE* out = _wfopen(Wide(path).c_str(), L"wb");
+  if (!out) {
+    fprintf(stderr, "browser: drive: can't write %s\n", path);
+    return false;
+  }
+  fwrite(&file, sizeof file, 1, out);
+  fwrite(&info.bmiHeader, sizeof info.bmiHeader, 1, out);
+  fwrite(pixels.data(), 1, bytes, out);
+  fclose(out);
+  *pixels_wide = size.cx;
+  *pixels_high = size.cy;
+  return true;
+}
+
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
+                   void (*ended)(uint64_t, int, bool, double, double)) {
+  if (!Root(ui_view)) {
+    return false;
+  }
+  ComPtr<IDataObject> data;
+  if (FAILED(SHCreateDataObject(nullptr, 0, nullptr, nullptr, IID_PPV_ARGS(&data)))) {
+    return false;
+  }
+  const std::wstring text =
+      std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(tab);
+  const size_t size = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+  memcpy(GlobalLock(memory), text.c_str(), size);
+  GlobalUnlock(memory);
+  FORMATETC format{TabFormat(), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  STGMEDIUM medium{};
+  medium.tymed = TYMED_HGLOBAL;
+  medium.hGlobal = memory;
+  if (FAILED(data->SetData(&format, &medium, TRUE))) {
+    GlobalFree(memory);
+    return false;
+  }
+  // The row as it's drawn, held where the pointer pressed it, as the Mac's drag shows it. The
+  // helper keeps the picture with the data, and the app's drop targets and Explorer draw it.
+  SIZE picture_size{};
+  if (HBITMAP picture = WindowPart(ui_view, x, y, width, height, &picture_size)) {
+    ComPtr<IDragSourceHelper> helper;
+    const double scale = Scale(Hwnd(ui_view));
+    SHDRAGIMAGE image{picture_size,
+                      {static_cast<LONG>(std::lround(grab_x * scale)),
+                       static_cast<LONG>(std::lround(grab_y * scale))},
+                      picture, CLR_NONE};
+    if (SUCCEEDED(CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_PPV_ARGS(&helper))) &&
+        SUCCEEDED(helper->InitializeFromBitmap(&image, data.Get()))) {
+      // check.sh reads this line.
+      fprintf(stderr, "browser: tab %llu drag picture %ldx%ld\n",
+              static_cast<unsigned long long>(tab), picture_size.cx, picture_size.cy);
+    } else {
+      DeleteObject(picture);
+    }
+  }
+  // From a task of its own once the UI's event has returned, as host_drag_file's: DoDragDrop is
+  // modal until it's let go.
+  Later([data, tab, ended] {
+    auto* source = new FileDropSource();
+    ComPtr<IDropSource> holding;
+    holding.Attach(source);
+    DWORD effect = DROPEFFECT_NONE;
+    const HRESULT dropped = DoDragDrop(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect);
+    POINT at{};
+    GetCursorPos(&at);
+    RECT point{at.x, at.y, at.x, at.y};
+    double x = 0, y = 0, width = 0, height = 0;
+    Logical(point, &x, &y, &width, &height);
+    const int how = dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE ? HOST_TAB_TAKEN
+                    : source->cancelled()                                   ? HOST_TAB_CANCELLED
+                                                                            : HOST_TAB_LET_GO;
+    LogIn("drag", "tab %llu ends: %lx, effect %lu", static_cast<unsigned long long>(tab),
+          static_cast<unsigned long>(dropped), effect);
+    ended(tab, how, true, x, y);
+  });
+  return true;
 }
 
 bool host_drag_file(const char* path, void (*ended)(bool)) {

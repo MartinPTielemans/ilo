@@ -8,13 +8,15 @@ pub(crate) const WINDOW_SIZE: (f64, f64) = (1280., 800.);
 /// Opens a browser window and returns its id, with `ui_view` filling it under the page: the first
 /// at the frame the front window had when the browser last quit, saved window `saved` behind the
 /// others at its own (bc_window_open_saved), each kept on screen, else centered on the main
-/// display, or cascaded from the one of `after` and as big. With `own`, it's a private window in
-/// that profile's off-the-record session, or a Little ilo window, where Little ilo's open.
+/// display, or cascaded from the one of `after` and as big, or at `at`, kept on a screen. With
+/// `own`, it's a private window in that profile's off-the-record session, or a Little ilo window,
+/// where Little ilo's open.
 pub(crate) fn open_browser_window(
     ui_view: *mut c_void,
     after: Option<*mut c_void>,
     own: Option<Own>,
     saved: Option<usize>,
+    at: Option<bc::bc_rect>,
 ) -> Option<bc::bc_id> {
     let frames = if after.is_none() || saved.is_some() {
         saved_frames()
@@ -23,6 +25,7 @@ pub(crate) fn open_browser_window(
     };
     let frame = match own {
         Some(Own::Little { .. }) => Some(little_frame()),
+        _ if at.is_some() => at.map(|at| placed(at).unwrap_or(at)),
         _ => frames.get(saved.unwrap_or(0)).copied().and_then(placed),
     };
     let bounds = frame.unwrap_or_else(|| {
@@ -32,7 +35,7 @@ pub(crate) fn open_browser_window(
             Some(after) => unsafe {
                 platform::host_cascaded(after, &mut x, &mut y, &mut width, &mut height)
             },
-            None => unsafe { platform::host_centered(width, height, &mut x, &mut y) },
+            None => (x, y) = platform::centered(width, height),
         }
         bc::bc_rect {
             x,
@@ -137,7 +140,16 @@ pub(crate) fn open_window(
     own: Option<Own>,
     cx: &mut App,
 ) -> Option<bc::bc_id> {
-    open_window_as(from, own, None, cx)
+    open_window_as(from, own, None, None, cx)
+}
+
+/// open_window, as ⌘N does, at `at` if given, kept on a screen, for a tab dragged out of `from`.
+pub(crate) fn open_window_at(
+    from: Option<BrowserWindow>,
+    at: Option<bc::bc_rect>,
+    cx: &mut App,
+) -> Option<bc::bc_id> {
+    open_window_as(from, None, None, at, cx)
 }
 
 /// open_window, or with `saved`, the saved window after the first the launch brings back
@@ -147,6 +159,7 @@ pub(crate) fn open_window_as(
     from: Option<BrowserWindow>,
     own: Option<Own>,
     saved: Option<usize>,
+    at: Option<bc::bc_rect>,
     cx: &mut App,
 ) -> Option<bc::bc_id> {
     #[cfg(not(target_os = "linux"))]
@@ -155,7 +168,7 @@ pub(crate) fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
-    let id = open_browser_window(ui_view, after, own, saved)?;
+    let id = open_browser_window(ui_view, after, own, saved, at)?;
     // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
     // UI opens, so that starts at the maximized size.
     if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
@@ -244,8 +257,13 @@ pub(crate) fn open_window_as(
                 videos: RefCell::default(),
             });
             match (&from_shell, own_space) {
-                (_, Some((space, Own::Private(profile)))) => {
-                    Shell::private_window(engine, space, private_name(profile), profile, cx)
+                (from, Some((space, Own::Private(profile)))) => {
+                    let mut shell =
+                        Shell::private_window(engine, space, private_name(profile), profile, cx);
+                    if let Some(from) = from {
+                        shell.hear_extensions_from(from, cx);
+                    }
+                    shell
                 }
                 (from, Some((space, Own::Little { profile, home }))) => {
                     Shell::little_window(engine, space, home, profile, from.as_ref(), cx)
@@ -373,7 +391,10 @@ pub(crate) fn open_window_as(
                     platform::host_since_launch()
                 });
                 cx.update(overlays_now);
-                cx.update(agents_core::start)
+                cx.update(agents_core::start);
+                // The command bar's settings rows, built in a task of their own once the UI
+                // shows.
+                cx.update(crate::settings::index_after_launch)
             })
             .detach();
         }
@@ -504,6 +525,8 @@ pub(crate) fn finish_opening(
     });
     // check.sh reads these lines.
     log!("browser: window opened {id}");
+    #[cfg(target_os = "linux")]
+    crate::active_window::window_opened();
     match own {
         Some(Own::Private(profile)) => {
             log!("browser: private window opened {id} profile {profile}")
@@ -528,6 +551,7 @@ pub(crate) fn finish_opening(
         platform::host_take_drops(dragged);
         platform::host_watch_key_window(key_window_changed);
         platform::host_watch_full_screen(full_screen_changed);
+        platform::host_watch_window_main(window_main_changed);
         platform::host_watch_swipes(swiped);
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
@@ -536,6 +560,7 @@ pub(crate) fn finish_opening(
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
+    browser::shell::follow_scroll_bars(cx);
     #[cfg(not(target_os = "linux"))]
     unsafe {
         platform::host_watch_reduce_motion(reduce_motion_changed)
@@ -602,6 +627,7 @@ pub(crate) fn finish_opening(
     ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
     {
         toast_host.view.set(view);
+        TOAST_VIEW.set(view);
         unsafe { platform::host_add_toast(view) };
         // Auto-archive at launch can come before there's a toast to show its note in.
         show_archive_note(cx);

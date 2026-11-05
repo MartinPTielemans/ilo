@@ -22,8 +22,8 @@ use crate::dialog::{Question, Return, Tone};
 use crate::settings_rows::{Look, button, group};
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, HEADER_GAP, PADDING, PROFILE_ROW, SECTION_GAP, WORD_GAP, WORD_NUMBER,
-    WORDS_COLUMNS,
+    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
+    WORD_GAP, WORD_NUMBER, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -333,7 +333,7 @@ impl Account {
             entering: None,
             asked: false,
             drawn: Rc::default(),
-            look: Look::settings(),
+            look: Look::settings(true),
             step: false,
         }
     }
@@ -721,7 +721,7 @@ impl Account {
             None => {
                 let name = self.server_name();
                 div()
-                    .pl(px(PADDING))
+                    .pl(px(ROW_X))
                     .flex()
                     // Under the step's button, centred as it is.
                     .when(self.step, |line| line.pl_0().justify_center())
@@ -764,7 +764,7 @@ impl Account {
                 &self.look,
                 [div()
                     .relative()
-                    .px(px(PADDING))
+                    .px(px(ROW_X))
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
@@ -785,7 +785,7 @@ impl Account {
                 below.child(
                     div()
                         .mt(px(HEADER_GAP))
-                        .pl(px(PADDING))
+                        .pl(px(ROW_X))
                         .text_size(px(text::SMALL))
                         .text_color(self.look.detail)
                         .child(refused),
@@ -832,11 +832,11 @@ impl Account {
             .size(px(text::BODY));
         let copy = copy.when(copied, |copy| copy.child(check.text_color(self.look.ink)));
         div()
-            .child(header("Your recovery words", true))
+            .child(header(&self.look, "Your recovery words", true))
             .child(group(
                 &self.look,
                 [div()
-                    .px(px(PADDING))
+                    .px(px(ROW_X))
                     .py(px(PADDING))
                     .flex()
                     .children((0..columns).map(column))],
@@ -879,7 +879,7 @@ impl Account {
             let refused = "These aren't 24 recovery words. Check each one.";
             let wrong = self.state.problem == Some(Problem::WrongWords) && !field.refused;
             return div()
-                .child(header("Enter your recovery words", true))
+                .child(header(&self.look, "Enter your recovery words", true))
                 .child(self.field(field, refused, cx))
                 .child(note(
                     &self.look,
@@ -903,7 +903,7 @@ impl Account {
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
-                        .pl(px(PADDING))
+                        .pl(px(ROW_X))
                         .flex()
                         .text_size(px(text::SMALL))
                         .text_color(self.look.detail)
@@ -961,7 +961,7 @@ impl Account {
                 ),
             };
         div()
-            .child(header("Approve on another device", true))
+            .child(header(&self.look, "Approve on another device", true))
             .child(group(&self.look, [waiting]))
             .child(
                 div()
@@ -1011,8 +1011,9 @@ impl Account {
                 }
             };
             div()
-                .h(px(PROFILE_ROW))
-                .px(px(PADDING))
+                .min_h(px(ROW_HEIGHT))
+                .px(px(ROW_X))
+                .py(px(PADDING))
                 .flex()
                 .items_center()
                 .child(
@@ -1028,7 +1029,7 @@ impl Account {
                                 .child(device.os.clone()),
                         ),
                 )
-                .child(div().flex_none().ml(px(PADDING)).child(control))
+                .child(div().flex_none().ml(px(END_GAP)).child(control))
         });
         let devices: Vec<gpui::Div> = devices.collect();
         div()
@@ -1037,7 +1038,7 @@ impl Account {
             .child(group(&self.look, [account]))
             .when(!devices.is_empty(), |section| {
                 section
-                    .child(header("Devices", false))
+                    .child(header(&self.look, "Devices", false))
                     .child(group(&self.look, devices))
             })
             .child(div().mt(px(BUTTONS_TOP)).flex().child(self.button(
@@ -1064,13 +1065,14 @@ fn host_of(server: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
-/// A header over a box, as the Shortcuts tab's.
-fn header(title: &'static str, first: bool) -> gpui::Div {
+/// A heading over a group, as Settings' pages have theirs.
+fn header(look: &Look, title: &'static str, first: bool) -> gpui::Div {
     div()
-        .when(!first, |header| header.mt(px(SECTION_GAP)))
-        .mb(px(HEADER_GAP))
-        .pl(px(PADDING))
-        .font_weight(FontWeight::SEMIBOLD)
+        .when(!first, |header| header.mt(px(HEADING_TOP)))
+        .mb(px(HEADING_BOTTOM))
+        .px(px(ROW_X))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(look.heading)
         .child(title)
 }
 
@@ -1078,7 +1080,7 @@ fn header(title: &'static str, first: bool) -> gpui::Div {
 fn note(look: &Look, text: &'static str) -> gpui::Div {
     div()
         .mt(px(HEADER_GAP))
-        .pl(px(PADDING))
+        .pl(px(ROW_X))
         .text_size(px(text::SMALL))
         .text_color(look.detail)
         .child(text)
@@ -1091,11 +1093,11 @@ fn lines(
     detail: Option<SharedString>,
     control: Option<gpui::AnyElement>,
 ) -> gpui::Div {
-    div().px(px(PADDING)).py(px(PADDING)).child(
+    div().px(px(ROW_X)).py(px(PADDING)).child(
         div()
             .flex()
             .items_center()
-            .gap(px(BOX_GAP))
+            .gap(px(END_GAP))
             .child(
                 div()
                     .flex_1()

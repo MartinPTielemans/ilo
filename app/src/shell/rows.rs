@@ -10,7 +10,7 @@ use std::{
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas,
-    div, prelude::*, px, rgb, svg,
+    div, prelude::*, px, svg,
 };
 
 use super::{
@@ -22,11 +22,10 @@ use super::{
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
     SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET,
-    SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_AGENT,
-    STATUS_DOT, STATUS_LOADING, STATUS_RING, STATUS_RING_COLOR, Shell, Slot, Swapped,
-    TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label, cubic_bezier, developer_outline, divider_box,
-    favicon, folder_icon, icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box,
-    row_spring,
+    SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
+    STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label,
+    cubic_bezier, developer_outline, divider_box, favicon, folder_icon, host, icon_placeholder,
+    icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -40,7 +39,8 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
-    tokens::shell::DROP_SLOT_INSET,
+    tokens::shell::{DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE},
+    tokens::text,
     tooltip::{Anchor, Tip},
 };
 
@@ -222,7 +222,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let (id, slot) = match row {
             Row::NewTab => (("new-tab", 0), Slot::NewTab),
             Row::Tab(tab) => (("tab", tab), Slot::Tab(tab)),
@@ -395,7 +395,7 @@ impl Shell {
         {
             return Some(1.);
         }
-        let selected = row == self.selected_row();
+        let selected = Some(row) == self.selected_row();
         let left = self
             .unhovered
             .iter()
@@ -415,7 +415,7 @@ impl Shell {
             .absolute()
             .top(px(room + row.top))
             .left_0()
-            .w(px(self.width()))
+            .w(px(self.rows_width()))
             .h(px(ROW_HEIGHT))
             .px(px(PLATE_INSET))
             .pl(px(PLATE_INSET + row.indent))
@@ -767,6 +767,18 @@ impl Shell {
         }
     }
 
+    /// Mutes every tab of the window, or unmutes them, those silent now too, so none starts playing
+    /// aloud (Arc's Mute All Tabs; ours, which tabs: the window's, as Arc's isn't recorded).
+    pub(super) fn mute_all(&mut self, muted: bool, cx: &mut Context<Self>) {
+        let tabs: Vec<u64> = (self.tabs.iter())
+            .filter(|(_, tab)| tab.page.muted != muted)
+            .map(|(&tab, _)| tab)
+            .collect();
+        for tab in tabs {
+            self.browser.set_muted(tab, muted, cx);
+        }
+    }
+
     /// What stands for `tab`: the emoji the user gave it, else its page's favicon.
     pub(super) fn tab_icon(&self, tab: u64) -> AnyElement {
         self.tab_icon_in(&self.palette, tab)
@@ -789,15 +801,16 @@ impl Shell {
         self.browser.focus_page(cx)
     }
 
-    /// A press on the list where the row drawn isn't the one that rests there. On the page that
-    /// slides in after a Space switch, where the page isn't yet, the pointer is over the outgoing
-    /// page, which takes no input, or over nothing. Among rows that moved, as ⌘D or a close
-    /// moves them, the frame last drawn may have another row under the pointer, one on its way
-    /// out. Either way it acts on the row that will be there, as the press that it is
-    /// (docs/ux-principles.md: act on the press), so a click under a pointer that hasn't moved
+    /// A press on the list where the row drawn isn't the one that rests there. While the page of
+    /// a Space switched to slides in, the frame last drawn has it somewhere on its way, which a
+    /// busy main thread leaves behind the slide, so the pointer may be over the outgoing page,
+    /// which takes no input, over nothing, or over another part of the row, such as its ✕. Among
+    /// rows that moved, as ⌘D or a close moves them, it may have another row under the pointer,
+    /// one on its way out. Either way it acts on the row that will be there, as the press that it
+    /// is (docs/ux-principles.md: act on the press), so a click under a pointer that hasn't moved
     /// acts on the row it rests on, and a right-click where no row rests shows the menu of the
     /// Space's name or of its empty space. Returns whether it took the press; a press on a row
-    /// drawn where it rests, or on the sliding page's drawn part, is the rows' own.
+    /// drawn where it rests is the rows' own.
     pub(super) fn press_at_rest(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) -> bool {
         let busy = self.swipe.is_some() || self.form().is_some() || self.renaming.is_some();
         if busy || self.dragging().is_some() || (self.settle.is_some() && self.drag.is_some()) {
@@ -807,6 +820,14 @@ impl Shell {
         let width = self.width();
         let rows = self.drawn_list_top()..f32::from(self.viewport.height) - self.list_bottom();
         if !(0. ..width).contains(&at.x) || !rows.contains(&at.y) {
+            return false;
+        }
+        // The name row stays put over the rows scrolled under it, which take no press there.
+        if self.on_fixed_head(at.y) && self.settle.is_none() {
+            if event.button == MouseButton::Right {
+                self.space_menu(self.space, event.position, cx);
+                return true;
+            }
             return false;
         }
         let y = self.list_y(at.y);
@@ -821,15 +842,7 @@ impl Shell {
             })
             .collect();
         let tab = row_at(&layout);
-        if self.settle.is_some() {
-            let Some(&(_, page)) = self.pages().iter().find(|&&(space, _)| space == self.space)
-            else {
-                return false;
-            };
-            if (page..page + width).contains(&at.x) {
-                return false;
-            }
-        } else if row_at(&self.drawn_rows.borrow()) == tab {
+        if self.settle.is_none() && row_at(&self.drawn_rows.borrow()) == tab {
             return false;
         }
         let new_tab = (self.layout().into_iter())
@@ -871,7 +884,7 @@ impl Shell {
 
     /// How wide each segment of a split view's row is, `count` of them `depth` folders in.
     pub(super) fn segment_width(&self, depth: usize, count: usize) -> f32 {
-        let plate = self.width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
+        let plate = self.rows_width() - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
         (plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X)) / count as f32
     }
 
@@ -994,7 +1007,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let first = panes[0];
-        let row_selected = self.selected_row() == Row::Tab(first);
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
         let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
         // A pinned tab closed already has nothing to close.
         let pinned = self.pinned().contains(&first);
@@ -1114,6 +1127,16 @@ impl Shell {
         }
     }
 
+    /// The host a tab's row names under its title, as Arc's does: a pinned tab's whose page left
+    /// its pinned URL's host, and a tab's in Developer Mode, whose site is what's worked on. A
+    /// renamed pinned tab at its pinned host has none (*interim*: Arc's rule for those isn't
+    /// known, and one of its two seen has none).
+    pub(super) fn host_line(&self, tab: u64) -> Option<SharedString> {
+        let kept = self.tabs.get(&tab)?;
+        let named = kept.left_pinned_host || kept.page.developer_mode;
+        named.then(|| SharedString::from(host(&kept.page.url).to_owned()))
+    }
+
     fn single_row(
         &self,
         tab: u64,
@@ -1131,8 +1154,12 @@ impl Shell {
         } else {
             self.title(tab)
         };
-        let bright = Row::Tab(tab) == self.selected_row() || page.developer_mode;
+        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
         let title = title(&self.palette, label, bright);
+        let title = match self.host_line(tab) {
+            Some(host) => with_host(&self.palette, title, host),
+            None => title,
+        };
         // The row's button shows under the pointer, and the title truncates before it.
         let button = hovered
             .then(|| self.row_button(vec![tab], closable, cx))
@@ -1674,26 +1701,17 @@ fn breath_strength(phase: f32) -> f32 {
 }
 
 impl Shell {
-    /// A tab's status dot, in the slot at its row's end, if it has one: a Signal ring while the
-    /// user holds it from its agent, Signal green while an agent is at work in it, else the row's
-    /// text while its page loads, breathing while it loads either way.
+    /// A tab's status dot, in the slot at its row's end, while its page loads: the row's text,
+    /// breathing.
     fn status_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {
-        let (loading, agent) = (self.page(tab).loading, self.agent_at_work(tab));
-        let dot = match (agent, loading) {
-            // The user holds it from its agent: a ring with nothing in it, waiting on them.
-            _ if self.agent_holds(tab) => div()
-                .size(px(STATUS_DOT))
-                .rounded_full()
-                .border(px(STATUS_RING))
-                .border_color(rgb(STATUS_AGENT)),
-            (true, _) => ringed_dot(STATUS_AGENT, STATUS_DOT),
-            (false, true) => div()
-                .size(px(STATUS_DOT))
-                .rounded_full()
-                .bg(self.palette.text(STATUS_LOADING)),
-            (false, false) => return None,
-        };
-        let strength = if loading { self.breath.strength() } else { 1. };
+        if !self.page(tab).loading {
+            return None;
+        }
+        let dot = div()
+            .size(px(STATUS_DOT))
+            .rounded_full()
+            .bg(self.palette.text(STATUS_LOADING));
+        let strength = self.breath.strength();
         Some(
             div()
                 .flex_none()
@@ -1705,20 +1723,6 @@ impl Shell {
                 .child(dot.opacity(strength)),
         )
     }
-}
-
-/// A status dot `size` across of `color`, a colour that says who, such as an agent's Signal green
-/// or a Space's own, in a ring that keeps it readable on any theme. #335's palette takes this over
-/// to pick the ring by its contrast with the theme.
-pub(super) fn ringed_dot(color: u32, size: f32) -> gpui::Div {
-    div()
-        .size(px(size + 2. * STATUS_RING))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .bg(rgb(STATUS_RING_COLOR))
-        .child(div().size(px(size)).rounded_full().bg(rgb(color)))
 }
 
 /// An emoji in a favicon's place.
@@ -1742,6 +1746,24 @@ pub(super) fn capture_glyph(page: &Page) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A row's title with its host under it, the two centred in the row together.
+fn with_host(palette: &Palette, title: gpui::Div, host: SharedString) -> gpui::Div {
+    let host = div()
+        .truncate()
+        .text_size(px(text::SMALL))
+        .line_height(px(HOST_LINE))
+        .text_color(palette.text(SECONDARY))
+        .child(host);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(title.flex_none().line_height(px(HOST_TITLE_LINE)))
+        .child(host)
 }
 
 #[cfg(test)]
@@ -2063,8 +2085,7 @@ mod tests {
     }
 
     /// Under the pointer the row is lit, its chevron in the icon's place and its ••• showing, all
-    /// at once; the menu the ••• opens keeps them while it's up. Collapsed, the chevron stays with
-    /// the pointer gone, so the way back shows.
+    /// at once; the menu the ••• opens keeps them while it's up.
     #[gpui::test]
     fn the_name_row_lights_under_the_pointer_and_keeps_it_for_its_menu(cx: &mut TestAppContext) {
         let (shell, cx, host) = header_shell(cx);
@@ -2120,9 +2141,23 @@ mod tests {
         assert!(!lit(cx), "the row stayed lit after its menu closed");
         let library = shell.read_with(cx, |shell, _| shell.library_open);
         assert!(library, "Manage Spaces… didn't open the Library");
-        // The pinned rows collapsed, the chevron stays drawn with the pointer away.
+    }
+
+    /// Collapsed, the name row's chevron stays with the pointer gone, so the way back shows. The
+    /// sidebar is at rest here: closing the Library just before would leave it faded out, and
+    /// undrawn, for as long as the fade back waits, which reads the wall clock.
+    #[gpui::test]
+    fn the_chevron_stays_for_collapsed_rows_with_the_pointer_gone(cx: &mut TestAppContext) {
+        let (shell, cx, _) = header_shell(cx);
+        let row = shell
+            .read_with(cx, |shell, _| shell.name_row_drawn.get())
+            .expect("a name row");
+        cx.simulate_mouse_move(row.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(600.), px(400.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert!(!shell.read_with(cx, |shell, _| shell.name_hovered));
         shell.update(cx, |shell, cx| {
-            shell.set_library(false, cx);
             shell.set_tabs(1, vec![5, 6], vec![2], Vec::new(), folded(true), cx)
         });
         cx.run_until_parked();
@@ -3118,6 +3153,126 @@ mod tests {
         );
     }
 
+    /// A click on a row while its Space's page slides back in from the left shows that row's tab,
+    /// as it rests under the pointer, whatever the frame last drawn has there (#1437): the page
+    /// further back than it is by now, as a busy main thread draws it, or the row's ✕ under a
+    /// pointer that rested on the sidebar as the page slid under it.
+    #[gpui::test]
+    fn a_click_while_a_space_slides_back_in_shows_the_row_at_rest(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let browser = host.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+        shell.update(cx, |shell, cx| {
+            let space = |id: u64| {
+                (
+                    id,
+                    format!("Space {id}").into(),
+                    None,
+                    1,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )
+            };
+            shell.set_spaces(vec![space(1), space(2)], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 4],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_tabs(2, Vec::new(), vec![7], Vec::new(), Folders::default(), cx);
+            shell.set_selected(4, cx);
+        });
+        cx.run_until_parked();
+        let (close, y) = close_button(&shell, cx, 10);
+        let at = point(px(100.), px(y));
+        let width = shell.read_with(cx, |shell, _| shell.width());
+        let back = |cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                shell.set_space(2, cx);
+                shell.set_selected(7, cx);
+                shell.settle = None;
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+        let slide_in = |cx: &mut VisualTestContext, ago: u64| {
+            shell.update(cx, |shell, cx| {
+                shell.set_space(1, cx);
+                shell.set_selected(4, cx);
+                if let Some(settle) = shell.settle.as_mut() {
+                    settle.start -= Duration::from_millis(ago);
+                }
+                cx.notify();
+            });
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.pages()[0])
+        };
+        let click = |cx: &mut VisualTestContext, at: gpui::Point<gpui::Pixels>| {
+            host.take();
+            cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            host.take()
+        };
+
+        // Drawn with the pointer still over the outgoing page, then on, undrawn, past the pointer.
+        back(cx);
+        cx.simulate_mouse_move(point(px(97.), px(y + 400.)), None, Modifiers::none());
+        let (space, drawn) = slide_in(cx, 0);
+        assert!(
+            space == 1 && drawn < 100. - width,
+            "the page was drawn at {drawn}"
+        );
+        shell.update(cx, |shell, _| {
+            if let Some(settle) = shell.settle.as_mut() {
+                settle.start -= Duration::from_millis(100);
+            }
+        });
+        let now = shell.read_with(cx, |shell, _| shell.pages()[0].1);
+        assert!(now > 100. - width && now < 0., "the page is at {now}");
+        let calls = click(cx, at);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.starts_with("select"))
+                .count(),
+            1,
+            "{calls:?}"
+        );
+        assert!(
+            calls.contains(&"select 10".to_string()),
+            "behind the slide: {calls:?}"
+        );
+
+        // The pointer rests where row 10's ✕ is drawn as the page slides under it, a point that
+        // at rest is on the row, left of its ✕. Taken from the frame drawn, not a time into the
+        // slide, so the ✕'s place in the row doesn't move it off the pointer.
+        back(cx);
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        let (_, drawn) = slide_in(cx, 60);
+        let over_close = point(px(close + drawn), px(y));
+        assert!(
+            close + drawn > 0. && close + drawn < close - CLOSE_SIZE,
+            "the ✕ is drawn at {}, where it rests at {close}",
+            close + drawn
+        );
+        cx.simulate_mouse_move(over_close, None, Modifiers::none());
+        let calls = click(cx, over_close);
+        assert!(
+            calls.contains(&"select 10".to_string()),
+            "over the ✕: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("close")),
+            "over the ✕: {calls:?}"
+        );
+    }
+
     /// A press on an away pinned tab's favicon leaves showing the tab to its click, which takes
     /// the tab back to its pinned URL first, so its old page never loads.
     #[gpui::test]
@@ -3300,6 +3455,48 @@ mod tests {
             [3],
             "the pointer moved on the row it rests on"
         );
+    }
+
+    /// Under its title, a pinned tab's row names the host its page went to from its pinned URL's,
+    /// but not another page on the same host, and a tab's row in Developer Mode names its host,
+    /// without "www." or the port, as the URL field does.
+    #[gpui::test]
+    fn a_row_names_its_host_off_its_pinned_host_and_in_developer_mode(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        host.pinned_urls
+            .borrow_mut()
+            .insert(2, "https://p.example/".into());
+        host.pinned_urls
+            .borrow_mut()
+            .insert(3, "https://p.example/".into());
+        let report = |cx: &mut VisualTestContext, tab, url: &str, away, developer_mode| {
+            shell.update(cx, |shell, cx| {
+                let page = Page {
+                    url: gpui::SharedString::from(url.to_owned()),
+                    away_from_pinned_url: away,
+                    developer_mode,
+                    ..shell.page(tab)
+                };
+                shell.set_page(tab, page, cx);
+            });
+        };
+        report(cx, 2, "https://www.other.example/a", true, false);
+        report(cx, 3, "https://p.example/signin", true, false);
+        report(cx, 4, "http://localhost:3000/", false, true);
+        report(cx, 5, "https://q.example/", false, false);
+        let lines = shell.read_with(cx, |shell, _| [2, 3, 4, 5].map(|tab| shell.host_line(tab)));
+        assert_eq!(
+            lines,
+            [
+                Some("other.example".into()),
+                None,
+                Some("localhost".into()),
+                None
+            ]
+        );
+        // Back at its pinned URL's host, the line goes.
+        report(cx, 2, "https://p.example/", false, false);
+        assert_eq!(shell.read_with(cx, |shell, _| shell.host_line(2)), None);
     }
 
     /// A middle press on a tab's row closes it, as its ✕ does: a Today tab goes, a pinned one lets

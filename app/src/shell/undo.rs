@@ -50,6 +50,7 @@ impl What {
     pub const ADD_FAVORITE: What = What::quiet("Add to Favorites");
     pub const REMOVE_FAVORITE: What = What::said("Remove from Favorites", "Removed from Favorites");
     pub const MOVE_TAB: What = What::quiet("Move Tab");
+    pub const MOVE_TO_WINDOW: What = What::quiet("Move Tab to Window");
     pub const DUPLICATE: What = What::quiet("Duplicate");
     pub const MOVE_FAVORITE: What = What::quiet("Move Favorite");
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
@@ -156,6 +157,13 @@ pub(super) enum Edit {
     },
     /// Removes a pinned row from the pinned tabs, as its remove button does.
     Remove(u64),
+    /// Shows `tab` in browser window `window`, its page moving there live, as it was before a drag
+    /// took it to this window, and with `close` closes this one, which the drag opened for it.
+    Return {
+        tab: u64,
+        window: u64,
+        close: bool,
+    },
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
     Put {
         tab: u64,
@@ -289,6 +297,7 @@ impl Edit {
                 }
             }
             Edit::Remove(tab) => id(tab),
+            Edit::Return { tab, .. } => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -433,6 +442,20 @@ impl Edit {
                     shell.browser.set_pinned_url(*tab, url, cx);
                 }
                 Some(Edit::Remove(first))
+            }
+            Edit::Return { tab, window, close } => {
+                let here = shell.browser.window();
+                shell.browser.show_in_window(window, tab, cx);
+                if close {
+                    // A window the drag opened holds nothing else of the user's: every window
+                    // shows the same Spaces. Its redo goes with it.
+                    shell.browser.close_window(cx);
+                }
+                Some(Edit::Return {
+                    tab,
+                    window: here,
+                    close: false,
+                })
             }
             Edit::Remove(tab) => {
                 let back = shell.repin_of(tab)?;
@@ -821,6 +844,9 @@ impl Shell {
             (Some(_), false) => vec![tab],
         };
         let show = self.shown_among(&tabs);
+        if tabs.is_empty() {
+            self.show_the_tab_before(tab, split, cx);
+        }
         self.browser.close(tab, split, cx);
         let what = if tabs.len() > 1 {
             What::CLOSE_TABS
@@ -832,6 +858,34 @@ impl Shell {
             (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show }),
             cx,
         );
+    }
+
+    /// Close and Keep Pinned on the tab shown, a pinned tab or a favorite, shows the tab shown
+    /// before it that's still open in this Space, and rings its row, as Arc 1.170 does: a Today
+    /// tab, or a pinned tab or favorite with its page, so it loads no other. Shown first, so the
+    /// core has no tab of its own to pick, and its pick, the top Today tab, stands when there's
+    /// none. The list glides to the row, as it does to any tab shown.
+    fn show_the_tab_before(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) {
+        let going = if split { self.panes(tab) } else { vec![tab] };
+        let Some(space) = self
+            .shown_space()
+            .filter(|_| self.shown_among(&going).is_some())
+        else {
+            return;
+        };
+        let open = |other: &u64| {
+            space.today.contains(other)
+                || ((space.pinned.contains(other) || self.favorites.contains(other))
+                    && !self.page(*other).unloaded)
+        };
+        let before = self
+            .recent
+            .iter()
+            .find(|other| !going.contains(other) && open(other));
+        if let Some(&before) = before {
+            self.select(before, cx);
+            self.ring_for_attention(before, cx);
+        }
     }
 
     /// Removes the pinned row whose first tab is `tab` from the pinned tabs, with its split, as

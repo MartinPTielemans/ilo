@@ -1,7 +1,8 @@
 # A new profile's first launch plays the onboarding over the window, captured at each step in a
 # light and a dark appearance: the intro draws ilo's wordmark and its line and goes on by itself, or
 # at any key; the import step lists the made-up Arc in src/import/fixture (a made-up Chrome on
-# Linux), never the Mac's own browsers; Esc or Skip goes on from a step, the colour step's Return
+# Linux), never the Mac's own browsers, and ↩ there shows its choices, with Import and Back, which
+# Esc goes back from to the list; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
 # welcome with the command bar up and a line under it. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
@@ -42,6 +43,21 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
+# ↩ at the import's list shows the choices of the browser used last, as "What comes from …", with
+# Import as the step's button and Back in its corner; Esc goes back to the list, keeping the step.
+# The choices are captured as onboarding-$1-import-choose.png once their counts are in.
+import_choices() {
+  send key return
+  expect "^browser: import pick $found\$" "$1: ↩ at the import didn't show $found's choices"
+  expect "^browser: import read $found: " "$1: picking $found didn't read it"
+  # Once its counts have drawn, which the driver waits for.
+  send state
+  capture_step "$1-import-choose"
+  send key escape
+  expect '^browser: import escape$' "$1: Esc in $found's choices didn't reach the import"
+  expect '^browser: import drawn list$' "$1: Esc didn't go back from $found's choices to the list"
+  none_since '^browser: onboarding left import' || fail "$1: Esc in the choices left the import step"
+}
 # The account's step, while the build names a server to sign in to.
 account=
 [ ! -s branding/sync-server ] || account="account "
@@ -77,6 +93,7 @@ for each in $steps; do
   [ "$each" = import ] ||
     expect "^browser: onboarding step $each settled\$" "light: the $each step didn't come"
   capture_step "light-$each"
+  [ "$each" != import ] || import_choices light
   send key escape
   expect "^browser: onboarding left $each via escape\$" "light: Esc didn't leave the $each step"
 done
@@ -149,6 +166,7 @@ if [ "$reduced" = windows ]; then
 fi
 expect '^browser: onboarding step import settled$' "dark: the import step didn't come"
 capture_step dark-import
+import_choices dark
 # Its words and chip end 24 in from the window's right and bottom, 20 tall.
 # Only the Mac's window frame is its content, so elsewhere the driver's layout gives its size: Linux
 # logs no frame (host_window_frame), and Windows' takes in the title bar and borders.
@@ -186,7 +204,11 @@ case " $steps " in
       done
       entry="$apps/$(cat branding/id).desktop"
       mkdir -p "$apps"
-      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\n' "$app_name" "$browser" \
+      # With the types xdg-settings sets already listed: it adds each one missing to the entry and
+      # sleeps 4 s after, which put http's past the wait below on a quick runner.
+      printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s %%U\nMimeType=%s\n' \
+        "$app_name" "$browser" \
+        'text/html;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;x-scheme-handler/unknown;' \
         > "$entry"
       send key return
       expect '^browser: onboarding left default-browser via return$' \
@@ -286,6 +308,63 @@ for each in $steps; do
 done
 expect '^browser: onboarding done$' "the replay in its own window didn't end"
 expect '^browser: command bar shown$' "the replay in its own window didn't end with the command bar"
+exec 3>&-
+quit
+
+# Suggested favorites: a first launch on a made-up Chrome whose history visits two sites three
+# times and more brings them in, with ↩ at the browser and ↩ at its choices, and the step after
+# the import is Your favorites, offering those two, ticked.
+fav_home="$PWD/$out/onboarding-favorites-home"
+rm -rf "$fav_home"
+if [ "$(uname)" = Darwin ]; then
+  fav_chrome="$fav_home/Library/Application Support/Google/Chrome"
+elif windows; then
+  fav_chrome="$fav_home/AppData/Local/Google/Chrome/User Data"
+else
+  fav_chrome="$fav_home/.config/google-chrome"
+fi
+mkdir -p "$fav_chrome/Default"
+printf '%s' '{"profile":{"info_cache":{"Default":{"name":"Me"}}}}' > "$fav_chrome/Local State"
+printf '%s' '{}' > "$fav_chrome/Default/Preferences"
+printf '%s' '{"roots":{}}' > "$fav_chrome/Default/Bookmarks"
+# Chromium counts microseconds from 1601: an hour ago.
+python3 -I -c '
+import sqlite3, sys, time
+db = sqlite3.connect(sys.argv[1])
+now = int((time.time() + 11644473600) * 1000000)
+db.executescript("""CREATE TABLE urls(id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR,
+  title LONGVARCHAR, visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL,
+  last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL);""")
+db.executemany("INSERT INTO urls(url, title, visit_count, typed_count, last_visit_time) "
+               "VALUES (?, ?, ?, 1, ?)",
+               [("https://news.example.org/", "News", 5, now - 3600000000),
+                ("https://mail.example.org/", "Mail", 4, now - 3600000000)])
+db.commit()
+' "$fav_chrome/Default/History" || fail "couldn't write the made-up Chrome's history"
+fav_import_home=$fav_home
+! windows || fav_import_home=$(cygpath -w "$fav_home")
+log="$out/onboarding-favorites.log"
+step=0
+rm -f "$saved" "$profile_dir/Account"
+BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
+  "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: onboarding step intro settled$' || fail "favorites: the intro didn't draw"
+send key escape
+expect '^browser: onboarding left intro via key$' "favorites: a key didn't skip the intro"
+expect '^browser: onboarding step import settled$' "favorites: the import step didn't come"
+send key return
+expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
+expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
+send key return
+expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
+  "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
+await '^browser: onboarding step favorites settled$' ||
+  fail "favorites: the step after the import wasn't Your favorites"
+capture_step favorites
+send key escape
+expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
 exec 3>&-
 quit
 
