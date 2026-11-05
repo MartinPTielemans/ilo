@@ -2079,8 +2079,8 @@ impl Settings {
             "Peek",
             Some(
                 format!(
-                    "Links from pinned tabs and favorites open in a preview, and so does \
-                     {peek_click} on any link."
+                    "Links from pinned tabs and favorites open in a preview, and so do \
+                     {peek_click} on any link and a click on an archived tab."
                 )
                 .into(),
             ),

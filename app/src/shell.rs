@@ -2141,6 +2141,9 @@ impl Shell {
         if self.page_laid != Some(frame) {
             self.page_laid = Some(frame);
             self.browser.lay_out_page(frame.0, frame.1, cx);
+            if let Some(page) = self.preview_page() {
+                self.browser.preview_page_moved(page, cx);
+            }
             // The card moved, such as with the sidebar, and the plate in its corner with it.
             self.show_link(cx);
         }
@@ -2211,7 +2214,7 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some((page, radius)) = self.page_laid.filter(|_| self.peeks_links_of(tab)) else {
+        let Some((page, radius)) = self.preview_page().filter(|_| self.peeks_links_of(tab)) else {
             return false;
         };
         // check.sh waits for this line.
@@ -2224,6 +2227,20 @@ impl Shell {
     /// Where the page was laid out last, and the radius of its corners.
     pub fn page_laid(&self) -> Option<(Bounds<Pixels>, f32)> {
         self.page_laid
+    }
+
+    /// The part of the page laid out last that the window shows, which a link preview goes over:
+    /// all of it, but while the Library pushes it past the window's right edge, where a preview over
+    /// the whole page would run off the window.
+    pub fn preview_page(&self) -> Option<(Bounds<Pixels>, f32)> {
+        let window = Bounds::new(point(px(0.), px(0.)), self.viewport);
+        self.page_laid.map(|(page, radius)| {
+            let shown = page.intersect(&window);
+            match shown.size.width > px(0.) && shown.size.height > px(0.) {
+                true => (shown, radius),
+                false => (page, radius),
+            }
+        })
     }
 
     /// Where the card's left edge is: past the sidebar, or at the inset once ⌘S has hidden it,

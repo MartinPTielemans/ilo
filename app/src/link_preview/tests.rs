@@ -51,6 +51,9 @@ impl Host for Recorder {
     fn keep(&self, window: u64, tab: u64) {
         self.push(format!("keep {window} {tab}"));
     }
+    fn kept_archived(&self, window: u64, archived: u64, _: &mut App) {
+        self.push(format!("kept archived {archived} in {window}"));
+    }
     fn closed(&self, window: u64, closed: Closed, undone: bool, _: &mut App) {
         let (x, y) = (f32::from(closed.link.x), f32::from(closed.link.y));
         let undone = if undone { " undone" } else { "" };
@@ -119,11 +122,16 @@ impl Shown {
     }
 
     fn show(&mut self, tab: u64) {
+        self.show_of(tab, None);
+    }
+
+    /// Shows `tab`'s page as the preview of the archived tab `archived`, if it's one.
+    fn show_of(&mut self, tab: u64, archived: Option<u64>) {
         let link = point(px(400.), px(200.));
         let url = "https://www.example.org/a".into();
         self.cx
             .cx
-            .update(|cx| show(WINDOW, tab, OVER, url, (page(), 6.), link, cx));
+            .update(|cx| show(WINDOW, tab, OVER, url, (page(), 6.), link, archived, cx));
         self.cx.run_until_parked();
     }
 
@@ -237,6 +245,29 @@ fn escape_closes_it(cx: &mut TestAppContext) {
     let mut shown = Shown::new(cx);
     shown.keys("escape");
     assert_eq!(shown.calls(), ["release", "hide", "close 7", CLOSED]);
+}
+
+/// An archived tab's preview, from the Library (#696): ⌘W and Esc close it and leave it in the
+/// archive, with nothing for ⌘Z to reopen, and ⌘↩ keeps it as a tab, which restores it from the
+/// archive.
+#[gpui::test]
+fn an_archived_tabs_preview_closes_leaving_it_and_keeps_restoring_it(cx: &mut TestAppContext) {
+    let mut shown = Shown::new(cx);
+    shown.show_of(8, Some(5));
+    shown.calls();
+    shown.keys("cmd-w");
+    assert_eq!(shown.calls(), ["release", "hide", "close 8"]);
+    shown.show_of(9, Some(5));
+    shown.keys("escape");
+    let calls = shown.calls();
+    assert_eq!(&calls[calls.len() - 3..], ["release", "hide", "close 9"]);
+    shown.show_of(10, Some(5));
+    shown.keys("cmd-enter");
+    let calls = shown.calls();
+    assert_eq!(
+        &calls[calls.len() - 4..],
+        ["release", "keep 1 10", "hide", "kept archived 5 in 1"]
+    );
 }
 
 /// ⌘↩ grows it into the tab's place, then keeps its page as a Today tab, as it is.
