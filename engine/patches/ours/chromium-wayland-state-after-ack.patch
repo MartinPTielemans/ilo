@@ -5,8 +5,11 @@ sway 1.9 configures a window that leaves full screen before acking its entry at 
 entered at, and one that enters before acking its exit at the size it left at, as its
 should_configure compares with the state the unacked configure never applied; it then keeps the
 size its floating window commits, so a page's full screen left quickly brought the window back
-at the output's size, swinging between the two first (#1714). A roundtrip after each request
-lets the configures it brings, and sway's answer to the commit that acks them, arrive first.
+at the output's size, swinging between the two first (#1714). A sync after each request
+orders no configure: wlroots answers it once it has handled the requests before it, and sends
+the configures they bring later, from an idle callback in the same turn of its loop, flushed
+with the answer. So the held state goes in a task posted from the answer, once the rest of that
+read is dispatched, and waits for any configure in it to be acked.
 --- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 +++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 @@ -219,6 +219,13 @@
@@ -37,8 +40,8 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
 +    int64_t display_id;
 +  };
 +  std::optional<HeldState> held_state_;
-+  // The roundtrip after a state request, done once the compositor has handled
-+  // it and sent the configures it brings.
++  // The sync after a state request, answered once the compositor has handled
++  // it; the configures it brings may come after the answer, in the same read.
 +  wl::Object<wl_callback> state_sync_;
 +
    bool is_active_ = false;
@@ -61,7 +64,7 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
  #include "base/unguessable_token.h"
  #include "third_party/skia/include/core/SkPath.h"
  #include "ui/base/hit_test.h"
-@@ -662,6 +664,64 @@
+@@ -662,6 +664,67 @@
  
    ProcessSequencePoint(seq);
    MaybeApplyLatestStateRequest(/*force=*/false);
@@ -90,9 +93,12 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
 +                                        uint32_t time) {
 +  auto* window = static_cast<WaylandToplevelWindow*>(data);
 +  window->state_sync_.reset();
-+  // The configures the request brought, if any, are in flight now, and the
-+  // held state waits for their frame.
-+  window->MaybeSendHeldState();
++  // Posted: wlroots sends a request's configures after answering the sync,
++  // flushed with it, so they're dispatched once the rest of this read is, and
++  // the held state then waits for their frame.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&WaylandToplevelWindow::MaybeSendHeldState,
++                                window->weak_ptr_factory_.GetWeakPtr()));
 +}
 +
 +void WaylandToplevelWindow::MaybeSendHeldState() {
@@ -126,7 +132,7 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
  }
  
  bool WaylandToplevelWindow::OnInitialize(
-@@ -907,6 +967,8 @@
+@@ -907,6 +970,8 @@
        return applied_state().window_state == state ||
               GetLatestRequestedState().window_state == state;
      };
@@ -135,7 +141,7 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
      // Call UnSetMaximized only if current state is normal. Otherwise, if the
      // current state is fullscreen and the previous is maximized, calling
      // UnSetMaximized may result in wrong restored window position that clients
-@@ -914,6 +976,10 @@
+@@ -914,6 +979,10 @@
      if (window_state == PlatformWindowState::kMinimized) {
        xdg_toplevel_->SetMinimized();
        pending_minimize_ = true;
@@ -146,7 +152,7 @@ lets the configures it brings, and sway's answer to the commit that acks them, a
      } else if (window_state == PlatformWindowState::kFullScreen) {
        xdg_toplevel_->SetFullscreen(
            GetWaylandOutputForDisplayId(fullscreen_display_id));
-@@ -929,6 +995,11 @@
+@@ -929,6 +998,11 @@
          xdg_toplevel_->UnSetMaximized();
        }
      }
