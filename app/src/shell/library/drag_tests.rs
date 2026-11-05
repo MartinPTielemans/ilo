@@ -10,34 +10,29 @@ use super::{CARD_NAME_HEIGHT, CARD_NAME_TOP, CARD_WIDTH, SPACES_INSET, card_x};
 use crate::shell::{Folders, Section, Shell, recorder::Recorder};
 use crate::tokens::shell::ROW_HEIGHT;
 
-/// The Library open on Spaces over Home, with 3 pinned, Work, which is empty, and an agent's
-/// Space with 5 pinned, Work shown, so a click on Home's card would show it.
+/// The Library open on Spaces over Home, with 3 pinned, and Work, which is empty, shown, so a click
+/// on Home's card would show it.
 fn library(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     cx.update(|window, _| window.activate_window());
     shell.update(cx, |shell, cx| {
-        let space = |id: u64, name: &str, agent: &str| {
+        let space = |id: u64, name: &str| {
             (
                 id,
                 name.to_string().into(),
                 None,
                 1,
                 "".into(),
-                agent.into(),
+                "".into(),
                 "".into(),
             )
         };
-        let spaces = vec![
-            space(1, "Home", ""),
-            space(2, "Work", ""),
-            space(9, "Agent", "claude"),
-        ];
+        let spaces = vec![space(1, "Home"), space(2, "Work")];
         shell.set_spaces(spaces, cx);
         shell.set_space(2, cx);
         shell.set_tabs(1, vec![3], Vec::new(), Vec::new(), Folders::default(), cx);
-        shell.set_tabs(9, vec![5], Vec::new(), Vec::new(), Folders::default(), cx);
         shell.section = Section::Spaces;
         shell.set_library(true, cx);
         shell.library_motion = None;
@@ -84,10 +79,9 @@ fn a_tab_dragged_to_another_spaces_card_moves_there(cx: &mut TestAppContext) {
     assert!(library_open(&shell, cx));
 }
 
-/// Let go over its own card it stays, and isn't a click that shows the Space; an agent's Space
-/// takes no tab and gives none.
+/// Let go over its own card it stays, and isn't a click that shows the Space.
 #[gpui::test]
-fn its_own_card_and_an_agents_take_no_tab(cx: &mut TestAppContext) {
+fn its_own_card_takes_no_tab(cx: &mut TestAppContext) {
     let (shell, cx, host) = library(cx);
     drag(cx, first_row(0), first_row(0) + point(px(0.), px(40.)));
     assert!(host.take_edits().is_empty());
@@ -96,10 +90,6 @@ fn its_own_card_and_an_agents_take_no_tab(cx: &mut TestAppContext) {
         "the drag was a click on its card"
     );
     assert!(library_open(&shell, cx));
-    drag(cx, first_row(0), first_row(2));
-    assert!(host.take_edits().is_empty());
-    drag(cx, first_row(2), first_row(1));
-    assert!(host.take_edits().is_empty());
     // Where a click on its card does show it.
     cx.simulate_click(first_row(0) + point(px(0.), px(40.)), Modifiers::none());
     cx.run_until_parked();

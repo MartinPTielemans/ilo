@@ -20,10 +20,10 @@ rm -f "$saved" "$launch_frame"
 # the mark the crash test's launch writes as it starts, not one an earlier try left.
 python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 prefs.setdefault("profile", {})["exit_type"] = "Normal"
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the session couldn't be marked clean in $prefs"
 # What no annotation may have: the switch that gives the profile, its folder and the home, which

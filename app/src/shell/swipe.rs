@@ -9,9 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle,
-    Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band,
-    rubber_band,
+    Command, ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
+    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
+    library::library_band, rubber_band,
 };
 
 impl Shell {
@@ -370,29 +370,52 @@ impl Shell {
         if (sum * WHEEL_LINE).abs() > 1. {
             self.wheel = None;
             self.wheel_paged = Some(now);
-            self.leave_popovers(cx);
-            let library = sum > 0. && (self.library_open || self.library_beside(self.space));
-            if library != self.library_open {
-                // check.sh waits for this line.
-                log!("browser: command view-library via wheel");
-                if !library {
-                    self.show_first_space(cx);
-                }
-                self.set_library(library, cx);
-            } else if !self.library_open
-                && let Some(space) = self.nearest(self.space, sum.signum() * self.width())
-                && space != self.space
-            {
-                if self.form().is_some() {
-                    self.cancel_space(window, cx);
-                    return true;
-                }
-                // check.sh waits for this line.
-                log!("browser: command select-space via wheel");
-                self.show_space(space, cx);
-            }
+            self.page_step(sum > 0., "wheel", window, cx);
         }
         true
+    }
+
+    /// One step along the row the pages go by, back (to the left) or forward, as a wheel's burst
+    /// or a mouse's button takes it: back from the first Space opens the Library, forward leaves
+    /// it for the first Space, and back off the form cancels it.
+    fn page_step(&mut self, back: bool, via: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_popovers(cx);
+        let library = back && (self.library_open || self.library_beside(self.space));
+        if library != self.library_open {
+            // check.sh waits for this line.
+            log!("browser: command view-library via {via}");
+            if !library {
+                self.show_first_space(cx);
+            }
+            self.set_library(library, cx);
+        } else if !self.library_open
+            && let Some(space) =
+                self.nearest(self.space, if back { 1. } else { -1. } * self.width())
+            && space != self.space
+        {
+            if self.form().is_some() {
+                self.cancel_space(window, cx);
+                return;
+            }
+            // check.sh waits for this line.
+            log!("browser: command select-space via {via}");
+            self.show_space(space, cx);
+        }
+    }
+
+    /// A mouse's back or forward button over the UI takes the pages a step, and forward from the
+    /// last Space makes a new one, as the pull past it does. A private or little window pages no
+    /// Spaces with it.
+    pub(super) fn navigate(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.private || self.little.is_some() {
+            return;
+        }
+        if !back && !self.library_open && self.new_space_beside(self.space) {
+            self.leave_popovers(cx);
+            self.run(Command::NewSpace, "mouse", cx);
+            return;
+        }
+        self.page_step(back, "mouse", window, cx);
     }
 
     /// Fingers and wheels over the sidebar or the Library, heard ahead of the list, which would
@@ -923,6 +946,36 @@ mod tests {
             assert!(shell.library_open, "the next swipe left the Library closed");
         });
         assert_eq!(*host.shown.borrow(), [1]);
+    }
+
+    /// A flick, fingers lifted while they're still going, goes on to the next Space though they
+    /// went less than halfway, and lifted the same way back it goes back. check.sh's swipes go
+    /// past halfway, as a frame of the hosted runners' that takes longer than SWIPE_HISTORY can
+    /// fall between the last move and the lift there, which reads as fingers held still (#1869).
+    #[gpui::test]
+    fn a_flick_short_of_halfway_goes_on_to_the_next_space(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let fingers = |touch_phase, x| ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+                touch_phase,
+                ..Default::default()
+            };
+            let flick =
+                |shell: &mut Shell, step: f32, window: &mut Window, cx: &mut Context<Shell>| {
+                    // A quarter of the way, in ten moves.
+                    let step = step * 0.25 * shell.width() / SWIPE_TRACKING / 10.;
+                    shell.scroll(&fingers(TouchPhase::Started, step), window, cx);
+                    for _ in 0..9 {
+                        shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                    }
+                    shell.scroll(&fingers(TouchPhase::Ended, 0.), window, cx);
+                };
+            flick(shell, -1., window, cx);
+            shell.set_space(2, cx);
+            flick(shell, 1., window, cx);
+        });
+        assert_eq!(*host.shown.borrow(), [2, 1]);
     }
 
     /// Two fingers as Direct Manipulation reports a precision touchpad's on Windows: the touch

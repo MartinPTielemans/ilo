@@ -204,6 +204,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $a on emoji\$" \
   "Change Icon… on the tile didn't open the icon picker for the favorite"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the tile"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 # The arrow's tip is 13 in from the picker's left, 12 under the tile's middle at $tile.
 at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 echo "$at $tile" | awk '{ x = $1 + 13 - $5; y = $2 - 12 - $6; exit !(x > -2 && x < 2 && y > -2 && y < 2) }' ||
@@ -346,6 +347,7 @@ expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace F
   "a right-click on the tile before the quit didn't offer Change Icon…"
 send choose "$(cased 'Change Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… before the quit didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: page $a icon 🌟\$" "the picker's pick before the quit didn't become the favorite's icon"
@@ -649,7 +651,7 @@ grep -q '^browser: dialog shown Quit' "$log" && fail "⌘Q asked first with the 
 # URL of its own.
 python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     session = json.load(f)
 kept = session["favorites"]
 copies = []
@@ -658,7 +660,7 @@ for i in range(13):
     copy["pinned_url"] = f"{sys.argv[2]}favorite-{i}.html"
     copies.append(copy)
 session["favorites"] = copies
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(session, f)
 ' "$saved" "$site" || fail "the saved favorites couldn't be made 13"
 log="$out/favorites-most.log"

@@ -14,7 +14,7 @@ use gpui::{
 use crate::site_controls;
 
 use super::{
-    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell, ShellHandle,
+    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell,
     URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP, UserKeys,
     user_keys, written_as,
 };
@@ -108,10 +108,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
@@ -127,10 +124,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.run_extension(&run.0, cx))
                 .ok();
@@ -140,10 +134,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx))
                 .ok();
@@ -910,6 +901,31 @@ mod tests {
             let bar = shell.menu_bar(cx);
             bar.extensions
                 .iter()
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(listed, ["allowed"]);
+    }
+
+    /// A private window opened after the core reported the extensions lists those allowed in
+    /// Incognito from the window it opened from, as it hears them only once they change.
+    #[gpui::test]
+    fn a_private_window_lists_the_allowed_extensions_its_opener_heard(cx: &mut TestAppContext) {
+        let allowed = Extension {
+            incognito: true,
+            ..extension("allowed", true, &[])
+        };
+        let extensions = vec![extension("other", true, &[]), allowed];
+        let host = Rc::new(Recorder::default());
+        let from = cx.new(|cx| Shell::new(host.clone(), cx));
+        from.update(cx, |shell, cx| shell.set_extensions(7, extensions, cx));
+        let private = cx.new(|cx| {
+            let mut shell = Shell::private_window(host.clone(), 1, "Private".into(), 7, cx);
+            shell.hear_extensions_from(&from, cx);
+            shell
+        });
+        let listed = private.update(cx, |shell, cx| {
+            (shell.menu_bar(cx).extensions.iter())
                 .map(|extension| extension.id.to_string())
                 .collect::<Vec<_>>()
         });

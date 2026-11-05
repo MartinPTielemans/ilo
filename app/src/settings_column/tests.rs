@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use gpui::{Context, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size};
 
 use super::*;
+use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
 struct Shown {
@@ -33,6 +34,8 @@ impl Render for Shown {
             self.shown,
             true,
             self.logged.clone(),
+            div().h(px(SEARCH_HEIGHT)).into_any_element(),
+            None,
             pick,
             foot,
             window.is_a11y_active(),
@@ -52,10 +55,10 @@ fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContex
     (view, cx)
 }
 
-/// Where the middle of `section`'s plate is: the sections 2 apart from 48 down, their groups 12
-/// apart.
+/// Where the middle of `section`'s plate is: the sections 2 apart from 12 under the search field,
+/// 48 down, their groups 12 apart.
 fn plate_y(section: Section) -> f32 {
-    let (mut y, mut first) = (COLUMN_TOP, true);
+    let (mut y, mut first) = (COLUMN_TOP + SEARCH_HEIGHT + SEARCH_GAP, true);
     for group in Section::GROUPS {
         if !first {
             y += SECTION_GROUP_GAP;

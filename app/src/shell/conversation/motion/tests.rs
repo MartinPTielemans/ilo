@@ -40,7 +40,7 @@ fn trace(running: bool, steps: usize) -> Line {
 fn conversation(lines: Vec<Line>) -> Conversation {
     Conversation {
         agent: "task-1".into(),
-        name: "Claude",
+        name: "Claude".into(),
         title: "Museums in Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
         asked: "what's on at maat".into(),

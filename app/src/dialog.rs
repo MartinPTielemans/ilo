@@ -85,7 +85,7 @@ use crate::tokens::dialog::{
 use crate::tokens::text;
 /// Arc's motion: over 0.275 s the window dims and the card comes down 32 pt into place,
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
-const MOVE: f32 = 0.275;
+pub(crate) const MOVE: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
 const DROP: f32 = 32.;
 
@@ -211,7 +211,7 @@ impl Pose {
     }
 }
 
-fn ease_in_out(t: f32) -> f32 {
+pub(crate) fn ease_in_out(t: f32) -> f32 {
     cubic_bezier(0.42, 0., 0.58, 1., t)
 }
 
