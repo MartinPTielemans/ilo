@@ -1028,6 +1028,10 @@ impl Browser for Engine {
         unsafe { bc::bc_profile_delete(profile) };
     }
 
+    fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
+        shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
+    }
+
     fn context_menu(
         &self,
         items: Vec<MenuEntry>,

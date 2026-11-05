@@ -733,8 +733,10 @@ struct Profile {
     id: u64,
     name: SharedString,
     spaces: usize,
-    /// As the core has it: not the one it started with, nor one a Space or a favorite is in.
+    /// As the core has it: not the one it started with, nor one a Space is in.
     deletable: bool,
+    /// The favorites its tabs hold, which go with it.
+    favorites: usize,
     /// Why it has no Delete, for the line under its name.
     kept: Option<SharedString>,
     /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab to open in.
@@ -807,13 +809,14 @@ fn profiles() -> Vec<Profile> {
         .map(|(index, id)| {
             let count = spaces.iter().filter(|&&each| each == id).count();
             let listed = listed.iter().filter(|&&each| each == id).count();
-            let favorites = favorites.contains(&id);
-            let kept = shell::profile_kept(index == 0, total, listed, count > listed, favorites);
+            let favorites = favorites.iter().filter(|&&each| each == id).count();
+            let kept = shell::profile_kept(index == 0, total, listed, count > listed);
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
                 spaces: listed,
-                deletable: index > 0 && count == 0 && !favorites,
+                deletable: index > 0 && count == 0,
+                favorites,
                 kept: kept.map(Into::into),
                 users_space: users.contains(&id),
             }
@@ -2833,13 +2836,13 @@ impl Settings {
                         }))
                         .into_any_element()
                 });
-            let name = profile.name.clone();
+            let (name, favorites) = (profile.name.clone(), profile.favorites);
             let delete = profile.deletable.then(|| {
                 self.button(("delete-profile", id), "Delete")
                     .relative()
                     .child(self.drawn(format!("delete profile {id}")))
                     .on_click(cx.listener(move |settings, _, window, cx| {
-                        settings.delete(id, name.clone(), window, cx)
+                        settings.delete(id, name.clone(), favorites, window, cx)
                     }))
                     .into_any_element()
             });
@@ -2963,11 +2966,12 @@ impl Settings {
         &mut self,
         profile: u64,
         name: SharedString,
+        favorites: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let message = format!("Delete “{name}”?");
-        let detail = "Its history, cookies and logins go with it.";
+        let detail = shell::profile_goes_with(favorites_scope(), favorites);
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,
@@ -2985,7 +2989,7 @@ impl Settings {
         {
             let _ = window;
             cx.spawn(async move |_, _| {
-                if crate::ask(&message, detail, &["Delete", "Cancel"], true) == 0 {
+                if crate::ask(&message, &detail, &["Delete", "Cancel"], true) == 0 {
                     unsafe { bc::bc_profile_delete(profile) };
                 }
             })

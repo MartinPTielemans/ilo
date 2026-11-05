@@ -78,6 +78,9 @@ class Favorites {
   static void SpaceMoved(bc_id space);
   // The Space |space| is going: under Each Space, its favorites close with it.
   static void SpaceDeleting(bc_id space);
+  // The profile in the directory |profile| is going: its favorites' tabs close with it. Under
+  // Every Space the other profiles keep the sites.
+  static void ProfileDeleting(const std::string& profile);
   // Under Every Space, gives each profile that shows favorites a tab for each site it lacks.
   static void Complete();
 

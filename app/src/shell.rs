@@ -164,6 +164,7 @@ pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
+pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};

@@ -138,6 +138,8 @@ pub(super) struct Recorder {
     pub(super) dialog_busy: Cell<bool>,
     /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
     pub(super) warn_profiles: Cell<bool>,
+    /// Who shares the favorites, as `favorites_scope` answers.
+    pub(super) favorites_scope: Cell<super::FavoritesScope>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -1096,6 +1098,10 @@ impl Browser for Recorder {
     }
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
+
+    fn favorites_scope(&self, _: &mut App) -> super::FavoritesScope {
+        self.favorites_scope.get()
+    }
 
     fn context_menu(
         &self,

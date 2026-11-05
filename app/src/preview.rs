@@ -1356,6 +1356,10 @@ impl Browser for Fake {
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
 
+    fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
+        shell::FavoritesScope::default()
+    }
+
     // The preview's window is GPUI's own, which has the keyboard already.
     fn focus_ui(&self, _: &mut App) {}
 

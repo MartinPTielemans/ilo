@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    Command, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
+    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -170,6 +170,21 @@ impl MenuEntry {
     }
 }
 
+/// What a profile's Delete confirmation says goes with it, counting the `favorites` its tabs hold.
+/// A profile with no Space can hold favorites no Space shows (#1524). Under Every Space the other
+/// profiles keep those sites, so none of them goes.
+pub fn profile_goes_with(scope: FavoritesScope, favorites: usize) -> String {
+    match if scope == FavoritesScope::Every {
+        0
+    } else {
+        favorites
+    } {
+        0 => "Its history, cookies and logins go with it.".into(),
+        1 => "Its history, cookies, logins and 1 favorite go with it.".into(),
+        count => format!("Its history, cookies, logins and {count} favorites go with it."),
+    }
+}
+
 /// A new profile's name as Chrome numbers them, "Profile 2" after the first, that `names` hasn't.
 pub fn new_profile_name(names: &[SharedString]) -> String {
     (names.len() + 1..)
@@ -179,31 +194,23 @@ pub fn new_profile_name(names: &[SharedString]) -> String {
 }
 
 /// Why Settings › Profiles has no Delete for a profile, for the line under its name, or None when
-/// it has one or nothing needs saying. The core deletes none a Space or a favorite is in, nor the
-/// one it started with, `first`. `profiles` counts them all; `spaces` counts the Spaces listed in
-/// it, `task` says whether an agent's task, whose Space isn't listed, is working in it, and
-/// `favorites` whether a favorite is in it.
-pub fn profile_kept(
-    first: bool,
-    profiles: usize,
-    spaces: usize,
-    task: bool,
-    favorites: bool,
-) -> Option<String> {
+/// it has one or nothing needs saying. The core deletes none a Space is in, nor the one it started
+/// with, `first`; its favorites go with it. `profiles` counts them all; `spaces` counts the Spaces
+/// listed in it, and `task` says whether an agent's task, whose Space isn't listed, is working in
+/// it.
+pub fn profile_kept(first: bool, profiles: usize, spaces: usize, task: bool) -> Option<String> {
     let its = match spaces {
         0 => None,
         1 => Some("its Space"),
         _ => Some("its Spaces"),
     };
-    let why = match (its, favorites) {
+    let why = match its {
         // With no other profile there's nothing to delete it for, so nothing to explain.
         _ if first && profiles < 2 => return None,
         _ if first => "The first profile can't be deleted.".into(),
-        (Some(its), true) => format!("Delete {its} and remove its favorites to delete it."),
-        (Some(its), false) => format!("Delete {its} to delete it."),
-        (None, true) => "Remove its favorites to delete it.".into(),
-        (None, false) if task => "An agent's task is working in it.".into(),
-        (None, false) => return None,
+        Some(its) => format!("Delete {its} to delete it."),
+        None if task => "An agent's task is working in it.".into(),
+        None => return None,
     };
     Some(why)
 }
@@ -538,14 +545,11 @@ impl Shell {
         }
     }
 
-    /// A Delete item for each profile nothing is in.
+    /// A Delete item for each profile no Space is in. Its favorites go with it.
     fn delete_profile_items(&self) -> Vec<(MenuEntry, MenuAction)> {
         // The one the browser started with stays, as the browser needs one.
         (self.profiles.iter().skip(1))
-            .filter(|(profile, _)| {
-                !self.spaces.iter().any(|each| each.profile == *profile)
-                    && !self.favorite_holders.values().any(|each| each == profile)
-            })
+            .filter(|(profile, _)| !self.spaces.iter().any(|each| each.profile == *profile))
             .map(|(profile, name)| {
                 let (profile, name) = (*profile, name.clone());
                 let entry = MenuEntry::named(format!("Delete “{name}”"), true).destructive();
@@ -559,9 +563,15 @@ impl Shell {
     /// Deletes the profile once the user confirms, as nothing brings it back.
     fn delete_profile(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
         let shell = cx.weak_entity();
+        // Under Each Space a favorite's holder is its Space, never a profile.
+        let favorites = self
+            .favorite_holders
+            .values()
+            .filter(|&&each| each == profile)
+            .count();
         self.browser.confirm(
             format!("Delete “{name}”?"),
-            "Its history, cookies and logins go with it.".into(),
+            profile_goes_with(self.browser.favorites_scope(cx), favorites),
             "Delete",
             Box::new(move |cx| {
                 shell
@@ -1757,41 +1767,65 @@ mod tests {
 
     use super::{MenuEntry, profile_kept, sentence_case, space_menu_head, space_menu_label};
     use crate::shell::{
-        Command, Folders, Page, Shell, drag::detents::shell_with, recorder::Recorder,
+        Command, FavoritesScope, Folders, Page, Shell, drag::detents::shell_with,
+        recorder::Recorder,
     };
 
+    /// A profile no Space is in can be deleted, favorites and all, from a Space's menu, and its
+    /// confirmation counts the favorites that go with it: none under Every Space, where the other
+    /// profiles keep the sites, and none under Each Space, where favorites close with their Space
+    /// (#1524).
+    #[gpui::test]
+    fn a_profile_with_favorites_alone_is_deleted_with_them(cx: &mut TestAppContext) {
+        let (shell, host) = shell_with(cx, &[], &[10], Folders::default());
+        shell.update(cx, |shell, cx| {
+            let profiles = vec![
+                (0, "Default".into()),
+                (5, "Work".into()),
+                (6, "Spare".into()),
+            ];
+            shell.set_profiles(profiles, cx);
+            // Work has no Space to show its favorites in.
+            shell.set_favorites(vec![(20, 0), (21, 5), (22, 5), (23, 6)], cx);
+        });
+        let says = |scope, profile: &str, cx: &mut TestAppContext| {
+            host.favorites_scope.set(scope);
+            shell.update(cx, |shell, cx| {
+                shell.space_menu(1, point(px(100.), px(200.)), cx)
+            });
+            cx.update(|cx| host.choose(&format!("Delete “{profile}”"), cx));
+            let (message, detail, _) = host.confirming.take().expect("Delete to ask first");
+            format!("{message} {detail}")
+        };
+        let work = "Delete “Work”? Its history, cookies, logins and 2 favorites go with it.";
+        assert_eq!(says(FavoritesScope::Profile, "Work", cx), work);
+        let spare = "Delete “Spare”? Its history, cookies, logins and 1 favorite go with it.";
+        assert_eq!(says(FavoritesScope::Profile, "Spare", cx), spare);
+        let kept = "Delete “Work”? Its history, cookies and logins go with it.";
+        assert_eq!(says(FavoritesScope::Every, "Work", cx), kept);
+        // Under Each Space a favorite is its Space's, so no profile holds one.
+        shell.update(cx, |shell, cx| shell.set_favorites(vec![(21, 1)], cx));
+        assert_eq!(says(FavoritesScope::Space, "Work", cx), kept);
+    }
+
     /// Settings › Profiles says why a profile has no Delete: what keeps it, and what the user does
-    /// to delete it. A profile nothing keeps, and the only one, say nothing.
+    /// to delete it. A profile nothing keeps, and the only one, say nothing. Its favorites don't
+    /// keep it: they go with it (#1524).
     #[test]
     fn a_profile_kept_from_deleting_says_why() {
-        let says = |first, profiles, spaces, task, favorites| {
-            profile_kept(first, profiles, spaces, task, favorites).unwrap_or_default()
+        let says = |first, profiles, spaces, task| {
+            profile_kept(first, profiles, spaces, task).unwrap_or_default()
         };
-        assert_eq!(says(true, 1, 3, false, true), "", "the only profile");
+        assert_eq!(says(true, 1, 3, false), "", "the only profile");
         assert_eq!(
-            says(true, 2, 1, false, false),
+            says(true, 2, 1, false),
             "The first profile can't be deleted."
         );
+        assert_eq!(says(false, 2, 1, false), "Delete its Space to delete it.");
+        assert_eq!(says(false, 3, 2, true), "Delete its Spaces to delete it.");
+        assert_eq!(says(false, 2, 0, true), "An agent's task is working in it.");
         assert_eq!(
-            says(false, 2, 1, false, false),
-            "Delete its Space to delete it."
-        );
-        assert_eq!(
-            says(false, 3, 2, true, false),
-            "Delete its Spaces to delete it."
-        );
-        let both = "Delete its Space and remove its favorites to delete it.";
-        assert_eq!(says(false, 2, 1, false, true), both);
-        assert_eq!(
-            says(false, 2, 0, true, true),
-            "Remove its favorites to delete it."
-        );
-        assert_eq!(
-            says(false, 2, 0, true, false),
-            "An agent's task is working in it."
-        );
-        assert_eq!(
-            says(false, 2, 0, false, false),
+            says(false, 2, 0, false),
             "",
             "nothing keeps it, so it has Delete"
         );
