@@ -21,6 +21,10 @@ pub use crate::tokens::dock_dot::GREEN;
 struct DockDot {
     host: Rc<dyn Host>,
     wait: Option<Task<()>>,
+    /// The color last asked for, which the dot takes again once it follows again.
+    last: Option<u32>,
+    /// Settings › General's Dock icon switch is off: the icon stays green and nothing swaps.
+    plain: bool,
 }
 
 impl Global for DockDot {}
@@ -28,7 +32,28 @@ impl Global for DockDot {}
 /// Starts following, with `host` to swap the icon. Without it, `follow` does nothing, as in the
 /// preview.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) {
-    cx.set_global(DockDot { host, wait: None });
+    cx.set_global(DockDot {
+        host,
+        wait: None,
+        last: None,
+        plain: false,
+    });
+}
+
+/// Settings › General's Dock icon switch: off, the icon goes back to green at once and stays it,
+/// sparing each Space switch the swap; on, it takes the key window's Space's color again.
+pub fn set_plain(plain: bool, cx: &mut App) {
+    let Some(dot) = cx.try_global::<DockDot>() else {
+        return;
+    };
+    if dot.plain == plain {
+        return;
+    }
+    let (host, last) = (dot.host.clone(), dot.last);
+    let dot = cx.global_mut::<DockDot>();
+    dot.plain = plain;
+    dot.wait = None;
+    host.show(if plain { None } else { last });
 }
 
 /// The key window shows a Space in `color`, or one without a color. Asked again for the same
@@ -38,6 +63,11 @@ pub fn follow(color: Option<u32>, cx: &mut App) {
         return;
     }
     let color = color.filter(|&color| color != GREEN);
+    let dot = cx.global_mut::<DockDot>();
+    dot.last = color;
+    if dot.plain {
+        return;
+    }
     // Replacing the wait drops the one before, so only the last change of a run swaps.
     let wait = cx.spawn(async move |cx| {
         cx.background_executor().timer(QUIET).await;
@@ -97,6 +127,24 @@ mod tests {
         }
         assert_eq!(after(cx, &host, QUIET / 2), [Some(0xE0475B)]);
         assert!(after(cx, &host, QUIET * 2).is_empty());
+    }
+
+    /// With the switch off the icon goes green at once and no Space's color swaps it; on again,
+    /// it takes the last Space's color.
+    #[gpui::test]
+    fn off_the_icon_stays_green_and_nothing_swaps(cx: &mut TestAppContext) {
+        let host = opened(cx);
+        cx.update(|cx| follow(Some(0x8655BF), cx));
+        assert_eq!(after(cx, &host, QUIET), [Some(0x8655BF)]);
+        cx.update(|cx| set_plain(true, cx));
+        assert_eq!(host.0.take(), [None]);
+        cx.update(|cx| follow(Some(0xE0475B), cx));
+        assert!(
+            after(cx, &host, QUIET * 2).is_empty(),
+            "a switch swapped the plain icon"
+        );
+        cx.update(|cx| set_plain(false, cx));
+        assert_eq!(host.0.take(), [Some(0xE0475B)]);
     }
 
     #[gpui::test]

@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -2150,6 +2150,7 @@ dependencies = [
  "gpui_util",
  "gpui_wgpu",
  "http_client",
+ "image",
  "libc",
  "log",
  "notify-rust",

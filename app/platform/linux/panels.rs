@@ -317,6 +317,7 @@ pub extern "C" fn host_forget_window(ui_view: *mut c_void) {
     crate::floats::forget_window(ui_view);
     crate::frames::forget_window(ui_view);
     crate::popovers::forget_window(ui_view);
+    crate::active_window::forget_window(ui_view);
     crate::link_preview_window::forget_window(ui_view);
     crate::reveal_window::forget_window(ui_view);
     CORNERS.with_borrow_mut(|corners| corners.retain(|(each, ..)| *each != ui_view));

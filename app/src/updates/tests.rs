@@ -19,6 +19,10 @@ impl Host for Recorder {
         self.asked.borrow_mut().push("check");
     }
 
+    fn show(&self, _: &mut App) {
+        self.asked.borrow_mut().push("show");
+    }
+
     fn restart(&self, _: &mut App) {
         self.asked.borrow_mut().push("restart");
     }
@@ -133,6 +137,25 @@ fn downloading_names_the_version(cx: &mut TestAppContext) {
         (Some("Downloading the update…".into()), None)
     );
     assert!(about.asked().is_empty());
+}
+
+/// An update the updater won't download by itself, as Sparkle leaves one for the user to say,
+/// offers Show Update, which asks the updater to show it in its own window. A failure after it is
+/// the update's.
+#[gpui::test]
+fn an_update_the_updater_waits_on_offers_its_window(cx: &mut TestAppContext) {
+    let mut about = shown(Updater::Own, cx);
+    about.says(Stage::Found(Some("0.1.5".into())));
+    about.says(Stage::Available(Some("0.1.5".into())));
+    let available = concat!(env!("APP_NAME"), " 0.1.5 is available");
+    assert_eq!(about.reads(), (Some(available.into()), Some("Show Update")));
+    about.click();
+    assert_eq!(about.asked(), ["show"]);
+    about.says(Stage::Failed { found: false });
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
 }
 
 /// A ready update offers Restart to Update, which asks the updater to install it now, as do the
@@ -419,4 +442,21 @@ fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
         about.cx.update(|_, cx| follow(Track::Nightly, cx));
         assert!(about.asked().is_empty());
     }
+}
+
+/// With Settings › About's Show what's new off, an update's first launch opens no notes, and on
+/// again it opens them.
+#[test]
+fn with_whats_new_off_an_update_opens_no_notes() {
+    let dir = std::env::temp_dir().join(format!("ilo-whats-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = || Some(format!("{}#0.1.10", crate::build_info::WHATS_NEW));
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on, the default");
+    std::fs::write(dir.join(NO_WHATS_NEW), "").unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), None, "off");
+    assert_eq!(notes_to_open(None, &dir), None);
+    std::fs::remove_file(dir.join(NO_WHATS_NEW)).unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on again");
+    let _ = std::fs::remove_dir_all(&dir);
 }
