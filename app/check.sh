@@ -13,7 +13,9 @@
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
 # which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
 # keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
-# the Store's pictures from pages on the internet, so it runs only when named too.
+# the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
+# tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
+# runs only when named, and skips elsewhere, where the windows run checks it.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -76,7 +78,7 @@ runs="$runs split favorites cards extensions adblock adblock-lists windows priva
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts"
 runs="$runs handback"
-named="store adblock-live widevine updates nightly update-checks keychain shots"
+named="store adblock-live widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
