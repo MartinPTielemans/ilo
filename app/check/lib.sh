@@ -384,6 +384,25 @@ drawn_after() {
   done
   return 1
 }
+# Sets at to where Settings drew its control $1, as drawn does, in the card's sight: between its
+# held title and its fade, where the card shows a row whole ("browser: settings card shows <top> to
+# <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
+# foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
+# sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
+# if it never drew it.
+in_sight() {
+  at=$(drawn "$1") || return 1
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ -n "$sight" ] || return 0
+  top=${sight%% to *}
+  bottom=${sight##* to }
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  # Past it by its row's half, 24, and a little more.
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+}
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
 # a path, the windows are captured there while it's open.

@@ -771,6 +771,10 @@ impl Browser for Recorder {
 
     fn clear_site(&self, _: u64, _: bool, _: &mut App) {}
 
+    fn clear_site_data(&self, tab: u64, _: &mut App) {
+        self.record(format!("clear site data {tab}"))
+    }
+
     fn set_developer_mode(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("developer mode {tab} {on}"))
     }

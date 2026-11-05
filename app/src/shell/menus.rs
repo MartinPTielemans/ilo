@@ -209,6 +209,46 @@ pub fn profile_kept(
 }
 
 impl Shell {
+    /// The menu a right-click on the header's reload button shows, or a Ctrl-click on the Mac,
+    /// which GPUI hands on as one (the owner, #1959): Reload, Hard Reload, and the site's data
+    /// cleared before a reload past the cache. Like Clear Cookies and Refresh, it doesn't ask: it's
+    /// picked by name, and the View menu's doesn't either.
+    pub(super) fn reload_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let keys = user_keys(cx);
+        let page = self.selected != 0;
+        let entry = |title, command| {
+            MenuEntry::new(title, page && self.offers(command)).shortcut(command, keys)
+        };
+        let run = |command: Command| -> MenuAction {
+            Box::new(move |shell, cx| shell.run(command, "sidebar", cx))
+        };
+        // Only a web page has a site whose data to clear, as for the View menu's clearing.
+        let clear = MenuEntry::new(
+            "Clear Site Data and Reload",
+            page && self.offers(Command::ClearCookiesAndRefresh),
+        );
+        let items: Vec<(MenuEntry, MenuAction)> = vec![
+            (entry("Reload", Command::Reload), run(Command::Reload)),
+            (
+                entry("Hard Reload", Command::ForceReload),
+                run(Command::ForceReload),
+            ),
+            (MenuEntry::line(), Box::new(|_, _| {})),
+            (
+                clear,
+                Box::new(|shell, cx| {
+                    if shell.selected == 0 || !shell.offers(Command::ClearCookiesAndRefresh) {
+                        return;
+                    }
+                    // check.sh waits for this line.
+                    log!("browser: command clear-site-data via sidebar");
+                    shell.browser.clear_site_data(shell.selected, cx)
+                }),
+            ),
+        ];
+        self.show_menu(items, position, None, cx);
+    }
+
     /// The menu a right-click on a Space's name or dot shows (Arc), with its icon (ours).
     pub(super) fn space_menu(
         &mut self,

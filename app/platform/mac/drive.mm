@@ -1424,13 +1424,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
-  if (action == "scroll") {
+  // As scroll, in the window with the keyboard, such as Settings', as clickkey clicks there.
+  if (action == "scroll" || action == "scrollkey") {
     double x, y, dy;
     int count;
-    if (!(words >> x >> y >> dy >> count) || count < 1) {
+    NSWindow* in = action == "scrollkey" ? NSApp.keyWindow : window;
+    if (!in || !(words >> x >> y >> dy >> count) || count < 1) {
       return false;
     }
-    Scroll(window, x, y, dy, count, done);
+    Scroll(in, x, y, dy, count, done);
     return true;
   }
   if (action == "swipe") {

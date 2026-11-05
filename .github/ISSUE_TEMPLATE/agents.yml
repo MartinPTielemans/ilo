@@ -62,16 +62,17 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: ilo has no releases yet. The commit you built (`git rev-parse --short HEAD`).
+      label: ilo version
+      description: "Settings › About shows it, and Copy Build Info copies it with the Chromium version, the system and the chip: Help › Troubleshooting on the Mac, the command bar elsewhere. Built from source, the commit (`git rev-parse --short HEAD`)."
+      placeholder: 0.1.0 (4321)
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: macOS version and chip
-      description: "`sw_vers -productVersion` and `uname -m`."
-      placeholder: 26.1, arm64
+      label: System and chip
+      description: "The system and its version, and the chip, as Copy Build Info gives them: on the Mac `sw_vers -productVersion` and `uname -m`; on Linux the distribution, Wayland or X11, and the desktop; on Windows the version `winver` shows."
+      placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true

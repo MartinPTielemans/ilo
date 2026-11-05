@@ -39,11 +39,13 @@ A browser holds the user's whole online life. While you work:
 
 - macOS and chip: `sw_vers -productVersion` and `uname -m`.
 - Which build: the prod build in `/Applications/ilo.app`, or a dev build in a
-  checkout's `app/build/Browser.app`. ilo has no releases yet, so its version is the
-  commit it was built from. Ask the user where their checkout is and run
-  `git -C <checkout> rev-parse HEAD`, and check it's the commit the app was built from
-  (`git status` clean, built since the last pull). If nobody can tell, say the commit
-  is unknown. Do not guess.
+  checkout's `app/build/Browser.app`. A prod build is a release, which updates itself:
+  its version and build are what Settings › About shows, and
+  `plutil -extract CFBundleShortVersionString raw /Applications/ilo.app/Contents/Info.plist`
+  and `CFBundleVersion` read them. A dev build's version is the commit it was built from.
+  Ask the user where their checkout is and run `git -C <checkout> rev-parse HEAD`, and
+  check it's the commit the app was built from (`git status` clean, built since the last
+  pull). If nobody can tell, say the commit is unknown. Do not guess.
 - Chromium version: `chromium.version` in `engine/pins.ini` at that commit.
 - Whether ilo is running: `pgrep -lx Browser`.
 - The extensions installed: ask the user. They are in the profile, which you don't read.

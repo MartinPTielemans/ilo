@@ -2422,6 +2422,12 @@ BC_EXPORT void bc_tab_stop(bc_id tab);
 // system's engine's store loses the site's too, once the profile has used it.
 BC_EXPORT void bc_tab_clear_site(bc_id tab, bool cookies);
 
+// Deletes the profile's cookies, storage and cache for the site of the tab's page, then loads it
+// again bypassing the cache: what Clear Site Data and Reload does. Storage is local storage,
+// IndexedDB, service workers, Cache Storage and file systems. A site, the page's scheme and the
+// system's engine's store are as bc_tab_clear_site's.
+BC_EXPORT void bc_tab_clear_site_data(bc_id tab);
+
 // The system's engine, WebKit on the Mac, plays the protected video Chromium can't (decision 1).
 // A short built-in list of streaming services opens in it from the first visit, until
 // bc_tab_set_system_engine turns one off, which the profile keeps. Any other site's pages show in

@@ -240,6 +240,9 @@ pub trait Browser {
     /// Deletes the cookies, or else the cache, the profile keeps for the site of the tab's page,
     /// then reloads it.
     fn clear_site(&self, tab: u64, cookies: bool, cx: &mut App);
+    /// Deletes the cookies, storage and cache the profile keeps for the site of the tab's page,
+    /// then reloads it past the cache. The user's alone: agents get no path to it.
+    fn clear_site_data(&self, tab: u64, cx: &mut App);
     /// Turns Developer Mode on or off for the site of the tab's page, in its profile. The user's
     /// view: agents get none.
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);

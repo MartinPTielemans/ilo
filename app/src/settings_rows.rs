@@ -20,10 +20,10 @@ use crate::tokens::settings::{
     CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
     CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
-    CONTROL_RADIUS, DETAIL, DETAIL_LIGHT, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF,
-    GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB,
-    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED,
-    ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
+    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
+    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
+    KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
+    ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
     SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -334,7 +334,7 @@ impl Look {
             surface,
             ink: mix(NAME),
             line: mix(LINE),
-            detail: mix(pick(DETAIL, DETAIL_LIGHT)),
+            detail: mix(DETAIL),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
@@ -744,6 +744,44 @@ mod tests {
                 );
             }
             assert!(contrast(&look, look.off()) < contrast(&look, look.ink));
+        }
+    }
+
+    /// Settings' quieter text still reads at WCAG AA's 4.5:1 for small text, in dark and light,
+    /// on what it's drawn over: a row's line on its group, the page's sentence and a heading on
+    /// the card, the keys that can't change and None on their chips, and in the column Chromium
+    /// settings, the sections and the field's "Search" and ⌘F (#1636, where 0.4 read at 2.4:1).
+    #[test]
+    fn the_quiet_text_reads_in_dark_and_light() {
+        use crate::palette::contrast;
+        use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use crate::tokens::settings::{FOOT_TEXT, SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::shell::library::LIBRARY_PLATE;
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            let (card, base, ground) = match dark {
+                true => (rgb(OVERLAY_DARK), rgb(PAPER), rgb(STAND_IN)),
+                false => (rgb(DIALOG_LIGHT), rgb(INK), rgb(LIGHT_STAND_IN)),
+            };
+            let on = |under: Rgba, alpha: f32| (under.blend(base.opacity(alpha)), under);
+            let chip = |fill: f32, text: f32| on(look.surface.blend(base.opacity(fill)), text);
+            let field = ground.blend(base.opacity(LIBRARY_PLATE));
+            let quiet = [
+                ("a row's line", (look.detail, look.surface)),
+                ("an off feature's name", (look.off(), look.surface)),
+                ("the page's sentence", on(card, DETAIL)),
+                ("a heading", (look.heading, card)),
+                ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
+                ("None", chip(CHIP, CHIP_NONE_TEXT)),
+                ("a section", on(ground, SECTION_TEXT)),
+                ("Chromium settings", on(ground, FOOT_TEXT)),
+                ("Search", on(field, DETAIL)),
+                ("⌘F", on(field, SEARCH_HINT)),
+            ];
+            for (what, (text, under)) in quiet {
+                let ratio = contrast(text, under);
+                assert!(ratio >= 4.5, "{what} reads at {ratio:.2}:1, dark {dark}");
+            }
         }
     }
 

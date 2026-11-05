@@ -533,6 +533,10 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_clear_site(tab, cookies) };
     }
 
+    fn clear_site_data(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_clear_site_data(tab) };
+    }
+
     fn set_developer_mode(&self, tab: u64, on: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_developer_mode(tab, on) };
     }
