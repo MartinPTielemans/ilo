@@ -128,6 +128,24 @@ send_link() {
         fail "$what didn't go chrome.exe's fast way to the running browser ($status):" \
           "$(tr '\n' ' ' < "$out/links-sent-now.log")"
     fi
+  elif [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    # Wayland brings a window forward only with an activation token, which a launcher gives the
+    # app it starts, and the second launch hands it the running browser. sway's exec gives its
+    # command one, which this launch takes. A script, as sway reads a newline or ; in the command
+    # it's sent as the start of another.
+    activation_token="$PWD/$out/activation-token"
+    rm -f "$activation_token"
+    printf '%s\n' 'printf %s "$XDG_ACTIVATION_TOKEN" > "$1.part" && mv "$1.part" "$1"' \
+      > "$out/activation-token.sh"
+    swaymsg exec "sh '$PWD/$out/activation-token.sh' '$activation_token'" > "$out/swaymsg.log" 2>&1 ||
+      fail "sway didn't run the command that gets $what an activation token: $(cat "$out/swaymsg.log")"
+    for _ in $(seq 100); do
+      [ ! -e "$activation_token" ] || break
+      sleep 0.05
+    done
+    [ -s "$activation_token" ] || fail "sway gave $what no activation token"
+    XDG_ACTIVATION_TOKEN=$(cat "$activation_token") "$browser" "$@" >> "$out/links-sent.log" 2>&1 ||
+      fail "the second launch with $what failed"
   else
     "$browser" "$@" >> "$out/links-sent.log" 2>&1 || fail "the second launch with $what failed"
   fi
