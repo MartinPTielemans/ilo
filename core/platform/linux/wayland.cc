@@ -60,9 +60,10 @@ void DispatchApp() {
 }
 
 // Hears each configure a window acks, which Chromium does as it draws the first frame of the state
-// the configure brought, and runs what waits for one with the state the window has. A state the
-// browser asks for is the window's at once, and the compositor's configure with its bounds comes
-// after, maybe after configures it had sent before, such as sway's answer to the last commit.
+// the configure brought, and runs what waits for the compositor's answer to the state the window
+// has. A state the browser asks for is the window's at once, and the compositor's configure with
+// its bounds comes after, maybe after configures it had sent before, such as sway's answer to the
+// last commit, which can latch with the window's state (chromium-wayland-state-after-ack.patch).
 class ConfigureWatcher : public wl::WaylandProxy::Delegate {
  public:
   // The proxy's one delegate, which nothing else sets outside tests.
@@ -84,19 +85,30 @@ class ConfigureWatcher : public wl::WaylandProxy::Delegate {
   void OnWindowAdded(gfx::AcceleratedWidget) override {}
   void OnWindowRemoved(gfx::AcceleratedWidget window) override { waiting_.erase(window); }
   void OnWindowConfigured(gfx::AcceleratedWidget window, bool configured) override {
-    auto waiting = waiting_.find(window);
-    if (waiting == waiting_.end() || !configured || !proxy_->IsWindowStateConfigured(window)) {
+    if (!configured || !waiting_.contains(window)) {
       return;
     }
-    base::OnceClosure done = std::move(waiting->second);
-    waiting_.erase(waiting);
-    // Posted, as the ack comes in the middle of Chromium's frame.
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(done));
+    // Asked once Chromium is done with the frame whose ack this is, which it acks in the middle of,
+    // before it lets go of the configures that frame answered.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&ConfigureWatcher::Answered, base::Unretained(this), window));
   }
   void OnWindowRoleAssigned(gfx::AcceleratedWidget) override {}
 
  private:
   explicit ConfigureWatcher(wl::WaylandProxy* proxy) : proxy_(proxy) {}
+
+  // Runs the wait for |window| if the compositor's answer to its state is in. Unretained above:
+  // the watcher is never destroyed.
+  void Answered(gfx::AcceleratedWidget window) {
+    auto waiting = waiting_.find(window);
+    if (waiting == waiting_.end() || !proxy_->IsWindowStateConfigured(window)) {
+      return;
+    }
+    base::OnceClosure done = std::move(waiting->second);
+    waiting_.erase(waiting);
+    std::move(done).Run();
+  }
 
   const raw_ptr<wl::WaylandProxy> proxy_;
   base::flat_map<gfx::AcceleratedWidget, base::OnceClosure> waiting_;
