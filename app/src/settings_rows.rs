@@ -730,3 +730,78 @@ mod tests {
         assert!(dark.edge.is_none() && on.edge.is_some());
     }
 }
+
+/// What an assistive app finds of a Settings view drawn in a test's window, once one asks: each
+/// place ⇥ stops, front to back, and each control it can press, with the role and name it reads.
+#[cfg(test)]
+pub mod spoken {
+    use gpui::accesskit::{Action, Role};
+    use gpui::{InputEvent, VisualTestContext};
+
+    /// A control as an assistive app reads it: its role, its name, and its value, if any.
+    pub type Said = (Role, String, Option<String>);
+
+    fn said(node: &gpui::accesskit::Node) -> Said {
+        let name = node.label().unwrap_or_default().to_string();
+        (node.role(), name, node.value().map(str::to_string))
+    }
+
+    /// Turns on what an assistive app sees, and lists what VoiceOver's press can press: every
+    /// node that takes a click, a pop-up's and a switch's too.
+    pub fn pressable(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .filter(|(_, node)| node.supports_action(Action::Click))
+            .map(|(_, node)| said(node))
+            .collect()
+    }
+
+    /// Each place ⇥ stops, from the first round to it again, as an assistive app reads it.
+    pub fn stops(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus_next(cx);
+        });
+        cx.run_until_parked();
+        let mut stops = Vec::new();
+        let mut first = None;
+        for _ in 0..40 {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let Some((id, node)) = (tree.nodes.iter()).find(|(id, _)| *id == tree.focus) else {
+                break;
+            };
+            if first == Some(*id) {
+                break;
+            }
+            first.get_or_insert(*id);
+            stops.push(said(node));
+            cx.update(|window, cx| window.focus_next(cx));
+            cx.run_until_parked();
+        }
+        stops
+    }
+
+    /// `key` pressed and let go, as a keyboard sends it: Space and Return click on the release.
+    pub fn press(key: &'static str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes(key);
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.update(|window, cx| {
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Those of `said` an assistive app can't tell apart: no name, or no role of a control.
+    pub fn unnamed(said: &[Said]) -> Vec<Said> {
+        (said.iter())
+            .filter(|(role, name, _)| {
+                name.is_empty()
+                    || matches!(role, Role::Window | Role::GenericContainer | Role::Unknown)
+            })
+            .cloned()
+            .collect()
+    }
+}

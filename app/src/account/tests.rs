@@ -702,3 +702,76 @@ fn the_server_is_named_by_its_host() {
     assert_eq!(host_of("http://127.0.0.1:8080/x?y"), "127.0.0.1:8080");
     assert_eq!(host_of("sync.example.org"), "sync.example.org");
 }
+
+/// What an assistive app finds in the tab as it's drawn now: each control it can press and each
+/// place ⇥ stops, all with a role and a name. Returns the names it can press.
+fn spoken_names(tab: &mut Shown) -> Vec<String> {
+    use crate::settings_rows::spoken::{pressable, stops, unnamed};
+    let pressable = pressable(tab.cx);
+    assert_eq!(
+        unnamed(&pressable),
+        [],
+        "a control without a name: {pressable:?}"
+    );
+    let stops = stops(tab.cx);
+    assert_eq!(unnamed(&stops), [], "a stop without a name: {stops:?}");
+    assert!(!stops.is_empty(), "⇥ reaches none of it");
+    pressable.into_iter().map(|(_, name, _)| name).collect()
+}
+
+/// Every control in each of the Sync tab's views is one an assistive app can name, and ⇥ stops
+/// only at those (#1911): a button says what it does, a device's Remove which device it takes,
+/// and the fields what goes in them.
+#[gpui::test]
+fn every_control_in_sync_has_a_name(cx: &mut TestAppContext) {
+    use gpui::accesskit::Role;
+    let mut tab = shown(state(Status::SignedOut), cx);
+    let names = spoken_names(&mut tab);
+    assert!(names.contains(&"Sign In".into()), "{names:?}");
+    assert!(names.contains(&"Change Server…".into()), "{names:?}");
+
+    tab.click("change-server");
+    tab.cx.run_until_parked();
+    spoken_names(&mut tab);
+    let tree = tab.cx.a11y_tree().expect("a tree");
+    let field = (tree.nodes.iter()).find(|(_, node)| node.role() == Role::TextInput);
+    assert_eq!(
+        field.and_then(|(_, node)| node.label()),
+        Some("Sync Server Address"),
+        "the server's field is called by its placeholder"
+    );
+    tab.keys("escape");
+
+    tab.set(state(Status::SigningIn));
+    assert!(spoken_names(&mut tab).contains(&"Cancel Sign In".into()));
+
+    tab.set(state(Status::NeedsSecret));
+    let names = spoken_names(&mut tab);
+    for name in ["Ask Again", "Use Recovery Words Instead", "Sign Out"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.set(state(Status::Pairing));
+    assert!(spoken_names(&mut tab).contains(&"Cancel Request".into()));
+    tab.click("use-words");
+    tab.set(state(Status::NeedsSecret));
+    let names = spoken_names(&mut tab);
+    for name in ["Back", "Continue", "Start Over…"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.click("back");
+
+    tab.set(state(Status::FirstDevice));
+    let names = spoken_names(&mut tab);
+    for name in ["Copy Recovery Words", "Done"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.click("copy");
+    assert!(spoken_names(&mut tab).contains(&"Recovery Words Copied".into()));
+    tab.set(state(Status::On));
+    tab.click("done");
+    tab.set_devices(vec![device("a", true), device("b", false)]);
+    let names = spoken_names(&mut tab);
+    for name in ["Sign Out", "Remove Device b", "Show Recovery Words…"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+}

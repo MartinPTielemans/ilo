@@ -7,11 +7,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, Entity, Focusable, Hsla, MouseButton, Pixels, Point, SharedString, Subscription,
-    Window, canvas, div, point, prelude::*, px, rgb, svg,
+    App, ClickEvent, Context, Entity, Focusable, Hsla, MouseButton, Pixels, Point, SharedString,
+    Subscription, Window, canvas, div, point, prelude::*, px, rgb, svg,
 };
 
-use crate::settings_rows::{Look, detailed_row, drawn, frame, group, icon_button, popup};
+use crate::settings_rows::{
+    Look, detailed_row, drawn, frame, group, icon_button, named_button, named_popup, popup,
+};
 use crate::shell::MenuEntry;
 use crate::text_input::TextInput;
 use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
@@ -54,6 +56,14 @@ impl Condition {
 /// Where a rule or everything else sends a link in place of a Space: a new Little ilo window, for
 /// the Space in front. No Space of the core's has this id.
 pub const LITTLE: u64 = u64::MAX;
+
+/// The row for links no rule matches, as it's labelled and an assistive app calls its pop-up.
+const OTHERWISE: &str = "Everything else opens in";
+
+/// What an assistive app calls rule `index`'s `part`, by its place from 1: "Rule 1 Condition".
+fn rule_name(index: usize, part: &str) -> SharedString {
+    format!("Rule {} {part}", index + 1).into()
+}
 
 /// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
 const LITTLE_NAME: &str = "Little ilo";
@@ -427,13 +437,14 @@ impl LinkRulesView {
     /// A field for each rule, holding its text, whose typing changes the rule.
     fn make_fields(&mut self, cx: &mut Context<Self>) {
         let look = self.look;
-        self.fields = (self.rules.rules.iter())
-            .map(|rule| {
+        self.fields = (self.rules.rules.iter().enumerate())
+            .map(|(index, rule)| {
                 cx.new(|cx| {
                     TextInput::new("example.com", cx)
                         .placeholder_color(look.detail)
                         .caret_color(look.ink)
                         .with_text(rule.text.clone().into())
+                        .spoken(rule_name(index, "Text"))
                 })
             })
             .collect();
@@ -513,6 +524,12 @@ impl LinkRulesView {
         self.rules.rules.insert(to, rule);
         let field = self.fields.remove(from);
         self.fields.insert(to, field);
+        // Each field is called by its rule's place, which moved.
+        for (index, field) in self.fields.iter().enumerate() {
+            field.update(cx, |field, cx| {
+                field.set_spoken(rule_name(index, "Text"), cx)
+            });
+        }
         self.keep(cx);
     }
 
@@ -614,8 +631,9 @@ impl LinkRulesView {
         which: Popup,
         label: SharedString,
         width: f32,
+        a11y: bool,
         cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    ) -> gpui::Stateful<gpui::Div> {
         let texts = self.popup_texts.clone();
         let at = canvas(
             |_, _, _| {},
@@ -633,18 +651,38 @@ impl LinkRulesView {
             Popup::Space(index) => format!("link space {index}"),
             Popup::Otherwise => "link otherwise".into(),
         };
-        popup(&self.look, label, width, self.choosing == Some(which))
-            .relative()
-            .child(at)
-            .child(drawn(name, self.drawn_at.clone()))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _, window, cx| {
-                    // A press on a control isn't the start of its row's drag.
-                    cx.stop_propagation();
-                    view.choose(which, window, cx)
-                }),
-            )
+        // An assistive app reads it by what it sets, with what it shows as its value.
+        let spoken = match which {
+            Popup::Condition(index) => rule_name(index, "Condition"),
+            Popup::Space(index) => rule_name(index, "Space"),
+            Popup::Otherwise => OTHERWISE.into(),
+        };
+        popup(
+            &self.look,
+            label.clone(),
+            width,
+            self.choosing == Some(which),
+        )
+        .relative()
+        .id(SharedString::from(name.clone()))
+        .when(a11y, |control| named_popup(control, spoken, label))
+        .child(at)
+        .child(drawn(name, self.drawn_at.clone()))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _, window, cx| {
+                // A press on a control isn't the start of its row's drag.
+                cx.stop_propagation();
+                view.choose(which, window, cx)
+            }),
+        )
+        // An assistive app's press is a press at its middle, which it offers for what takes
+        // clicks; a key's click opens it as Settings' pop-ups do.
+        .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+            if event.is_keyboard() {
+                view.choose(which, window, cx)
+            }
+        }))
     }
 
     fn rule_row(
@@ -652,6 +690,7 @@ impl LinkRulesView {
         index: usize,
         rule: &Rule,
         spaces: &[(u64, SharedString)],
+        a11y: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let look = self.look;
@@ -659,6 +698,7 @@ impl LinkRulesView {
             Popup::Condition(index),
             rule.condition.title().into(),
             RULE_CONDITION,
+            a11y,
             cx,
         );
         let field = div()
@@ -676,9 +716,13 @@ impl LinkRulesView {
             Popup::Space(index),
             space_name(rule.space, spaces),
             RULE_SPACE,
+            a11y,
             cx,
         );
         let remove = icon_button(&look, ("remove-link-rule", index), "icons/trash.svg")
+            .when(a11y, |remove| {
+                named_button(remove, format!("Remove Rule {}", index + 1))
+            })
             .relative()
             .child(drawn(format!("link remove {index}"), self.drawn_at.clone()))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -734,8 +778,9 @@ impl Render for LinkRulesView {
             crate::log!("browser: link rule {index} field has the keyboard");
         }
         let look = self.look;
+        let a11y = window.is_a11y_active();
         let rows: Vec<gpui::Div> = (self.rules.rules.iter().enumerate())
-            .map(|(index, rule)| self.rule_row(index, rule, &spaces, cx))
+            .map(|(index, rule)| self.rule_row(index, rule, &spaces, a11y, cx))
             .collect();
         let rules = match rows.is_empty() {
             true => group(
@@ -747,14 +792,15 @@ impl Render for LinkRulesView {
             false => group(&look, rows),
         };
         let add = icon_button(&look, "add-link-rule", "icons/plus.svg")
+            .when(a11y, |add| named_button(add, "Add Rule"))
             .relative()
             .child(drawn("link add".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.add(cx)));
         let otherwise = otherwise_name(self.rules.otherwise, &spaces);
-        let otherwise = self.popup(Popup::Otherwise, otherwise, RULE_SPACE, cx);
+        let otherwise = self.popup(Popup::Otherwise, otherwise, RULE_SPACE, a11y, cx);
         let otherwise = detailed_row(
             &look,
-            "Everything else opens in",
+            OTHERWISE,
             "Links no rule matches.",
             Some(otherwise.into_any_element()),
         );
