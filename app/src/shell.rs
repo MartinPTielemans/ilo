@@ -3734,7 +3734,7 @@ impl Render for Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
-        self.step_empty(window);
+        self.step_empty(window, cx);
         self.step_crash_cards(window);
         let drop_targets = self
             .drag
