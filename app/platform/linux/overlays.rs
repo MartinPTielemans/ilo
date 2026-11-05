@@ -523,11 +523,18 @@ struct Dialog {
     view: *mut c_void,
     over: Option<(*mut c_void, bc::bc_id)>,
     insets: [f64; 4],
+    /// Answered, it draws as it leaves with the keyboard back with the browser window.
+    leaving: bool,
 }
 
 thread_local! {
     static DIALOG: RefCell<Dialog> = const {
-        RefCell::new(Dialog { view: std::ptr::null_mut(), over: None, insets: [0.; 4] })
+        RefCell::new(Dialog {
+            view: std::ptr::null_mut(),
+            over: None,
+            insets: [0.; 4],
+            leaving: false,
+        })
     };
 }
 
@@ -590,8 +597,12 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
         return;
     };
     let window = crate::window_with_view(ui_view);
-    DIALOG.with_borrow_mut(|dialog| dialog.over = Some((ui_view, window)));
+    DIALOG.with_borrow_mut(|dialog| {
+        dialog.over = Some((ui_view, window));
+        dialog.leaving = false;
+    });
     lend_keyboard(window, view, true);
+    gpui_linux::set_overlay_pointer(view, None);
     gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_dialog);
     // check.sh reads this line.
     eprintln!("browser: dialog window shown");
@@ -603,8 +614,32 @@ pub extern "C" fn host_hide_dialog() {
     let Some((_, window)) = over else {
         return;
     };
-    gpui_linux::hide_overlay(view, move || lend_keyboard(window, view, false));
+    gpui_linux::hide_overlay(view, move || {
+        // The next question, which shows as this one hides, keeps the keyboard it took.
+        if DIALOG.with_borrow(|dialog| dialog.over.is_none()) {
+            lend_keyboard(window, view, false);
+        }
+    });
     eprintln!("browser: dialog window hidden");
+}
+
+/// The dialog was answered and leaves: it goes on drawing, and the clicks and keys go to the
+/// browser window under it at once, to the page or the UI that had them, as a key typed while it
+/// leaves, such as ⌥⌘N right after Esc, would otherwise reach the dialog going (#1963).
+pub(crate) fn dialog_leaving() {
+    let left = DIALOG.with_borrow_mut(|dialog| {
+        let (_, window) = dialog.over.filter(|_| !dialog.leaving)?;
+        dialog.leaving = true;
+        Some((dialog.view, window))
+    });
+    let Some((view, window)) = left else {
+        return;
+    };
+    gpui_linux::set_overlay_pointer(view, Some(&[]));
+    gpui_linux::set_overlay_keyboard(view, false, left_dialog);
+    lend_keyboard(window, view, false);
+    // check.sh reads this line.
+    eprintln!("browser: dialog gives the keyboard back");
 }
 
 /// Places the dialog again if it shows over the browser window of `ui_view`, as its content
@@ -629,6 +664,10 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 /// The user left the dialog, such as for the sidebar beside a page's, or Chromium took its
 /// window's keyboard as a page committed: it takes the keyboard back, unless another app has it.
 fn left_dialog(view: *mut c_void) {
+    // One leaving has given the keyboard back for good.
+    if DIALOG.with_borrow(|dialog| dialog.leaving) {
+        return;
+    }
     // To ilo's menu over it, its field's, which gives the keyboard back as it closes.
     if crate::menu_window::over(view) {
         gpui_linux::set_overlay_keyboard(view, true, left_dialog);

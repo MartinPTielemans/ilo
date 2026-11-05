@@ -64,7 +64,15 @@ impl dialog::Host for DialogHost {
     }
 
     fn hold_keys(&self) {
-        unsafe { platform::host_hold_keys() };
+        // On Linux the browser window has the keyboard back at once, as the dialog draws its
+        // leaving, so nothing waits (overlays::dialog_leaving). The Mac and Windows hold the keys
+        // until it has hidden.
+        #[cfg(target_os = "linux")]
+        crate::overlays::dialog_leaving();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_hold_keys()
+        };
     }
 
     fn give_held_keys(&self) {
