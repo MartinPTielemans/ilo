@@ -68,8 +68,8 @@ LOGOS
 
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a
 # later commit after it (ungoogled-chromium-macos 156.0.8078.47 builds one that fixes the tag's
-# patches), for the pinned Chromium version. A platform whose tag names another version lags the
-# Mac's point release, and is checked against its tag alone. Takes the submodule's path and
+# patches), for the pinned Chromium version. A platform whose tag names another version, behind the
+# Mac's or ahead of it, is checked against its tag alone. Takes the submodule's path and
 # "<repository> <tag>".
 check_ungoogled() {
   local uc=$1 platform_tag=$2 version uc_tag pinned tag_version
