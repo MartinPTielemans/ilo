@@ -7,7 +7,8 @@
 use std::time::Instant;
 
 use gpui::{
-    Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba,
+    App, Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px,
+    rgba,
 };
 
 use super::{
@@ -70,8 +71,8 @@ impl Shell {
     }
 
     /// Starts the fade as the card comes to show no page, and ends it as a page shows, which ends
-    /// the welcome for good.
-    pub(super) fn step_empty(&mut self, window: &mut Window) {
+    /// the welcome for good. The fade runs on the executor's clock, which the tests move on.
+    pub(super) fn step_empty(&mut self, window: &mut Window, cx: &App) {
         if self.selected != 0 {
             self.empty_since = None;
             self.empty_settled = false;
@@ -80,13 +81,14 @@ impl Shell {
             self.card_back = None;
             return;
         }
-        let since = *self.empty_since.get_or_insert_with(Instant::now);
+        let now = cx.background_executor().now();
+        let since = *self.empty_since.get_or_insert(now);
         // Under the bar it draws nothing, and it fades in again once the bar has gone.
         if self.bar_over_card {
             return;
         }
         let since = self.card_back.map_or(since, |back| back.max(since));
-        if since.elapsed().as_secs_f32() < FADE {
+        if now.saturating_duration_since(since).as_secs_f32() < FADE {
             window.request_animation_frame();
         } else if !std::mem::replace(&mut self.empty_settled, true) {
             // check.sh waits for this line before it captures the empty card.
@@ -105,7 +107,7 @@ impl Shell {
             return;
         }
         if !over && self.selected == 0 {
-            self.card_back = Some(Instant::now());
+            self.card_back = Some(cx.background_executor().now());
             self.empty_settled = false;
         }
         // check.sh reads this line.
@@ -182,7 +184,7 @@ impl Shell {
                 .on_click(cx.listener(|shell, _, _, cx| {
                     shell.clicked_bar_target(Command::NewTab, "card", cx)
                 }))
-                .child(sign.opacity(self.card_opacity(Instant::now())))
+                .child(sign.opacity(self.card_opacity(cx.background_executor().now())))
                 .children(self.in_hint.then(|| self.hint(cx))),
         )
     }
