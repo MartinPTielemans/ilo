@@ -5,7 +5,7 @@
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
 # ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
 # Settings' column is a tab list of its sections, the one shown selected, and its sub-views,
-# Links, Sync and About, name their controls.
+# Links, Sync, Import & Export and About, name their controls.
 # It reads the tree from outside, as an assistive app does: on the Mac through tools/ax-tree.sh,
 # which needs this terminal to have the Accessibility permission, on Linux as Orca does, over
 # AT-SPI through tools/atspi-tree.sh, which needs dbus-daemon and at-spi2-core, and on Windows as
@@ -224,7 +224,8 @@ else
     grep -q " $button \"Chromium settings\"" "$settings" ||
       fail "Settings' Chromium settings isn't a button: $settings"
     # Its sub-views name their controls too (#1911), as far as this copy draws them: Links' + and
-    # its pop-ups, a rule's where the profile has one, Sync's buttons signed in or out, and About's
+    # its pop-ups, a rule's where the profile has one, Sync's buttons signed in or out, the
+    # import's files and each browser it found, and About's
     # update button and nightly switch, which a copy with no updater or nightly feed has none of.
     # A pop-up's role is each reader's own, so it's found by its name.
     links="$out/access-settings-links.txt"
@@ -260,6 +261,25 @@ else
       read_tree '"Sign Out"' > "$sync"
       grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
     fi
+    import="$out/access-settings-import.txt"
+    send clickkey $(drawn "toolbar Import & Export")
+    expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+    settings_drew 'Import & Export'
+    expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+    read_tree '"Import a Bookmarks File…"' > "$import"
+    for name in "Import a Bookmarks File…" "Import a Passwords File…"; do
+      grep -q " $button \"$name\"" "$import" || fail "the import's $name isn't a button: $import"
+    done
+    # Each browser it found, by name: "Import from Chrome…", or Import Again once it came in.
+    browsers=$(sed -n 's/^browser: import found //p' "$log" | tail -1)
+    old_ifs=$IFS
+    IFS=,
+    for name in $browsers; do
+      name=${name# }
+      grep -q " $button \"Import\( Again\)\{0,1\} from $name…\"" "$import" ||
+        fail "the import's button for $name doesn't say it imports from $name: $import"
+    done
+    IFS=$old_ifs
     about="$out/access-settings-about.txt"
     send clickkey $(drawn "toolbar About")
     expect '^browser: settings tab About$' "a click on About didn't show its tab"
@@ -283,13 +303,14 @@ else
     fi
     echo "settings' sub-views: Links' rule ${rule_read:-not read, the profile has none}," \
       "Sync's $(grep -c ' "Sign In"\| "Sign Out"' "$sync") account button," \
+      "the import's files and browsers: ${browsers:-none found}," \
       "About's update button: ${said:-none drawn}, nightly switch:" \
       "$(grep -q ' "Get nightly builds"' "$about" && echo read || echo none drawn)"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
     exec 3>&-
     quit
-    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, the find bar's named buttons and its Matches, Settings' sections as tabs with Chromium settings a button, and its sub-views' controls by name: Links' Add Rule and pop-ups, Sync's account buttons and About's update button and nightly switch where drawn. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found, $settings, $links, $sync, $about"
+    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, the find bar's named buttons and its Matches, Settings' sections as tabs with Chromium settings a button, and its sub-views' controls by name: Links' Add Rule and pop-ups, Sync's account buttons, the import's files and browsers, and About's update button and nightly switch where drawn. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found, $settings, $links, $sync, $import, $about"
   fi
 fi
 # The run's buses go with it.

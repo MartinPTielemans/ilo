@@ -71,6 +71,34 @@ pub fn named_switch<E: StatefulInteractiveElement>(
         .aria_toggled(toggled)
 }
 
+/// What an assistive app reads of a box to tick: a checkbox called `name`, ticked or not, as the
+/// dialog's check row is.
+pub fn named_check<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    on: bool,
+) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    control
+        .role(Role::CheckBox)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// A button called `name` that's dimmed and takes no click until `enabled`, as an assistive app
+/// says it is.
+pub fn named_dimmed<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    enabled: bool,
+) -> E {
+    let control = named_button(control, name);
+    match enabled {
+        true => control,
+        false => control.a11y_synthetic_children(|builder| builder.parent_node().set_disabled()),
+    }
+}
+
 /// What an assistive app reads of a pop-up button: a button called by its row's `name`, its value
 /// the item it shows, which says it opens a menu, as Site Controls' rows do.
 pub fn named_popup<E: StatefulInteractiveElement>(
