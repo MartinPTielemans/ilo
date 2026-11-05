@@ -359,9 +359,11 @@ pub(crate) fn new_little_window(from: &str, cx: &mut App) {
     }
 }
 
-/// The menu bar's Little ilo button was clicked.
+/// The menu bar's Little ilo button was clicked, or on Windows the notification area's icon.
 pub(crate) extern "C" fn status_item_clicked() {
-    update_app_later(|cx| new_little_window("menu bar", cx));
+    let place =
+        little_launch::button(little_launch::os()).map_or("menu bar", |button| button.place);
+    update_app_later(move |cx| new_little_window(place, cx));
 }
 
 /// Where the choice to show Little ilo's button in the menu bar is kept, beside its size: there
@@ -413,6 +415,10 @@ pub(crate) unsafe extern "C" fn window_open_little(
         .to_string_lossy()
         .into_owned();
     update_app(|cx| {
+        // A launch that asked for one, from the jump list or the launcher, names no window or link.
+        if window == 0 && url.is_empty() {
+            return new_little_window("command line", cx);
+        }
         let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
         let Some(from) = from else {
             return;

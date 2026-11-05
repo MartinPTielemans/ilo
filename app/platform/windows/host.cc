@@ -2882,7 +2882,8 @@ void host_set_window_little(void* ui_view, bool grows) {
 }
 void host_grow_little_window(void* ui_view) {}
 
-// Little ilo's Dock items alone hide windows, and Windows has no Dock menu.
+// Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
+// has New Little ilo Window (host_set_little_task), and there's no Show or Hide All.
 void host_set_window_shown(void* ui_view, bool shown) {}
 bool host_window_shown(void* ui_view) {
   return true;
@@ -2959,8 +2960,6 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
   }
 }
 
-void host_set_little_status_item(void (*clicked)(void)) {}
-
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;
   WatchForeground();
@@ -2975,8 +2974,13 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
+// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
+static void WriteLittleTask();
+
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
+  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
+  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -4915,6 +4919,204 @@ const char* host_floating_name(void* hwnd) {
     }
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+}  // extern "C"
+
+// Little ilo from Windows' own places (#693): the jump list's task, and the notification area's
+// icon, which Settings turns on as the Mac's menu-bar button. Neither has a timer: Windows keeps
+// the list, and the icon's window answers only the icon's messages and Explorer's TaskbarCreated.
+namespace {
+
+// The icon's messages, by its window, and what its click calls, while it's on.
+constexpr UINT kTrayMessage = WM_APP + 69;
+constexpr UINT kTrayId = 1;
+HWND g_tray = nullptr;
+void (*g_tray_clicked)(void) = nullptr;
+UINT g_taskbar_created = 0;
+// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
+// written under the windows' AppUserModelID, which the first window has.
+std::wstring g_little_title;
+std::wstring g_little_arguments;
+bool g_little_task_waits = false;
+
+// PKEY_Title, named here as kAppId is, rather than linked from propsys.
+constexpr PROPERTYKEY kTitle = {
+    {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
+
+std::wstring ExePath() {
+  std::wstring path(MAX_PATH, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  path.resize(length);
+  return path;
+}
+
+// Puts the icon in the notification area, or takes it out, as |message| says.
+bool TrayIcon(DWORD message) {
+  NOTIFYICONDATAW data = {sizeof(data)};
+  data.hWnd = g_tray;
+  data.uID = kTrayId;
+  if (message != NIM_DELETE) {
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    data.uCallbackMessage = kTrayMessage;
+    // The exe's own icon, ilo's, small, as Windows draws the area's icons.
+    ExtractIconExW(ExePath().c_str(), 0, nullptr, &data.hIcon, 1);
+    wcsncpy_s(data.szTip, g_little_title.c_str(), _TRUNCATE);
+  }
+  const bool done = Shell_NotifyIconW(message, &data);
+  if (done && message == NIM_ADD) {
+    data.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &data);
+  }
+  if (data.hIcon) {
+    DestroyIcon(data.hIcon);
+  }
+  return done;
+}
+
+LRESULT CALLBACK TrayProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  if (message == kTrayMessage) {
+    // As the Mac's button, a click opens a window: the primary button, or Enter or Space on it.
+    switch (LOWORD(lparam)) {
+      case NIN_SELECT:
+      case NIN_KEYSELECT:
+        if (g_tray_clicked) {
+          g_tray_clicked();
+        }
+        return 0;
+    }
+    return 0;
+  }
+  // Explorer started again, with an empty notification area.
+  if (g_taskbar_created && message == g_taskbar_created && g_tray_clicked) {
+    TrayIcon(NIM_ADD);
+    return 0;
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+}  // namespace
+
+extern "C" {
+
+void host_set_little_status_item(void (*clicked)(void)) {
+  if (!clicked) {
+    if (g_tray_clicked) {
+      TrayIcon(NIM_DELETE);
+      // check.sh reads this line.
+      fprintf(stderr, "browser: notification icon removed\n");
+    }
+    g_tray_clicked = nullptr;
+    return;
+  }
+  const bool shown = g_tray_clicked;
+  g_tray_clicked = clicked;
+  if (shown) {
+    return;
+  }
+  if (!g_tray) {
+    WNDCLASSEXW window_class = {sizeof(window_class)};
+    window_class.lpfnWndProc = TrayProc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.lpszClassName = L"IloLittleTray";
+    RegisterClassExW(&window_class);
+    // Top-level and never shown, as only top-level windows hear Explorer's TaskbarCreated.
+    g_tray = CreateWindowExW(WS_EX_TOOLWINDOW, L"IloLittleTray", L"", WS_POPUP, 0, 0, 0, 0,
+                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    g_taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: notification icon %s\n", TrayIcon(NIM_ADD) ? "shown" : "refused");
+}
+
+void host_set_little_task(const char* title, const char* arguments) {
+  g_little_title = Wide(title);
+  g_little_arguments = Wide(arguments);
+  g_little_task_waits = true;
+  WriteLittleTask();
+}
+
+}  // extern "C"
+
+static void WriteLittleTask() {
+  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
+  // before the first opens.
+  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
+  if (id.empty()) {
+    return;
+  }
+  g_little_task_waits = false;
+  // check.sh reads these lines: which step refused, and why.
+  const auto refused = [](const char* step, HRESULT result) {
+    fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
+            static_cast<unsigned long>(result));
+  };
+  ComPtr<ICustomDestinationList> list;
+  ComPtr<IObjectCollection> tasks;
+  ComPtr<IShellLinkW> link;
+  ComPtr<IPropertyStore> store;
+  HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&list));
+  if (FAILED(result)) {
+    return refused("the list", result);
+  }
+  result = CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                            IID_PPV_ARGS(&tasks));
+  if (FAILED(result)) {
+    return refused("the tasks", result);
+  }
+  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+  if (FAILED(result) || FAILED(result = link.As(&store))) {
+    return refused("the task", result);
+  }
+  if (FAILED(result = list->SetAppID(id.c_str()))) {
+    return refused("its app id", result);
+  }
+  const std::wstring exe = ExePath();
+  link->SetPath(exe.c_str());
+  link->SetArguments(g_little_arguments.c_str());
+  link->SetIconLocation(exe.c_str(), 0);
+  link->SetDescription(g_little_title.c_str());
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  value.vt = VT_LPWSTR;
+  const size_t bytes = (g_little_title.size() + 1) * sizeof(wchar_t);
+  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
+  if (value.pwszVal) {
+    memcpy(value.pwszVal, g_little_title.c_str(), bytes);
+  }
+  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
+  PropVariantClear(&value);
+  if (FAILED(result) || FAILED(result = store->Commit())) {
+    return refused("its title", result);
+  }
+  UINT slots = 0;
+  ComPtr<IObjectArray> removed;
+  ComPtr<IObjectArray> array;
+  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+      FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
+      FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
+    return refused("the commit", result);
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
+          g_little_arguments.c_str());
+}
+
+extern "C" {
+
+// The notification area's icon's window, for drive.cc's statusitem: null while it's off.
+void* host_drive_little_tray(void) {
+  return g_tray_clicked ? g_tray : nullptr;
+}
+
+// Sends the icon what Explorer sends for a click on it, for drive.cc's statusitem click.
+bool host_drive_little_tray_click(void) {
+  if (!g_tray_clicked || !g_tray) {
+    return false;
+  }
+  SendMessageW(g_tray, kTrayMessage, 0, MAKELPARAM(NIN_SELECT, kTrayId));
+  return true;
 }
 
 }  // extern "C"

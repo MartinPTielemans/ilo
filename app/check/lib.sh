@@ -110,6 +110,12 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so.
+engine_has() {
+  local commit
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
+}
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
   for _ in $(seq 300); do

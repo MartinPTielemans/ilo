@@ -21,6 +21,7 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use browser::flatpak;
+use browser::little_launch;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
@@ -519,12 +520,25 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
+        // which the host writes as the first window opens, under its AppUserModelID.
+        if let (Ok(title), Ok(switch)) = (
+            CString::new(little_launch::NEW_LITTLE_WINDOW),
+            CString::new(little_launch::NEW_LITTLE_SWITCH),
+        ) {
+            unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
+        }
         needs_you_host::start(cx);
         open_window(None, None, cx);
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
         if launch_asks_private_window() {
             cx.defer(|cx| new_window_in_front(true, "launch", cx));
+        }
+        // A launch for a new Little ilo window, from the jump list or the launcher, once there's a
+        // window for it to open from; a later one comes through the core (window_open_little).
+        if little_launch::asks_for_little(std::env::args()) {
+            cx.defer(|cx| new_little_window("command line", cx));
         }
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium

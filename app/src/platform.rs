@@ -87,6 +87,7 @@ unsafe extern "C" {
     pub fn host_window_shown(ui_view: *mut c_void) -> bool;
     pub fn host_add_dock_items(little: extern "C" fn() -> c_int, chosen: extern "C" fn(c_int));
     pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
+    pub fn host_set_little_task(title: *const c_char, arguments: *const c_char);
     pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
     pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
     pub fn host_watch_window_main(changed: extern "C" fn(*mut c_void, bool));

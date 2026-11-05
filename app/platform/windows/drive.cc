@@ -93,6 +93,8 @@ bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int
 void* host_drop_target(void* hwnd);
 bool host_drive_window_part(void* hwnd, double x, double y, double width, double height,
                             const char* path, long* pixels_wide, long* pixels_high);
+void* host_drive_little_tray(void);
+bool host_drive_little_tray_click(void);
 }
 
 namespace {
@@ -1572,6 +1574,16 @@ bool Run(const std::string& line) {
       CloseClipboard();
     }
     fprintf(stderr, "browser: pasteboard text %s\n", Utf8(text).c_str());
+    return true;
+  }
+  // The notification area's Little ilo icon, as the Mac's driver has the menu bar's button:
+  // "browser: status item shown" or "none", or with click what Explorer sends for a click on it,
+  // as the driver can't reach Explorer's area or its flyout.
+  if (action == "statusitem") {
+    if (rest == "click") {
+      return host_drive_little_tray_click();
+    }
+    fprintf(stderr, "browser: status item %s\n", host_drive_little_tray() ? "shown" : "none");
     return true;
   }
   if (action == "title") {

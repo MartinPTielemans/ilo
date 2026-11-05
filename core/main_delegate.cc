@@ -138,6 +138,9 @@ void OpenLinks(const std::vector<GURL>& urls) {
 }
 
 #if !BUILDFLAG(IS_MAC)
+// The switch of a launch that opens a new Little ilo window (OpenCommandLine).
+constexpr char kNewLittleWindow[] = "new-little-window";
+
 // The links in a launch's command line, read as Chrome reads them: paths relative to |cur_dir|,
 // and "? words" searched with the profile's engine, which needs a profile. A later launch with none
 // the app opens, as from the Start menu, brings a window forward, as Chrome's would open one: the
@@ -146,6 +149,15 @@ void OpenCommandLine(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir,
                      Profile* profile,
                      bool process_startup) {
+  // A launch for a new Little ilo window, as the jump list's task and the Linux launcher's action
+  // run one: the app opens it for the Space in front, as the Mac's Dock item does (#693). The first
+  // launch's own, the app reads once its windows are up.
+  if (command_line.HasSwitch(kNewLittleWindow)) {
+    if (!process_startup && g_host.window_open_little) {
+      g_host.window_open_little(g_host.context, 0, "", 0);
+    }
+    return;
+  }
   if (!profile) {
     profile = ProfileManager::GetLastUsedProfileIfLoaded();
   }

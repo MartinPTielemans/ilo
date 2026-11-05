@@ -157,6 +157,13 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 // Off the Mac, nothing, and Settings offers no switch there.
 void host_set_little_status_item(void (*clicked)(void));
 
+// Puts a task called |title| in the taskbar's jump list, which runs the browser with |arguments|,
+// as Windows' jump lists hold an app's tasks: New Little ilo Window, which the core hands the app.
+// Windows keeps the list, so it's written once a launch, as the first window opens with the
+// AppUserModelID the list goes under, and nothing waits for it. Off Windows,
+// whose Dock menu and launcher have their own, nothing.
+void host_set_little_task(const char* title, const char* arguments);
+
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 

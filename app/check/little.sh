@@ -293,9 +293,13 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
-# The menu bar's button, the Mac's alone: none until Settings › Features turns it on, a click on it
-# opens a Little ilo window for the Space shown, and turned off it's gone.
-if [ "$(uname)" = Darwin ]; then
+# The menu bar's button, and on Windows the notification area's icon: none until Settings ›
+# Features turns it on, a click on it opens a Little ilo window for the Space shown, and turned off
+# it's gone. Windows' driver can't reach Explorer's area or its flyout, so its click is the message
+# Explorer sends the icon's window for one.
+if [ "$(uname)" = Darwin ] || windows; then
+  place="menu bar"
+  ! windows || place="notification area"
   send statusitem
   expect '^browser: status item none$' "the menu bar has Little ilo's button before it was turned on"
   send menu Settings…
@@ -307,30 +311,56 @@ if [ "$(uname)" = Darwin ]; then
     settings_drew Features
   fi
   menu_bar_switch=$(drawn "switch little in the menu bar") ||
-    fail "Settings didn't draw Show Little ilo in the menu bar's switch"
+    fail "Settings didn't draw Show in the $place's switch"
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
-  expect '^browser: status item shown$' "turning the switch on didn't put the button in the menu bar"
+  expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
   send statusitem click
-  expect '^browser: menu bar opened little window [0-9]*$' "the menu bar's button didn't open a Little ilo window"
+  expect "^browser: $place opened little window [0-9]*\$" "the $place's button didn't open a Little ilo window"
   little=$(opened)
   expect "^browser: little window opened $little profile [0-9]* home $home\$" \
-    "the menu bar's Little ilo window isn't for Space $home"
+    "the $place's Little ilo window isn't for Space $home"
   # A new window goes in front of the others, so it logs no "key window"; ⌘W closing it shows it's key.
   send key w cmd
-  expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
+  expect "^browser: window closed $little\$" "the $place's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
   expect '^browser: settings shown Features$' "Settings… didn't show Features again"
   settings_drew Features
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
   send statusitem
-  expect '^browser: status item none$' "turning the switch off left the button in the menu bar"
+  expect '^browser: status item none$' "turning the switch off left the button in the $place"
   settings_close
   post clickkey $close
   expect '^browser: settings hidden$' "the close button didn't hide Settings"
   send window 1
+fi
+
+# The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs
+# the browser with --new-little-window, as its first window opens, and that command opens a Little
+# ilo window for the Space shown. The driver can't open Explorer's jump list, so the run reads the task ilo wrote
+# and runs its command, as Windows runs it. A launch the browser hands on reaches the core, so that
+# part needs an engine built with core/main_delegate.cc as it is here.
+if windows; then
+  await '^browser: jump list task New Little [^ ]* Window: --new-little-window$' ||
+    fail "the jump list didn't get New Little ilo Window: $(grep '^browser: jump list' "$log" | tail -1)"
+  if engine_has ../core/main_delegate.cc; then
+    send window 1
+    ("$browser" --new-little-window < /dev/null) >> "$out/little-launch.log" 2>&1 ||
+      fail "the jump list's command didn't reach the browser"
+    expect_late '^browser: command line opened little window [0-9]*$' \
+      "the jump list's command didn't open a Little ilo window"
+    little=$(opened)
+    expect "^browser: little window opened $little profile [0-9]* home $home\$" \
+      "the jump list's Little ilo window isn't for Space $home"
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key w cmd
+    expect "^browser: window closed $little\$" "⌘W didn't close the jump list's Little ilo window"
+    send window 1
+  else
+    echo "skip: the jump list's command opening Little ilo: the engine's core predates the switch (core/main_delegate.cc), until an engine is built with it."
+  fi
 fi
 
 # ⌥⌘-click on a Today tab's row moves the tab, its page live, into a Little ilo window for its
