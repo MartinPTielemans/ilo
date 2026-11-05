@@ -1109,6 +1109,34 @@ fn an_agents_download_asks_and_answers_with_its_file(cx: &mut TestAppContext) {
     );
 }
 
+/// A small file can come whole before the core's pause holds it, ending while its question
+/// waits: the user's yes then answers with the file at once, not that it's still downloading.
+#[gpui::test]
+fn a_download_that_ended_while_it_asked_answers_with_its_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let url = json!({ "url": "https://files.example.com/report.docx" });
+    let answer = call(&agents, "claude-code", "open_tab", url, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 30, request, 900, cx);
+    let question = browser.asked.borrow().clone().expect("the download didn't ask");
+    let done = DownloadEnd::Done {
+        name: "report.docx".into(),
+        bytes: 7,
+        path: "/Users/someone/Downloads/report.docx".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::text(
+            "Downloaded report.docx (7 bytes) to Downloads. Agents can't open files; ask the user \
+             if you need it."
+        )
+    );
+}
+
 /// A download the user says no to is cancelled, which leaves no file, and so is one whose agent
 /// went before the user answered. A page's own, with no action to answer, asks all the same.
 #[gpui::test]
