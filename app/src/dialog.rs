@@ -9,7 +9,7 @@
 //! its tab's card alone, which come and go with the tab (docs/ux-spec.md › Page dialogs).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     sync::Arc,
@@ -276,6 +276,36 @@ struct Asked {
     drawn_press: Option<&'static str>,
     /// Where each button was said to be drawn, in the browser window.
     buttons_drawn: Rc<RefCell<HashMap<&'static str, Point<Pixels>>>>,
+    /// Where the card, the checkbox and its label were drawn last, in the dialog's window.
+    check_drawn: Rc<Cell<CheckDrawn>>,
+}
+
+/// The card's bounds, its checkbox's and the checkbox's label's, as drawn.
+#[derive(Clone, Copy, Default, Debug)]
+struct CheckDrawn {
+    card: Bounds<Pixels>,
+    check: Bounds<Pixels>,
+    label: Bounds<Pixels>,
+}
+
+/// Puts the bounds it's drawn at into `drawn` by `put`.
+fn drawn_into(
+    drawn: &Rc<Cell<CheckDrawn>>,
+    put: fn(&mut CheckDrawn, Bounds<Pixels>),
+) -> impl IntoElement + use<> {
+    let drawn = drawn.clone();
+    canvas(
+        move |bounds, _, _| {
+            let mut now = drawn.get();
+            put(&mut now, bounds);
+            drawn.set(now);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 impl Asked {
@@ -764,6 +794,7 @@ impl Dialog {
             pressed: None,
             drawn_press: None,
             buttons_drawn: Rc::default(),
+            check_drawn: Rc::default(),
         });
         self.host.show(asker, over.map(|(over, _)| over));
         cx.notify();
@@ -1254,17 +1285,24 @@ impl Render for Dialog {
         });
         let check = question.check.clone().map(|check| {
             let checked = asked.checked;
+            // The label wraps inside the card as the detail does, a site's long name too, and the
+            // box sits beside its first line.
             div()
                 .id("dialog-check")
                 .mt(px(CHECK_TOP))
+                .pr(px(TEXT_INSET - BUTTON_INSET))
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(CHECK_GAP))
                 .text_size(px(text::BODY))
+                .line_height(px(DETAIL_LINE))
                 .text_color(palette.on_overlay(DETAIL))
                 .child(
                     div()
+                        .relative()
                         .flex_none()
+                        .mt(px((DETAIL_LINE - CHECK_BOX) / 2.))
+                        .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.check = at))
                         .size(px(CHECK_BOX))
                         .flex()
                         .items_center()
@@ -1296,7 +1334,14 @@ impl Render for Dialog {
                         .aria_label(check.clone())
                         .aria_toggled(toggled)
                 })
-                .child(check)
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.label = at))
+                        .child(check),
+                )
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.toggle_check(cx)))
         });
         let buttons_top = match detail.is_some() || fields.is_some() || check.is_some() {
@@ -1308,6 +1353,7 @@ impl Render for Dialog {
             // Clicks on the card stay on it, and one around it cancels.
             .occlude()
             .relative()
+            .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
             .w(px(WIDTH))
             .pt(px(TEXT_INSET))
