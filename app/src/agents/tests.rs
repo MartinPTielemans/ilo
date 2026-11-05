@@ -190,21 +190,6 @@ impl Browser for Made {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
     }
 
-    // As the core does: only a tab of the user's, into an agent's Space.
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        let agents = self.agent_spaces.borrow();
-        let mut tabs = self.tabs.borrow_mut();
-        let Some(each) = tabs.iter_mut().find(|each| each.0 == tab) else {
-            return false;
-        };
-        if agents.values().any(|&agent| agent == each.1) || !agents.values().any(|&s| s == space) {
-            return false;
-        }
-        each.1 = space;
-        self.held.borrow_mut().remove(&tab);
-        true
-    }
-
     /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
     fn make_task_space(&self, agent: &str, name: &str, like: u64, _: &mut App) -> u64 {
         let space = 100 + self.task_spaces.borrow().len() as u64;
@@ -240,6 +225,11 @@ impl Browser for Made {
             moved.1 = space;
             tabs.insert(0, moved);
         }
+    }
+
+    /// The user's Space is 1.
+    fn user_space(&self, _: u64) -> u64 {
+        1
     }
 }
 
@@ -1640,7 +1630,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert!(stopped.error && stopped.text.starts_with("The user stopped you."));
     assert_eq!(*browser.asked.borrow(), None);
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
-    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped");
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
@@ -1721,39 +1711,6 @@ fn a_tab_the_user_took_back_stays_theirs_until_they_hand_it_back(cx: &mut TestAp
     );
     assert!(browser.held.borrow().is_empty());
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-}
-
-/// The user gives the agent a tab of theirs, which it may then read, with an entry in its log.
-/// Nothing else moves into its Space: a tab of its own, or one into a Space that isn't an agent's.
-#[gpui::test]
-fn the_user_gives_an_agent_a_tab_of_theirs(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
-    let read = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
-        call(agents, "claude-code", "snapshot", json!({ "tab": 10 }), cx)
-    };
-    assert!(
-        read(&agents, cx).recv().unwrap().error,
-        "the user's tab was the agent's already"
-    );
-    agents.update(cx, |agents, cx| {
-        agents.give(20, 2, cx);
-        agents.give(10, 1, cx);
-    });
-    assert!(
-        log(&agents, "claude-code", cx)
-            .iter()
-            .all(|entry| entry.0 != "given")
-    );
-
-    agents.update(cx, |agents, cx| agents.give(10, 2, cx));
-    assert_eq!(
-        log(&agents, "claude-code", cx)
-            .into_iter()
-            .find(|entry| entry.0 == "given"),
-        Some(("given".into(), "en.wikipedia.org".into(), String::new()))
-    );
-    let answer = read(&agents, cx);
     assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
 }
 
@@ -2280,9 +2237,10 @@ mod tasks {
             (card.title.as_ref(), card.status.as_ref(), card.dot),
             ("Find a flight to Lisbon", "Thinking", Dot::Working)
         );
-        // Dropped, its CLI ends and its Space goes.
+        // At quit its CLI ends and its Space goes, and so does Claude Code's, which only its
+        // sessions' cards show.
         agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
-        assert_eq!(*browser.deleted.borrow(), vec![100]);
+        assert_eq!(*browser.deleted.borrow(), vec![100, 2]);
         assert!(
             agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()
                 || !agents.tokens.lock().unwrap().contains_key(&token))
@@ -2313,6 +2271,54 @@ mod tasks {
             Some("npm install -g @anthropic-ai/claude-code")
         );
         assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
+    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
+    /// apps that connect, and on again it's as it was.
+    #[gpui::test]
+    fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.state = State::Limit { resets: None };
+        });
+        assert!(card_of(&agents, cx).retry);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.read_with(cx, |agents, _| {
+            assert!(agents.is_on(), "tasks off turned agents off");
+            assert!(!agents.tasks_on());
+            assert!(
+                agents.ask_agents().is_empty(),
+                "⌘T's ask still lists agents"
+            );
+        });
+        let started = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Another", page(), 1, cx)
+        });
+        assert_eq!(started, None, "a task started with tasks off");
+        assert!(!card_of(&agents, cx).retry, "the card still offers Retry");
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("And a hotel".into()), cx);
+            agents.task_action(&agent, TaskAction::Retry, cx);
+        });
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached the task with tasks off"
+        );
+        assert!(matches!(
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
+            State::Limit { .. }
+        ));
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
+        assert!(card_of(&agents, cx).retry);
     }
 
     #[gpui::test]
@@ -3761,12 +3767,18 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
+    /// At launch the tasks' Spaces a run before left go, and an outside agent's, which a run
+    /// before #1080 showed as a Space of the user's, gives its tabs to the user's Space first.
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         browser.task_spaces.borrow_mut().extend([100, 101]);
         agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
-        assert_eq!(*browser.deleted.borrow(), vec![100, 101]);
+        assert_eq!(*browser.deleted.borrow(), vec![100, 101, 2]);
+        let spaces: Vec<_> = (browser.tabs.borrow().iter())
+            .map(|each| (each.0, each.1))
+            .collect();
+        assert_eq!(spaces, [(20, 1), (10, 1)]);
     }
 
     #[gpui::test]
@@ -3888,4 +3900,358 @@ fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
         !agents.read_with(cx, |agents, _| agents.scripts_on()),
         "on with nothing saved"
     );
+}
+
+/// An outside agent's session (#1080): one task card for each client the user connected, from its
+/// first call that opens or acts on a tab, whichever of its connections it comes on, until its last
+/// connection closes, it waits IDLE for a call, or the user stops it.
+mod sessions {
+    use super::*;
+    use crate::agents::task::{Card, Dot, IDLE, Line, TaskAction};
+
+    /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
+    fn call_as(
+        agents: &Entity<Agents>,
+        id: u64,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id,
+            agent: "claude-code".into(),
+            tool: tool.into(),
+            arguments,
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        answer
+    }
+
+    /// The server says call `id` was answered, as it does once it sent the answer.
+    fn answered(agents: &Entity<Agents>, id: u64, cx: &mut TestAppContext) {
+        let event = Event::Answered {
+            agent: "claude-code".into(),
+            id,
+            at: std::time::Instant::now(),
+            error: None,
+            image: None,
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn hello(agents: &Entity<Agents>, agent: &str, client: &str, cx: &mut TestAppContext) {
+        let event = Event::Hello {
+            agent: agent.into(),
+            client: client.into(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn bye(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+        let event = Event::Bye {
+            agent: "claude-code".into(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn cards(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Card> {
+        agents.read_with(cx, |agents, cx| agents.shown_cards(cx))
+    }
+
+    /// Claude Code connected and said hello, at work in its tab 20.
+    fn at_work(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 1, "list_tabs", json!({}), cx);
+        answered(&agents, 1, cx);
+        assert!(cards(&agents, cx).is_empty(), "list_tabs alone isn't work");
+        call_as(&agents, 2, "read_page", json!({ "tab": 20 }), cx);
+        (agents, browser)
+    }
+
+    /// The first call that acts on a tab starts the client's card, with its name, and the calls of
+    /// its other connections are steps of the same card. Its conversation is its steps, with no
+    /// ask, and the user talks to it where they started it. Its last connection closing ends it,
+    /// with the pages it worked in to open, and its next call is a session of its own.
+    #[gpui::test]
+    fn a_clients_work_is_one_card_until_it_disconnects(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        // A second connection of Claude Code's.
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for each connection");
+        let card = &shown[0];
+        assert_eq!(
+            (card.name.as_ref(), card.title.as_ref(), card.dot),
+            ("Claude Code", "Claude Code", Dot::Working)
+        );
+        assert!(!card.replies);
+        let agent = card.agent.to_string();
+        assert!(agent.starts_with("session-"), "{agent}");
+        let talk = agents
+            .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+            .unwrap();
+        assert!(talk.asked.is_empty());
+        assert_eq!(talk.lines.len(), 2, "{:?}", talk.lines);
+        assert!(
+            talk.lines.iter().all(|line| matches!(line, Line::Step(_))),
+            "{:?}",
+            talk.lines
+        );
+        assert!(!talk.about.starts_with("Claude Code"), "{}", talk.about);
+        // A reply has nowhere to go.
+        let replied = agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("and then?".into()), cx)
+        });
+        assert_eq!(replied, (None, None));
+
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Done);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert_eq!(card.open, vec![(20, "example.com".into())]);
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0].dot, Dot::Working);
+    }
+
+    /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
+    /// page, from its status, its questions and Settings' activity read the same. Another MCP
+    /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
+    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
+    /// it calls itself.
+    #[gpui::test]
+    fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Other, cx));
+        cx.run_until_parked();
+        let named = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                let status = agents.status();
+                let strip = status.iter().find(|each| each.agent == "mcp-client");
+                (
+                    agents.agent_name("mcp-client").to_string(),
+                    strip.map(|each| each.name.to_string()),
+                )
+            })
+        };
+        hello(&agents, "mcp-client", "", cx);
+        agents.update(cx, |agents, cx| agents.take_over("mcp-client", 30, cx));
+        assert_eq!(
+            named(&agents, cx),
+            ("MCP client".into(), Some("MCP client".into())),
+            "a client that gave no name has its kind's"
+        );
+        hello(&agents, "mcp-client", "Zed", cx);
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        // Its session's card has that name, and keeps it while it works.
+        let (reply, _answer) = mpsc::channel();
+        let call = Call {
+            id: 1,
+            agent: "mcp-client".into(),
+            tool: "read_page".into(),
+            arguments: json!({ "tab": 20 }),
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        hello(&agents, "mcp-client", "Cursor", cx);
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
+        assert_eq!(claude, "Claude Code");
+    }
+
+    /// A session's card, once it ends, is its receipt (#1080): the orders the user allowed it, done,
+    /// and not the pages it worked in, which Open's button counts. An order refused, or allowed and
+    /// failed in the page, isn't one placed. A session with nothing of the kind says when it ended.
+    #[gpui::test]
+    fn a_sessions_receipt_counts_its_pages_and_the_orders_it_placed(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 1, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 1, cx);
+        let order = |id: u64, answer: Answer, cx: &mut TestAppContext| {
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser
+                .asked
+                .borrow()
+                .clone()
+                .expect("the order didn't ask");
+            assert_eq!(question.why, "It looks like a payment or an order.");
+            agents.update(cx, |agents, cx| agents.answer(question.id, answer, cx));
+            reply
+        };
+        let placed = order(2, Answer::Once, cx);
+        assert!(!page_done(&agents, &browser, placed, shop_tree(), cx).error);
+        answered(&agents, 2, cx);
+        let refused = order(3, Answer::Dismiss, cx);
+        assert!(refused.recv().unwrap().error);
+        answered(&agents, 3, cx);
+        let failed = order(4, Answer::Once, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| {
+            agents.page_done(request, "The button went away.".into(), true, cx)
+        });
+        assert!(failed.recv().unwrap().error);
+        answered(&agents, 4, cx);
+        assert_eq!(
+            cards(&agents, cx)[0].dot,
+            Dot::Working,
+            "the receipt came before the end"
+        );
+
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(
+            !card.status.contains('·'),
+            "a session that only looked has a receipt: {}",
+            card.status
+        );
+    }
+
+    /// A session with no call under way ends once IDLE passes without another, and a call before
+    /// then keeps it going.
+    #[gpui::test]
+    fn a_session_waiting_idle_for_a_call_is_done(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        cx.executor().advance_clock(IDLE - Duration::from_secs(1));
+        call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        cx.executor().advance_clock(Duration::from_secs(2));
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        // Under way for longer than IDLE, it's still at work.
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        answered(&agents, 3, cx);
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].dot, Dot::Done);
+    }
+
+    /// The card's Stop stops the client on every connection: its calls under way are answered that
+    /// the user stopped it, and its connections close, so it shows the browser's server as gone,
+    /// with "stopped by the user" in its activity log. Reconnected, its next call is a card of its
+    /// own, and ⌘. from its page, which stops the client, stops that card too.
+    #[gpui::test]
+    fn stop_closes_the_clients_connections_and_its_card(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        let (socket, token) = agents.read_with(cx, |agents, _| {
+            let tokens = agents.tokens.lock().unwrap();
+            let token = tokens.iter().find(|(_, agent)| *agent == "claude-code");
+            (agents.socket.clone(), token.unwrap().0.clone())
+        });
+        // Two connections of Claude Code's, each past its token.
+        let open = || {
+            let stream = server::connect(&socket).unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                format!("{}\n", json!({ "token": token })).as_bytes(),
+            )
+            .unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            assert_eq!(
+                server::read_line(&mut reader).as_deref(),
+                Some(r#"{"ok":true}"#)
+            );
+            reader
+        };
+        let mut connections = [open(), open()];
+        let waiting = call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        let agent = cards(&agents, cx)[0].agent.to_string();
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Stop, cx)
+        });
+        assert_eq!(waiting.recv().unwrap().text, STOPPED);
+        assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Ended);
+        for reader in &mut connections {
+            assert_eq!(server::read_line(reader), None, "a connection stayed open");
+        }
+        assert!(
+            log(&agents, "claude-code", cx)
+                .iter()
+                .any(|entry| entry.0 == "stopped by the user")
+        );
+
+        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "a new session");
+        agents.update(cx, |agents, cx| agents.stop_agent("claude-code", cx));
+        assert!(cards(&agents, cx).iter().all(|card| card.dot == Dot::Ended));
+    }
+
+    /// Open moves a finished session's pages into the user's Space, and archiving one that left
+    /// pages closes its own and not those of the client's session under way, which share its
+    /// Space.
+    #[gpui::test]
+    fn open_and_archive_take_a_sessions_own_pages(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let opened = agents.update(cx, |agents, cx| {
+            agents.task_action(&first, TaskAction::Open, cx)
+        });
+        assert_eq!(opened, (Some(20), None));
+        let space = |tab: u64| {
+            (browser.tabs.borrow().iter())
+                .find(|each| each.0 == tab)
+                .map(|each| each.1)
+        };
+        assert_eq!(space(20), Some(1), "Open moved it to the user's Space");
+
+        // A session that opened 30 and is done, beside one at work in 31 of the same Space.
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let answer = call_as(&agents, 3, "open_tab", json!({ "url": "example.com" }), cx);
+        let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 4, "read_page", json!({ "tab": 31 }), cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&second, TaskAction::Dismiss, cx);
+            agents.task_action(&second, TaskAction::Delete, cx);
+        });
+        let archived = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx));
+        assert!(archived.iter().all(|task| task.agent != second.as_str()));
+        // Dropped, as the Archive keeps so many, its 30 closes and 31 stays.
+        agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
+        assert_eq!(space(30), None);
+        assert_eq!(space(31), Some(2));
+    }
 }

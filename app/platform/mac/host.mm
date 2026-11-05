@@ -52,8 +52,44 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 }
 @end
 
+// The type of a tab host_drag_tab drags: this process's id and the tab's, which only the app's views
+// take, so another app, or another ilo, leaves it be.
+static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
+
+// The source of a tab host_drag_tab drags, which moves it to another of the app's windows and
+// nowhere else.
+@interface HostTabDragSource : NSObject <NSDraggingSource>
+@property(nonatomic) void (*ended)(uint64_t, int, bool, double, double);
+@property(nonatomic) uint64_t tab;
+@end
+
+@implementation HostTabDragSource
+@synthesize ended = _ended;
+@synthesize tab = _tab;
+
+- (NSDragOperation)draggingSession:(NSDraggingSession*)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+  return context == NSDraggingContextWithinApplication ? NSDragOperationMove : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session
+           endedAtPoint:(NSPoint)point
+              operation:(NSDragOperation)operation {
+  // In host_window_frame's terms: from the top-left of the first screen, y down.
+  const double y = NSHeight(NSScreen.screens.firstObject.frame) - point.y;
+  // Escape ends a drag no view took as a release where none takes it does: the event that ended
+  // it tells them apart.
+  NSEvent* event = NSApp.currentEvent;
+  const bool escape = event.type == NSEventTypeKeyDown && event.keyCode == 53;
+  const int how = operation != NSDragOperationNone ? HOST_TAB_TAKEN
+                  : escape                         ? HOST_TAB_CANCELLED
+                                                   : HOST_TAB_LET_GO;
+  self.ended(self.tab, how, true, point.x, y);
+}
+@end
+
 // The view the UI draws in. It takes the links and files dragged onto it, from the page or another
-// app, for the UI.
+// app, for the UI, and the tabs host_drag_tab drags from the app's windows.
 @interface HostUIView : NSView
 @end
 
@@ -61,12 +97,14 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   // What the drag over the view carries, read as it comes.
   std::vector<std::string> _urls;
   std::vector<bool> _files;
+  // The app's tab it carries instead, else 0.
+  uint64_t _tab;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
   if ((self = [super initWithFrame:frame])) {
     [self registerForDraggedTypes:@[
-      NSPasteboardTypeFileURL, NSPasteboardTypeURL, NSPasteboardTypeString
+      kTabDragType, NSPasteboardTypeFileURL, NSPasteboardTypeURL, NSPasteboardTypeString
     ]];
   }
   return self;
@@ -79,8 +117,11 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   }
   NSPoint point = [self convertPoint:info.draggingLocation fromView:nil];
   std::vector<host_dragged> items;
+  if (_tab) {
+    items.push_back({"", false, _tab});
+  }
   for (size_t i = 0; i < _urls.size(); i++) {
-    items.push_back({_urls[i].c_str(), _files[i]});
+    items.push_back({_urls[i].c_str(), _files[i], 0});
   }
   return g_dragged((__bridge void*)self, phase, point.x, NSHeight(self.bounds) - point.y,
                    items.data(), items.size());
@@ -89,7 +130,15 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info {
   _urls.clear();
   _files.clear();
+  _tab = 0;
   NSPasteboard* pasteboard = info.draggingPasteboard;
+  // "<pid> <tab>", this process's alone.
+  NSArray<NSString*>* tab =
+      [[pasteboard stringForType:kTabDragType] componentsSeparatedByString:@" "];
+  if (tab.count == 2 && tab[0].longLongValue == getpid()) {
+    _tab = strtoull(tab[1].UTF8String, nullptr, 10);
+    return [self draggingUpdated:info];
+  }
   NSArray<NSURL*>* files =
       [pasteboard readObjectsForClasses:@[ NSURL.class ]
                                 options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
@@ -114,7 +163,10 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)info {
-  return [self tell:HOST_DRAG_OVER info:info] ? NSDragOperationCopy : NSDragOperationNone;
+  if (![self tell:HOST_DRAG_OVER info:info]) {
+    return NSDragOperationNone;
+  }
+  return _tab ? NSDragOperationMove : NSDragOperationCopy;
 }
 
 - (void)draggingExited:(id<NSDraggingInfo>)info {
@@ -126,6 +178,7 @@ bool (*g_dragged)(void*, int, double, double, const host_dragged*, size_t);
   [self tell:HOST_DRAG_LEFT info:info];
   _urls.clear();
   _files.clear();
+  _tab = 0;
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)info {
@@ -535,6 +588,22 @@ BOOL Never(id, SEL) {
   return NO;
 }
 
+// An overlay that never takes the keyboard. GPUI's panel class is every overlay's and can become
+// key, so AppKit can hand one the keyboard as the key menu orders out over it, which ends a name
+// field the menu just opened (#1664).
+void NeverKey(NSWindow* window) {
+  static Class never_key;
+  if (!never_key) {
+    Class panel = object_getClass(window);
+    SEL key = @selector(canBecomeKeyWindow);
+    never_key = objc_allocateClassPair(panel, "ILONeverKeyPanel", 0);
+    class_addMethod(never_key, key, (IMP)Never,
+                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
+    objc_registerClassPair(never_key);
+  }
+  object_setClass(window, never_key);
+}
+
 // Another app that asks which of ours is in front takes the first window at the normal level, in
 // the window server's order: T3 Code's window capture does, and so do others. Our windows over a
 // browser window are child windows, ahead of it in that order, so a tooltip or an overlay's shadow
@@ -552,8 +621,9 @@ bool IsOurs(NSWindow* child) {
 
 // A window above the normal level defaults to transient, which Spaces and Mission Control treat
 // apart from a normal window, so it's managed, as Chromium makes its own.
-void SetOverLevel(NSWindow* child, bool raised) {
-  const NSWindowLevel level = raised ? kOverLevel : NSNormalWindowLevel;
+void SetOverLevel(NSWindow* child, NSWindow* parent, bool raised) {
+  // A level above its parent's, which Stay On Top raises (host_set_window_on_top).
+  const NSWindowLevel level = parent.level + (raised ? kOverLevel - NSNormalWindowLevel : 0);
   if (child.level != level) {
     child.collectionBehavior |= NSWindowCollectionBehaviorManaged;
     child.level = level;
@@ -571,14 +641,14 @@ void LevelOver(NSWindow* parent, bool raised) {
       }];
   for (NSWindow* child in children) {
     if (IsOurs(child)) {
-      SetOverLevel(child, raised);
+      SetOverLevel(child, parent, raised);
     }
   }
 }
 
 // Puts |child| over |parent|, at the level of |parent|'s others.
 void AddOver(NSWindow* parent, NSWindow* child) {
-  SetOverLevel(child, NSApp.active && parent.mainWindow);
+  SetOverLevel(child, parent, NSApp.active && parent.mainWindow);
   [parent addChildWindow:child ordered:NSWindowAbove];
 }
 
@@ -616,7 +686,23 @@ void WatchMenus() {
                   }];
 }
 
-// From the first browser window, the levels follow the main window and the active app.
+// Told whether a browser window is the one the user is in (host_watch_window_main).
+void (*g_window_main_changed)(void* ui_view, bool main);
+
+// Tells the app whether |window|, if a browser window, is the one the user is in: the active app's
+// main window, which the levels below follow too. An overlay, a menu or a sheet over it is never
+// main, so it stays.
+void TellMain(NSWindow* window, bool main) {
+  if (!g_window_main_changed) {
+    return;
+  }
+  if (Browser* browser = BrowserOf(window)) {
+    g_window_main_changed((__bridge void*)browser->ui_view, main);
+  }
+}
+
+// From the first browser window, the levels follow the main window and the active app, and so does
+// whether each browser window is the one the user is in.
 void WatchMainWindow() {
   static bool watching = false;
   if (watching) {
@@ -629,18 +715,21 @@ void WatchMainWindow() {
                        queue:nil
                   usingBlock:^(NSNotification* notification) {
                     LevelOver(notification.object, NSApp.active);
+                    TellMain(notification.object, NSApp.active);
                   }];
   [center addObserverForName:NSWindowDidResignMainNotification
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification* notification) {
                     LevelOver(notification.object, false);
+                    TellMain(notification.object, false);
                   }];
   [center addObserverForName:NSApplicationDidBecomeActiveNotification
                       object:nil
                        queue:nil
                   usingBlock:^(NSNotification*) {
                     LevelOver(NSApp.mainWindow, true);
+                    TellMain(NSApp.mainWindow, true);
                   }];
   // Before the tooltip and Site Controls start fading out as the app goes.
   [center addObserverForName:NSApplicationWillResignActiveNotification
@@ -649,6 +738,7 @@ void WatchMainWindow() {
                   usingBlock:^(NSNotification*) {
                     for (NSWindow* window in NSApp.windows) {
                       LevelOver(window, false);
+                      TellMain(window, false);
                     }
                   }];
 }
@@ -1466,6 +1556,94 @@ static void ToActiveSpace(NSWindow* window) {
   });
 }
 
+// The window on screen right behind |window| at the normal level, one with something to see, and
+// its process, as the window server stacks every app's windows.
+static bool WindowBehind(NSWindow* window, CGWindowID* behind, pid_t* owner) {
+  NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenBelowWindow | kCGWindowListExcludeDesktopElements,
+      (CGWindowID)window.windowNumber));
+  for (NSDictionary* info in windows) {
+    if ([info[(id)kCGWindowLayer] intValue] == 0 && [info[(id)kCGWindowAlpha] doubleValue] > 0) {
+      *behind = [info[(id)kCGWindowNumber] unsignedIntValue];
+      *owner = [info[(id)kCGWindowOwnerPID] intValue];
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether |window| is on screen in front of the window |behind|.
+static bool InFrontOf(NSWindow* window, CGWindowID behind) {
+  NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenAboveWindow, behind));
+  for (NSDictionary* info in windows) {
+    if ([info[(id)kCGWindowNumber] integerValue] == window.windowNumber) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// NativeWidgetMacNSWindow's, which a Little ilo window's goes on to.
+static IMP g_order_out;
+
+// A Little ilo window going with the keyboard leaves another app's window right behind it in front
+// and active, as closing any app's window does (#1689): AppKit would hand the keyboard to the app's
+// next window and bring it in front of that app. Chromium orders a closing window out before it
+// closes it, so the Dock's Hide All comes here too. A Little ilo window without the keyboard, as
+// the archive closes one and ⌘O, which gives the main window the keyboard first, leaves all as is.
+static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
+  Browser* browser = BrowserOf(self);
+  NSWindow* key = NSApp.keyWindow;
+  while (key && key != self) {
+    key = key.parentWindow;
+  }
+  CGWindowID behind = 0;
+  pid_t owner = 0;
+  NSRunningApplication* to = nil;
+  if (browser && browser->little && key && NSApp.active && self.visible &&
+      WindowBehind(self, &behind, &owner) && owner != getpid()) {
+    to = [NSRunningApplication runningApplicationWithProcessIdentifier:owner];
+  }
+  if (to) {
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    // Inactive, the app has no key window for AppKit to hand on from.
+    [NSApp deactivate];
+  }
+  ((void (*)(id, SEL, id))g_order_out)(self, selector, sender);
+  if (!to) {
+    return;
+  }
+  // Any of the app's windows AppKit brought in front anyway goes back behind that window.
+  for (NSWindow* each in NSApp.orderedWindows) {
+    if (BrowserOf(each) && each != self && each.visible && InFrontOf(each, behind)) {
+      [each orderWindow:NSWindowBelow relativeTo:behind];
+    }
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+}
+
+// Little ilo windows order out through OrderLittleOut. They're Chromium's class, whose browser
+// windows all share it, so it's added once, and it passes the others on.
+static void WatchLittleOrderingOut(NSWindow* window) {
+  const SEL selector = @selector(orderOut:);
+  Class kind = object_getClass(window);
+  if (class_getMethodImplementation(kind, selector) == (IMP)OrderLittleOut) {
+    return;
+  }
+  Method inherited = class_getInstanceMethod(kind, selector);
+  g_order_out = method_getImplementation(inherited);
+  if (!class_addMethod(kind, selector, (IMP)OrderLittleOut, method_getTypeEncoding(inherited))) {
+    g_order_out = method_setImplementation(class_getInstanceMethod(kind, selector),
+                                           (IMP)OrderLittleOut);
+  }
+}
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1496,6 +1674,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
       }
     }
     ToActiveSpace(window);
+    WatchLittleOrderingOut(window);
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
@@ -1518,6 +1697,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   WatchMenus();
   WatchMainWindow();
   WatchDisplayGone();
+  // Shown, the app hears whether it's the one the user is in: one shown behind another never
+  // becomes main, so it hears nothing else.
+  __weak NSWindow* shown = window;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    TellMain(shown, NSApp.active && shown.isMainWindow);
+  });
   WatchHeldEscape();
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
@@ -1663,6 +1848,40 @@ size_t host_screens(double* frames, size_t count) {
 NSPoint g_driven_pointer;
 bool g_driven_pointer_known = false;
 
+bool host_app_icon(const char* bundle_id, size_t size, uint8_t* rgba) {
+  @autoreleasepool {
+    NSWorkspace* workspace = NSWorkspace.sharedWorkspace;
+    NSURL* app = [workspace URLForApplicationWithBundleIdentifier:@(bundle_id)];
+    if (!app) {
+      return false;
+    }
+    NSImage* icon = [workspace iconForFile:app.path];
+    NSBitmapImageRep* bitmap =
+        [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                                                pixelsWide:(NSInteger)size
+                                                pixelsHigh:(NSInteger)size
+                                             bitsPerSample:8
+                                           samplesPerPixel:4
+                                                  hasAlpha:YES
+                                                  isPlanar:NO
+                                            colorSpaceName:NSDeviceRGBColorSpace
+                                               bytesPerRow:(NSInteger)size * 4
+                                              bitsPerPixel:32];
+    if (!icon || !bitmap) {
+      return false;
+    }
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [icon drawInRect:NSMakeRect(0, 0, size, size)
+            fromRect:NSZeroRect
+           operation:NSCompositingOperationCopy
+            fraction:1];
+    [NSGraphicsContext restoreGraphicsState];
+    memcpy(rgba, bitmap.bitmapData, size * size * 4);
+    return true;
+  }
+}
+
 bool host_pointer(double* x, double* y) {
   const NSPoint point = g_driven_pointer_known ? g_driven_pointer : NSEvent.mouseLocation;
   *x = point.x;
@@ -1785,7 +2004,9 @@ static IMP g_engine_dock_menu;
 
 static DockItems* g_dock_items;
 
-// The engine's Dock menu with Little ilo's items after its first command, New Window.
+// The engine's Dock menu, its profiles' items first, with ilo's in place of its commands: New
+// Window and New Incognito Window, as File's run them (the engine's open Chrome's windows), then
+// Little ilo's.
 static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   NSMenu* menu = g_engine_dock_menu
                      ? ((NSMenu * (*)(id, SEL, NSApplication*)) g_engine_dock_menu)(delegate,
@@ -1794,12 +2015,13 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   if (!menu) {
     menu = [[NSMenu alloc] initWithTitle:@""];
   }
-  // After New Window, the first item that isn't a profile's, which the engine puts first.
+  // Where the engine's commands were, after the profiles' items, which it puts first.
   NSInteger at = menu.numberOfItems;
-  for (NSInteger index = 0; index < menu.numberOfItems; index++) {
-    if ([menu itemAtIndex:index].action == NSSelectorFromString(@"commandFromDock:")) {
-      at = index + 1;
-      break;
+  const SEL command = NSSelectorFromString(@"commandFromDock:");
+  for (NSInteger index = menu.numberOfItems - 1; index >= 0; index--) {
+    if ([menu itemAtIndex:index].action == command) {
+      at = index;
+      [menu removeItemAtIndex:index];
     }
   }
   auto add = [&](NSString* title, NSInteger tag) {
@@ -1810,6 +2032,8 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
     item.tag = tag;
     [menu insertItem:item atIndex:at++];
   };
+  add(@"New Window", 3);
+  add(@"New Incognito Window", 4);
   add(@"New Little ilo Window", 0);
   switch (g_dock_little()) {
     case 1:
@@ -1901,6 +2125,15 @@ void host_watch_key_window(void (*changed)(void* ui_view)) {
                                                   changed((__bridge void*)browser->ui_view);
                                                 }
                                               }];
+}
+
+void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
+  g_window_main_changed = changed;
+  for (auto& browser : g_browsers) {
+    if (browser->window) {
+      TellMain(browser->window, NSApp.active && browser->window.isMainWindow);
+    }
+  }
 }
 
 void host_watch_full_screen(void (*changed)(void* ui_view, bool entered)) {
@@ -2448,6 +2681,10 @@ void host_show_overlay(int index,
     [overlay->view.layer displayIfNeeded];
     PlaceOverlayShadow(*overlay);
     overlay->shadow.alphaValue = 1;
+    // Last shown over a window on another desktop, such as a full-screen one that ⌘N's opened
+    // from, it would take macOS back there as it comes on screen.
+    ToActiveSpace(overlay->window);
+    ToActiveSpace(overlay->shadow);
     if (overlay->shadow.parentWindow != window) {
       [overlay->shadow.parentWindow removeChildWindow:overlay->shadow];
       AddOver(window, overlay->shadow);
@@ -3618,6 +3855,8 @@ void host_add_toast(void* toast_view) {
   // The toast draws its own, which scales with it.
   g_toast.hasShadow = NO;
   g_toast.ignoresMouseEvents = YES;
+  // Its undo is a click, and the keyboard stays with the browser window, where ⌘Z is.
+  NeverKey(g_toast);
 }
 
 void host_show_toast(void* ui_view) {
@@ -3668,6 +3907,7 @@ void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {
   g_tooltip.hasShadow = NO;
   // It takes neither a click nor the keyboard.
   g_tooltip.ignoresMouseEvents = YES;
+  NeverKey(g_tooltip);
   // To accessibility it's a help tag, as AppKit's tooltips are, not one of the app's windows.
   g_tooltip.accessibilityRole = NSAccessibilityHelpTagRole;
   // The user leaves the browser window for another or another app.
@@ -3800,18 +4040,8 @@ void host_add_hover_card(void* card_view, double margin, void (*away)(void)) {
   g_card.hasShadow = NO;
   g_card.ignoresMouseEvents = YES;
   // A click on its buttons leaves the keyboard where it was, in the page or the browser window, as
-  // the browser window losing it ends the card before the click reaches the button (#818). The
-  // panel's own class, since GPUI's is every overlay's and the others take the keyboard.
-  static Class card_class;
-  if (!card_class) {
-    Class panel = object_getClass(g_card);
-    SEL key = @selector(canBecomeKeyWindow);
-    card_class = objc_allocateClassPair(panel, "ILOHoverCardPanel", 0);
-    class_addMethod(card_class, key, (IMP)Never,
-                    method_getTypeEncoding(class_getInstanceMethod(panel, key)));
-    objc_registerClassPair(card_class);
-  }
-  object_setClass(g_card, card_class);
+  // the browser window losing it ends the card before the click reaches the button (#818).
+  NeverKey(g_card);
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
   void (^left_window)(NSNotification*) = ^(NSNotification*) {
     if (g_card_shown && g_card_away) {
@@ -4231,6 +4461,58 @@ bool host_drag_file(const char* path, void (*ended)(bool taken)) {
   return [view beginDraggingSessionWithItems:@[ item ] event:event source:source] != nil;
 }
 
+bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width, double height,
+                   double grab_x, double grab_y,
+                   void (*ended)(uint64_t tab, int how, bool placed, double x, double y)) {
+  // Kept until the next drag, as the session doesn't keep its source.
+  static HostTabDragSource* source;
+  Browser* browser = BrowserWithView(ui_view);
+  NSEvent* event = NSApp.currentEvent;
+  NSWindow* window = browser ? browser->window : nil;
+  if (!window || event.type != NSEventTypeLeftMouseDragged || width < 1 || height < 1) {
+    return false;
+  }
+  NSView* view = browser->ui_view;
+  // The row as it's drawn, from the window's own picture, which needs no Screen Recording
+  // permission, as the launch picture's (host_save_launch_picture).
+  using CreateImage = CGImageRef (*)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
+  static const auto create_image =
+      reinterpret_cast<CreateImage>(dlsym(RTLD_DEFAULT, "CGWindowListCreateImage"));
+  CGImageRef whole =
+      create_image ? create_image(CGRectNull, kCGWindowListOptionIncludingWindow,
+                                  (CGWindowID)window.windowNumber, kCGWindowImageBoundsIgnoreFraming)
+                   : nullptr;
+  NSImage* picture = nil;
+  if (whole) {
+    const CGFloat scale = (CGFloat)CGImageGetWidth(whole) / NSWidth(view.bounds);
+    CGImageRef row = CGImageCreateWithImageInRect(
+        whole, CGRectMake(round(x * scale), round(y * scale), round(width * scale),
+                          round(height * scale)));
+    CGImageRelease(whole);
+    if (row) {
+      picture = [[NSImage alloc] initWithCGImage:row size:NSMakeSize(width, height)];
+      CGImageRelease(row);
+    }
+  }
+  NSPasteboardItem* carried = [[NSPasteboardItem alloc] init];
+  [carried setString:[NSString stringWithFormat:@"%d %llu", getpid(), (unsigned long long)tab]
+             forType:kTabDragType];
+  NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:carried];
+  // Held where the pointer is in it, in the view's terms, whose y is up.
+  const NSPoint at = [view convertPoint:event.locationInWindow fromView:nil];
+  [item setDraggingFrame:NSMakeRect(at.x - grab_x, at.y - (height - grab_y), width, height)
+                contents:picture];
+  source = [[HostTabDragSource alloc] init];
+  source.ended = ended;
+  source.tab = tab;
+  NSDraggingSession* session = [view beginDraggingSessionWithItems:@[ item ]
+                                                             event:event
+                                                            source:source];
+  // Let go, it comes back to nowhere: the tab has gone where it was dropped, or to a new window.
+  session.animatesToStartingPositionsOnCancelOrFail = NO;
+  return session != nil;
+}
+
 // |image| as a PNG, or nil.
 static NSData* PNGOf(CGImageRef image) {
   NSMutableData* png = [NSMutableData data];
@@ -4592,6 +4874,79 @@ void host_day_starts(double starts[4]) {
   for (int i = 0; i < 4; i++) {
     starts[i] = dates[i].timeIntervalSince1970 * 1000;
   }
+}
+
+bool host_window_on_active_space(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  return !browser || !browser->window || browser->window.onActiveSpace;
+}
+
+bool host_enter_full_screen(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || !browser->window) {
+    return false;
+  }
+  NSWindow* window = browser->window;
+  // AppKit sets the mask as the transition starts.
+  if (window.styleMask & NSWindowStyleMaskFullScreen) {
+    return true;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!(window.styleMask & NSWindowStyleMaskFullScreen)) {
+      [window toggleFullScreen:nil];
+    }
+  });
+  return false;
+}
+
+// The browser windows Window › Stay On Top keeps over other apps' windows.
+static NSHashTable<NSWindow*>* g_on_top;
+
+// The level Stay On Top gives |window|: floating, but not while it's full screen, which macOS
+// keeps at its own level, and then over its overlays again.
+static void LevelOnTop(NSWindow* window) {
+  const bool on = [g_on_top containsObject:window] &&
+                  !(window.styleMask & NSWindowStyleMaskFullScreen);
+  window.level = on ? NSFloatingWindowLevel : NSNormalWindowLevel;
+  LevelOver(window, NSApp.active && window.mainWindow);
+}
+
+void host_set_window_on_top(void* ui_view, bool on) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || !browser->window) {
+    return;
+  }
+  if (!g_on_top) {
+    g_on_top = [NSHashTable weakObjectsHashTable];
+    // Before full screen's transition, which a floating window would make over every Space, and
+    // once it's over.
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    [center addObserverForName:NSWindowWillEnterFullScreenNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* notification) {
+                      NSWindow* window = notification.object;
+                      if ([g_on_top containsObject:window]) {
+                        window.level = NSNormalWindowLevel;
+                        LevelOver(window, NSApp.active && window.mainWindow);
+                      }
+                    }];
+    [center addObserverForName:NSWindowDidExitFullScreenNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification* notification) {
+                      NSWindow* window = notification.object;
+                      if ([g_on_top containsObject:window]) {
+                        LevelOnTop(window);
+                      }
+                    }];
+  }
+  if (on) {
+    [g_on_top addObject:browser->window];
+  } else {
+    [g_on_top removeObject:browser->window];
+  }
+  LevelOnTop(browser->window);
 }
 
 void host_press_window_button(void* ui_view, int button) {

@@ -14,11 +14,11 @@
 //! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 //! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
-//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
-//! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
-//! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
-//! them, cmd with Ctrl and alt with Alt. flags presses and lets
-//! go of those keys, the last key's among them, and the keys after it go with what it holds. insert
+//! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
+//! agentrelease, agentdisconnect, takeback, age and insert, and Windows' stack. The Mac's
+//! modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl and alt
+//! with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt with Alt.
+//! flags presses and lets go of those keys, the last key's among them, and the keys after it go with what it holds. insert
 //! commits its text to a field of the UI's, not a page's. scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
@@ -33,7 +33,8 @@
 //! or resizes, then "browser: pip gone", or "browser: pip none" without one. pip doubleclick, pip
 //! wheel, and pip press, dragto and release work in it, at points from its top-left corner as the
 //! command finds it, or as it was at the press. pip press, dragto and release alone move the
-//! display's pointer, through XTest, onto the window only, and the release puts it back.
+//! display's pointer, through XTest, onto the window only, and the release puts it back once the
+//! window manager has let go, logging where the drag left the window.
 //!
 //! It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, "browser: drive
 //! <n>: can't do that" for one it can't, and "browser: drive <n> done, key <window>, focus <view>,
@@ -1080,6 +1081,81 @@ fn name_of(browser: &Browser) -> String {
     )
 }
 
+/// Logs the windows on screen over the driven browser window and overlapping it, front first, down
+/// to it, as the X server stacks them and Windows' driver lists them: a browser window by what
+/// order calls it, another of the app's as "ilo" and its title, and another app's as "other" and
+/// its title.
+fn stack() -> Option<()> {
+    let driven = driven()?;
+    let x = server()?;
+    let (connection, root) = &*x;
+    let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
+    let bounds = |window| {
+        let geometry = connection.get_geometry(window).ok()?.reply().ok()?;
+        let [x, y] = [geometry.x, geometry.y].map(i32::from);
+        Some([
+            x,
+            y,
+            x + i32::from(geometry.width),
+            y + i32::from(geometry.height),
+        ])
+    };
+    let own = tops
+        .iter()
+        .copied()
+        .find(|&top| within(connection, driven.window, top))?;
+    let over = bounds(own)?;
+    let browsers: Vec<Browser> = (0..MADE.with_borrow(Vec::len) + WINDOWS.with_borrow(Vec::len))
+        .filter_map(browser)
+        .collect();
+    let mut stack = Vec::new();
+    for &top in tops.iter().rev() {
+        if top == own {
+            stack.push("driven".to_string());
+            break;
+        }
+        let Some(at) = bounds(top) else { continue };
+        if !viewable(connection, top)
+            || at[0] >= over[2]
+            || over[0] >= at[2]
+            || at[1] >= over[3]
+            || over[1] >= at[3]
+        {
+            continue;
+        }
+        if let Some(browser) = browsers.iter().find(|b| within(connection, b.window, top)) {
+            stack.push(name_of(browser));
+            continue;
+        }
+        // The window manager's frame holds the client, which has the title and process.
+        let mut clients = vec![top];
+        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let property = |window, name: &str| {
+            let reply = connection
+                .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
+                .ok()?
+                .reply()
+                .ok()?;
+            (!reply.value.is_empty()).then_some(reply)
+        };
+        let title = clients.iter().find_map(|&client| {
+            let reply = property(client, "_NET_WM_NAME").or_else(|| property(client, "WM_NAME"))?;
+            Some(String::from_utf8_lossy(&reply.value).into_owned())
+        });
+        let pid = clients
+            .iter()
+            .find_map(|&client| property(client, "_NET_WM_PID")?.value32()?.next());
+        let whose = if pid == Some(std::process::id()) {
+            "ilo"
+        } else {
+            "other"
+        };
+        stack.push(format!("{whose} {}", title.unwrap_or_default()));
+    }
+    log!("browser: stack {}", stack.join(", "));
+    Some(())
+}
+
 /// The browser windows that are open, front to back, as the X server stacks them.
 fn stacked() -> Option<Vec<Browser>> {
     let x = server()?;
@@ -1098,6 +1174,27 @@ fn stacked() -> Option<Vec<Browser>> {
             })
             .collect(),
     )
+}
+
+/// Whether (`x`, `y`) in browser window `id`'s content is on one of its pages.
+/// shortcut: where the shell lays them out, as `pages` has them.
+pub(super) fn over_page(id: bc::bc_id, x: f64, y: f64) -> bool {
+    let shell =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.shell.clone()));
+    let (Some(shell), Some(cx)) = (shell, CX.with_borrow(Clone::clone)) else {
+        return false;
+    };
+    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+    cx.update(|cx| {
+        let Some(shell) = shell.upgrade() else {
+            return false;
+        };
+        shell
+            .read(cx)
+            .shown_pages()
+            .iter()
+            .any(|(_, page)| page.contains(&at))
+    })
 }
 
 /// The pages of browser window `id`, as drive.mm lists their views: from the bottom-left corner of
@@ -1599,6 +1696,11 @@ fn start_drag(kind: &str, value: &str) -> Option<Source> {
         ],
         "file" => vec![(uris?, format!("{}\r\n", file_url(value)).into_bytes())],
         "text" => vec![(utf8?, value.into()), (plain?, value.into())],
+        // As host_drag_tab carries one from another of the app's windows.
+        "tab" => vec![(
+            atom("application/x-ilo-tab")?,
+            format!("{} {value}", std::process::id()).into_bytes(),
+        )],
         _ => return None,
     };
     let window = match SOURCE_WINDOW.get() {
@@ -1883,8 +1985,20 @@ fn run_command(line: &str) -> Option<()> {
         "window" => {
             let number: usize = words.next()?.parse().ok()?;
             let browser = browser(number.checked_sub(1)?)?;
+            let behind = match words.next() {
+                None => false,
+                Some("behind") => true,
+                Some(_) => return None,
+            };
             DRIVEN.set(number - 1);
-            log!("browser: drive window {number}");
+            log!(
+                "browser: drive window {number}{}",
+                if behind { " behind" } else { "" }
+            );
+            // With behind, it stays where it is, as drive.mm's does, for another app's window over it.
+            if behind {
+                return Some(());
+            }
             // To the front with the keyboard, as a click on it does.
             let x = server()?;
             let (connection, root) = &*x;
@@ -2170,6 +2284,7 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: order{order}, key {key}");
             Some(())
         }
+        "stack" => stack(),
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
@@ -2459,13 +2574,12 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
             return fake(xproto::MOTION_NOTIFY_EVENT, 0, back);
         }
         first_press(at, 1, false);
-        let [left, top, ..] = frame(window)?;
         let held = HeldPip {
             x,
             y,
             root: (at.root_x, at.root_y),
             back,
-            at: (left, top),
+            frame: frame(window)?,
         };
         PIP_HELD.set(Some(held));
         return fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y));
@@ -2483,11 +2597,11 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     // The window manager takes the pointer only once it has the core's request to move the
     // window, which can be after the drag's last motion, and it then moves the window with the
     // pointer until a click, so the release would leave the window following the pointer home.
-    // A hand that drags keeps moving: a pixel back and forth till the window has moved, or 2 s.
+    // A hand that drags keeps moving: a pixel back and forth till the window has moved or sized,
+    // or 2 s.
     if to != held.root {
         for _ in 0..20 {
-            let [left, top, ..] = frame(window)?;
-            if (left, top) != held.at {
+            if frame(window)? != held.frame {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2497,18 +2611,54 @@ fn hold_mini_player(window: xproto::Window, step: &str, x: f64, y: f64) -> Optio
     }
     PIP_HELD.set(None);
     fake(xproto::BUTTON_RELEASE_EVENT, 1, to)?;
+    // A hand rests after it lets go. The window manager takes a move's queued motions as one, the
+    // last first, so the pointer sent home before it has read the release took the window with it,
+    // its grabbed point under the corner (#1780). The pointer waits till no one holds it, or 2 s.
+    for _ in 0..20 {
+        if !pointer_held_elsewhere()? {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // Where the drag left it, as the last frame the window manager gave it may have come before.
+    let [left, top, width, height] = frame(window)?;
+    log!("browser: pip at {left:.0} {top:.0} {width:.0} {height:.0}");
     fake(xproto::MOTION_NOTIFY_EVENT, 0, held.back)
 }
 
+/// Whether another client holds the display's pointer, as the window manager does through a move
+/// or resize it took over, and the window a press was on until its release: a grab of ours fails
+/// then. Ours, when it succeeds, goes at once.
+fn pointer_held_elsewhere() -> Option<bool> {
+    let server = server()?;
+    let (connection, root) = &*server;
+    let grab = connection.grab_pointer(
+        false,
+        *root,
+        EventMask::NO_EVENT,
+        xproto::GrabMode::ASYNC,
+        xproto::GrabMode::ASYNC,
+        x11rb::NONE,
+        x11rb::NONE,
+        x11rb::CURRENT_TIME,
+    );
+    let status = grab.ok()?.reply().ok()?.status;
+    if status == xproto::GrabStatus::SUCCESS {
+        connection.ungrab_pointer(x11rb::CURRENT_TIME).ok()?;
+        connection.flush().ok()?;
+    }
+    Some(status == xproto::GrabStatus::ALREADY_GRABBED)
+}
+
 /// A press on the Mini Player through XTest: where it was in the window and on the screen, where
-/// the display's pointer was before it, where the release puts it back, and where the window was.
+/// the display's pointer was before it, where the release puts it back, and the window's frame.
 #[derive(Clone, Copy)]
 struct HeldPip {
     x: f64,
     y: f64,
     root: (i16, i16),
     back: (i16, i16),
-    at: (f64, f64),
+    frame: [f64; 4],
 }
 
 /// Logs the Mini Player's frame each time `window`, it, moves or resizes, from a thread of its own

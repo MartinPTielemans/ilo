@@ -182,7 +182,7 @@ grep -q 'browser: tab [0-9]* game running$' "$log" && fail "Space started a game
 cat > "$out/network.py" <<'PY'
 import base64, json, os, socket, struct, sys, urllib.request
 
-port = open(sys.argv[1]).read().split()[0]
+port = open(sys.argv[1], encoding="utf-8").read().split()[0]
 targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list"))
 url = next(t["webSocketDebuggerUrl"] for t in targets
            if t["type"] == "page" and t["url"].startswith(sys.argv[2]))
@@ -247,7 +247,15 @@ for line in sys.stdin:
 PY
 rm -f "$out/network"
 mkfifo "$out/network"
-python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" > "$out/network.log" 2>&1 &
+# Windows' Python can't open Git Bash's FIFO, so on Windows it reads a pipe that cat fills from it,
+# as windows_bridge does (git-bash.sh); a plain pipe, as the Mac's bash 3.2 parses this file --posix.
+if windows; then
+  cat "$out/network" | python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" \
+    > "$out/network.log" 2>&1 &
+else
+  python3 -I "$out/network.py" "$ports" "http://127.0.0.1:$free/" < "$out/network" \
+    > "$out/network.log" 2>&1 &
+fi
 network=$!
 exec 4> "$out/network"
 # Takes the tab $1, offline or online.

@@ -668,6 +668,7 @@ name = "browser-linux"
 version = "0.1.0"
 dependencies = [
  "browser",
+ "futures-lite",
  "gpui",
  "gpui_linux",
  "gpui_platform",

@@ -48,8 +48,11 @@
 //   pageswipe <x> <y> back|forward        a swipe between pages at (x, y), as three fingers or
 //                                         a mouse's swipe send one, handed to the host's monitor
 //   wheel <x> <y> <dx>                    a mouse wheel's tick across at (x, y), <dx> lines right
-//   dragover <x> <y> [url|file|text <s>]  a drag from another app at (x, y), carrying the URL,
-//                                         the file at the path or the text <s>, handed to the view
+//   dragover <x> <y> [url|file|text|tab <s>]
+//                                         a drag from another app at (x, y), carrying the URL,
+//                                         the file at the path or the text <s>, or tab <s>, as a
+//                                         tab's row dragged from another of the app's windows
+//                                         carries it (host_drag_tab), handed to the view
 //                                         AppKit would hand it to, which it logs with whether it
 //                                         takes it, as "browser: drag over <view class> taken"
 //   dragdrop <x> <y> [url|file|text <s>]  lets go of that drag there, as dragover, then logs
@@ -110,6 +113,11 @@
 //                                         T3 Code's window capture takes. Each is "driven",
 //                                         "window <n>" for another browser window, "none", or
 //                                         "<class> <width>x<height> <accessibility role>"
+//   stack                                 logs the windows on screen at the normal level over
+//                                         the driven one and overlapping it, front first, down
+//                                         to it, as Windows' driver does, as "browser: stack
+//                                         <window>, …, driven": each as front names it, or
+//                                         another app's as "other <its process's name>"
 //   backdrop <grey>|off                   a window of the driver's in <grey> (0–255, sRGB) behind
 //                                         the browser window and 100 points past its edges, for
 //                                         the window's material to blur something known. Each
@@ -674,6 +682,10 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
       [pasteboard writeObjects:@[ url ]];
     } else if (kind == "text") {
       [pasteboard setString:value forType:NSPasteboardTypeString];
+    } else if (kind == "tab") {
+      // As host_drag_tab carries one from another of the app's windows.
+      [pasteboard setString:[NSString stringWithFormat:@"%d %@", getpid(), value]
+                    forType:@"dev.ilo.browser.tab"];
     } else {
       [pasteboard releaseGlobally];
       return false;
@@ -1634,6 +1646,43 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     bc_age_tabs_for_testing(seconds);
+    done();
+    return true;
+  }
+  if (action == "stack") {
+    NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    const auto bounds = [](NSDictionary* info) {
+      CGRect rect = CGRectNull;
+      CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],
+                                             &rect);
+      return rect;
+    };
+    CGRect over = CGRectNull;
+    for (NSDictionary* info in windows) {
+      if ([info[(id)kCGWindowNumber] integerValue] == window.windowNumber) {
+        over = bounds(info);
+      }
+    }
+    NSMutableArray<NSString*>* stack = [NSMutableArray array];
+    for (NSDictionary* info in windows) {
+      const NSInteger number = [info[(id)kCGWindowNumber] integerValue];
+      if (number == window.windowNumber) {
+        [stack addObject:@"driven"];
+        break;
+      }
+      if ([info[(id)kCGWindowLayer] intValue] != 0 || [info[(id)kCGWindowAlpha] doubleValue] == 0 ||
+          !CGRectIntersectsRect(bounds(info), over)) {
+        continue;
+      }
+      if ([info[(id)kCGWindowOwnerPID] intValue] == getpid()) {
+        [stack addObject:Describe([NSApp windowWithWindowNumber:number]
+                                      ?: [NSString stringWithFormat:@"number %ld", (long)number])];
+      } else {
+        [stack addObject:[NSString stringWithFormat:@"other %@", info[(id)kCGWindowOwnerName]]];
+      }
+    }
+    fprintf(stderr, "browser: stack %s\n", [stack componentsJoinedByString:@", "].UTF8String);
     done();
     return true;
   }

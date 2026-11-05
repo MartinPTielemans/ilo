@@ -26,8 +26,11 @@ pub struct Card {
     pub scroll: ScrollHandle,
     /// Each heading the page marked, with its top in the window, in the page's order.
     headings: Rc<RefCell<Vec<(SharedString, f32)>>>,
-    /// The scroll view's top in the window.
+    /// The scroll view's top in the window, and its height.
     top: Rc<Cell<f32>>,
+    height: Rc<Cell<f32>>,
+    /// The row put in with `reveal` is to be scrolled to once it's drawn.
+    revealing: Rc<Cell<bool>>,
     /// What the top held when last drawn, logged once a change.
     logged: RefCell<Option<SharedString>>,
 }
@@ -55,6 +58,37 @@ impl Card {
                 headings
                     .borrow_mut()
                     .push((heading.clone(), f32::from(bounds.origin.y)));
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// The next row drawn with `reveal` in it is scrolled into sight.
+    pub fn reveal_next(&self) {
+        self.revealing.set(true);
+    }
+
+    /// Put in a row's element: once it's drawn after `reveal_next`, the card scrolls it to just
+    /// under the held title, unless it's already in sight above the fade.
+    pub fn reveal(&self) -> gpui::Canvas<()> {
+        let (scroll, top, height) = (self.scroll.clone(), self.top.clone(), self.height.clone());
+        let revealing = self.revealing.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                if !revealing.replace(false) {
+                    return;
+                }
+                let (row, card) = (f32::from(bounds.origin.y), top.get());
+                let bottom = row + f32::from(bounds.size.height);
+                if row >= card + HELD_TITLE && bottom <= card + height.get() - FADE {
+                    return;
+                }
+                let offset = f32::from(scroll.offset().y) - (row - card - HELD_TITLE - PAGE_TOP);
+                let most = f32::from(scroll.max_offset().y);
+                scroll.set_offset(point(px(0.), px(offset.clamp(-most, 0.))));
+                window.refresh();
             },
         )
         .absolute()
@@ -147,10 +181,13 @@ impl Card {
                     linear_color_stop(fill, 1.),
                 ))
         });
-        let top = self.top.clone();
+        let (top, height) = (self.top.clone(), self.height.clone());
         let at = canvas(
             |_, _, _| {},
-            move |bounds, _, _, _| top.set(f32::from(bounds.origin.y)),
+            move |bounds, _, _, _| {
+                top.set(f32::from(bounds.origin.y));
+                height.set(f32::from(bounds.size.height));
+            },
         )
         .absolute()
         .inset_0();
@@ -180,6 +217,8 @@ impl Card {
             .child(
                 div()
                     .id("card")
+                    .tab_group()
+                    .tab_index(2)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
