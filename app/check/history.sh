@@ -179,7 +179,8 @@ const kept = async () => {
 })();
 </script>
 PAGE
-key="kept$(date +%s)"
+# Not $key, which send sets to the key window.
+stored_key="kept$(date +%s)"
 stored() { # <url> <cookie local idb, as 0 or 1> <what failed>
   expect "^browser: title $tab stored cookie ${2% * *} local $(echo "$2" | cut -d' ' -f2) idb ${2##* }\$" \
     "$3: $(grep "^browser: title $tab " "$log" | tail -1)"
@@ -192,9 +193,9 @@ reload_item() {
     "a right-click on reload didn't show its menu: $(grep '^browser: menu shown' "$log" | tail -1)"
   send choose "$(cased "$1")"
 }
-go_from_bar "http://$nearby:$port/stored.html?$key"
+go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "0 0 0" "$nearby's page found its data before it stored it"
-go_from_bar "http://127.0.0.1:$port/stored.html?$key"
+go_from_bar "http://127.0.0.1:$port/stored.html?$stored_key"
 stored 127.0.0.1 "0 0 0" "127.0.0.1's page found its data before it stored it"
 send key r cmd
 stored 127.0.0.1 "1 1 1" "⌘R lost the page's cookie, localStorage or IndexedDB"
@@ -220,7 +221,7 @@ stored 127.0.0.1 "1 1 1" "the menu's Hard Reload lost the page's data"
 reload_item "Clear Site Data and Reload"
 expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Reload didn't run"
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
-go_from_bar "http://$nearby:$port/stored.html?$key"
+go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
 exec 3>&-
 quit
