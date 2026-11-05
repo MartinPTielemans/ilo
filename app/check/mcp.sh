@@ -499,6 +499,11 @@ refused=$(call separate_tab "{\"tab\":$user_tab}")
   fail "separating the user's tab answered: $refused"
 await_log "^browser: agent activity mcp-client $user_tab separate_tab refused: The tab isn't in the agent's own Space\.\$" \
   "the refused separate didn't reach the activity log"
+# The split views' pages close, so the conversation's grid has the pages the steps after it count on.
+for split_tab in $split_a $split_b $split_c; do
+  closed=$(call close_tab "{\"tab\":$split_tab}")
+  case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
+done
 
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
