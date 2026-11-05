@@ -197,9 +197,7 @@ ok "github.com is this run's server, trusted by macOS, with $to's appcast and DM
 
 note "3. $from launches, and Sparkle gets $version ready"
 launch "$out/from.log" "$from"
-await '^browser: update check in [0-9]* s' "$out/from.log" 60 ||
-  fail "Sparkle didn't schedule a check: $(updates "$out/from.log")"
-grep '^browser: update check in' "$out/from.log" | head -1
+# A check that's due runs as Sparkle starts, without saying when it's scheduled.
 await "GET ${feed#https://github.com}" "$out/server.log" 180 ||
   fail "$from didn't check at launch: $(updates "$out/from.log")"
 await "^browser: update $build found" "$out/from.log" 60 ||
