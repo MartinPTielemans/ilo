@@ -1275,6 +1275,17 @@ if none_since '^browser: site controls hidden$'; then
   send key escape
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 fi
+exec 3>&-
+quit
+# In a launch of its own, with a DevTools client that says when Clear browsing data's dialog has the
+# keyboard (cdp.py), as a DevTools pipe for the whole run keeps the Widevine note above from coming.
+# The history is the profile's, kept from the launch before.
+log="$out/clear-delete.log"
+cdp_log="$out/clear-cdp.log"
+step=0
+scratch=$(mktemp -d)
+start_with_cdp "$site" "$profile_dir" ""
+await_load
 # Clear browsing data's Delete, with Browsing history ticked as it is at first, empties the
 # history and the browser stays up, though Chrome tells the BrowserView, which a window of the
 # core's hasn't got (#1821). The page typed before is history, which the command bar suggests with
@@ -1295,6 +1306,22 @@ history_suggested || fail "the command bar didn't suggest $visited from history:
 bar_command clear-browsing-data "Clear Browsing Data" "clear browsing"
 expect_late '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "Clear Browsing Data didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
+# The dialog takes the keyboard a moment after its page loads, which a key sent before then misses:
+# the run waits for its Cancel to have it, as cdp.py sees it.
+focused() {
+  asked=$(grep -c '^cdp: focus ' "$cdp_log" || true)
+  echo "focus chrome://settings/" >&5
+  for _ in $(seq 50); do
+    [ "$(grep -c '^cdp: focus ' "$cdp_log" || true)" -gt "$asked" ] && break
+    sleep 0.1
+  done
+  grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
+}
+for _ in $(seq 100); do
+  [ "$(focused)" = Cancel ] && break
+done
+[ "$(focused)" = Cancel ] ||
+  fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused)"
 send key tab
 send key space
 for _ in $(seq 20); do
@@ -1303,8 +1330,9 @@ done
 history_suggested && fail "Delete in Clear browsing data left $visited in the history: $suggested"
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"
 send key w cmd
-exec 3>&-
+exec 3>&- 5>&-
 quit
+rm -rf "$scratch"
 # A listed streaming service opens in Safari's engine from its first load, here 127.0.0.1, which
 # the dev build lists for the run (main.rs). The run above kept it, and turned its note off, so the
 # profile forgets both first, or the site kept would open there without the list. The app launches
