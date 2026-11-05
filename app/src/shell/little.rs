@@ -15,8 +15,8 @@ use gpui::{
 };
 
 use super::{
-    BarSpace, Command, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, Shell, Space, SpaceEntry, Swapped,
-    TITLE, URL_BUTTON_INSET, URL_BUTTON_SIZE, WINDOW_BUTTONS,
+    BarSpace, CARD_INSET, Command, DialogKind, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PageDialog,
+    Shell, Space, SpaceEntry, Swapped, TITLE, URL_BUTTON_INSET, URL_BUTTON_SIZE, WINDOW_BUTTONS,
     access::Accessible,
     browser::Browser,
     favicon,
@@ -49,6 +49,9 @@ pub(super) struct Little {
     spaces: Vec<Elsewhere>,
     drawn: bool,
     picker_at: Cell<Option<Point<Pixels>>>,
+    /// The tabs its page opened, which went behind: their pages' questions to open another app
+    /// are asked here, where the user is, as a sign-in's pop-up's hand-back is (#1914).
+    pub(super) sent: Vec<u64>,
     /// Where its bar's title went in its last draw, at whose end its extensions' buttons are.
     pub(super) title: Cell<Option<Bounds<Pixels>>>,
 }
@@ -110,6 +113,7 @@ impl Shell {
             spaces,
             drawn: false,
             picker_at: Cell::new(None),
+            sent: Vec::new(),
             title: Cell::new(None),
         });
         shell.spaces = vec![Space {
@@ -407,12 +411,39 @@ impl Shell {
         );
     }
 
-    /// The card in a Little ilo window, under its bar, or `card` in any other.
+    /// `tab`, which its page opened, went behind: while no window shows it, its question to open
+    /// another app is asked here.
+    pub fn little_sent(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if let Some(little) = &mut self.little {
+            little.sent.push(tab);
+            cx.notify();
+        }
+    }
+
+    /// The tab its page opened and sent behind whose page asks to open another app, with what it
+    /// asks, if one does.
+    pub(super) fn little_sent_asks(&self) -> Option<(u64, &PageDialog)> {
+        let little = self.little.as_ref()?;
+        (little.sent.iter()).find_map(|tab| {
+            let dialog = self.page_dialogs.get(tab)?;
+            (dialog.kind == DialogKind::OpenApp).then_some((*tab, dialog))
+        })
+    }
+
+    /// The card in a Little ilo window, under its bar, or `card` in any other. While its page asks
+    /// a question, the card goes under the question's, which hangs from the bar as it would from
+    /// the URL field, since nothing can be drawn over the page.
     pub(super) fn little_card(&self, card: Bounds<Pixels>) -> Bounds<Pixels> {
         if self.little.is_none() || self.page_fullscreen {
             return card;
         }
-        let top = px(LITTLE_BAR);
+        let asked = (self.question().is_some())
+            .then(|| self.question_drawn.get())
+            .flatten();
+        let top = match asked {
+            Some(question) => question.bottom() + px(CARD_INSET),
+            None => px(LITTLE_BAR),
+        };
         Bounds::new(
             point(card.origin.x, top),
             size(card.size.width, card.bottom() - top),

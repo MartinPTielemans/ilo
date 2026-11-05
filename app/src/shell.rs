@@ -3925,6 +3925,12 @@ impl Render for Shell {
                 shell
                     .children(self.cards())
                     .children(self.little_bar(cx))
+                    .children(
+                        self.little
+                            .is_some()
+                            .then(|| self.question_card(cx))
+                            .flatten(),
+                    )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
                     .children(self.crash_cards(cx))
