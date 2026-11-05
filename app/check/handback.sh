@@ -22,7 +22,12 @@
 serve
 log="$out/handback.log"
 step=0
-handled="$out/handback-handled.txt"
+# The stand-in runs wherever its system starts it, so it's given whole paths.
+case $out in
+/*) here=$out ;;
+*) here=$PWD/$out ;;
+esac
+handled="$here/handback-handled.txt"
 : > "$handled"
 rm -f "$saved" "$launch_frame" "$out/handback-local.log"
 scheme=ilohandback
@@ -42,20 +47,20 @@ case "$(uname)" in
 Linux)
   # On a runner alone, as it sets the user's default for the scheme, put back after.
   if [ -n "${GITHUB_ACTIONS:-}" ] && command -v xdg-mime > /dev/null; then
-    apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-    lists="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list $apps/mimeapps.list"
+    handback_apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    handback_lists="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list $handback_apps/mimeapps.list"
     at=0
-    for list in $lists; do
+    for list in $handback_lists; do
       at=$((at + 1))
       rm -f "$out/handback-mimeapps-$at.list"
       [ ! -f "$list" ] || cp "$list" "$out/handback-mimeapps-$at.list"
     done
-    entry="$apps/ilo-handback.desktop"
-    mkdir -p "$apps"
-    printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s"\n' "$handled" > "$out/handback-handler.sh"
-    chmod +x "$out/handback-handler.sh"
+    handback_entry="$handback_apps/ilo-handback.desktop"
+    mkdir -p "$handback_apps"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s"\n' "$handled" > "$here/handback-handler.sh"
+    chmod +x "$here/handback-handler.sh"
     printf '[Desktop Entry]\nType=Application\nName=Handback\nExec=%s %%u\nMimeType=x-scheme-handler/%s;\nNoDisplay=true\n' \
-      "$out/handback-handler.sh" "$scheme" > "$entry"
+      "$here/handback-handler.sh" "$scheme" > "$handback_entry"
     xdg-mime default ilo-handback.desktop "x-scheme-handler/$scheme"
     [ "$(xdg-mime query default "x-scheme-handler/$scheme")" = ilo-handback.desktop ] ||
       fail "xdg-mime didn't take the stand-in as the $scheme scheme's app"
@@ -65,11 +70,11 @@ Linux)
 Darwin)
   # An applet that handles the scheme's open location, registered with Launch Services.
   if [ -n "${CI:-}" ] || [ "$(sysctl -n kern.hv_vmm_present 2> /dev/null)" = 1 ]; then
-    applet="$out/Handback.app"
+    handback_applet="$here/Handback.app"
     printf 'on open location given\n  do shell script "printf %%s\\\\\\\\n " & quoted form of given & " >> " & quoted form of "%s"\nend open location\n' \
       "$handled" > "$out/handback.applescript"
-    osacompile -o "$applet" "$out/handback.applescript" || fail "osacompile didn't make the stand-in"
-    plist="$applet/Contents/Info.plist"
+    osacompile -o "$handback_applet" "$out/handback.applescript" || fail "osacompile didn't make the stand-in"
+    plist="$handback_applet/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier app.ilo.check.handback" "$plist" 2> /dev/null ||
       /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string app.ilo.check.handback" "$plist"
     /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" \
@@ -77,23 +82,26 @@ Darwin)
       -c "Add :CFBundleURLTypes:0:CFBundleURLName string Handback" \
       -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" \
       -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $scheme" "$plist"
-    lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-    "$lsregister" -f "$applet" || fail "Launch Services didn't take the stand-in"
+    handback_lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    "$handback_lsregister" -f "$handback_applet" || fail "Launch Services didn't take the stand-in"
     standin=mac
   fi
   ;;
 *)
   if windows; then
-    python=$(python3 -I -c 'import sys; print(sys.executable)')
+    # pythonw, with no console, which would take the foreground from the browser.
+    handback_python=$(python3 -I -c 'import os, sys
+windowless = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+print(windowless if os.path.exists(windowless) else sys.executable)')
     printf 'import sys\nwith open(sys.argv[1], "a", encoding="utf-8") as f:\n    f.write(sys.argv[2] + "\\n")\n' \
       > "$out/handback-handler.py"
-    key="HKCU\\Software\\Classes\\$scheme"
-    command="\"$python\" \"$(cygpath -w "$out/handback-handler.py")\" \"$(cygpath -w "$handled")\" \"%1\""
+    handback_key="HKCU\\Software\\Classes\\$scheme"
+    handback_command="\"$handback_python\" \"$(cygpath -w "$here/handback-handler.py")\" \"$(cygpath -w "$handled")\" \"%1\""
     # Git Bash converts none of these, so reg.exe gets its switches as written.
     reg() { MSYS2_ARG_CONV_EXCL='*' reg.exe "$@" >> "$out/handback-reg.log" 2>&1; }
-    reg add "$key" /ve /d "URL:Handback" /f &&
-      reg add "$key" /v "URL Protocol" /d "" /f &&
-      reg add "$key\\shell\\open\\command" /ve /d "$command" /f ||
+    reg add "$handback_key" /ve /d "URL:Handback" /f &&
+      reg add "$handback_key" /v "URL Protocol" /d "" /f &&
+      reg add "$handback_key\\shell\\open\\command" /ve /d "$handback_command" /f ||
       fail "the registry didn't take the stand-in for $scheme: $(tr '\r\n' '  ' < "$out/handback-reg.log")"
     standin=windows
   fi
@@ -102,9 +110,9 @@ esac
 forget_standin() {
   case $standin in
   linux)
-    rm -f "$entry"
+    rm -f "$handback_entry"
     at=0
-    for list in $lists; do
+    for list in $handback_lists; do
       at=$((at + 1))
       if [ -f "$out/handback-mimeapps-$at.list" ]; then
         mv "$out/handback-mimeapps-$at.list" "$list"
@@ -113,8 +121,8 @@ forget_standin() {
       fi
     done
     ;;
-  mac) "$lsregister" -u "$applet" 2> /dev/null || true ;;
-  windows) reg delete "$key" /f || true ;;
+  mac) "$handback_lsregister" -u "$handback_applet" 2> /dev/null || true ;;
+  windows) reg delete "$handback_key" /f || true ;;
   esac
 }
 trap 'cleanup; forget_standin' EXIT
