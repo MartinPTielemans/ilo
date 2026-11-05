@@ -19,8 +19,8 @@ use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Rgba, Role,
     SharedString, Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb,
+    rgba, size, svg,
 };
 
 use crate::{
@@ -100,17 +100,7 @@ pub struct Swatch {
 impl Swatch {
     /// The mark as a menu draws it on `panel`, ringed where its edge would fade into the panel.
     pub fn dot(self, panel: Rgba) -> gpui::Div {
-        let (from, to) = (rgb(self.from), rgb(self.to));
-        let gradient =
-            linear_gradient(135., linear_color_stop(from, 0.), linear_color_stop(to, 1.))
-                .color_space(gpui::ColorSpace::Oklab);
-        let ring = crate::palette::Palette::swatch_ring_of(from, to, &[panel]);
-        div()
-            .size(px(SWATCH))
-            .flex_none()
-            .rounded_full()
-            .bg(gradient)
-            .when_some(ring, |dot, ring| dot.border_1().border_color(ring))
+        crate::palette::Swatch::of_two(rgb(self.from), rgb(self.to)).draw(SWATCH, &[panel])
     }
 }
 

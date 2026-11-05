@@ -13,7 +13,7 @@ use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::SWATCHES;
-use crate::tokens::shell::onboarding::SKIP_MARGIN;
+use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
 /// keyboard in the UI.
@@ -67,6 +67,13 @@ fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
 }
 
 /// Moves the step shown, or the flow's end, `seconds` into the past, and draws.
+/// Lets `seconds` of the executor's clock pass, as a timer the flow set waits for.
+fn waited(cx: &mut VisualTestContext, seconds: f32) {
+    cx.executor()
+        .advance_clock(Duration::from_secs_f32(seconds));
+    cx.run_until_parked();
+}
+
 fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
     shell.update(cx, |shell, cx| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
@@ -266,14 +273,15 @@ fn escape_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
 }
 
 /// Return is the step's button, and Skip, at the window's bottom right, goes on too, from a step
-/// and from the last, which leaves the flow. The import's buttons are its own, so Return there is
-/// the view's.
+/// and from the last, which leaves the flow. At the import Return is its view's button, which
+/// shows the browser's choices, and keeps the step.
 #[gpui::test]
 fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     for (go_on, from, next) in [
-        ("return", Step::Import, Some(Step::Import)),
+        // Skip first: the window keeps its import view, which Return leaves in the choices.
         ("skip", Step::Import, Some(Step::DefaultBrowser)),
+        ("return", Step::Import, Some(Step::Import)),
         ("return", Step::DefaultBrowser, Some(Step::Color)),
         ("return", Step::Color, None),
         ("skip", Step::Color, None),
@@ -548,8 +556,9 @@ fn welcome_to_ilo_plays_it_again(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"welcome window".to_string()));
 }
 
-/// The import step is the import view Settings shows: an import begun goes on to the next step
-/// while it runs, which the flow then says quietly, and so does what it brought in. Its Done goes
+/// The import step is the import view Settings shows: an import whose Spaces are in holds a moment
+/// on them, then goes on to the next step while the rest runs, which the flow then says quietly,
+/// and so does what it brought in. Its Done goes
 /// on too. The view outlives the flow, so an import under way goes on, and Welcome to ilo shows
 /// the same one again.
 #[gpui::test]
@@ -573,8 +582,21 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
     assert_eq!(
         step(&shell, cx),
+        Some(Step::Import),
+        "it went on before its Spaces were in"
+    );
+    shown.update(cx, |_, cx| cx.emit(ImportEvent::Placed));
+    waited(cx, IMPORT_HOLD * 0.9);
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it didn't hold on the Spaces"
+    );
+    waited(cx, IMPORT_HOLD * 0.2);
+    assert_eq!(
+        step(&shell, cx),
         Some(Step::DefaultBrowser),
-        "an import begun goes on"
+        "an import placed goes on"
     );
     let said: gpui::SharedString = "2 Spaces came in from Arc.".into();
     shown.update(cx, |_, cx| cx.emit(ImportEvent::Finished(said.clone())));
@@ -650,7 +672,11 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
         tab("https://news.example.org/"),
     ];
     shown.update(cx, |view, _| view.offer(offered));
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
+    shown.update(cx, |_, cx| {
+        cx.emit(ImportEvent::Started);
+        cx.emit(ImportEvent::Placed);
+    });
+    waited(cx, IMPORT_HOLD);
     assert_eq!(step(&shell, cx), Some(Step::Favorites));
     let ticked = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, cx| {
@@ -665,8 +691,8 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
         ticked(&shell, cx),
         ["https://example.com/", "https://news.example.org/"]
     );
-    shell.update(cx, |shell, cx| {
-        shell.onboarding_tick("https://example.com/", cx)
+    view(&shell, cx).update(cx, |view, cx| {
+        view.toggle_favorite("https://example.com/", cx)
     });
     assert_eq!(ticked(&shell, cx), ["https://news.example.org/"]);
     cx.simulate_keystrokes("enter");
@@ -681,7 +707,11 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
     shown.update(cx, |view, _| view.offer(Vec::new()));
-    shown.update(cx, |_, cx| cx.emit(ImportEvent::Started));
+    shown.update(cx, |_, cx| {
+        cx.emit(ImportEvent::Started);
+        cx.emit(ImportEvent::Placed);
+    });
+    waited(cx, IMPORT_HOLD);
     assert_eq!(
         step(&shell, cx),
         Some(Step::DefaultBrowser),
@@ -872,9 +902,10 @@ fn importing_from(
     (shell, cx, view.expect("the import view"))
 }
 
-/// Safari's files kept from the app need Full Disk Access: the import step stays, showing the
-/// view's way to System Settings, and Skip still goes on. Once it's given and the user is back,
-/// the import reads and the flow goes on by itself (#1378).
+/// Safari's files kept from the app need Full Disk Access as Safari is picked: the import step
+/// stays, showing the view's way to System Settings, and Skip still goes on. Once it's given and
+/// the user is back, the view reads Safari and shows its choices, and Import there goes on
+/// (#1378, #1673).
 #[cfg(unix)]
 #[gpui::test]
 fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext) {
@@ -885,10 +916,7 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    view.update(cx, |view, cx| {
-        view.pick(0, cx);
-        view.import(cx);
-    });
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
     assert_eq!(
         step(&shell, cx),
@@ -900,15 +928,160 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
         Some("no access")
     );
 
-    // With access given, coming back reads, and the flow goes on.
+    // With access given, coming back reads Safari and shows its choices; Import goes on.
     let_read(&home);
     cx.update(|_, cx| browser.activate(cx));
     cx.run_until_parked();
-    assert_ne!(step(&shell, cx), Some(Step::Import), "read, it went on");
+    assert_eq!(view.read_with(cx, |view, _| view.drawn()), Some("pick"));
+    assert_eq!(step(&shell, cx), Some(Step::Import), "it waits for Import");
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    waited(cx, IMPORT_HOLD);
+    assert_ne!(step(&shell, cx), Some(Step::Import), "imported, it went on");
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// Skip goes on from the import step's no-access view, as from any step.
+/// The import step says what the state its view shows is for, with its button and its corner:
+/// the list "Bring your stuff." with Import from the browser used last and Skip; ↩ shows that
+/// browser's choices, "What comes from Arc.", with Import and Back, and its view has no buttons of
+/// its own; Esc goes back to the list, keeping the step, and Esc there skips it.
+#[gpui::test]
+fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
+    use crate::import::Corner;
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser, cx);
+    let guide = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide());
+    // The fixture's Arc is where the Mac keeps it, so it says the Mac.
+    let here = "this Mac";
+    let list = guide(cx);
+    assert_eq!(list.title, "Bring your stuff.");
+    assert_eq!(
+        list.line,
+        format!("Spaces, tabs and history from the browser you used. It all stays on {here}.")
+    );
+    assert_eq!(list.button.as_deref(), Some("Import from Arc"));
+    assert_eq!(list.corner, Corner::Skip);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    let choose = guide(cx);
+    assert_eq!(choose.title, "What comes from Arc.");
+    assert_eq!(
+        choose.line,
+        "All of it, unless you turn something off. Tabs load when you first open them."
+    );
+    assert_eq!(choose.button.as_deref(), Some("Import"));
+    assert_eq!(choose.corner, Corner::Back);
+    assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "Esc went past the list"
+    );
+    assert_eq!(guide(cx).title, "Bring your stuff.");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+}
+
+/// ↩ at the list brings the browser picked, and ↩ at its choices imports it: once read, the flow
+/// goes on by itself while the rest comes in.
+#[gpui::test]
+fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    // The step shows the Spaces arriving while Work's profile loads, and holds on them once in.
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it went on before its Spaces were in"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "Here it comes."
+    );
+    cx.update(|_, cx| browser.load(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "it didn't hold on the Spaces"
+    );
+    waited(cx, IMPORT_HOLD);
+    assert_ne!(step(&shell, cx), Some(Step::Import), "placed, it went on");
+}
+
+/// A profile that hasn't opened keeps the step, named in its title, with Try Again as its button,
+/// which ↩ presses; Esc skips the step, as its corner says, and the import goes on waiting.
+#[gpui::test]
+fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
+    use crate::import::Corner;
+    use crate::import::tests::Browser;
+    let browser = Rc::new(Browser::new(None));
+    let (shell, cx, view) = importing_from(browser, cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    waited(cx, crate::import::STALL.as_secs_f32());
+    let guide = view.read_with(cx, |view, _| view.guide());
+    assert_eq!(guide.title, "Work hasn't opened.");
+    assert_eq!(guide.button.as_deref(), Some("Try Again"));
+    assert_eq!(guide.corner, Corner::Skip);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "Here it comes.",
+        "↩ didn't try again"
+    );
+    waited(cx, crate::import::STALL.as_secs_f32());
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.primary()),
+        Some("Try Again"),
+        "the import stopped waiting as the step was skipped"
+    );
+}
+
+/// ↓ and ↑ move the list's pick, stopping at its ends, and the button names the browser picked.
+#[gpui::test]
+fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
+    use crate::import::sources::{Os, Roots};
+    use crate::import::tests::{Browser, chrome, firefox_dir};
+    let home = chrome(
+        "onboarding-two",
+        &[("Default", "Me")],
+        std::time::SystemTime::now(),
+    );
+    firefox_dir(home.join(".mozilla/firefox"), 60 * 60);
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    let (_, cx, view) = importing_from(browser, cx);
+    let button = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.guide().button);
+    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
+    cx.simulate_keystrokes("down down");
+    assert_eq!(button(cx).as_deref(), Some("Import from Firefox"));
+    cx.simulate_keystrokes("up");
+    assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.guide().title),
+        "What comes from Chrome."
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// The wait for Full Disk Access says Back in its corner, which Esc does, back to the list; Esc
+/// there goes on, as from any step.
 #[cfg(unix)]
 #[gpui::test]
 fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
@@ -919,14 +1092,25 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     };
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
     let (shell, cx, view) = importing_from(browser, cx);
-    view.update(cx, |view, cx| {
-        view.pick(0, cx);
-        view.import(cx);
-    });
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
     assert_eq!(
         view.read_with(cx, |view, _| view.drawn()),
         Some("no access")
+    );
+    let guide = view.read_with(cx, |view, _| view.guide());
+    assert_eq!(
+        guide.title,
+        format!("Let {} read Safari.", env!("APP_NAME"))
+    );
+    assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
+    assert_eq!(guide.corner, crate::import::Corner::Back);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Import),
+        "Esc went back to the list"
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));

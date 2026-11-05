@@ -11,6 +11,9 @@ use std::{
 };
 
 use browser::account::{self, Account};
+use browser::agents::task::{
+    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
+};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
@@ -1074,29 +1077,29 @@ impl Browser for Fake {
     fn settings(&self, _: &mut App) {}
 
     fn passwords(&self, _: u64, _: &mut App) {}
-    fn agent_activity(&self, _: &mut App) {}
-
-    fn agent_permissions(&self, _: u64, _: &App) -> browser::shell::AgentGrants {
-        Default::default()
-    }
-
-    fn revoke_agent(&self, _: u64, _: Option<SharedString>, _: &mut App) {}
-
-    fn disconnect_agent(&self, _: u64, _: &mut App) {}
-
-    fn take_back_agent_tabs(&self, _: u64, _: &mut App) {}
 
     fn take_over(&self, _: SharedString, _: u64, _: &mut App) {}
 
     fn hand_back(&self, _: u64, _: &mut App) {}
 
-    fn give_to_agent(&self, _: u64, _: u64, _: &mut App) {}
-
     fn stop_agent(&self, _: SharedString, _: &mut App) {}
 
     fn task(&self, _: SharedString, _: browser::agents::task::TaskAction, _: &mut App) {}
 
-    fn show_task(&self, _: SharedString, _: &mut App) {}
+    // Each card's click shows the working task's conversation, as the Agents send it.
+    fn show_task(&self, agent: SharedString, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            shell.set_conversation(Some(task_conversation(agent)), cx)
+        });
+    }
+
+    // A task's Space is known by its agent's id, as the core's are.
+    fn space_agent(&self, space: u64) -> SharedString {
+        match (FIRST_TASK..FIRST_TASK + TASKS.len() as u64).contains(&space) {
+            true => format!("task-{space}").into(),
+            false => SharedString::default(),
+        }
+    }
 
     fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
 
@@ -1321,11 +1324,22 @@ impl Browser for Fake {
     // The targets' window is the app's, over the page, which the preview has neither of.
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
 
+    // The preview has no page for the pointer to be over.
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        None
+    }
+
+    fn over_page_blends(&self) -> bool {
+        true
+    }
+
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
     fn little_drawn(&self, _: &mut App) {}
 
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
+
+    fn set_on_top(&self, _: bool, _: &mut App) {}
 
     // The preview's window is GPUI's own, which GPUI moves.
     fn start_window_move(&self, _: &mut App) {}
@@ -1398,6 +1412,10 @@ impl Browser for Fake {
     fn set_edit_titles(&self, _: Option<&str>, _: Option<&str>, _: &mut App) {}
 
     fn full_screen_note(&self, _: bool, _: &mut App) {}
+
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        false
+    }
 
     // The toast is a window over the page, which the preview has neither of.
     fn hang_note(&self, _: u64, _: bool, _: &mut App) {}
@@ -1614,6 +1632,140 @@ fn preview_tone() -> Option<Tone> {
     }
 }
 
+/// The first task's Space, apart from the ids the rest of the preview takes.
+const FIRST_TASK: u64 = 9001;
+/// The tasks PREVIEW_TASKS shows: each one's title, status and dot.
+const TASKS: [(&str, &str, Dot); 3] = [
+    (
+        "Find two tickets for Saturday",
+        "Clicking “Tickets”",
+        Dot::Working,
+    ),
+    ("Compare the museum passes", "Stopped", Dot::Ended),
+    (
+        "Book a table for four",
+        "A table for four at 20:00 is held",
+        Dot::Done,
+    ),
+];
+/// The pages the done task left the user, each with its site.
+const TASK_PAGES: [(&str, &str); 3] = [
+    ("Booking · Taberna", "https://taberna.example/booking"),
+    ("Menu · Taberna", "https://taberna.example/menu"),
+    ("Directions", "https://maps.example/taberna"),
+];
+
+/// A task's Space, as the core lists one: its agent's name in the agent column, its agent's id
+/// a task's (`Fake::space_agent`).
+fn task_space(id: u64) -> SpaceEntry {
+    (
+        id,
+        "Task".into(),
+        None,
+        0,
+        "".into(),
+        "Claude".into(),
+        "".into(),
+    )
+}
+
+/// The tasks' cards, each asked in `home`.
+fn task_cards(home: u64) -> Vec<TaskCard> {
+    let card = |(at, (title, status, dot)): (u64, (&str, &str, Dot))| TaskCard {
+        agent: format!("task-{at}").into(),
+        home,
+        space: at,
+        name: "Claude".into(),
+        replies: true,
+        title: title.into(),
+        status: status.into(),
+        asks: false,
+        dot,
+        answers: Vec::new(),
+        question: None,
+        open: match dot {
+            Dot::Done => {
+                let site = |url: &str| url.split('/').nth(2).unwrap_or("").into();
+                let pages = (FIRST_TASK + 100..).zip(TASK_PAGES);
+                pages.map(|(tab, (_, url))| (tab, site(url))).collect()
+            }
+            _ => Vec::new(),
+        },
+        retry: false,
+        command: None,
+    };
+    let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
+    // Newest first, as the Agents send them.
+    cards.reverse();
+    cards
+}
+
+/// The working task's conversation: a step done, one that failed, what the agent said of it, and
+/// the step under way, on four pages, so it opens on Pages.
+fn task_conversation(agent: SharedString) -> Conversation {
+    let (title, _, _) = TASKS[0];
+    let step = |key, glyph, title: &str, description: &str, running, failed| TraceStep {
+        key,
+        glyph,
+        title: title.into(),
+        description: description.into(),
+        running,
+        failed,
+        opens: match failed {
+            true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
+            false => Opens::Nothing,
+        },
+    };
+    let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
+    let items = vec![
+        TraceItem::Step(step(
+            0,
+            "icons/globe.svg",
+            "Opened tickets.example",
+            "2 s",
+            false,
+            false,
+        )),
+        TraceItem::Step(step(1, read, "Read tickets.example", "", false, false)),
+        TraceItem::Step(step(
+            2,
+            click,
+            "Couldn't click “Tickets”",
+            "A banner covers it",
+            false,
+            true,
+        )),
+        TraceItem::Said("The banner is in the way, so I'll close it first.".into()),
+        TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
+        TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),
+    ];
+    Conversation {
+        agent,
+        name: "Claude".into(),
+        title: title.into(),
+        about: "Claude · Working".into(),
+        asked: "Find two tickets for Saturday's concert, in the stalls".into(),
+        page: None,
+        lines: vec![Line::Trace(Trace {
+            key: 0,
+            running: true,
+            took: None,
+            items,
+        })],
+        tabs: vec![
+            (FIRST_TASK + 200, "tickets.example".into()),
+            (FIRST_TASK + 201, "seatmap.example".into()),
+            (FIRST_TASK + 202, "tickets.example".into()),
+            (FIRST_TASK + 203, "maps.example".into()),
+        ],
+        on: Some(FIRST_TASK + 200),
+        stoppable: true,
+        open: None,
+        answers: Vec::new(),
+        writing: false,
+    }
+}
+
 fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let page = |text: &str, detail: &str, url: &str, tab: u64| Suggestion {
         url: url.into(),
@@ -1645,6 +1797,7 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         url: url.into(),
         favicon: None,
         renamed: false,
+        switched: 0.0,
     })
     .collect();
     let (typed, rows) = match mode {
@@ -1857,6 +2010,13 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
+                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // stopped and one done; =open shows the first's conversation, as its card's
+                    // click does.
+                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    if tasks.is_some() {
+                        spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
+                    }
                     let first_archived = first_space + count as u64;
                     let archive = (first_archived..)
                         .zip(ARCHIVE)
@@ -2007,6 +2167,7 @@ fn main() {
                         };
                         let status = browser::agents::Status {
                             agent: "claude-code".into(),
+                            name: "Claude Code".into(),
                             space: first_space + 1,
                             doing: "Clicked · en.wikipedia.org".into(),
                             held,
@@ -2053,6 +2214,40 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    if let Some(tasks) = &tasks {
+                        let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
+                        let none = Folders::default();
+                        shell.set_tabs(
+                            FIRST_TASK + 2,
+                            Vec::new(),
+                            pages.clone(),
+                            Vec::new(),
+                            none,
+                            cx,
+                        );
+                        for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
+                            shell.set_title(tab, title.into(), cx);
+                            shell.set_page(
+                                tab,
+                                Page {
+                                    url: url.into(),
+                                    ..Default::default()
+                                },
+                                cx,
+                            );
+                        }
+                        shell.set_task_cards(task_cards(first_space), cx);
+                        // After the first frame, which sets the palette the reply field takes, as
+                        // a click on the card comes after it.
+                        if tasks == "open" {
+                            let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
+                            window.on_next_frame(move |_, cx| {
+                                shown
+                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .ok();
+                            });
+                        }
                     }
                     // PREVIEW_TROUBLE=crashed shows the tab shown's page died, =hung that it stopped
                     // answering, which shows in its row (the note is the toast's, a window the preview
@@ -2582,10 +2777,17 @@ fn preview_account(state: &str, cx: &mut App) {
                 }
                 account
             });
+            let look = browser::settings_rows::Look::settings(true);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
             AccountPage {
                 account,
                 dialog,
                 card: Card::default(),
+                search,
             }
         });
         window.focus(&page.read(cx).account.focus_handle(cx), cx);
@@ -2611,6 +2813,8 @@ struct AccountPage {
     account: gpui::Entity<Account>,
     dialog: gpui::Entity<dialog::Dialog>,
     card: Card,
+    /// Settings' search field, at the column's top.
+    search: gpui::Entity<browser::text_input::TextInput>,
 }
 
 impl gpui::Render for AccountPage {
@@ -2628,10 +2832,19 @@ impl gpui::Render for AccountPage {
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
         let look = Look::settings(true);
+        let field = browser::settings_search::field(
+            &self.search,
+            rgb(PAPER),
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
         let column = settings_column::column(
             Section::Sync,
             true,
             Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
         );

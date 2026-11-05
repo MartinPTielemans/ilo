@@ -60,10 +60,18 @@ pub(super) struct Recorder {
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
     pub(super) moves: Cell<usize>,
+    /// Whether a tab's row dragged out of the window starts the system's drag, as the Mac's does.
+    pub(super) drags_tabs: Cell<bool>,
+    /// The window that shows each tab's page, as `tab_window` answers.
+    pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
     pub(super) default_browser: Cell<bool>,
     /// The system it says it runs on, the Mac unless a test says.
     pub(super) os: Cell<Option<crate::default_browser::Os>>,
+    /// Where the pointer is in the window, as `pointer` answers.
+    pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// The window over the page draws opaque, as `over_page_blends` answers.
+    pub(super) over_page_opaque: Cell<bool>,
     /// The build updates itself, as `updates` answers, and how often Check for Updates ran.
     pub(super) updates: Cell<bool>,
     pub(super) checked_for_updates: Cell<usize>,
@@ -73,6 +81,8 @@ pub(super) struct Recorder {
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
     pub(super) full_screen: Cell<bool>,
+    /// Whether the window can't stay on top, as under Wayland.
+    pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
@@ -116,6 +126,8 @@ pub(super) struct Recorder {
     /// The questions the dialog was asked through `tell`, each as its message, its buttons and
     /// its other answer's, and what the last one's action does.
     pub(super) told: RefCell<Vec<String>>,
+    /// Each tab the shell muted or unmuted, in order.
+    pub(super) muted: RefCell<Vec<(u64, bool)>>,
     pub(super) told_action: RefCell<Option<Box<dyn FnOnce(Vec<String>, &mut App)>>>,
     /// The dialog asks something else, so `tell` doesn't ask.
     pub(super) dialog_busy: Cell<bool>,
@@ -142,6 +154,8 @@ pub(super) struct Recorder {
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     pub(super) clear_browsing_data: Cell<usize>,
+    /// Each profile's command bar picks, as the file keeps them.
+    pub(super) bar_picks: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -182,6 +196,8 @@ pub(super) struct Recorder {
     /// The label of the last toast's button other than Undo, and what it runs, its words in
     /// `toasts`.
     pub(super) toast_run: RefCell<Option<(&'static str, Rc<dyn Fn(&mut App)>)>>,
+    /// What the last toast's Share button runs, given where in the toast it was pressed.
+    pub(super) toast_share: RefCell<Option<Rc<dyn Fn(Point<Pixels>, &mut App)>>>,
     /// Another browser window is in front of this one.
     pub(super) behind: Cell<bool>,
     /// The Edit menu's Undo and Redo titles it was last given.
@@ -199,7 +215,6 @@ pub(super) struct Recorder {
     /// The answers to page dialogs it was given, with what was typed.
     pub(super) replies: RefCell<Vec<PageReply>>,
     /// What it says every agent's Space's menu lists.
-    pub(super) agent_permissions: RefCell<super::AgentGrants>,
     /// What the Library button's hover leaves out, none at first, as the core's default.
     hover_kinds_off: Cell<u32>,
     /// The account's core, as the first launch's account step asks it, in a build that names a
@@ -398,6 +413,10 @@ impl Browser for Recorder {
         self.record(format!("folder open {folder} {open}"))
     }
 
+    fn toggle_full_screen(&self, _: &mut App) {
+        self.record("toggle full screen".into())
+    }
+
     fn set_pinned_open(&self, space: u64, open: bool, _: &mut App) {
         self.record(format!("pinned open {space} {open}"))
     }
@@ -450,11 +469,21 @@ impl Browser for Recorder {
 
     fn show_drop_targets(&self, _: bool, _: &mut App) {}
 
+    fn pointer(&self, _: &mut App) -> Option<Point<Pixels>> {
+        self.pointer.get()
+    }
+
+    fn over_page_blends(&self) -> bool {
+        !self.over_page_opaque.get()
+    }
+
     fn back_to_pinned_url(&self, tab: u64, _: &mut App) {
         self.record(format!("back to pinned url {tab}"))
     }
 
-    fn set_muted(&self, _: u64, _: bool, _: &mut App) {}
+    fn set_muted(&self, tab: u64, muted: bool, _: &mut App) {
+        self.muted.borrow_mut().push((tab, muted));
+    }
 
     fn share_instead(&self, tab: u64, _: &mut App) {
         self.record(format!("share instead {tab}"));
@@ -861,6 +890,20 @@ impl Browser for Recorder {
             .set(self.clear_browsing_data.get() + 1);
     }
 
+    fn bar_picks(&self, profile: u64) -> String {
+        self.bar_picks
+            .borrow()
+            .get(&profile)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn set_bar_picks(&self, profile: u64, text: &str) {
+        self.bar_picks
+            .borrow_mut()
+            .insert(profile, text.to_string());
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         Default::default()
     }
@@ -1064,6 +1107,14 @@ impl Browser for Recorder {
         self.window_buttons.get()
     }
 
+    fn set_on_top(&self, on: bool, _: &mut App) {
+        self.record(format!("on top {on}"))
+    }
+
+    fn can_stay_on_top(&self) -> bool {
+        !self.no_stay_on_top.get()
+    }
+
     fn press_window_button(&self, button: WindowButton, _: &mut App) {
         if let WindowButton::Zoom = button {
             self.record("window button zoom".into())
@@ -1130,6 +1181,22 @@ impl Browser for Recorder {
         self.toasts.borrow_mut().push(text.into());
     }
 
+    fn toast_share(
+        &self,
+        text: &str,
+        share: Rc<dyn Fn(Point<Pixels>, &mut App)>,
+        _: Duration,
+        _: &mut App,
+    ) {
+        self.toasts.borrow_mut().push(format!("{text} [share]"));
+        *self.toast_share.borrow_mut() = Some(share);
+    }
+
+    fn share_from_toast(&self, url: &str, title: &str, at: Point<Pixels>, _: &mut App) {
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.record(format!("share from toast {url} {title} at {x} {y}"))
+    }
+
     fn toast_undo(&self, text: &str, undo: Rc<dyn Fn(&mut App)>, _: Duration, _: &mut App) {
         self.undo_toasts.borrow_mut().push(text.into());
         *self.undo_toast.borrow_mut() = Some(undo);
@@ -1155,6 +1222,11 @@ impl Browser for Recorder {
     ) {
         self.toasts.borrow_mut().push(text.into());
         *self.toast_run.borrow_mut() = Some((label, run));
+    }
+
+    fn enter_full_screen(&self, _: &mut App) -> bool {
+        self.record("enter full screen".into());
+        self.full_screen.get()
     }
 
     fn full_screen_note(&self, shown: bool, _: &mut App) {
@@ -1361,37 +1433,12 @@ impl Browser for Recorder {
         self.record(format!("passwords {space}"));
     }
 
-    fn agent_activity(&self, _: &mut App) {
-        self.record("agent activity".into());
-    }
-
-    fn agent_permissions(&self, _: u64, _: &App) -> super::AgentGrants {
-        self.agent_permissions.borrow().clone()
-    }
-
-    fn revoke_agent(&self, space: u64, site: Option<SharedString>, _: &mut App) {
-        let site = site.map_or("all".into(), |site| site.to_string());
-        self.record(format!("revoke agent {space} {site}"));
-    }
-
-    fn disconnect_agent(&self, space: u64, _: &mut App) {
-        self.record(format!("disconnect agent {space}"));
-    }
-
-    fn take_back_agent_tabs(&self, space: u64, _: &mut App) {
-        self.record(format!("take back agent {space}"));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         self.record(format!("take over {agent} {tab}"));
     }
 
     fn hand_back(&self, tab: u64, _: &mut App) {
         self.record(format!("hand back {tab}"));
-    }
-
-    fn give_to_agent(&self, tab: u64, space: u64, _: &mut App) {
-        self.record(format!("give {tab} to {space}"));
     }
 
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
@@ -1456,6 +1503,37 @@ impl Browser for Recorder {
 
     fn close_window(&self, _: &mut App) {
         self.record("close window".into())
+    }
+
+    fn drag_tab(&self, tab: u64, row: Bounds<Pixels>, grab: Point<f32>, _: &mut App) -> bool {
+        if !self.drags_tabs.get() {
+            return false;
+        }
+        let (x, y) = (f32::from(row.origin.x), f32::from(row.origin.y));
+        let (width, height) = (f32::from(row.size.width), f32::from(row.size.height));
+        self.record(format!(
+            "drag tab {tab} {x} {y} {width}x{height} at {} {}",
+            grab.x, grab.y
+        ));
+        true
+    }
+
+    fn show_in_window(&self, window: u64, tab: u64, _: &mut App) {
+        self.record(format!("show {tab} in window {window}"))
+    }
+
+    fn tab_to_new_window(&self, tab: u64, at: Option<Point<f32>>, grab: Point<f32>, _: &mut App) {
+        let at = at.map_or("where the system puts it".into(), |at| {
+            format!("at {} {}", at.x, at.y)
+        });
+        self.record(format!(
+            "new window for {tab} {at}, held at {} {}",
+            grab.x, grab.y
+        ))
+    }
+
+    fn tab_window(&self, tab: u64) -> u64 {
+        self.tab_windows.borrow().get(&tab).copied().unwrap_or(0)
     }
 
     fn new_private_window(&self, _: &mut App) {}

@@ -440,3 +440,7 @@ fn color(color: &Value) -> Option<u32> {
     };
     Some(channel("red")? << 16 | channel("green")? << 8 | channel("blue")?)
 }
+
+#[cfg(test)]
+#[path = "arc_tests.rs"]
+mod tests;

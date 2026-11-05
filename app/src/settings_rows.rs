@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use gpui::{BoxShadow, Rgba, SharedString, canvas, div, point, prelude::*, px, rgb, rgba, svg};
 
-use crate::palette::{INK, OVERLAY_DARK, PAPER};
-use crate::tokens::palette::DIALOG_LIGHT;
+use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
+use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
@@ -70,11 +70,15 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
+    /// What's on, a switch's track or a box's tick, and the one button that does what the view
+    /// is for: the host's own green.
+    pub accent: Rgba,
 }
 
 impl Look {
     /// Settings' own, on its card: the paper over the overlay's fill in dark, the ink over the
-    /// dialog's in light, as the window's other text is.
+    /// dialog's in light, as the window's other text is, and ilo's green, as the app's window
+    /// isn't a Space's (#319).
     pub fn settings(dark: bool) -> Look {
         let (card, base) = match dark {
             true => (rgb(OVERLAY_DARK), rgb(PAPER)),
@@ -101,12 +105,13 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: card.blend(base.opacity(HEADING)),
             edge: None,
+            accent: rgb(NO_THEME_ACCENT),
         }
     }
 
     /// Groups filled with `surface`, in `ink`, the rest `ink` over `surface`, and edged in their
-    /// line, as the first launch's ground has no card to set them off.
-    pub fn on(surface: Rgba, ink: Rgba) -> Look {
+    /// line, as the first launch's ground has no card to set them off, with that ground's `accent`.
+    pub fn on(surface: Rgba, ink: Rgba, accent: Rgba) -> Look {
         let mix = |amount: f32| surface.blend(ink.opacity(amount));
         let line = mix(ON_LINE);
         Look {
@@ -123,6 +128,7 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
+            accent,
         }
     }
 
@@ -265,6 +271,35 @@ pub fn icon_button(
             .size(px(BUTTON_GLYPH))
             .text_color(look.ink),
     )
+}
+
+/// The push button that does what the view is for, one at most in sight: white on the accent,
+/// each channel darker under the pointer and darker again pressed, as every filled button is.
+pub fn primary(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    title: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let shade = |by: f32| Rgba {
+        r: look.accent.r * by,
+        g: look.accent.g * by,
+        b: look.accent.b * by,
+        a: look.accent.a,
+    };
+    let (hovered, pressed) = (shade(ACCENT_HOVERED), shade(ACCENT_PRESSED));
+    div()
+        .id(id)
+        .px(px(CONTROL_PADDING))
+        .flex_none()
+        .h(px(CONTROL_HEIGHT))
+        .flex()
+        .items_center()
+        .rounded(px(CONTROL_RADIUS))
+        .bg(look.accent)
+        .text_color(gpui::white())
+        .hover(move |button| button.bg(hovered))
+        .active(move |button| button.bg(pressed))
+        .child(title.into())
 }
 
 /// A control's plate, lit under the pointer and pressed.
@@ -413,6 +448,7 @@ mod tests {
         let (dark, light) = (Look::settings(true), Look::settings(false));
         assert!(lum(dark.ink) > lum(dark.surface) && lum(light.ink) < lum(light.surface));
         assert!(!dark.light() && light.light());
-        assert!(dark.edge.is_none() && Look::on(dark.surface, dark.ink).edge.is_some());
+        let on = Look::on(dark.surface, dark.ink, dark.accent);
+        assert!(dark.edge.is_none() && on.edge.is_some());
     }
 }

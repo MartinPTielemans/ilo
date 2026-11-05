@@ -27,8 +27,9 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    WriteFile,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::{
@@ -260,7 +261,21 @@ impl Write for Pipe {
         }
     }
 
+    /// On the server's end, waits until the client has read what was written to it: closing
+    /// the connection disconnects it, which throws away what the client hasn't read yet
+    /// (DisconnectNamedPipe), so a stopped agent never heard that the user stopped it. On the
+    /// connection's own threads, never the UI's, as a client that doesn't read keeps it waiting.
     fn flush(&mut self) -> io::Result<()> {
+        if !self.connection.server || self.is_closed() {
+            return Ok(());
+        }
+        if unsafe { FlushFileBuffers(self.connection.pipe.0) } == 0 {
+            let error = io::Error::last_os_error();
+            return Err(match ended(&error) {
+                true => io::ErrorKind::BrokenPipe.into(),
+                false => error,
+            });
+        }
         Ok(())
     }
 }
@@ -449,4 +464,42 @@ fn owned_by_user(pipe: &Handle) -> io::Result<bool> {
 
 fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::{Listener, Pipe};
+
+    /// What the server writes and flushes before it closes the connection reaches a client that
+    /// reads only after, as the bridge may: the answer to a call the user stopped, written just
+    /// before the stop closes the connection.
+    #[test]
+    fn what_the_server_flushes_before_closing_reaches_a_client_that_reads_after() {
+        let path = std::path::PathBuf::from(format!(
+            r"\\.\pipe\{}-pipe-test-{}",
+            env!("APP_NAME"),
+            std::process::id()
+        ));
+        let mut listener = Listener::bind(&path).unwrap();
+        let client = Pipe::connect(&path).unwrap();
+        let mut server = listener.accept().unwrap();
+        let (closed, heard) = mpsc::channel();
+        let writing = std::thread::spawn(move || {
+            writeln!(server, "the user stopped you").unwrap();
+            server.flush().unwrap();
+            server.close();
+            _ = closed.send(());
+        });
+        // Read once the server has closed, or, while its flush waits for the read, a moment on:
+        // no flush and the line is gone by then.
+        _ = heard.recv_timeout(Duration::from_millis(200));
+        let mut line = String::new();
+        BufReader::new(client).read_line(&mut line).unwrap();
+        assert_eq!(line, "the user stopped you\n");
+        writing.join().unwrap();
+    }
 }

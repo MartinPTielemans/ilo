@@ -129,6 +129,8 @@ void CheckAppActive() {
       return;
     }
     g_app_active = active;
+    // check.sh reads this line.
+    fprintf(stderr, "browser: app active %d\n", active ? 1 : 0);
     // Once the app has stopped being active, where the Mac's comes just before.
     void (*changed)(void) = active ? g_became_active : g_resigning_active;
     if (changed) {
@@ -405,6 +407,10 @@ void host_watch_resigning_active(void (*resigning)(void)) {
 
 void host_watch_active(void (*became_active)(void)) {
   g_became_active = became_active;
+}
+
+bool host_app_active(void) {
+  return g_app_active;
 }
 
 // Read as xdg-settings reads it on most desktops. A Flatpak sees its own config rather than the
