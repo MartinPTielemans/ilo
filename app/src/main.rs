@@ -468,9 +468,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
-        if !wayland {
-            held_escape::watch(cx);
-        }
+        held_escape::watch(wayland, cx);
         cx.set_global(menu::field_menu(Rc::new(|window, request, cx| {
             // A browser window's field by the view the host knows the window by, as its other
             // menus are, which on Linux isn't GPUI's own: Chromium's surface or the X window GPUI

@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..e6062aa0da 100644
+index a5390e77f8..ee4eedc021 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,25 @@
@@ -58,11 +58,11 @@ index a5390e77f8..e6062aa0da 100644
 +};
 +#[cfg(feature = "wayland")]
 +pub use linux::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..0c786e2a77 100644
+index e4da54b52b..cca540937f 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -117,7 +117,7 @@ index e4da54b52b..0c786e2a77 100644
  pub(crate) use wayland::*;
 +#[cfg(feature = "wayland")]
 +pub use wayland::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 +#[cfg(feature = "x11")]
@@ -1681,7 +1681,7 @@ index 0c5370db6c..9d0a77223e 100644
      let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
      let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962bcff..bfbb357677 100644
+index cbc962bcff..46c3b3e249 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
 @@ -9,7 +9,13 @@ mod window;
@@ -1690,7 +1690,7 @@ index cbc962bcff..bfbb357677 100644
  
 +pub(crate) use client::dispatch_embedded_queue;
 +pub use client::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    resize_embedded,
 +};
  pub(crate) use client::*;
@@ -1699,7 +1699,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..cd0d763f59 100644
+index 2d40cf7fa9..b1982f7c9d 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2798,7 +2798,7 @@ index 2d40cf7fa9..cd0d763f59 100644
              }
              _ => {}
          }
-@@ -3479,3 +4027,620 @@ mod tests {
+@@ -3479,3 +4027,631 @@ mod tests {
          );
      }
  }
@@ -3298,6 +3298,17 @@ index 2d40cf7fa9..cd0d763f59 100644
 +    if let Some(backend) = window.surface().backend().upgrade() {
 +        backend.flush().ok();
 +    }
++}
++
++/// The key GPUI repeats while it's held in the embedder's surfaces, as its keysym and a number
++/// that changes with each press: None once it's let go. Every key reaches both the embedder and
++/// GPUI, so the embedder's own repeats of a key GPUI had the press of are the held key's.
++pub fn held_key() -> Option<(u32, u64)> {
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    let state = client.borrow();
++    let keycode = state.repeat.current_keycode?;
++    let keysym = state.keymap_state.as_ref()?.key_get_one_sym(keycode);
++    Some((keysym.raw(), state.repeat.current_id))
 +}
 +
 +/// Whether the compositor has given the keyboard to one of GPUI's windows or the embedder's.
