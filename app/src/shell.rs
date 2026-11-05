@@ -3117,7 +3117,8 @@ impl Shell {
 
     /// The window's bounds changed, as they do when it's maximized or restored: the third button
     /// shows which it would do next. They change as it goes full screen or comes back too, which
-    /// on Linux nothing else says.
+    /// on Linux nothing else says, and under Wayland the core tells the size again once the window
+    /// has, for one that keeps its size (`window_resized`).
     pub fn bounds_changed(&mut self, cx: &mut Context<Self>) {
         let maximized = self.browser.window_maximized();
         if maximized != std::mem::replace(&mut self.maximized, maximized) {

@@ -159,6 +159,7 @@ in_front() {
   return 1
 }
 send window 2
+forward=$step
 in_front || true
 expect '^browser: front driven, main driven, key driven, ax focused driven, ax main driven$' \
   "with the first window in full screen, other apps take the wrong window: $(grep '^browser: front ' "$log" | tail -1)"
@@ -172,9 +173,16 @@ send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
 fi
-send fullscreen
-left=$step
-expect '^browser: window left full screen$' "the first window didn't leave full screen"
+# Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
+# the first left as the second came forward.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  logged '^browser: window left full screen$' "$forward" ||
+    fail "the first window stayed full screen under sway as the second came forward"
+else
+  send fullscreen
+  left=$step
+  expect '^browser: window left full screen$' "the first window didn't leave full screen"
+fi
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' \
     "the desktop's Space didn't come back after full screen" "$left"
