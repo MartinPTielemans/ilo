@@ -6,6 +6,7 @@ ardia/chromium-extension-omaha-attributes.patch
 ours/chromium-core-link.patch
 ours/chromium-core-link-linux.patch
 ours/chromium-core-wayland.patch
+ours/chromium-wayland-state-after-ack.patch
 ours/chromium-core-main.patch
 ours/chromium-core-browser-window.patch
 ours/chromium-core-tab-background.patch
