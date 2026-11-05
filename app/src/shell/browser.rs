@@ -433,6 +433,8 @@ pub trait Browser {
     /// Keeps View › Appearance's choice for the next launch, and gives it the app's native parts
     /// and its pages, which follow it as they follow the system's.
     fn set_appearance(&self, appearance: Appearance, cx: &mut App);
+    /// Keeps Show Space Header's choice for the next launch (`LoneSpaceHeader`).
+    fn keep_lone_header(&self, kept: bool, cx: &mut App);
     /// Whether the shell is moving the page's frame on its own, a step at a time. A page that
     /// hasn't drawn at its new size yet shows its last frame stretched to fill the view, rather
     /// than at its old size in the corner, so its right edge and scrollbar stay with the frame's.

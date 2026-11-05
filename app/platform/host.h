@@ -910,6 +910,43 @@ bool host_choose(const char* title);
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
 
+// AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
+// Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,
+// which the app carries out as a click would. A script asks with one Apple Event at a time,
+// |event| (its sender's pid and return ID), from |sender|, the app that sent it by its name. The
+// strings are UTF-8, copied as bc_space_name copies them.
+typedef struct {
+  // Whether scripts may control the browser, asked once for each Apple Event that reads, with
+  // |action| "read". The app logs it, refused if not.
+  bool (*allowed)(uint64_t event, const char* sender, const char* action);
+  // The windows, front to back, never a private one; the Space each shows, 0 for none of the
+  // user's, and the tab it shows, 0 for none; and its name, the shown tab's title.
+  size_t (*windows)(uint64_t* windows, size_t capacity);
+  uint64_t (*window_space)(uint64_t window);
+  uint64_t (*window_tab)(uint64_t window);
+  size_t (*window_name)(uint64_t window, char* name, size_t capacity);
+  // The user's Spaces, as the switcher lists them, never an agent's.
+  size_t (*spaces)(uint64_t* spaces, size_t capacity);
+  size_t (*space_name)(uint64_t space, char* name, size_t capacity);
+  // The tabs of |space|, pinned then Today, or with 0 of the Space |window| shows.
+  size_t (*tabs)(uint64_t window, uint64_t space, uint64_t* tabs, size_t capacity);
+  size_t (*tab_title)(uint64_t tab, char* title, size_t capacity);
+  size_t (*tab_url)(uint64_t tab, char* url, size_t capacity);
+  // The commands, each logged: |window| shows |space|, or |tab|; a window opens as ⌘N's does; a
+  // tab opens loading |url|, an http or https page, in |space| of |window|, or with |window| 0 as a
+  // link from another app does. Each returns false or 0, and copies why into |why|, if refused.
+  bool (*focus_space)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      char* why, size_t capacity);
+  bool (*select_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t tab, char* why,
+                     size_t capacity);
+  uint64_t (*new_window)(uint64_t event, const char* sender, char* why, size_t capacity);
+  uint64_t (*new_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      const char* url, char* why, size_t capacity);
+} host_scripting;
+
+// Answers scripts with |scripting|, which the app keeps for as long as it runs.
+void host_set_scripting(const host_scripting* scripting);
+
 #ifdef __cplusplus
 }
 #endif

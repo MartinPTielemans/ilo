@@ -8,11 +8,12 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation, Window, canvas,
-    div, prelude::*, px, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation,
+    Window, canvas, div, prelude::*, px, svg,
 };
 
+use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
     CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, DIVIDER, EMOJI_SIZE, FAVICON_DRAWN,
@@ -39,10 +40,27 @@ use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
     space_icon::has_icon,
-    tokens::shell::{DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE},
+    tokens::shell::{
+        DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, NAME_HIDDEN, NAME_HIDDEN_UNDER_FAVORITES,
+    },
     tokens::text,
     tooltip::{Anchor, Tip},
 };
+
+/// Whether Show Space Header keeps a lone unnamed Space's name row in every window: Arc 1.171's
+/// `showSpaceHeaderOnSingleUnnamedSpaces`, off until it's chosen. The user's: agents have no call
+/// to change it.
+#[derive(Clone, Copy, Default)]
+pub struct LoneSpaceHeader(pub bool);
+
+impl Global for LoneSpaceHeader {}
+
+/// Whether `name` is one ilo gives a Space the user doesn't name, "Space 2" (the form's and the
+/// first launch's), where Arc 1.171 keeps no name and shows one like it.
+pub(super) fn given_name(name: &str) -> bool {
+    let number = name.strip_prefix("Space ").unwrap_or_default();
+    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+}
 
 /// What Clear's tooltip says (Arc 1.170.0 cap).
 pub(super) const CLEAR_TIP: &str = "Clear unpinned tabs in this space";
@@ -553,18 +571,22 @@ impl Shell {
     /// separate, which takes the tabs out of the split and closes none, as Arc's ⌥-click does.
     fn close_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let row = tabs[0];
-        let angle = if self.close_glyph(row) == UNLOAD {
-            0.
-        } else {
-            45.
-        };
+        let unload = self.close_glyph(row) == UNLOAD;
+        let angle = if unload { 0. } else { 45. };
         let split = tabs.len() > 1;
-        let glyph = match self.on_split_close == Some((row, true)) {
+        let separate = self.on_split_close == Some((row, true));
+        let glyph = match separate {
             true => SEPARATE.into(),
             false => super::assets::bars_path(angle),
         };
+        let name = match (separate, unload) {
+            (true, _) => "Separate All Tabs",
+            (false, true) => "Unload Tab",
+            (false, false) => "Close Tab",
+        };
         div()
             .id(("close", row))
+            .when(self.a11y, |button| button.button_named(name))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -638,6 +660,7 @@ impl Shell {
         let row = tabs[0];
         div()
             .id(("remove", row))
+            .when(self.a11y, |button| button.button_named(REMOVE_TIP))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -713,6 +736,9 @@ impl Shell {
         (page.audible || page.muted).then(|| {
             div()
                 .id(("speaker", tab))
+                .when(self.a11y, |button| {
+                    button.button_named(if page.muted { "Unmute" } else { "Mute" })
+                })
                 .flex_none()
                 .mr(px(SPEAKER_GAP))
                 .size(px(SPEAKER_SIZE))
@@ -848,7 +874,7 @@ impl Shell {
         let new_tab = (self.layout().into_iter())
             .any(|(slot, top)| matches!(slot, Slot::NewTab) && (top..top + ROW_PITCH).contains(&y));
         if event.button == MouseButton::Right && tab.is_none() && !new_tab {
-            match y < NAME_HEIGHT {
+            match y < NAME_HEIGHT && !self.name_row_hidden() {
                 true => self.space_menu(self.space, event.position, cx),
                 false => self.empty_space_menu(self.space, event.position, cx),
             }
@@ -1385,10 +1411,23 @@ impl Shell {
         })
     }
 
-    /// The Space's name over its rows. Under the pointer it's a row of its own (Arc 1.171): a tab
-    /// row's plate, the chevron in the icon's slot and the ••• at its end, in one frame, kept while
-    /// its menu is up. A press anywhere on it but the ••• collapses the pinned rows or expands them.
-    pub(super) fn name_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// The Space's name over its rows, or with the row hidden what Arc leaves of it, which keeps
+    /// its place for the theme picker that waits for it to settle.
+    pub(super) fn name_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.name_row_hidden() {
+            return self.shown_name_row(cx).into_any_element();
+        }
+        let drawn = self.name_row_drawn.clone();
+        let bounds = canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {});
+        let head = div().flex_none().h(px(self.list_head()));
+        head.child(bounds.absolute().top_0().left_0().size_full())
+            .into_any_element()
+    }
+
+    /// The name row. Under the pointer it's a row of its own (Arc 1.171): a tab row's plate, the
+    /// chevron in the icon's slot and the ••• at its end, in one frame, kept while its menu is
+    /// up. A press anywhere on it but the ••• collapses the pinned rows or expands them.
+    fn shown_name_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let space = self.space;
         let icon = (self.shown_space()).and_then(|each| space_icon(&self.palette, &each.icon));
         let placeholder = self.holds_icon_place().then(icon_placeholder);
@@ -1602,6 +1641,52 @@ impl Shell {
         self.space_menu(space, position, cx);
         self.name_menu = self.menu_open;
         cx.notify();
+    }
+
+    /// Whether the window's Space is the browser's only one, with no icon and the name ilo gives a
+    /// Space the user doesn't name, which Arc 1.171 counts as unnamed: its name tells it from no
+    /// other. An agent's Space is one more, which the name then tells it from.
+    pub(super) fn lone_unnamed(&self) -> bool {
+        let unnamed = |space: &Space| !has_icon(&space.icon) && given_name(&space.name);
+        !self.private && self.spaces.len() == 1 && self.shown_space().is_some_and(unnamed)
+    }
+
+    /// Whether the name row hides, as Arc 1.171's does for a lone unnamed Space unless Show Space
+    /// Header keeps it. It shows while the Space is renamed or given an icon there, as both hang
+    /// from it.
+    pub(super) fn name_row_hidden(&self) -> bool {
+        let space = self.space;
+        let naming = (self.renaming.as_ref())
+            .is_some_and(|naming| naming.naming == Naming::Space(space) && !naming.in_library);
+        let asked = Some(Pending::Icon(Subject::Space(space)));
+        let picking =
+            self.picker_pending.map(|(picker, _)| picker) == asked || self.holds_icon_place();
+        !self.lone_header && self.lone_unnamed() && !naming && !picking
+    }
+
+    /// How tall the list's head is: the name row, or what Arc leaves of it once it hides.
+    pub(super) fn list_head(&self) -> f32 {
+        match self.name_row_hidden() {
+            false => NAME_HEIGHT,
+            true if self.tile_tabs().is_empty() => NAME_HIDDEN,
+            true => NAME_HIDDEN_UNDER_FAVORITES,
+        }
+    }
+
+    /// Show Space Header or Hide Space Header, from a lone unnamed Space's menu: every window's,
+    /// kept for the next launch.
+    pub(super) fn keep_lone_header(&mut self, kept: bool, cx: &mut Context<Self>) {
+        // check.sh waits for this line.
+        log!(
+            "browser: space header {}",
+            if kept { "kept" } else { "hidden" }
+        );
+        cx.set_global(LoneSpaceHeader(kept));
+        self.lone_header = kept;
+        self.browser.keep_lone_header(kept, cx);
+        // check.sh waits for the outline the rows are drawn with next.
+        self.outline_changed = true;
+        cx.refresh_windows();
     }
 
     /// The line over Today, and Clear at its end, where the titles end.
@@ -1879,7 +1964,9 @@ mod tests {
 
     use gpui::{
         Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
-        VisualTestContext, point, px,
+        VisualTestContext,
+        accesskit::{Action, Role},
+        point, px,
     };
 
     use super::{
@@ -3662,6 +3749,67 @@ mod tests {
         cx.simulate_click(point(px(today.0), px(today.1)), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["close 5"]);
+    }
+
+    /// VoiceOver reads the button the row under the pointer shows by what it does, and the speaker
+    /// by what a press on it would do (#1381). Its press closes the tab as a click does.
+    #[gpui::test]
+    fn the_row_buttons_say_what_they_do(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        shell.update(cx, |shell, cx| {
+            shell.set_page(
+                5,
+                Page {
+                    audible: true,
+                    ..Page::default()
+                },
+                cx,
+            );
+            shell.set_page(
+                3,
+                Page {
+                    unloaded: true,
+                    ..Page::default()
+                },
+                cx,
+            );
+        });
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let button = |cx: &mut VisualTestContext, name: &str| {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let found = tree
+                .nodes
+                .into_iter()
+                .find(|(_, node)| node.role() == Role::Button && node.label() == Some(name));
+            found.map(|(id, _)| id)
+        };
+        assert!(button(cx, "Mute").is_some());
+        assert!(button(cx, "Close Tab").is_none(), "only under the pointer");
+        for (tab, name) in [(2, "Unload Tab"), (3, "Remove Tab"), (5, "Close Tab")] {
+            let at = close_button(&shell, cx, tab);
+            move_to(cx, at);
+            assert!(button(cx, name).is_some(), "{name}");
+        }
+
+        host.take();
+        let close = button(cx, "Close Tab").expect("Video's ✕");
+        cx.simulate_a11y_action(close, Action::Click);
+        cx.run_until_parked();
+        assert!(host.take().contains(&"close 5".to_owned()));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(
+                5,
+                Page {
+                    audible: true,
+                    muted: true,
+                    ..Page::default()
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(button(cx, "Unmute").is_some());
     }
 
     /// The button the row under the pointer draws, as check.sh reads it: "1" for ✕, "−" for −,

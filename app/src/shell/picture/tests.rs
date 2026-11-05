@@ -2,11 +2,7 @@
 //! shell asks of the core. The user's way in is the core's report, a click on the picture and the
 //! window coming to the front.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     Bounds, Entity, Modifiers, Pixels, RenderImage, TestAppContext, VisualTestContext, point, px,
@@ -65,16 +61,26 @@ fn card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Bounds<Pixels> {
     shell.read_with(cx, |shell, _| shell.picture_card())
 }
 
-/// Where the picture is `later` from the start of its motion, or from now if it has none, so a test
-/// on a busy machine reads the motion where it means to.
-fn picture_at(
-    shell: &Entity<Shell>,
-    cx: &mut VisualTestContext,
-    later: Duration,
-) -> Option<Bounds<Pixels>> {
+/// Where the picture is now, on the executor's clock, which only the test moves on.
+fn picture_at(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    let now = cx.executor().now();
+    shell.read_with(cx, |shell, _| shell.picture_bounds(now))
+}
+
+/// Moves the test's clock on by `time` and draws a frame, which steps the picture's motion.
+fn after(time: Duration, shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    cx.executor().advance_clock(time);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// Whether the picture is still stepping back.
+fn moving(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
     shell.read_with(cx, |shell, _| {
-        let motion = shell.picture.as_ref().and_then(|picture| picture.motion);
-        shell.picture_bounds(motion.map_or_else(Instant::now, |motion| motion.start) + later)
+        shell
+            .picture
+            .as_ref()
+            .is_some_and(|picture| picture.motion.is_some())
     })
 }
 
@@ -122,13 +128,13 @@ fn a_picture_answered_inside_the_ask_comes_after_it(cx: &mut TestAppContext) {
     assert_eq!(asked(&host), ["picture 10"]);
     cx.run_until_parked();
     assert!(asked(&host).is_empty());
-    assert!(picture_at(&shell, cx, Duration::from_millis(300)).is_some());
+    assert!(picture_at(&shell, cx).is_some());
 
     shell.update(cx, |shell, cx| shell.became_key(cx));
     assert_eq!(asked(&host), ["picture 10"]);
     cx.run_until_parked();
     assert!(asked(&host).is_empty());
-    assert!(picture_at(&shell, cx, Duration::from_millis(300)).is_some());
+    assert!(picture_at(&shell, cx).is_some());
 }
 
 /// Nothing shows until the picture comes. Then it's fitted to 0.8 of the card, centred, once it has
@@ -137,12 +143,21 @@ fn a_picture_answered_inside_the_ask_comes_after_it(cx: &mut TestAppContext) {
 fn the_picture_rests_at_four_fifths_of_the_card(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     shell.update(cx, |shell, cx| shell.page_elsewhere(10, cx));
-    assert!(picture_at(&shell, cx, Duration::ZERO).is_none());
+    assert!(picture_at(&shell, cx).is_none());
     answer(&shell, cx);
     assert_eq!(asked(&host), ["picture 10"]);
 
+    // It arrives at the card's size and steps back, and rests once its motion is over.
+    let first = picture_at(&shell, cx).unwrap();
+    after(Duration::from_millis(60), &shell, cx);
+    let middle = picture_at(&shell, cx).unwrap();
+    assert!(moving(&shell, cx));
+    after(Duration::from_millis(300), &shell, cx);
+    assert!(!moving(&shell, cx));
+    let rest = picture_at(&shell, cx).unwrap();
+    assert!(first.size.width > middle.size.width && middle.size.width > rest.size.width);
+
     let card = card(&shell, cx);
-    let rest = picture_at(&shell, cx, Duration::from_millis(300)).unwrap();
     let (card_width, card_height) = (f32::from(card.size.width), f32::from(card.size.height));
     let (width, height) = (f32::from(rest.size.width), f32::from(rest.size.height));
     assert!(width <= REST * card_width + 0.01 && height <= REST * card_height + 0.01);
@@ -157,11 +172,6 @@ fn the_picture_rests_at_four_fifths_of_the_card(cx: &mut TestAppContext) {
     let (centre, card_centre) = (rest.center(), card.center());
     assert!((f32::from(centre.x) - f32::from(card_centre.x)).abs() < 0.01);
     assert!((f32::from(centre.y) - f32::from(card_centre.y)).abs() < 0.01);
-
-    // It arrives at the card's size and steps back.
-    let first = picture_at(&shell, cx, Duration::ZERO).unwrap();
-    let middle = picture_at(&shell, cx, Duration::from_millis(60)).unwrap();
-    assert!(first.size.width > middle.size.width && middle.size.width > rest.size.width);
 }
 
 /// A press on the picture takes the page back at once, by the call a press on the tab's row makes;
@@ -212,7 +222,7 @@ fn the_window_a_page_leaves_shows_the_taker_s_picture_at_once(cx: &mut TestAppCo
     assert_eq!(asked(&host), ["picture 10"]);
     assert!(Arc::ptr_eq(&image(&giver, cx).unwrap(), &shown));
     let card = card(&giver, cx);
-    let first = picture_at(&giver, cx, Duration::ZERO).unwrap();
+    let first = picture_at(&giver, cx).unwrap();
     assert!(
         (first.size.width - card.size.width).abs() < px(2.)
             || (first.size.height - card.size.height).abs() < px(2.),
@@ -220,15 +230,17 @@ fn the_window_a_page_leaves_shows_the_taker_s_picture_at_once(cx: &mut TestAppCo
         first.size,
         card.size
     );
-    let rest = picture_at(&giver, cx, Duration::from_millis(300)).unwrap();
+    after(Duration::from_millis(300), &giver, cx);
+    let rest = picture_at(&giver, cx).unwrap();
     assert!(first.size.width > rest.size.width);
 
     // The fresh one replaces it where it is, without stepping back again.
     answer(&giver, cx);
     assert!(!Arc::ptr_eq(&image(&giver, cx).unwrap(), &shown));
     assert_eq!(
-        picture_at(&giver, cx, Duration::from_millis(300)),
-        Some(rest)
+        picture_at(&giver, cx),
+        Some(rest),
+        "it replaces it without stepping back"
     );
 
     // Once no window shows a picture of the tab, a window it leaves shows none until one comes.
@@ -256,7 +268,7 @@ fn the_window_coming_to_the_front_takes_the_picture_again(cx: &mut TestAppContex
     answer(&shell, cx);
     assert!(asked(&host).is_empty());
     assert!(shell.read_with(cx, |shell, _| shell.stale_pictures.is_empty()));
-    assert!(picture_at(&shell, cx, Duration::from_millis(300)).is_some());
+    assert!(picture_at(&shell, cx).is_some());
 }
 
 /// The picture goes when the page comes back, the window selects another tab or none, or the tab
@@ -315,5 +327,5 @@ fn a_page_that_is_live_here_is_never_captured(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(asked(&host).is_empty());
     assert!(!pictured(&shell, cx));
-    assert!(picture_at(&shell, cx, Duration::from_millis(300)).is_none());
+    assert!(picture_at(&shell, cx).is_none());
 }

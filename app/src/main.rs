@@ -164,6 +164,7 @@ use capture_host::*;
 mod updates_host;
 use updates_host::*;
 mod quitting;
+mod scripting_host;
 use quitting::*;
 mod battery_saver_host;
 use battery_saver_host::*;
@@ -466,6 +467,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_appearance(cx);
+        settings::read_lone_header(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
@@ -543,6 +545,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
+    // AppleScript, once the windows it reads can be there.
+    scripting_host::answer_scripts();
     if little_in_menu_bar() && unsafe { bc::bc_little_windows() } {
         unsafe { platform::host_set_little_status_item(Some(status_item_clicked)) };
     }

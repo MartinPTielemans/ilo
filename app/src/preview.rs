@@ -1299,6 +1299,7 @@ impl Browser for Fake {
 
     // The preview keeps nothing for a next launch.
     fn set_appearance(&self, _: Appearance, _: &mut App) {}
+    fn keep_lone_header(&self, _: bool, _: &mut App) {}
 
     fn page_moving(&self, _: bool, _: &mut App) {}
 
@@ -2438,7 +2439,8 @@ fn main() {
                 if theme_picker::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
                     let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                     let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
-                    theme_picker::show(0, 1, preview_theme(), anchor, f32::MAX, changed, cx);
+                    let at = theme_picker::At::Row(anchor);
+                    theme_picker::show(0, 1, preview_theme(), at, f32::MAX, changed, cx);
                 }
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
@@ -2886,7 +2888,7 @@ struct AccountPage {
 impl gpui::Render for AccountPage {
     fn render(
         &mut self,
-        _: &mut gpui::Window,
+        window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         use browser::palette::{INK, PAPER};
@@ -2917,6 +2919,7 @@ impl gpui::Render for AccountPage {
             None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            window.is_a11y_active(),
         );
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let colors = Colors {

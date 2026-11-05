@@ -119,6 +119,9 @@ pub(super) struct Recorder {
     pub(super) capture_look: Cell<Option<(u64, bool)>>,
     /// The appearance View › Appearance last chose.
     pub(super) appearance: Cell<Option<Appearance>>,
+    /// Whether Show Space Header last kept a lone unnamed Space's name row, or Hide Space Header
+    /// hid it.
+    pub(super) lone_header: Cell<Option<bool>>,
     /// The share services it lists for any page.
     pub(super) share_services: RefCell<Vec<SharedString>>,
     /// The system has a share sheet of its own.
@@ -1132,6 +1135,10 @@ impl Browser for Recorder {
 
     fn set_appearance(&self, appearance: Appearance, _: &mut App) {
         self.appearance.set(Some(appearance));
+    }
+
+    fn keep_lone_header(&self, kept: bool, _: &mut App) {
+        self.lone_header.set(Some(kept));
     }
 
     fn page_moving(&self, moving: bool, _: &mut App) {

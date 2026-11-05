@@ -447,15 +447,83 @@ fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pix
 
 /// Sway focuses Settings once it has mapped it, which as it first shows can come after the
 /// driver's next click, which then went to the browser window (#1180): the first click after a
-/// show waits for it. Only that one, as a browser window can take the focus while Settings shows.
-fn await_settings_focus() {
+/// show waits for it, and says it's the first. Only that one, as a browser window can take the
+/// focus while Settings shows.
+fn await_settings_focus() -> bool {
     if !settings_window::take_shown_anew() {
-        return;
+        return false;
     }
     let until = Instant::now() + Duration::from_secs(2);
     while focused_settings(&ours()).is_none() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(10));
     }
+    true
+}
+
+/// The first click in Settings after it shows, at (`x`, `y`) in its content and (`at_x`, `at_y`)
+/// in sway's layout. sway lists Settings centred as soon as it has mapped it, but it moves the
+/// window there only once the app has drawn again, and until then a press goes where it was: a
+/// click aimed by the list missed what it was aimed at (#1897). A hand clicks where it sees the
+/// window, so the press waits, with the loop running, until GPUI has the pointer there.
+fn settings_click(
+    (x, y): (f64, f64),
+    (at_x, at_y): (f64, f64),
+    which: u32,
+    double: bool,
+) -> Option<()> {
+    motion(at_x, at_y)?;
+    let since = Instant::now();
+    drive::go_on(Box::new(move |done| {
+        awaiting_pointer((x, y), (at_x, at_y), which, double, since, done)
+    }));
+    Some(())
+}
+
+/// Clicks once GPUI has the pointer at (`x`, `y`) in Settings, or 2 s after `since`, moving it
+/// there again each 10 ms meanwhile, as sway places a window under the pointer on its next move.
+fn awaiting_pointer(
+    (x, y): (f64, f64),
+    (at_x, at_y): (f64, f64),
+    which: u32,
+    double: bool,
+    since: Instant,
+    done: Box<dyn FnOnce()>,
+) {
+    let at = settings_pointer();
+    let there = at.is_some_and(|(px, py)| (px - x).abs() < 1. && (py - y).abs() < 1.);
+    if !there && since.elapsed() < Duration::from_secs(2) {
+        motion(at_x, at_y);
+        let retry = move || awaiting_pointer((x, y), (at_x, at_y), which, double, since, done);
+        drive::after(10, Box::new(retry));
+        return;
+    }
+    // check.sh's logs say how long sway took to put Settings where it lists it.
+    let ms = since.elapsed().as_millis();
+    match (there, at) {
+        (true, _) => log!("browser: drive's pointer at {x:.0},{y:.0} in Settings after {ms} ms"),
+        (false, Some((px, py))) => {
+            log!("browser: drive's pointer at {px:.0},{py:.0} in Settings, not {x:.0},{y:.0}")
+        }
+        (false, None) => log!("browser: drive's pointer isn't in Settings"),
+    }
+    if click(at_x, at_y, which, 0, false).is_some() && double {
+        click(at_x, at_y, BTN_LEFT, 0, true);
+    }
+    done();
+}
+
+/// Where GPUI last had the pointer in Settings' window, in its content.
+fn settings_pointer() -> Option<(f64, f64)> {
+    let view = settings_window::shown()?;
+    let cx = CX.with_borrow(Clone::clone)?;
+    let mut at = None;
+    cx.update(|cx| {
+        overlays::update_window(view, cx, |window, _| {
+            let position = window.mouse_position();
+            at = Some((f64::from(position.x), f64::from(position.y)));
+        })
+    });
+    at
 }
 
 /// The origin, in sway's layout, of the window with the keyboard, for clickkey: Settings with
@@ -917,7 +985,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         })(),
         "clickkey" | "rightclickkey" | "doubleclickkey" => (|| {
             let (x, y) = drive::point(&mut words)?;
-            await_settings_focus();
+            let first = await_settings_focus();
             // Settings' close button is the compositor's off the Mac, in its title bar.
             if action == "clickkey"
                 && x.max(y) < drive::CLOSE_CORNER
@@ -926,12 +994,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return sway_command(&format!("[con_id={}] kill", settings.id));
             }
             let (left, top) = key_origin()?;
-            let (x, y) = (left + x, top + y);
             let which = if action == "rightclickkey" {
                 BTN_RIGHT
             } else {
                 BTN_LEFT
             };
+            let double = action == "doubleclickkey";
+            if first && focused_settings(&ours()).is_some() {
+                return settings_click((x, y), (left + x, top + y), which, double);
+            }
+            let (x, y) = (left + x, top + y);
             click(x, y, which, 0, false)?;
             if action == "doubleclickkey" {
                 click(x, y, BTN_LEFT, 0, true)?;

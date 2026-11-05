@@ -173,12 +173,13 @@ fn the_url_field_says_what_to_type_only_with_no_page(cx: &mut TestAppContext) {
         shell.set_page(1, page, cx);
     });
     let words = |cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| {
-            let (words, color) = shell.url_field_words(&shell.url(shell.selected));
+        shell.read_with(cx, |shell, cx| {
+            let (words, color) = shell.url_field_words(&shell.url(shell.selected), cx);
             (words.to_string(), color.a)
         })
     };
-    shell.update(cx, |shell, _| shell.empty_since = Some(Instant::now()));
+    let now = cx.executor().now();
+    shell.update(cx, |shell, _| shell.empty_since = Some(now));
     let (said, alpha) = words(cx);
     assert_eq!(said, PLACEHOLDER_TEXT);
     assert!(
@@ -186,7 +187,7 @@ fn the_url_field_says_what_to_type_only_with_no_page(cx: &mut TestAppContext) {
         "it starts from nothing with the mark, at {alpha}"
     );
     shell.update(cx, |shell, _| {
-        shell.empty_since = Some(Instant::now() - Duration::from_secs(1))
+        shell.empty_since = Some(now - Duration::from_secs(1))
     });
     let (_, faded_in) = words(cx);
     // Dimmer than a host where the window lets it be, and never under what text needs to read.

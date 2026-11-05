@@ -10,6 +10,8 @@ pub fn centered(width: f64, height: f64) -> (f64, f64) {
 }
 
 unsafe extern "C" {
+    #[cfg(target_os = "macos")]
+    pub fn host_set_scripting(scripting: *const host_scripting);
     #[cfg(not(target_os = "linux"))]
     pub fn drive_start();
     #[cfg(target_os = "windows")]
@@ -425,6 +427,26 @@ pub const TAB_LET_GO: c_int = 1;
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;
 pub const DRAG_DROP: c_int = 2;
+
+/// host.h's host_scripting: what scripts ask of the app (scripting_host.rs).
+#[repr(C)]
+pub struct host_scripting {
+    pub allowed: extern "C" fn(u64, *const c_char, *const c_char) -> bool,
+    pub windows: extern "C" fn(*mut u64, usize) -> usize,
+    pub window_space: extern "C" fn(u64) -> u64,
+    pub window_tab: extern "C" fn(u64) -> u64,
+    pub window_name: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub spaces: extern "C" fn(*mut u64, usize) -> usize,
+    pub space_name: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub tabs: extern "C" fn(u64, u64, *mut u64, usize) -> usize,
+    pub tab_title: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub tab_url: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub focus_space: extern "C" fn(u64, *const c_char, u64, u64, *mut c_char, usize) -> bool,
+    pub select_tab: extern "C" fn(u64, *const c_char, u64, u64, *mut c_char, usize) -> bool,
+    pub new_window: extern "C" fn(u64, *const c_char, *mut c_char, usize) -> u64,
+    pub new_tab:
+        extern "C" fn(u64, *const c_char, u64, u64, *const c_char, *mut c_char, usize) -> u64,
+}
 
 #[repr(C)]
 pub struct host_dragged {

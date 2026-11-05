@@ -6,7 +6,11 @@ use std::{
     rc::Rc,
 };
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Modifiers, TestAppContext, VisualTestContext,
+    accesskit::{Node, NodeId, Role},
+    point, px,
+};
 
 use super::*;
 
@@ -445,4 +449,69 @@ fn a_folders_icon_is_an_emoji_as_a_tabs_is(cx: &mut TestAppContext) {
     assert_eq!(Subject::Folder(3).to_string(), "folder 3");
     let mut picker = Picker::of(Subject::Folder(7), "", "", cx);
     assert_eq!(picker.tab(), Some(Tab::Emoji));
+}
+
+/// The node an assistive app reads with `role` and `label`.
+fn has(picker: &mut Picker, role: Role, label: &str) -> (NodeId, Node) {
+    let tree = picker.cx.a11y_tree().expect("GPUI built a tree");
+    let found = tree
+        .nodes
+        .into_iter()
+        .find(|(_, node)| node.role() == role && node.label() == Some(label));
+    found.unwrap_or_else(|| panic!("no {role:?} called {label}"))
+}
+
+/// VoiceOver reads the picker as what it picks for (#1381): Emoji | Icon as tabs with the shown
+/// one selected, the trash as Remove Icon, and the glyphs as a list of options by name, the
+/// Space's selected. Its press on a glyph picks it.
+#[gpui::test]
+fn voiceover_reads_the_icon_tab(cx: &mut TestAppContext) {
+    use gpui::accesskit::Action;
+    let mut picker = Picker::new("glyph:star", cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    has(&mut picker, Role::Dialog, "Space Icon");
+    has(&mut picker, Role::TabList, "Kind of Icon");
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Emoji").1.is_selected(),
+        Some(false)
+    );
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Icon").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::Button, "Remove Icon");
+    has(&mut picker, Role::ListBox, "Icons");
+    assert_eq!(
+        has(&mut picker, Role::ListBoxOption, "star")
+            .1
+            .is_selected(),
+        Some(true)
+    );
+    let (moon, node) = has(&mut picker, Role::ListBoxOption, "moon");
+    assert_eq!(node.is_selected(), Some(false));
+    picker.cx.simulate_a11y_action(moon, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.calls(), ["hide", "picked \"glyph:moon\""]);
+}
+
+/// On the Emoji tab VoiceOver lists the emoji as the system names them, the one ↩ picks
+/// selected, and the tone button says the tone. A tab's picker reads as that.
+#[gpui::test]
+fn voiceover_reads_the_emoji_tab(cx: &mut TestAppContext) {
+    let mut picker = Picker::for_tab("🦊", cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    has(&mut picker, Role::Dialog, "Tab Icon");
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Emoji").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::ListBox, "Emoji");
+    assert_eq!(picker.listed().1, Some("🦊"));
+    assert_eq!(
+        has(&mut picker, Role::ListBoxOption, "🦊").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::Button, "Skin Tone, Default");
 }
