@@ -39,9 +39,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: The commit the bug happened on, or unknown.
-      placeholder: a9a6941a
+      label: ilo version
+      description: The version Help › Troubleshooting › Copy Build Info gives, the commit for a build from source, or unknown.
+      placeholder: 0.1.4 (4321)
     validations:
       required: true
 

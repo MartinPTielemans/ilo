@@ -1,4 +1,4 @@
-# Keeps the labels the issue templates and the PR checks apply, in one list. Adapted from T3 Code
+# Keeps every label the repository uses, in one list: a label made by hand goes here too. Adapted from T3 Code
 # (https://github.com/pingdotgg/t3code, MIT) at commit 570d4b03eef879bd60be3d74444046858c94dacd.
 name: Labels
 
@@ -45,6 +45,24 @@ jobs:
               ["size:XXL", "b60205", "1,000+ changed lines (tests left out in mixed PRs)."],
               // agent-context-budget.yml.
               ["agent-context-increase", "bfdadc", "A maintainer accepts this PR's growth of the agent context."],
+              // Triage (CONTRIBUTING.md).
+              ["ready", "c2e0c6", "Triaged and ready for work"],
+              ["needs-repro", "bfd4f2", "Needs a reproduction before work starts"],
+              ["needs-mac-repro", "fef2c0", "macOS-only, needs a human repro on a Mac."],
+              ["needs-decision", "f9d0c4", "Needs a maintainer decision"],
+              ["accessibility", "f143ab", "Barrier affecting people with disabilities"],
+              // The integrator's merge queue.
+              ["queue:ready", "0e8a16", "Lane done: waiting for the integrator's next train"],
+              ["queue:held", "d93f0b", "Held: a comment says why and who owns the next step"],
+              ["queue:train", "1d76db", "In the integrator's current train; a comment names the train and its run"],
+              // GitHub's defaults.
+              ["documentation", "0075ca", "Improvements or additions to documentation"],
+              ["duplicate", "cfd3d7", "This issue or pull request already exists"],
+              ["good first issue", "7057ff", "Good for newcomers"],
+              ["help wanted", "008672", "Extra attention is needed"],
+              ["invalid", "e4e669", "This doesn't seem right"],
+              ["question", "d876e3", "Further information is requested"],
+              ["wontfix", "ffffff", "This will not be worked on"],
             ];
 
             const repo = { owner: context.repo.owner, repo: context.repo.repo };

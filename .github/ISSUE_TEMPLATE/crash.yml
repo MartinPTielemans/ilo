@@ -7,17 +7,24 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Crash.** macOS keeps a report in `~/Library/Logs/DiagnosticReports` (Console → Crash
-        Reports shows the same). Take the `.ips` file from the time of the crash whose name starts
-        with `Browser`, or a Helper's name if a page or the GPU process crashed.
-
-        **Hang.** While it's stuck, sample the browser for 10 seconds:
+        **macOS.** For a crash, macOS keeps a report in `~/Library/Logs/DiagnosticReports`
+        (Console → Crash Reports shows the same). Take the `.ips` file from the time of the crash
+        whose name starts with `Browser`, or a Helper's name if a page or the GPU process crashed.
+        For a hang, sample the browser for 10 seconds while it's stuck:
         ```
         sample "$(pgrep -x Browser)" 10 -file ~/Desktop/ilo-hang.txt
         ```
 
-        Reports and samples hold file paths with your user name, and can hold URLs. Replace your
-        user name and anything private before uploading.
+        **Linux.** The next time ilo starts after a crash, it offers to send the crash's report:
+        send it, and say below when the crash happened. For a hang, or a crash you can repeat, start
+        ilo from a terminal (`flatpak run app.ilo.browser`) and upload what it prints.
+
+        **Windows.** Event Viewer › Windows Logs › Application has an Application Error entry for a
+        crash, or an Application Hang entry once Windows closes a hung ilo, naming `chrome.exe`.
+        Copy the text of that entry's General tab.
+
+        These hold file paths with your user name, and can hold URLs. Replace your user name and
+        anything private before uploading.
 
   - type: dropdown
     id: kind
@@ -35,15 +42,15 @@ body:
     id: doing
     attributes:
       label: What you were doing
-      description: The last few things before it happened, and whether you can make it happen again. Public URLs only.
+      description: The last few things before it happened, when it happened, and whether you can make it happen again. Public URLs only.
     validations:
       required: true
 
   - type: upload
     id: report
     attributes:
-      label: Crash report or sample
-      description: The sample, or the `.ips` file zipped or renamed to `.txt` (GitHub won't take `.ips`), redacted.
+      label: Crash report, sample or log
+      description: The sample or the `.ips` file zipped or renamed to `.txt` (GitHub won't take `.ips`), the terminal's output, or the event's text, redacted.
     validations:
       required: false
       accept: ".txt,.log,.json,.zip"
@@ -51,8 +58,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: ilo has no releases yet. The commit you built (`git rev-parse --short HEAD`).
+      label: ilo version
+      description: Help › Troubleshooting › Copy Build Info copies it, with the Chromium version and the system. Built from source, the commit (`git rev-parse --short HEAD`).
+      placeholder: 0.1.4 (4321)
     validations:
       required: true
 
@@ -60,16 +68,48 @@ body:
     id: chromium
     attributes:
       label: Chromium version
-      description: "`chromium.version` in `engine/pins.ini` at that commit."
+      description: "Help › Troubleshooting › Copy Build Info has it, as has `chromium.version` in `engine/pins.ini` at that commit."
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
 
   - type: input
     id: os
     attributes:
-      label: macOS version and chip
-      description: "`sw_vers -productVersion` and `uname -m`."
-      placeholder: 26.1, arm64
+      label: System and chip
+      description: "Help › Troubleshooting › Copy Build Info has both. By hand: `sw_vers -productVersion` and `uname -m` on macOS, `PRETTY_NAME` in `/etc/os-release` on Linux, what `winver` shows on Windows."
+      placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How ilo is installed
+      options:
+        - macOS, the DMG
+        - Linux, the Flatpak
+        - Windows, the installer (setup.exe)
+        - Windows, from winget
+        - Windows, from the Microsoft Store (MSIX)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Linux session and desktop
+      description: "Linux only: Wayland or X11, and the desktop or compositor, such as Hyprland on Omarchy. `echo $XDG_SESSION_TYPE $XDG_CURRENT_DESKTOP` prints both."
+      placeholder: wayland Hyprland
 
   - type: textarea
     id: extensions

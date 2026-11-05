@@ -1,6 +1,6 @@
 # Contributing
 
-ilo is pre-alpha, with one maintainer and limited time to review. A pull request doesn't oblige
+ilo is in beta, with one maintainer and limited time to review. A pull request doesn't oblige
 anyone to review or merge it: we may close or defer it, ask for a smaller one, or build the idea
 another way later. Meeting this guide makes a PR eligible for review, not certain of a merge. The
 same bar applies to drafts.

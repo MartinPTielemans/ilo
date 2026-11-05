@@ -57,8 +57,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: ilo has no releases yet. The commit you built (`git rev-parse --short HEAD`).
+      label: ilo version
+      description: Help › Troubleshooting › Copy Build Info copies it, with the Chromium version and the system. Built from source, the commit (`git rev-parse --short HEAD`).
+      placeholder: 0.1.4 (4321)
     validations:
       required: true
 
@@ -66,16 +67,48 @@ body:
     id: chromium
     attributes:
       label: Chromium version
-      description: "`chromium.version` in `engine/pins.ini` at that commit."
+      description: "Help › Troubleshooting › Copy Build Info has it, as has `chromium.version` in `engine/pins.ini` at that commit."
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
 
   - type: input
     id: os
     attributes:
-      label: macOS version and chip
-      description: "`sw_vers -productVersion` and `uname -m`."
-      placeholder: 26.1, arm64
+      label: System and chip
+      description: "Help › Troubleshooting › Copy Build Info has both. By hand: `sw_vers -productVersion` and `uname -m` on macOS, `PRETTY_NAME` in `/etc/os-release` on Linux, what `winver` shows on Windows."
+      placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How ilo is installed
+      options:
+        - macOS, the DMG
+        - Linux, the Flatpak
+        - Windows, the installer (setup.exe)
+        - Windows, from winget
+        - Windows, from the Microsoft Store (MSIX)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Linux session and desktop
+      description: "Linux only: Wayland or X11, and the desktop or compositor, such as Hyprland on Omarchy. `echo $XDG_SESSION_TYPE $XDG_CURRENT_DESKTOP` prints both."
+      placeholder: wayland Hyprland
 
   - type: textarea
     id: extensions
