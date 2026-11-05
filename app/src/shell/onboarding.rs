@@ -62,7 +62,6 @@ use crate::tokens::shell::onboarding::SWATCH_RING;
 use crate::tokens::shell::onboarding::TAGLINE_GAP;
 use crate::tokens::shell::onboarding::TAGLINE_LINE;
 use crate::tokens::shell::onboarding::TAGLINE_SIZE;
-use crate::tokens::shell::onboarding::TILES_LINE_GAP;
 use crate::tokens::shell::onboarding::TITLE_LINE;
 use crate::tokens::shell::onboarding::TITLE_SIZE;
 use crate::tokens::shell::onboarding::WORDMARK_SCALE;
@@ -168,10 +167,8 @@ impl Step {
                     Os::Mac => "this Mac",
                     _ => "this computer",
                 };
-                let line = format!(
-                    "The sites you visit most, from the history you brought, worked out on {here}. \
-                     Nothing is sent anywhere."
-                );
+                let line =
+                    format!("From your history, worked out on {here}. Nothing is sent anywhere.");
                 return ("Your favorites.", line.into(), "Add Favorites");
             }
             // What the system does and its way back are Settings' row's, each system's own. A
@@ -1129,7 +1126,7 @@ impl Shell {
     }
 
     /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a
-    /// click ticking or unticking one, with where they go under them.
+    /// click ticking or unticking one. Tiles like the favorites they become say where they go.
     fn favorite_tiles(
         &self,
         colors: Colors,
@@ -1153,15 +1150,8 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap(px(TILES_LINE_GAP))
                 .text_size(px(crate::tokens::text::BODY))
-                .child(div().w_full().child(tiles))
-                .child(
-                    div()
-                        .text_size(px(crate::tokens::text::SMALL))
-                        .text_color(colors.ink(QUIET))
-                        .child("They go at the top of your first Space, as tiles like these."),
-                ),
+                .child(div().w_full().child(tiles)),
         )
     }
 

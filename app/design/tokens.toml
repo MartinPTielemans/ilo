@@ -670,6 +670,10 @@ line = 0.07
 name = 0.92
 name-off = 0.7
 detail = 0.52
+# On a light card, a row's grey line, the lines between groups and the page's sentence: ink at
+# the dark's 0.52 over Settings' light boxes reads at 3.6:1, and 0.6 is the least that reads at
+# 4.5:1 on them, for text at 11 (#1900).
+detail-light = 0.6
 detail-top = 2.0
 detail-line = 14.0
 end-gap = 20.0
@@ -1448,8 +1452,6 @@ import-surface = 0.05
 # it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
 # after it, in the line at the bottom left.
 import-hold = 0.6
-# The line saying where the favorites go is this far under their tiles.
-tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.

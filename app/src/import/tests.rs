@@ -2665,8 +2665,9 @@ pub(crate) fn let_read(home: &Path) {
 
 /// Picking a browser reads it, away from the UI, and its choices then say how much of each kind
 /// comes, with the profiles it goes into: Arc's Spaces by name, a new profile for its Work, and
-/// Chrome's bookmarks, open tabs, history and address. Until the read is in, each says it's
-/// counting, and Import pressed then goes on once it is.
+/// Chrome's bookmarks, open tabs, history and address. A kind with nothing to bring isn't a choice:
+/// they fold into one line that names them. Until the read is in, each says it's counting, and
+/// Import pressed then goes on once it is.
 #[gpui::test]
 fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
@@ -2677,36 +2678,26 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
         let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
         assert_eq!(counting, ["Counting…"; 5]);
         assert_eq!(view.note(), None);
+        assert_eq!(view.nothing(), None);
     });
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.choices(),
             [
-                (
-                    Kind::Spaces,
-                    "**2 Spaces** with **6 pinned tabs** in 2 folders, and 3 link rules".into()
-                ),
-                (
-                    Kind::Favorites,
-                    "**3**, at the top of each profile's Spaces".into()
-                ),
-                (Kind::History, "No pages from the last 90 days".into()),
-                (
-                    Kind::Addresses,
-                    "No saved addresses. Cards never come.".into()
-                ),
-                (
-                    Kind::Extensions,
-                    "None to add from the Chrome Web Store".into()
-                ),
+                (Kind::Spaces, "6 pinned tabs · 3 link rules".into()),
+                (Kind::Favorites, "3".into()),
             ]
+        );
+        assert_eq!(
+            view.nothing().as_deref(),
+            Some("Nothing to bring from History, Addresses or Extensions.")
         );
         assert_eq!(
             view.note().as_deref(),
             Some(
-                "Into **Default** and a new profile, **Work**, as Arc has it. Logins don't \
-                 come: you sign in to each site again."
+                "Into **Default** and a new profile, **Work**. Cards and sign-ins don't come: \
+                 you sign in to each site again."
             )
         );
     });
@@ -2734,19 +2725,14 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
+        assert_eq!(said, ["3 in 1 folder", "2", "2 pages", "1"]);
         assert_eq!(
-            said,
-            [
-                "**3 bookmarks** in 1 folder, as a Space's pinned tabs",
-                "**2 tabs**, as that Space's Today tabs",
-                "**2** pages from the last 90 days, kept on this computer",
-                "**1** saved address. Cards never come.",
-                "None to add from the Chrome Web Store",
-            ]
+            view.nothing().as_deref(),
+            Some("Nothing to bring from Extensions.")
         );
         assert_eq!(
             view.note().as_deref(),
-            Some("Into **Default**. Logins don't come: you sign in to each site again.")
+            Some("Into **Default**. Cards and sign-ins don't come: you sign in to each site again.")
         );
     });
     fs::remove_dir_all(made).unwrap();
@@ -2789,18 +2775,19 @@ fn counts_read_with_their_thousands_apart() {
         ..read::Tally::default()
     };
     assert_eq!(
-        super::kind_line(Kind::Spaces, &tally, "this Mac"),
-        "**1 Space** with **1 pinned tab**"
+        super::kind_count(Kind::Spaces, &tally).as_deref(),
+        Some("1 pinned tab")
     );
     assert_eq!(
-        super::kind_line(Kind::History, &tally, "this Mac"),
-        "**12,408** pages from the last 90 days, kept on this Mac"
+        super::kind_count(Kind::History, &tally).as_deref(),
+        Some("12,408 pages")
     );
+    assert_eq!(super::kind_count(Kind::Addresses, &tally), None);
     let two = [("Personal".to_string(), true), ("Work".to_string(), true)];
     assert_eq!(
-        super::into_note(&two, "Arc"),
-        "Into two new profiles, **Personal** and **Work**, as Arc has them. Logins don't come: \
-         you sign in to each site again."
+        super::into_note(&two),
+        "Into two new profiles, **Personal** and **Work**. Cards and sign-ins don't come: you \
+         sign in to each site again."
     );
 }
 
@@ -2883,14 +2870,7 @@ fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext)
     view.read_with(cx, |view, _| {
         assert_eq!(view.access(), None);
         let said: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
-        assert_eq!(
-            said,
-            [
-                "**5 bookmarks** in 3 folders, as a Space's pinned tabs",
-                "**1 page**, as a folder in that Space",
-                "**1** page from the last 90 days, kept on this Mac",
-            ]
-        );
+        assert_eq!(said, ["5 in 3 folders", "1", "1 page"]);
     });
     view.update(cx, |view, cx| view.import(cx));
     cx.run_until_parked();
@@ -3805,4 +3785,75 @@ fn the_end_of_an_import_offers_its_favorites(cx: &mut TestAppContext) {
     assert!(ticked(cx).is_empty());
     fs::remove_dir_all(made).unwrap();
     fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// A browser's row names its profiles only when it has several: Chrome's one, "Me", says nothing
+/// its name doesn't, and two are each named.
+#[gpui::test]
+fn a_browser_names_its_profiles_only_when_it_has_several(cx: &mut TestAppContext) {
+    let now = SystemTime::now();
+    for (name, profiles, said) in [
+        ("chrome-one-profile", &[("Default", "Me")][..], ""),
+        (
+            "chrome-two-profiles",
+            &[("Default", "Me"), ("Profile 1", "Work")][..],
+            "Me, Work",
+        ),
+    ] {
+        let home = chrome(name, profiles, now);
+        let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+        let host: Rc<dyn Host> = browser.clone();
+        let view = cx.new(|_| ImportView::new(host, false));
+        view.read_with(cx, |view, _| {
+            let mut line: Vec<String> = (view.row_line(&view.sources[0]).split(", "))
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect();
+            line.sort();
+            assert_eq!(line.join(", "), said, "{name}");
+        });
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+/// Done says what came in as one row, the browser over its counts, and comes at the foot, under
+/// the extensions left to add, as what's left to do comes before it.
+#[gpui::test]
+fn done_comes_at_the_foot_after_the_extensions_to_add(cx: &mut TestAppContext) {
+    let home = chrome("chrome-done-foot", &[("Default", "Me")], SystemTime::now());
+    chrome_extensions(&home);
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    view.update(cx, |view, cx| {
+        view.pick(0, cx);
+        view.import(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let came = view.read_with(cx, |view, _| view.came().cloned());
+    assert_eq!(
+        came,
+        Some(super::Came {
+            title: "Chrome came in".into(),
+            counts: "1 Space · 3 pinned tabs · 1 open tab · 2 pages of history · 1 address".into(),
+            more: None,
+        })
+    );
+    let lines = view.read_with(cx, |view, _| view.drawn_at.borrow().clone());
+    let y = |what: &str| {
+        let at = format!("browser: settings {what} at ");
+        (lines.iter())
+            .find_map(|line| line.strip_prefix(&at))
+            .and_then(|rest| rest.split(' ').nth(1)?.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("{what} wasn't drawn: {lines:?}"))
+    };
+    let extension = y("import-add-extension aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert!(
+        y("import-done") > extension,
+        "Done was drawn above the extensions to add"
+    );
+    fs::remove_dir_all(home).unwrap();
 }
