@@ -875,7 +875,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   await_log "^browser: agent activity mcp-client $frames_tab request\$" \
     "the request didn't reach the activity log"
   changes='^browser: agent mcp-client asks [0-9]*: make a change on localhost$'
-  posted="^POST localhost:$port/api/items cookie .*api=s3cret$port"
+  posted="^POST localhost:$port/api/items cookie .*api=s3cret$port[; ]"
   # Asks for a change and answers $1 with a click on the card's last row, Deny at its left and
   # Allow at its right.
   change() {
@@ -900,7 +900,8 @@ CARD
     'POST /api/items → 201 application/json'*'{"id":8,"title":"Milk"}') ;;
     *) fail "the allowed change answered: $changed" ;;
   esac
-  grep -q "$posted body {\"title\":\"Milk\"}\$" "$out/site.log" ||
+  # Its body on its own, as the session may hold other cookies of localhost's, such as profiles'.
+  grep "$posted" "$out/site.log" | grep -q ' body {"title":"Milk"}$' ||
     fail "the allowed change didn't reach the site with the tab's session"
   change Dismiss 1
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
