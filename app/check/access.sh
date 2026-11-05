@@ -276,10 +276,10 @@ else
     IFS=,
     for name in $browsers; do
       name=${name# }
-      # Each name as it reads, not a pattern: the Mac's grep missed "Import from Safari…" with the
-      # pattern's optional Again before the …, though the line was there (run 41985967620).
-      grep -qF " $button \"Import from $name…\"" "$import" ||
-        grep -qF " $button \"Import Again from $name…\"" "$import" ||
+      # Each name as it reads, not a pattern. ${name} keeps its braces: the Mac's bash 3.2 in a UTF-8
+      # locale reads the …'s first byte as part of the variable's name (run 41999155515).
+      grep -qF " $button \"Import from ${name}…\"" "$import" ||
+        grep -qF " $button \"Import Again from ${name}…\"" "$import" ||
         fail "the import's button for $name doesn't say it imports from $name: $import"
     done
     IFS=$old_ifs
