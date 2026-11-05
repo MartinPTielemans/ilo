@@ -1,7 +1,7 @@
-# The desktop's notification server, org.freedesktop.Notifications, as the runs' stand-in for one
-# on Linux: on the run's own session bus, where Chromium's notification bridge
-# (notification_platform_bridge_linux.cc) posts a page's notifications, and the mcp run's app its
-# needs' (app/src/needs_you/desktop.rs). It
+# The desktop's notification server, org.freedesktop.Notifications, as the notifications and mcp
+# runs' stand-in for one on Linux: on the run's own session bus, where Chromium's notification
+# bridge (notification_platform_bridge_linux.cc) posts a page's notifications, and the mcp run's
+# app its needs' (app/src/needs_you/desktop.rs). It
 # prints "ready" once it has the name, and "notify <id> <summary>" for each notification, then
 # "body <id> <body>" and "hints <id> <names>", and a
 # line "click <id>" on stdin sends ActionInvoked for it with the default action, as a desktop's
