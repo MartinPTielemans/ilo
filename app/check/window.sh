@@ -566,24 +566,33 @@ send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
 # by the page, as its button leaves, and then by escape. The steps run from the core's line to the
-# window's and the UI's, and the checks wait for the last of them.
+# window's and the UI's, and the checks wait for the last of them. Each key also waits for the page
+# to have heard the change before it: until it has, its document is still in the full screen it's
+# leaving, or not yet in the one it's entering, and requestFullscreen or exitFullscreen does nothing.
+page_heard() {
+  expect "^browser: title [0-9]* fullscreen $1\$" "the page didn't hear its full screen $2"
+}
 timed_from=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key x
   expect '^browser: page left full screen$' "exitFullscreen didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_escape=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key escape
   expect '^browser: page left full screen$' "escape didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_to=$(($(wc -l < "$log")))
 enter_ms=$(full_screen_times "$timed_from" "$timed_to" enter)
