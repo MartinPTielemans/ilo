@@ -315,6 +315,27 @@ awk -v run="$run" 'BEGIN { exit !(run != "" && run < 2) }' ||
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
+# DevTools' PUT /json/new, which names no window, opens its tab in the window's Space, at the top of
+# Today, as ⌘T's tab goes there (#1831). The Space is emptied first, so the window shows no page
+# and holds no Browser of its profile, which Chrome would find by itself, and opened a window of
+# its own, with a tab strip, without one.
+for _ in 1 2 3 4; do
+  [ -z "$(today)" ] && break
+  send key w cmd
+  expect '^browser: tab [0-9]* closed$' "⌘W didn't close the Space's tab"
+  expect '^browser: today' "the Space's Today didn't change as its tab closed"
+done
+[ -z "$(today)" ] || fail "⌘W left the Space's Today as \"$(today)\""
+python3 -I - "$(head -1 "$ports")" "${site}index.html" << 'PY' || fail "DevTools didn't answer PUT /json/new"
+import sys, urllib.request
+port, url = sys.argv[1:]
+urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/json/new?{url}", method="PUT"))
+PY
+expect '^browser: tab [0-9]* opened by 0 in the foreground$' "/json/new's tab didn't open in the window"
+opened=$(grep '^browser: tab [0-9]* opened by 0 in the foreground$' "$log" | tail -1 | cut -d' ' -f3)
+expect_tabs "$opened" "$opened" "/json/new's tab"
+expect "^browser: loaded $opened ${site}index.html\$" "/json/new's tab didn't load its page"
+
 quit_by_key
 exited
-echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/offline.png, $out/offline-game.png"
+echo "ok: a page that stops answering gets Not responding with Wait and Reload and goes by itself once it answers, Wait gives it longer and Reload ends its renderer and loads it again without the crash card, a dead page's pane shows This page stopped, whose Reload loads it again, a tab behind whose renderer dies is unloaded and loads once shown, a host that doesn't resolve shows the core's error page and a refused page loads by itself once its server comes. Offline, Space starts the game and a click doesn't, a page whose network comes back mid-run loads only once the run ends, chrome://dino opens it, and ⌘L opens the bar over a run, which ends it. DevTools' /json/new opens its tab at the top of the window's Today, with the Space empty. Windows: $out/hung.png, $out/crashed.png, $out/network-error.png, $out/offline.png, $out/offline-game.png"

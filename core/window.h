@@ -119,6 +119,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   static void PageCommittedInNewView(bc_id tab);
   // Chrome's navigator calls this before it picks the Browser for a navigation.
   static void AdjustNavigate(NavigateParams& params);
+  // The window that takes a navigation Chrome would place itself, with no Browser, page or
+  // contents of its own, that makes a tab of the regular profile: the window active last that
+  // shows a Space of that profile. Null to leave it to Chrome.
+  static Window* ForUnplaced(const NavigateParams& params);
   // From Chrome's DevTools: whether |browser|'s window docks them, as the core's windows do, and
   // that the docked DevTools of |inspected|, a tab of |browser|, opened, laid out again or closed.
   static bool CanDockDevTools(BrowserWindowInterface* browser);
@@ -441,6 +445,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Tells Chrome the shown page's Browser is active while the window is key, and the others
   // aren't, as Chrome's browser view does for its one Browser.
   void ReportActiveBrowser();
+  // While the window is key and shows no page: its Space's profile's Browser is the active one,
+  // made if it had none.
+  void ActivateSpaceBrowser();
+  // |shown| is the active Browser of the window's, if it's one, and the others aren't.
+  void MarkActive(BrowserWindowInterface* shown);
 
   // Gives the page shown the keyboard if the window is key and its keyboard is the page's, or
   // gives it to DevTools that have just shown.

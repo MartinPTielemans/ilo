@@ -643,7 +643,52 @@ void Window::TrimPageMenu(BrowserWindowInterface* browser, ui::SimpleMenuModel& 
 }
 
 // static
+Window* Window::ForUnplaced(const NavigateParams& params) {
+  // A page's own new tab or window comes with its Browser, and so does whatever a window does.
+  if (params.browser || params.source_contents || params.contents_to_insert) {
+    return nullptr;
+  }
+  // Only what makes a tab: a navigation in "the current tab" of no Browser would take whichever
+  // tab a window's Browser has active, which isn't the one it shows.
+  switch (params.disposition) {
+    case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+    case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+    case WindowOpenDisposition::NEW_WINDOW:
+    case WindowOpenDisposition::NEW_POPUP:
+      break;
+    default:
+      return nullptr;
+  }
+  Profile* profile = params.initiating_profile;
+  if (!profile || profile->IsOffTheRecord()) {
+    return nullptr;
+  }
+  // The user's own window active last whose Space is one of the user's in the navigation's
+  // profile, so its tab goes into a Space of that profile, as the tab opened then goes to the Space
+  // shown: not an agent's, which a window shows while a task's page is watched.
+  const std::string dir = DirOf(profile);
+  for (Window* window : All()) {
+    const Space* shown = Space::FromId(window->space_);
+    if (!window->closing_ && !window->off_the_record_ && !window->own_space_ && shown &&
+        !shown->agent() && shown->profile() == dir) {
+      return window;
+    }
+  }
+  return nullptr;
+}
+
+// static
 void Window::AdjustNavigate(NavigateParams& params) {
+  // A navigation with no Browser, such as DevTools' PUT /json/new (#1831), Chrome opens in the
+  // profile's tabbed Browser it activated last, else in a window of its own with a tab strip. A
+  // window makes its profile's Browser only once one of its tabs gets a page there, and a launch
+  // puts tabs back without one, so a window showing no page has none for Chrome to find. The
+  // user's window takes it instead, in the Space it shows, as ⌘T's tab would go there.
+  if (Window* front = ForUnplaced(params)) {
+    if (BrowserWindowInterface* browser = front->BrowserFor(params.initiating_profile)) {
+      params.browser = browser;
+    }
+  }
   Window* window = params.browser ? ForBrowser(params.browser) : nullptr;
   if (!window) {
     return;
@@ -2541,12 +2586,35 @@ void Window::ReportActiveBrowser() {
   // Chrome orders its Browsers by these reports, and picks the window by that order for what has
   // no tab of its own, such as an extension popup's install question or a page's alert.
   const bool key = widget_ && widget_->IsActive();
-  // A key window showing no page, as for an empty Space, keeps the Browser it had active.
   if (key && !shown_) {
+    // A key window showing no page, as for an empty Space, may hold no Browser of its Space's
+    // profile, as a launch puts tabs back without their pages: it makes one, from a task of its
+    // own, as this can come while a Browser closes.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Window::ActivateSpaceBrowser, weak_factory_.GetWeakPtr()));
     return;
   }
   tabs::TabInterface* tab = key ? tabs::TabInterface::MaybeGetFromContents(shown_.get()) : nullptr;
-  BrowserWindowInterface* shown = tab ? tab->GetBrowserWindowInterface() : nullptr;
+  MarkActive(tab ? tab->GetBrowserWindowInterface() : nullptr);
+}
+
+void Window::ActivateSpaceBrowser() {
+  if (closing_ || shown_ || !widget_ || !widget_->IsActive()) {
+    return;
+  }
+  // Its Space's profile's Browser is the active one, so what Chrome places in the window active
+  // last, such as an extension's chrome.tabs.create with no window, finds this window rather than
+  // none, or opens one of Chrome's own (#1831). A private or Little ilo window, or one whose
+  // Space's profile isn't loaded, keeps the Browser it had active.
+  const Space* space = own_space_ ? nullptr : Space::FromId(space_);
+  Profile* profile = space && !space->agent() ? ProfileFor(space->profile()) : nullptr;
+  if (BrowserWindowInterface* browser =
+          profile && DirOf(profile) == space->profile() ? BrowserFor(profile) : nullptr) {
+    MarkActive(browser);
+  }
+}
+
+void Window::MarkActive(BrowserWindowInterface* shown) {
   BrowserWindowInterface* active = nullptr;
   for (auto& [profile, held] : browsers_) {
     if (held.browser->IsDeleteScheduled()) {
