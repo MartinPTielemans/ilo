@@ -405,6 +405,8 @@ await_log "^browser: task plate task-${session#session-} at " "the client's card
 opened=$(call open_tab '{"url":"example.com"}')
 agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$agent_tab" ] || fail "open_tab example.com answered: $opened"
+# An agent's tab opens muted, until the user unmutes it or keeps it (#1080).
+await_log "^browser: page $agent_tab audible 0 muted 1\$" "the agent's tab didn't open muted"
 # Its page's picture in the card's conversation, once it shows: "x y width height".
 picture() {
   await_log "^browser: task picture $1 at " "the conversation didn't picture tab $1"
@@ -419,9 +421,21 @@ PICTURE
   await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
   await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
 }
-
+# A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
+# hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
+# for the page's focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log
+# had before them. The press reaches the window a turn after the click, which the state waits for.
+hand_back_pressed() {
+  send state
+  [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$1" ] && return
+  pressed=$(sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' "$log" | tail -1)
+  send key return cmd
+  await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
+}
+presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
 driven=$active
+hand_back_pressed "$presses"
 if [ "$driven" = 1 ]; then
   # A click on the card opens its conversation, its steps in its agent's place.
   read -r px py pw ph <<PLATE
@@ -549,10 +563,12 @@ painted(() => document.title = "fields");
   # A click while the page still loads can land before its field is drawn, and focus no field.
   await_log "^browser: page $agent_tab back 1 forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
     "the fields page didn't finish loading"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   send click $page_point
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  hand_back_pressed "$presses"
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
@@ -1042,8 +1058,8 @@ CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
-  # Hand Back, at the right end of the card's buttons.
-  send click $((qx + qw - 16)) $((qy + qh - 26))
+  # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
+  send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
   handed=$(next_answer) || fail "the browser didn't answer hand_off"
   handed=$(printf '%s\n' "$handed" | answered)
@@ -1052,16 +1068,28 @@ CARD
     *) fail "hand_off answered: $handed" ;;
   esac
 
-  # From the conversation, the strip under the page watched takes the tab the agent is at work
-  # in over with ⌘↩, and the agent's next action there is refused until the user hands it back.
+  # From the conversation, a press in the page watched takes the tab the agent is at work in over,
+  # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
+  # user hands it back. The strip then says the user drives.
   send key escape
   await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
   await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
   watch "$opened_tab"
   await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
   ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
-  send key return cmd
-  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "⌘↩ didn't take the tab"
+  read -r sx sy sw _ <<STRIP
+$(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+STRIP
+  # In the page, above the strip, where nothing on example.com takes the click. On X11 the host
+  # hears the display's own presses, which the driver's press makes; elsewhere its click is one.
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    send handclick $((sx + sw / 2)) $((sy - 120))
+  else
+    send click $((sx + sw / 2)) $((sy - 120))
+  fi
+  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
+  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
   refused=$(call scroll "{\"tab\":$opened_tab}")
   case "$refused" in
     "error: "*"hand it back"*) ;;
@@ -1148,8 +1176,12 @@ CARD
   await_more "^browser: title $opened_tab login\$" "$before" ||
     fail "the login page didn't load in the agent's tab"
   shown=$(children)
-  # A click in the username field, where Chrome's dropdown would offer the login.
-  send click 600 60
+  # The agent's own click in the username field, where Chrome's dropdown would offer the login. A
+  # user's press there would take the tab over (#1080), and the login would be theirs to fill.
+  outline=$(call snapshot "{\"tab\":$opened_tab}")
+  user_field=$(printf '%s\n' "$outline" | sed -n 's/.*- textbox[^[]*\[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$user_field" ] || fail "the login page's outline had no username field: $outline"
+  call click "{\"tab\":$opened_tab,\"ref\":\"$user_field\"}" > /dev/null
   # Chrome fills and offers a saved login within a moment of the load and the click. Here none
   # may come, so this waits out that moment.
   sleep 1
@@ -1527,7 +1559,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

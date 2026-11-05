@@ -803,8 +803,8 @@ expect '^browser: dropped 1 in today 2$' "the dropped text wasn't taken under th
 expect_lists "$e $c" "$t $d [0-9][0-9]*" "after dropping text"
 s=$(today | cut -d' ' -f3)
 expect "^browser: selected $s\$" "the dropped text's search didn't show"
-expect "^browser: loaded $s https://duckduckgo.com/?q=dogs+and+cats" \
-  "the dropped text didn't load a search for it: $(grep "^browser: loaded $s " "$log" | tail -1)"
+searching 'dogs+and+cats' \
+  "the dropped text didn't start a search for it: $(grep "^browser: page $s " "$log" | tail -1)" "$s"
 ../tools/window-screenshot.sh "$pid" "$out/dropped-text.png" || fail "no window to capture"
 
 # Under the pointer the Space's name row lights as a tab row does, with its chevron after the name

@@ -180,6 +180,26 @@ pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
     });
 }
 
+/// The user pressed a mouse button in a page of the window drawn in `ui_view`, which an agent's
+/// page shown there takes as the user taking it over (Shell::page_pressed).
+pub(crate) extern "C" fn page_pressed(ui_view: *mut c_void) {
+    page_pressed_in(window_with_view(ui_view));
+}
+
+/// As `page_pressed`, for the window `id`: after the press, which the page has.
+pub(crate) fn page_pressed_in(id: bc::bc_id) {
+    let Some(shell) = WINDOWS.with(|windows| {
+        let windows = windows.try_borrow().ok()?;
+        let window = windows.iter().find(|window| window.id == id)?;
+        Some(window.shell.clone())
+    }) else {
+        return;
+    };
+    update_app_later(move |cx| {
+        shell.update(cx, |shell, cx| shell.page_pressed(cx)).ok();
+    });
+}
+
 /// Changes every window's shell, from a core callback about what they all show, such as the
 /// Spaces and their tabs.
 pub(crate) fn update_shells(change: impl Fn(&mut Shell, &mut Context<Shell>)) {

@@ -53,6 +53,7 @@ fn conversation(steps: usize) -> Conversation {
         name: "Claude".into(),
         title: "Flight to Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
+        progress: "".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -276,6 +277,7 @@ fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
         name: "Claude Code".into(),
         title: "Claude Code".into(),
         about: "Working".into(),
+        progress: "".into(),
         asked: "".into(),
         lines: vec![
             Line::Step(step(0, "Read the page", false)),

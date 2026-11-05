@@ -772,3 +772,50 @@ fn under_reduce_motion_the_dialog_fades_in_where_it_rests(cx: &mut TestAppContex
     dialog.keys("escape");
     assert_eq!(dialog.calls(), ["show", "hide"]);
 }
+
+/// The open-app dialog's "Always allow" line wraps inside the card, as its detail does, however
+/// long the site's name, and its box sits beside the label's first line (#1920).
+#[gpui::test]
+fn the_checkbox_label_wraps_inside_the_card(cx: &mut TestAppContext) {
+    let label = "Always allow https://sign-in.a-very-long-identity-provider.example.com:8443 to \
+                 open links of this type in the associated app";
+    let mut question = page_question(Vec::new(), Some(label));
+    question.on_return = Return::Cancel;
+    let dialog = Asking::page(question, cx);
+    let mut dialog = dialog;
+    dialog
+        .cx
+        .executor()
+        .advance_clock(Duration::from_secs_f32(MOVE));
+    dialog.cx.run_until_parked();
+    let drawn = dialog.cx.cx.update(|cx| {
+        let window = cx.global::<DialogWindow>().0;
+        window
+            .update(cx, |dialog, _, _| {
+                dialog.asked.as_ref().map(|asked| asked.check_drawn.get())
+            })
+            .unwrap()
+    });
+    let drawn = drawn.expect("the dialog asks nothing");
+    let (card, check, label) = (drawn.card, drawn.check, drawn.label);
+    assert!(card.size.width > px(0.), "the card wasn't drawn: {drawn:?}");
+    // Inside the card's text inset, as the detail's lines are.
+    let right = card.right() - px(TEXT_INSET);
+    assert!(
+        label.right() <= right + px(0.5),
+        "the label runs to {:?}, past the card's text at {right:?}",
+        label.right()
+    );
+    assert!(
+        label.size.height >= px(2. * DETAIL_LINE),
+        "the long label didn't wrap: {:?}",
+        label.size.height
+    );
+    // The box's middle is the first line's.
+    let first_line = label.top() + px(DETAIL_LINE / 2.);
+    let middle = check.top() + check.size.height / 2.;
+    assert!(
+        (middle - first_line).abs() < px(0.5),
+        "the box's middle is at {middle:?}, the first line's at {first_line:?}"
+    );
+}

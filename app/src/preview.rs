@@ -1036,6 +1036,19 @@ impl Browser for Fake {
     }
 
     // No command bar here, as for a new tab.
+    // No Little ilo window here.
+    fn command_bar_in(
+        &self,
+        _: Option<(u64, SharedString)>,
+        _: Vec<SharedString>,
+        _: Vec<BarTab>,
+        _: Bounds<Pixels>,
+        _: &mut App,
+    ) {
+    }
+
+    fn spaces_menu(&self, _: Vec<shell::BarSpace>, _: Bounds<Pixels>, _: &mut App) {}
+
     fn search_tabs(&self, _: Vec<BarTab>, _: &mut App) {}
 
     // The made-up pages have nothing to find.
@@ -1385,6 +1398,8 @@ impl Browser for Fake {
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
+    fn little_drawn(&self, _: &mut App) {}
+
     fn press_window_button(&self, _: WindowButton, _: &mut App) {}
 
     fn set_on_top(&self, _: bool, _: &mut App) {}
@@ -1694,10 +1709,14 @@ const FIRST_TASK: u64 = 9001;
 const TASKS: [(&str, &str, Dot); 3] = [
     (
         "Find two tickets for Saturday",
-        "Clicking “Tickets”",
+        "Step 3 · Clicking “Tickets”",
         Dot::Working,
     ),
-    ("Compare the museum passes", "Stopped", Dot::Ended),
+    (
+        "Compare the museum passes",
+        "Stopped after 6 steps",
+        Dot::Ended,
+    ),
     (
         "Book a table for four",
         "A table for four at 20:00 is held",
@@ -1800,6 +1819,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
+        progress: "step 3 · 4 pages".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {

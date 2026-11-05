@@ -49,11 +49,13 @@ pub(crate) fn little_home(home: bc::bc_id, main: bc::bc_id) -> bc::bc_id {
 
 /// A tab a Little ilo window's page opened, by ⌘-click, `target=_blank` or ⌥-click, goes to the
 /// top of its Space's Today, behind, as the window has one page and no sidebar to show it in (Arc).
-pub(crate) fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id) {
+/// The window still asks what it would open another app for, as a sign-in's pop-up does (#1914).
+pub(crate) fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id, cx: &mut App) {
     let home = little_home(home, main_window_for(home).unwrap_or(0));
     unsafe { bc::bc_tab_move_to_space(tab, home) };
     // check.sh reads this line.
     log!("browser: little window {window} put {tab} in space {home}");
+    update_window_in(window, cx, |shell, cx| shell.little_sent(tab, cx));
 }
 
 /// Where a Little ilo window opens: centred a little above the middle of the screen the pointer is

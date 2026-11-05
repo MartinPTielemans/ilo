@@ -65,6 +65,12 @@ input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
 hint-end = 22.0
 hint-gap = 11.0
+# The hint's key, "Ask Claude ⇥": a key's chip on the bar's chip plate with a hairline of the ink
+# at `hint-key-rim` inside its edge, as the dialog's return key has, its glyph `hint-key-x` in from
+# each side, `hint-key-gap` after the words, so the two read as one (#1080).
+hint-key-rim = 0.2
+hint-key-x = 6.0
+hint-key-gap = 6.0
 # A long ask scrolls to keep the caret in view, and an edge with more text past it fades over this
 # far into the bar (ours).
 field-fade = 24.0
@@ -81,6 +87,11 @@ field-radius = 20.0
 field-input-text = 13.0
 # Over a new pane of a split view, the bar's right edge stays this far inside the card's (Arc).
 beside-end = 70.0
+# In a Little ilo window, ⌘L and ⌘T open the bar inside the window, this wide, centred across it,
+# its top this far down the window (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407).
+little-width = 500.0
+little-down = 0.333_333
 # The bar is the palette's overlay, opaque, and what's on it the palette's ink at these alphas
 # (Arc's white ones over its #191919), text raised to the overlay's floor (palette.rs).
 line-color = 0.1
@@ -710,6 +721,10 @@ line = 0.07
 name = 0.92
 name-off = 0.7
 detail = 0.52
+# On a light card, a row's grey line, the lines between groups and the page's sentence: ink at
+# the dark's 0.52 over Settings' light boxes reads at 3.6:1, and 0.6 is the least that reads at
+# 4.5:1 on them, for text at 11 (#1900).
+detail-light = 0.6
 detail-top = 2.0
 detail-line = 14.0
 end-gap = 20.0
@@ -1174,6 +1189,27 @@ windows-close-hovered = 0xc42b1c
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
 little-glyph = 18.0
+# Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
+# little-open-pad in from its half's sides and little-open-gap apart, the half no wider than
+# little-open-max; a line little-split tall; then the chevron's half, whose plate ends where the last
+# button's did. Copy Link's plate ends little-copy-gap before the words' half.
+little-open = 0.85
+little-open-key = 0.45
+little-open-pad = 10.0
+little-open-gap = 6.0
+little-open-max = 200.0
+little-split = 16.0
+little-split-line = 0.16
+little-chevron = 28.0
+little-chevron-glyph = 12.0
+little-copy-gap = 2.0
+# The chevron's Spaces menu is the compact command bar this wide, its top this far under the
+# button, and its right edge the button's, but no nearer the window's than every overlay keeps
+# (host_show_overlay), so no host narrows or moves it.
+little-spaces-width = 240.0
+little-spaces-below = 4.0
+little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
@@ -1202,6 +1238,10 @@ tag-radius = 6.0
 # words say who works and what it does; the chips are the toast's, its key after its words.
 strip = 40.0
 page-room = 46.0
+# Its chips are quiet while the agent works, and only when it waits on the user is the answer it
+# waits for, Hand Back, the one primary, in the Space's accent, its key in the accent's label at
+# this (#1080). The card's glyph leads the words, `gap` from back and from them.
+primary-key = 0.75
 gap = 10.0
 back = 26.0
 back-glyph = 16.0
@@ -1508,8 +1548,6 @@ import-surface = 0.05
 # it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
 # after it, in the line at the bottom left.
 import-hold = 0.6
-# The line saying where the favorites go is this far under their tiles.
-tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.
@@ -1752,6 +1790,11 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
+# The status line's ink, above the sidebar's secondary so its 11 pt reads at 4.5:1 or more on the
+# card's plate over a white backdrop, where secondary's 0.62 measured 4.3:1 (#1080). What leads it
+# while the agent works, its step count, and while it needs the user, "Needs you", is in the title's
+# ink at medium.
+status = 0.75
 # The status while it works: a highlight sweeping along it, from the status's own colour to the
 # ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
 # goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
@@ -1845,6 +1888,10 @@ crossfade = 0.2
 column = 640.0
 inset = 24.0
 top = 16.0
+# The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
+# 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
+# the toast's 0.6 read 3.75:1 (#1080).
+chip-key = 0.68
 title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
@@ -1861,8 +1908,18 @@ pictures-row-gap = 24.0
 pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+# A page with no picture yet has its site's globe in its tile's middle at this size, over "No
+# picture yet", in the card status's ink (#1080), and once the core had none to give, when the
+# next comes.
+picture-empty-glyph = 16.0
+picture-empty-gap = 6.0
+# Its header's Talk and Pages, one switch: a track of the ink at `views-track`, the view shown on
+# the sidebar's light selected plate (palette light-selected) `views-inset` inside it, at the
+# control radius less the inset, the two `views-gap` apart. Stop stands apart on a card button's
+# plate, the URL field's.
 views-gap = 4.0
+views-track = 0.07
+views-inset = 2.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1927,9 +1984,14 @@ shimmer-band = 0.3
 # The question's answers, and the result's Open, under its text.
 chips-top = 10.0
 chips-below = 16.0
+# The reply field: the ink at `reply-fill` with a hairline of it at `reply-rim` inside its edge, so
+# it reads as a field (#1080), and the key that sends it in a chip at its end, the command bar's
+# hint key, `reply-key-end` in from it.
 reply-height = 34.0
 reply-inset = 12.0
-reply-fill = 0.07
+reply-fill = 0.1
+reply-rim = 0.14
+reply-key-end = 7.0
 reply-bottom = 16.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:

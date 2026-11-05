@@ -138,10 +138,10 @@ pub use cast::{Cast, CastDevice, CastState};
 use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
-    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
-    KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
-    find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
-    shown_tab, task_page_shown, window_became_key, with_named_rows,
+    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
+    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar,
+    copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label, menu_item,
+    pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
@@ -3152,7 +3152,8 @@ impl Shell {
                 flag(left_pinned_host)
             );
         }
-        if (page.audible, page.muted) != (entry.page.audible, entry.page.muted) {
+        let sounded = (page.audible, page.muted) != (entry.page.audible, entry.page.muted);
+        if sounded {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
@@ -3240,6 +3241,10 @@ impl Shell {
         // View › Developer names it, so only its change rebuilds the menus, not each load.
         if tab == self.selected && self.developer_mode(tab) != developer_mode {
             self.update_menus(cx);
+        }
+        // A task's Pages draw its pages' speakers (#1080).
+        if sounded {
+            self.talk_redraw(cx);
         }
     }
 
@@ -3957,6 +3962,7 @@ impl Render for Shell {
         self.step_pinned_turn(window);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
+        self.step_little(window, cx);
         let drop_targets = self
             .drag
             .as_ref()
@@ -4127,6 +4133,12 @@ impl Render for Shell {
                 shell
                     .children(self.cards())
                     .children(self.little_bar(cx))
+                    .children(
+                        self.little
+                            .is_some()
+                            .then(|| self.question_card(cx))
+                            .flatten(),
+                    )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
                     .children(self.crash_cards(cx))

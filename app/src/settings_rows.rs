@@ -20,10 +20,10 @@ use crate::tokens::settings::{
     CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
     CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
-    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
-    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
-    KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
-    ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
+    CONTROL_RADIUS, DETAIL, DETAIL_LIGHT, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF,
+    GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB,
+    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED,
+    ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
     SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -69,6 +69,34 @@ pub fn named_switch<E: StatefulInteractiveElement>(
         .role(Role::Switch)
         .aria_label(name)
         .aria_toggled(toggled)
+}
+
+/// What an assistive app reads of a box to tick: a checkbox called `name`, ticked or not, as the
+/// dialog's check row is.
+pub fn named_check<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    on: bool,
+) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    control
+        .role(Role::CheckBox)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// A button called `name` that's dimmed and takes no click until `enabled`, as an assistive app
+/// says it is.
+pub fn named_dimmed<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    enabled: bool,
+) -> E {
+    let control = named_button(control, name);
+    match enabled {
+        true => control,
+        false => control.a11y_synthetic_children(|builder| builder.parent_node().set_disabled()),
+    }
 }
 
 /// What an assistive app reads of a pop-up button: a button called by its row's `name`, its value
@@ -306,7 +334,7 @@ impl Look {
             surface,
             ink: mix(NAME),
             line: mix(LINE),
-            detail: mix(DETAIL),
+            detail: mix(pick(DETAIL, DETAIL_LIGHT)),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
@@ -728,5 +756,80 @@ mod tests {
         assert!(!dark.light() && light.light());
         let on = Look::on(dark.surface, dark.ink, dark.accent);
         assert!(dark.edge.is_none() && on.edge.is_some());
+    }
+}
+
+/// What an assistive app finds of a Settings view drawn in a test's window, once one asks: each
+/// place ⇥ stops, front to back, and each control it can press, with the role and name it reads.
+#[cfg(test)]
+pub mod spoken {
+    use gpui::accesskit::{Action, Role};
+    use gpui::{InputEvent, VisualTestContext};
+
+    /// A control as an assistive app reads it: its role, its name, and its value, if any.
+    pub type Said = (Role, String, Option<String>);
+
+    fn said(node: &gpui::accesskit::Node) -> Said {
+        let name = node.label().unwrap_or_default().to_string();
+        (node.role(), name, node.value().map(str::to_string))
+    }
+
+    /// Turns on what an assistive app sees, and lists what VoiceOver's press can press: every
+    /// node that takes a click, a pop-up's and a switch's too.
+    pub fn pressable(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .filter(|(_, node)| node.supports_action(Action::Click))
+            .map(|(_, node)| said(node))
+            .collect()
+    }
+
+    /// Each place ⇥ stops, from the first round to it again, as an assistive app reads it.
+    pub fn stops(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus_next(cx);
+        });
+        cx.run_until_parked();
+        let mut stops = Vec::new();
+        let mut first = None;
+        for _ in 0..40 {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let Some((id, node)) = (tree.nodes.iter()).find(|(id, _)| *id == tree.focus) else {
+                break;
+            };
+            if first == Some(*id) {
+                break;
+            }
+            first.get_or_insert(*id);
+            stops.push(said(node));
+            cx.update(|window, cx| window.focus_next(cx));
+            cx.run_until_parked();
+        }
+        stops
+    }
+
+    /// `key` pressed and let go, as a keyboard sends it: Space and Return click on the release.
+    pub fn press(key: &'static str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes(key);
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.update(|window, cx| {
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Those of `said` an assistive app can't tell apart: no name, or no role of a control.
+    pub fn unnamed(said: &[Said]) -> Vec<Said> {
+        (said.iter())
+            .filter(|(role, name, _)| {
+                name.is_empty()
+                    || matches!(role, Role::Window | Role::GenericContainer | Role::Unknown)
+            })
+            .cloned()
+            .collect()
     }
 }

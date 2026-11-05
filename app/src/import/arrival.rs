@@ -22,7 +22,7 @@ use crate::shell::cubic_bezier;
 use crate::shell::swap::drawing_check;
 use crate::space_icon::SpaceIcon;
 use crate::tokens::radius;
-use crate::tokens::settings::{DETAIL_LINE, DETAIL_TOP, ROW_X};
+use crate::tokens::settings::ROW_X;
 use crate::tokens::shell::import::motion::{BREATH, CHECK};
 use crate::tokens::shell::import::{
     BADGE, BADGE_INSET, CARD_COUNT, CARD_COUNT_ALPHA, CARD_COUNT_LINE, CARD_GAP, CARD_GLYPH,
@@ -33,7 +33,6 @@ use crate::tokens::shell::import::{
 use crate::tokens::shell::task::motion::SHIMMER;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, CHIPS_STAGGER, EASE, ROLL, ROLL_RISE};
 use crate::tokens::shell::task::{SHIMMER_FROM, SHIMMER_HIGH, SHIMMER_REACH, SHIMMER_TO};
-use crate::tokens::text;
 
 /// A Space the import makes, or fills, as its card shows it.
 #[derive(Clone, Debug)]
@@ -442,23 +441,18 @@ fn card_view(
 /// Where one of what the core adds after the Spaces stands.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stage {
-    /// Not yet: the Spaces come first.
-    Waiting,
-    /// Waiting for a profile that hasn't opened: "12,408 pages, once Work opens".
-    Held(SharedString),
     /// The core is adding them, from what was read: "Adding 12,408 pages…".
     Adding(SharedString),
     /// In, with what came: "11,960".
     In(SharedString),
 }
 
-/// A row for what comes after the Spaces: its glyph and name, the line that says where it goes,
-/// and where it stands at its end, the words shimmering while the core adds them.
+/// A row for what comes after the Spaces, once they're in: its glyph and name, and where it stands
+/// at its end, the words shimmering while the core adds them.
 pub fn stage_row(
     look: &Look,
     glyph: &'static str,
     name: &'static str,
-    line: &'static str,
     stage: &Stage,
     still: bool,
     now: Instant,
@@ -466,20 +460,6 @@ pub fn stage_row(
 ) -> Div {
     let quiet = look.detail;
     let value = match stage {
-        Stage::Waiting => div()
-            .flex()
-            .items_center()
-            .gap(px(ROW_X / 2.))
-            .text_color(quiet)
-            .child("Not yet")
-            .child(div().size(px(BADGE * 0.4)).rounded_full().bg(quiet)),
-        Stage::Held(said) => div()
-            .flex()
-            .items_center()
-            .gap(px(ROW_X / 2.))
-            .text_color(quiet)
-            .child(said.clone())
-            .child(div().size(px(BADGE * 0.4)).rounded_full().bg(quiet)),
         Stage::Adding(said) => {
             let phase = (now.saturating_duration_since(since).as_secs_f32() / SHIMMER).fract();
             let words = shimmering(said, look, phase, still);
@@ -510,21 +490,9 @@ pub fn stage_row(
                     ),
             ),
     };
-    let line = div()
-        .mt(px(DETAIL_TOP))
-        .text_size(px(text::SMALL))
-        .line_height(px(DETAIL_LINE))
-        .text_color(look.detail)
-        .child(line);
     frame()
         .child(glyph_plate(look, glyph, true))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(div().truncate().child(name))
-                .child(line),
-        )
+        .child(div().flex_1().min_w_0().truncate().child(name))
         .child(end([value.into_any_element()]))
 }
 

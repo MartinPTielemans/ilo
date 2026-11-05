@@ -237,6 +237,8 @@ pub trait Browser {
     fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool;
     /// Takes `tab` out of its split view, as the user's Separate does (bc_tab_separate).
     fn separate(&self, tab: u64, cx: &mut App);
+    /// Mutes or unmutes `tab`'s sound (bc_tab_set_muted).
+    fn set_muted(&self, tab: u64, muted: bool);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -523,6 +525,26 @@ pub struct Agent {
     token: String,
 }
 
+/// Whether a press of the X server's `button` in an agent's page takes it over: a click of any of
+/// the mouse's buttons, 1 to 3 and the side ones, but never the wheel's 4 to 7, which scroll (#1080).
+pub fn press_takes_over(button: u32) -> bool {
+    !(4..=7).contains(&button)
+}
+
+/// The key a ⌘T task on `cli` keeps its answers for good under, the CLI's for its tasks, apart
+/// from the app of the same name that connects, whose answers are its own: "claude-tasks".
+pub fn task_answers(cli: runner::Cli) -> String {
+    format!("{}-tasks", cli.id())
+}
+
+/// Whether `agent` is a ⌘T task's own id, task-N, which earlier builds kept answers under and no
+/// task keeps for good.
+fn is_task_id(agent: &str) -> bool {
+    agent
+        .strip_prefix("task-")
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The entries the log keeps, all agents' together, as they're for this run of the browser.
 const LOG_LENGTH: usize = 1000;
 
@@ -773,6 +795,7 @@ impl Agents {
                 .collect();
             Some((agent.clone(), sites))
         }))
+        .filter(|(agent, _)| !is_task_id(agent))
         .collect();
         let tasks = saved.get("tasks").unwrap_or(&Value::Null);
         self.tasks.default = tasks
@@ -1862,7 +1885,7 @@ impl Agents {
     }
 
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
-    /// they hand it back.
+    /// they hand it back. A press in its page does, as Take Over did (Shell::page_pressed).
     pub fn take_over(&mut self, agent: &str, tab: u64, cx: &mut Context<Self>) {
         if self.held.contains_key(&tab) {
             return;
@@ -2219,7 +2242,7 @@ impl Agents {
         act.did = Did::of(why);
         match self
             .grants
-            .get(&act.agent)
+            .get(&self.answers_of(&act.agent))
             .and_then(|sites| sites.get(&site))
         {
             Some(true) => self.run(act, cx),
@@ -2288,7 +2311,7 @@ impl Agents {
         if act.action != "request"
             && let Answer::Always | Answer::Never = answer
         {
-            let sites = self.grants.entry(act.agent.clone()).or_default();
+            let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();
             sites.insert(site.clone(), answer == Answer::Always);
             self.save();
         }
@@ -2336,8 +2359,20 @@ impl Agents {
         grants
     }
 
+    /// Whose answers for good `agent`'s are, by the key they're kept under: a connected app's its
+    /// own, and a ⌘T task's its CLI's (task_answers), as a task's own id is new each task and
+    /// numbered from 1 again each run, so kept under it an answer was listed nowhere and the next
+    /// run's task of that number took it (#1913).
+    fn answers_of(&self, agent: &str) -> String {
+        match self.task(agent).and_then(|task| task.cli) {
+            Some(cli) => task_answers(cli),
+            None => agent.to_string(),
+        }
+    }
+
     /// Forgets the user's answer for good to the agent on `site`, or on every site with None, so
-    /// what asks first there asks again.
+    /// what asks first there asks again. `agent` is the key the answers are kept under: a connected
+    /// app's id, or a ⌘T CLI's task_answers.
     pub fn revoke(&mut self, agent: &str, site: Option<&str>, cx: &mut Context<Self>) {
         let Some(sites) = self.grants.get_mut(agent) else {
             return;
@@ -2505,6 +2540,8 @@ impl Agents {
             self.current.insert(agent.clone(), tab);
             self.opened(&agent, call, tab);
             self.opened.insert(tab);
+            // An agent's tab is quiet until the user wants to hear it (#1080).
+            self.browser.set_muted(tab, true);
             note = format!("Opened tab {tab}.");
         } else {
             if !self.act(&agent, tab, action, &reply, cx) {

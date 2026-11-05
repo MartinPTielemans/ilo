@@ -356,7 +356,7 @@ pub(crate) fn open_window_as(
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view) };
+        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe {
@@ -570,6 +570,8 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
+        #[cfg(not(target_os = "linux"))]
+        platform::host_watch_page_presses(page_pressed);
         platform::host_watch_resigning_active(launch_picture_on_resigning);
         platform::host_watch_active(became_active);
     }

@@ -13,8 +13,10 @@ use gpui::{
 };
 
 use super::{
-    NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TOP,
+    CARD_INSET, NAV, NAV_RADIUS, PLATE_INSET, Shell, TITLE, URL_FIELD, URL_FIELD_HEIGHT,
+    URL_FIELD_TOP,
 };
+use crate::tokens::shell::LITTLE_BAR;
 use crate::{
     palette::{Palette, STATE_HOVERED, STATE_PRESSED},
     settling::Settling,
@@ -176,7 +178,30 @@ pub(super) fn card_button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> Stateful<Div> {
-    div()
+    card_button_as(palette, id, label, Look::Quiet)
+}
+
+/// How a card's or a strip's button looks, by what its press does (#1080): the one answer the
+/// agent waits on in the Space's accent, the one that leaves things as they are on the quiet plate,
+/// and one that reaches further than it looks, such as Always Allow, as its words alone until the
+/// pointer is on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Look {
+    Primary,
+    Quiet,
+    Text,
+}
+
+/// A card's button in `look`: the URL field's plate for Quiet; the accent with its label, darker
+/// under the pointer and pressed as every filled button goes, for Primary; no plate at rest for
+/// Text, and the state ladder's under the pointer.
+pub(super) fn card_button_as(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+    look: Look,
+) -> Stateful<Div> {
+    let button = div()
         .id(id)
         .flex_1()
         .min_h(px(BUTTON_HEIGHT))
@@ -187,23 +212,42 @@ pub(super) fn card_button(
         .justify_center()
         .text_center()
         .rounded(px(NAV_RADIUS))
-        .bg(palette.plate(URL_FIELD))
-        .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
-        .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(palette.text(TITLE))
-        .child(label.into())
+        .font_weight(FontWeight::MEDIUM);
+    let (hovered, pressed) = (palette.accent_hovered(), palette.accent_pressed());
+    match look {
+        Look::Quiet => button
+            .bg(palette.plate(URL_FIELD))
+            .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
+            .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
+            .text_color(palette.text(TITLE)),
+        Look::Primary => button
+            .bg(palette.accent)
+            .hover(move |style| style.bg(hovered))
+            .active(move |style| style.bg(pressed))
+            .text_color(palette.accent_label),
+        Look::Text => button
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .active(|style| style.bg(palette.plate(STATE_PRESSED)))
+            .text_color(palette.text(TITLE)),
+    }
+    .child(label.into())
 }
 
 impl Shell {
     /// The card the page's question and the DRM note are: under the URL field, as wide as it, in
     /// the window's fill with a line inside its edge.
     pub(super) fn plate(&self, id: &'static str) -> Stateful<Div> {
+        // A Little ilo window has no URL field: its bar is where the page's site shows, and a
+        // card hangs under it, where the page makes room for it (little_card).
+        let (top, left) = match self.little.is_some() {
+            true => (LITTLE_BAR, CARD_INSET),
+            false => (URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP, PLATE_INSET),
+        };
         div()
             .id(id)
             .absolute()
-            .top(px(URL_FIELD_TOP + URL_FIELD_HEIGHT + GAP))
-            .left(px(PLATE_INSET))
+            .top(px(top))
+            .left(px(left))
             .w(px(self.width() - 2. * PLATE_INSET))
             .p(px(PADDING))
             .rounded(px(RADIUS))
@@ -227,7 +271,13 @@ pub(super) fn card_listener(
 ) -> impl IntoElement + use<> {
     let drawn = drawn.clone();
     canvas(
-        move |bounds, _, _| logged_at(what, &drawn, tab, bounds),
+        move |bounds, window, _| {
+            // A Little ilo window's page makes room for the card where it's drawn, so a card
+            // that moved is laid out again.
+            if logged_at(what, &drawn, tab, bounds) {
+                window.refresh();
+            }
+        },
         |_, _, _, _| {},
     )
     .absolute()
@@ -236,15 +286,15 @@ pub(super) fn card_listener(
     .size_full()
 }
 
-/// Logs where a card is in its window when that changes.
+/// Logs where a card is in its window when that changes, and says whether it did.
 fn logged_at(
     what: &str,
     drawn: &Rc<Cell<Option<Bounds<Pixels>>>>,
     tab: u64,
     bounds: Bounds<Pixels>,
-) {
+) -> bool {
     if drawn.get() == Some(bounds) {
-        return;
+        return false;
     }
     drawn.set(Some(bounds));
     // check.sh reads this line.
@@ -255,6 +305,7 @@ fn logged_at(
         f32::from(bounds.size.width),
         f32::from(bounds.size.height)
     );
+    true
 }
 
 #[cfg(test)]

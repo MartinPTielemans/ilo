@@ -11,7 +11,7 @@ use gpui::{Context, FontWeight, div, prelude::*, px};
 
 use super::{
     Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
 };
 use crate::agents::{Answer, Question};
 use crate::tokens::shell::permission::{BUTTON_GAP, CHANGE_GAP, DETAIL};
@@ -57,101 +57,53 @@ impl Shell {
             return None;
         };
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
-        if let Some(tab) = question.handoff {
-            let first = match question.back {
-                true => card_button(&self.palette, "agent-keep", "Keep")
-                    .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Never, cx))),
-                false => card_button(&self.palette, "agent-handoff-show", "Show Tab")
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.select(tab, cx))),
-            };
-            let back = card_button(&self.palette, "agent-handoff-back", "Hand Back")
-                .on_click(cx.listener(move |shell, _, _, cx| shell.browser.hand_back(tab, cx)));
-            let title = match question.back {
-                true => format!("{} asks for a tab", question.agent),
-                false => format!("{} needs you", question.agent),
-            };
-            return Some(
-                self.plate("agent-question")
-                    .child(listener)
-                    .child(
-                        div()
-                            .text_color(self.palette.text(TITLE))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_color(self.palette.on_overlay(DETAIL))
-                            .child(question.why.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(BUTTONS_TOP))
-                            .flex()
-                            .gap(px(BUTTON_GAP))
-                            .child(first)
-                            .child(back),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let button = |id: &'static str, label: &'static str, answer: Answer| {
-            card_button(&self.palette, id, label)
-                .on_click(cx.listener(move |shell, _, _, cx| shell.answer_agent(answer, cx)))
+        let buttons = buttons(question).into_iter().map(|button| {
+            let row = button.look == Look::Text;
+            card_button_as(&self.palette, button.id, button.label, button.look)
+                .when(row, |button| button.flex_basis(gpui::relative(1.)))
+                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
+                    Does::Answer(answer) => shell.answer_agent(answer, cx),
+                    Does::Show(tab) => shell.select(tab, cx),
+                    Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
+                }))
+        });
+        let title = match (question.handoff, question.back) {
+            (Some(_), true) => format!("{} asks for a tab", question.agent),
+            (Some(_), false) => format!("{} needs you", question.agent),
+            (None, _) => format!("{} wants to {}", question.agent, question.what),
         };
-        let close = card_close(&self.palette, "agent-question-close")
-            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
-        let title = div()
-            .pr(px(BESIDE_CLOSE))
-            .text_color(self.palette.text(TITLE))
-            .font_weight(FontWeight::MEDIUM)
-            .child(format!("{} wants to {}", question.agent, question.what));
+        let close = question.handoff.is_none().then(|| {
+            card_close(&self.palette, "agent-question-close")
+                .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
+        });
         // A request's changes, which ask every time: what each does, and Allow is for them alone.
-        if !question.changes.is_empty() {
-            let changes = question.changes.iter().map(|(line, sends)| {
-                let change = div()
-                    .mt(px(CHANGE_GAP))
-                    .text_color(self.palette.on_overlay(DETAIL))
-                    .child(line.clone());
-                change.when(!sends.is_empty(), |change| {
-                    change.child(div().child(sends.clone()))
-                })
-            });
-            let more = (question.more > 0).then(|| {
-                let more = format!("and {} more", question.more);
-                div()
-                    .mt(px(CHANGE_GAP))
-                    .text_color(self.palette.on_overlay(DETAIL))
-                    .child(more)
-            });
-            return Some(
-                self.plate("agent-question")
-                    .child(listener)
-                    .child(title)
-                    .children(changes)
-                    .children(more)
-                    .child(
-                        div()
-                            .mt(px(CHANGE_GAP))
-                            .text_color(self.palette.on_overlay(DETAIL))
-                            .child(question.why.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(BUTTONS_TOP))
-                            .flex()
-                            .gap(px(BUTTON_GAP))
-                            .child(button("agent-question-deny", "Deny", Answer::Dismiss))
-                            .child(button("agent-question-allow", "Allow", Answer::Once)),
-                    )
-                    .child(close)
-                    .into_any_element(),
-            );
-        }
+        let changes = question.changes.iter().map(|(line, sends)| {
+            let change = div()
+                .mt(px(CHANGE_GAP))
+                .text_color(self.palette.on_overlay(DETAIL))
+                .child(line.clone());
+            change.when(!sends.is_empty(), |change| {
+                change.child(div().child(sends.clone()))
+            })
+        });
+        let more = (question.more > 0).then(|| {
+            div()
+                .mt(px(CHANGE_GAP))
+                .text_color(self.palette.on_overlay(DETAIL))
+                .child(format!("and {} more", question.more))
+        });
         Some(
             self.plate("agent-question")
                 .child(listener)
-                .child(title)
+                .child(
+                    div()
+                        .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
+                        .text_color(self.palette.text(TITLE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .children(changes)
+                .children(more)
                 .child(
                     div()
                         .text_color(self.palette.on_overlay(DETAIL))
@@ -165,17 +117,107 @@ impl Shell {
                         .flex()
                         .flex_wrap()
                         .gap(px(BUTTON_GAP))
-                        .child(button("agent-question-never", "Never", Answer::Never))
-                        .child(button("agent-question-once", "Allow Once", Answer::Once))
-                        .child(button(
-                            "agent-question-always",
-                            "Always Allow",
-                            Answer::Always,
-                        )),
+                        .children(buttons),
                 )
-                .child(close)
+                .children(close)
                 .into_any_element(),
         )
+    }
+}
+
+/// What a card's button does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Does {
+    Answer(Answer),
+    /// Shows the agent's tab, where the user does the step it handed them.
+    Show(u64),
+    /// Gives the tab back to the agent.
+    HandBack(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Button {
+    pub(super) id: &'static str,
+    pub(super) label: &'static str,
+    pub(super) look: Look,
+    does: Does,
+}
+
+/// The card's buttons, in order: the answer that leaves things as they are on the quiet plate, then
+/// the answer the agent waits on, the one primary, on the right as the dialog keeps its action;
+/// and for a confirmation Always Allow, which reaches further than it looks, as its words alone on
+/// a row of their own.
+pub(super) fn buttons(question: &Question) -> Vec<Button> {
+    let button = |id, label, look, does| Button {
+        id,
+        label,
+        look,
+        does,
+    };
+    match question.handoff {
+        Some(tab) if question.back => vec![
+            button(
+                "agent-keep",
+                "Keep",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-handoff-back",
+                "Hand Back",
+                Look::Primary,
+                Does::HandBack(tab),
+            ),
+        ],
+        Some(tab) => vec![
+            button(
+                "agent-handoff-back",
+                "Hand Back",
+                Look::Quiet,
+                Does::HandBack(tab),
+            ),
+            button(
+                "agent-handoff-show",
+                "Show Tab",
+                Look::Primary,
+                Does::Show(tab),
+            ),
+        ],
+        // A request's changes: Allow sends them alone, so there's no Always.
+        None if !question.changes.is_empty() => vec![
+            button(
+                "agent-question-deny",
+                "Deny",
+                Look::Quiet,
+                Does::Answer(Answer::Dismiss),
+            ),
+            button(
+                "agent-question-allow",
+                "Allow",
+                Look::Primary,
+                Does::Answer(Answer::Once),
+            ),
+        ],
+        None => vec![
+            button(
+                "agent-question-never",
+                "Never",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-question-once",
+                "Allow Once",
+                Look::Primary,
+                Does::Answer(Answer::Once),
+            ),
+            button(
+                "agent-question-always",
+                "Always Allow",
+                Look::Text,
+                Does::Answer(Answer::Always),
+            ),
+        ],
     }
 }
 

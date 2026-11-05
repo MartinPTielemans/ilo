@@ -91,9 +91,17 @@ void host_capture_name(char* name, size_t capacity);
 
 // The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
 // screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
-// while a full-screen browser window has that desktop, it opens over it there. Before
-// host_show_window. Off the Mac, where the window manager places windows, nothing.
-void host_set_window_little(void* ui_view);
+// while a full-screen browser window has that desktop, it opens over it there. With |grows|,
+// host_show_window first shows it small, at a rectangle under the pointer, or at its middle when a
+// key opened it, until host_grow_little_window. Before host_show_window. Off the Mac, where the
+// window manager places windows and animates them its own way, it doesn't grow; Windows records
+// it, for closing it over another app's window (#1692), and Linux does nothing.
+void host_set_window_little(void* ui_view, bool grows);
+
+// Grows the Little ilo window of |ui_view| in from where host_show_window showed it small, once
+// its UI has drawn on screen, so the motion's start is seen. Nothing once it has grown or wasn't
+// held, as off the Mac.
+void host_grow_little_window(void* ui_view);
 
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
@@ -178,6 +186,12 @@ void host_watch_option_taps(void (*tapped)(void* ui_view));
 // Mac at a press in the page, on Windows as GPUI's window loses the focus, to the page or anything
 // else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
 void host_watch_ui_keyboard(void (*left)(void* ui_view));
+
+// Calls |pressed| with the UI's view of a browser window whose page the user presses a mouse
+// button in, as the press goes on to the page: a click in an agent's page takes it over (#1080).
+// Never for a press in the UI or the window's frame, nor for the wheel. On Linux the app hears
+// them itself, from GPUI under Wayland and from the X server while an agent works (page_presses.rs).
+void host_watch_page_presses(void (*pressed)(void* ui_view));
 
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
