@@ -770,6 +770,9 @@ if [ "$active" = 1 ]; then
   expect "^browser: title $popup_tab signin ready\$" "the sign-in pop-up didn't draw"
   ../tools/window-screenshot.sh "$pid" "$out/little-popup.png" all || fail "no window to capture"
   send window "$(grep -c '^browser: window opened ' "$log")"
+  # The driver's window gives the window the keyboard, which its UI takes on X11 as GPUI does a
+  # window's first focus, so a click in the page gives the field its autofocus asked for.
+  send click 250 300
   send type ada
   expect "^browser: title $popup_tab typed ada\$" "the pop-up's field didn't take the typing"
   send key return
@@ -809,8 +812,12 @@ if [ "$(uname)" = Linux ]; then
     fail "the action's Little ilo window didn't open"
   if engine_has ../core/main_delegate.cc; then
     "$browser" $arguments >> "$out/little-launch.log" 2>&1 || fail "the action's command didn't reach the browser"
-    await "^browser: command line opened little window [0-9]*\$" &&
-      [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] ||
+    # The first launch's line is in the log already, so it waits for a second.
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] ||
       fail "the launcher's action, with the browser running, didn't open a second Little ilo window"
   else
     echo "skip: the launcher's action handed to the browser running: the engine's core predates the switch (core/main_delegate.cc), until an engine is built with it."

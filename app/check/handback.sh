@@ -355,6 +355,13 @@ by_scheme() {
     close_little "$1"
     return 0
   fi
+  # A Little ilo window's sign-in pop-up opens as a window of its own (#1919), whose dialog is
+  # there: the driver clicks in it.
+  popup_window=$(sed -n "s/^browser: little window [0-9]* popup $asked in window \([0-9]*\) at .*/\1/p" "$log" |
+    tail -1)
+  if [ -n "$popup_window" ]; then
+    send window "$(grep '^browser: window opened ' "$log" | grep -n " $popup_window\$" | cut -d: -f1)"
+  fi
   send click $confirm
   if ! seen "^browser: page $asked dialog answered accept\$" 5; then
     record "$1" "$2" "a click on Open at $confirm in window $window didn't answer tab $asked's dialog"
