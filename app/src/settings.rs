@@ -40,19 +40,18 @@ use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
-    Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, named_popup, named_switch, popup, ring, ring_round, row, switch, text,
+    Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
+    named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTON_GLYPH, BUTTONS_TOP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_GAP, CHIP_HEIGHT,
-    CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_PADDING,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH,
-    FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT,
-    LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
-    RESTORE_RADIUS, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL_LINE, DETAIL_TOP, END_GAP,
+    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
+    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE, LEDE_LINE, LEDE_TOP,
+    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
+    SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -2309,17 +2308,16 @@ impl Settings {
         }
     }
 
-    /// Logs where the element it fills is drawn (settings_rows::drawn). Put it in a relative one.
     /// A push button with `title`, which an assistive app reads by it.
     fn button(
         &self,
         id: impl Into<gpui::ElementId>,
         title: impl Into<SharedString>,
     ) -> gpui::Stateful<gpui::Div> {
-        let title = title.into();
-        button(&self.look, id, title.clone()).when(self.a11y, |button| named_button(button, title))
+        stop_button(&self.look, id, title, self.a11y)
     }
 
+    /// Logs where the element it fills is drawn (settings_rows::drawn). Put it in a relative one.
     fn drawn(&self, what: String) -> gpui::Canvas<()> {
         browser::settings_rows::drawn(what, self.drawn_logged.clone())
     }
@@ -2345,25 +2343,23 @@ impl Settings {
         )
         .absolute()
         .inset_0();
-        let a11y = self.a11y;
         let press = Rc::new(press);
         let pressed = press.clone();
-        popup(
+        let id = SharedString::from(format!("popup-{which:?}"));
+        let open = self.choosing == Some(which);
+        stop_popup(
             &self.look,
-            label.clone(),
+            id,
+            which.spoken(),
+            label,
             width,
-            self.choosing == Some(which),
+            open,
+            self.a11y,
         )
-        .relative()
-        .id(SharedString::from(format!("popup-{which:?}")))
-        .when(a11y, |popup| named_popup(popup, which.spoken(), label))
-        // ⇥ reaches it, and Space or Return opens its menu as a press does.
-        .tab_index(0)
-        .focus_from_keys_only()
-        .focus_visible(ring(self.look.ink))
         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
             press(event, window, cx)
         })
+        // Space or Return opens its menu as a press does.
         .on_click(move |event, window, cx| {
             if event.is_keyboard() {
                 pressed(&MouseDownEvent::default(), window, cx)
@@ -2388,14 +2384,7 @@ impl Settings {
             }
             _ => 1.,
         };
-        div()
-            .id(name)
-            .when(self.a11y, |switch| named_switch(switch, spoken, on))
-            // ⇥ reaches it, and Space or Return flips it as a click does.
-            .tab_index(0)
-            .focus_from_keys_only()
-            .rounded_full()
-            .focus_visible(ring_round(self.look.ink))
+        stop_switch(&self.look, name, spoken, on, slid, accent, self.a11y)
             .on_click(cx.listener(move |settings, _, _, cx| {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
@@ -2403,8 +2392,6 @@ impl Settings {
                 settings.switched = Some((name, browser::motion::start(cx)));
                 cx.notify();
             }))
-            .relative()
-            .child(switch(&self.look, on, slid, accent))
             .child(self.drawn(format!("switch {name}")))
             .into_any_element()
     }
@@ -3638,7 +3625,7 @@ impl Settings {
                 .iter()
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
-                        (Keys::Of(command), _) => self.shortcut(*command, accent, cx),
+                        (Keys::Of(command), _) => self.shortcut(*command, &shown(name), accent, cx),
                         (Keys::FavoritesNumbered, _) => {
                             let on = shell::user_keys(cx).favorites_numbered();
                             self.toggle(
@@ -3699,33 +3686,21 @@ impl Settings {
         )
     }
 
-    /// Keys as a chip, as the command bar shows a command's: quieter for keys that can't change,
-    /// and quieter still for None.
+    /// Keys as a chip, as the command bar shows a command's (settings_rows::chip).
     fn chip(&self, keys: SharedString, kind: Chip) -> gpui::Div {
-        let base = self.base();
-        let (fill, text) = match kind {
-            Chip::Keys => (CHIP, CHIP_TEXT),
-            Chip::Fixed => (CHIP_FIXED, CHIP_FIXED_TEXT),
-            Chip::None => (CHIP, CHIP_NONE_TEXT),
-        };
-        div()
-            .flex_none()
-            .h(px(CHIP_HEIGHT))
-            .min_w(px(CHIP_WIDTH))
-            .px(px(CHIP_PADDING))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(CHIP_RADIUS))
-            .bg(base.opacity(fill))
-            .text_size(px(text::SMALL))
-            .text_color(base.opacity(text))
-            .child(keys)
+        chip(self.base(), keys, kind)
     }
 
     /// `command`'s chip, which records its keys if they can be changed, after why the last keys
-    /// were refused and the way back to its default, if it has others.
-    fn shortcut(&self, command: Command, accent: Rgba, cx: &mut Context<Self>) -> AnyElement {
+    /// were refused and the way back to its default, if it has others. An assistive app reads
+    /// them by its row's `name`.
+    fn shortcut(
+        &self,
+        command: Command,
+        name: &str,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let look = &self.look;
         let user = shell::user_keys(cx);
         if !shell::rebindable(command) {
@@ -3733,10 +3708,10 @@ impl Settings {
             return self.chip(keys.into(), Chip::Fixed).into_any_element();
         }
         let recording = self.recording == Some(command);
-        let chip = match user.label(command) {
-            _ if recording => self.chip("Type Keys".into(), Chip::Keys).text_color(accent),
-            Some(keys) => self.chip(keys.into(), Chip::Keys),
-            None => self.chip("None".into(), Chip::None),
+        let (keys, kind) = match user.label(command) {
+            _ if recording => ("Type Keys".into(), Chip::Keys),
+            Some(keys) => (keys.into(), Chip::Keys),
+            None => ("None".into(), Chip::None),
         };
         let said = |text: SharedString| div().text_color(look.detail).child(text);
         let refused = (self.refused.as_ref())
@@ -3746,41 +3721,17 @@ impl Settings {
         let preferred = user
             .prefers_ilo(command)
             .then(|| said(MenuEntry::label(PREFER_ILO)));
-        let (hovered, pressed) = (look.hovered, look.pressed);
         let restore = user.changed(command).then(|| {
-            div()
-                .id(SharedString::from(format!(
-                    "restore-{}",
-                    command.key_name()
-                )))
-                .tab_index(0)
-                .focus_from_keys_only()
-                .focus_visible(ring(look.ink))
-                .size(px(CHIP_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(RESTORE_RADIUS))
-                .hover(move |restore| restore.bg(hovered))
-                .active(move |restore| restore.bg(pressed))
-                .relative()
-                .child(
-                    svg()
-                        .path("icons/rotate-ccw.svg")
-                        .size(px(BUTTON_GLYPH))
-                        .text_color(look.ink),
-                )
+            let id = SharedString::from(format!("restore-{}", command.key_name()));
+            stop_restore(look, id, name, self.a11y)
                 .child(self.drawn(format!("restore {}", command.key_name())))
                 .on_click(cx.listener(move |settings, _, _, cx| settings.restore(command, cx)))
         });
-        let chip = chip
-            .id(SharedString::from(command.key_name()))
-            .tab_index(0)
-            .focus_from_keys_only()
-            .focus_visible(ring(look.ink))
-            .when(recording, |chip| chip.border_1().border_color(accent))
-            .hover(move |chip| chip.bg(hovered))
-            .active(move |chip| chip.bg(pressed))
+        let id = SharedString::from(command.key_name());
+        let chip = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
+            .when(recording, |chip| {
+                chip.text_color(accent).border_1().border_color(accent)
+            })
             .on_click(cx.listener(move |settings, _, window, cx| {
                 settings.start_recording(command, window, cx)
             }))
@@ -4402,14 +4353,6 @@ fn short_row(name: impl Into<SharedString>, control: AnyElement) -> gpui::Div {
         .items_center()
         .child(div().flex_1().min_w_0().truncate().child(name.into()))
         .child(end([control]))
-}
-
-/// What a chip holds: keys that can change, keys that can't, or none.
-#[derive(Clone, Copy)]
-enum Chip {
-    Keys,
-    Fixed,
-    None,
 }
 
 /// Why keys weren't given to a command, as its row says it.

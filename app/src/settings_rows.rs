@@ -17,12 +17,14 @@ use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
-    CHEVRONS_END, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED, CONTROL_HOVERED_LIGHT,
-    CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL,
-    GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE,
-    NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
-    ROW_HEIGHT, ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
+    CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
+    CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
+    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
+    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
+    KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
+    ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
+    SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
@@ -111,6 +113,148 @@ pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::Styl
             inset: false,
         }])
     }
+}
+
+/// Settings' push button: a tab stop as every button here is, which an assistive app, while one
+/// asks (`a11y`), reads as a button called `title`.
+pub fn stop_button(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    title: impl Into<SharedString>,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let title = title.into();
+    button(look, id, title.clone()).when(a11y, |button| named_button(button, title))
+}
+
+/// Settings' switch, `on`, `slid` of the way there: ⇥ reaches it, Space or Return flips it as its
+/// caller's click does, and an assistive app reads it as a switch called by its row's `name`.
+pub fn stop_switch(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<SharedString>,
+    on: bool,
+    slid: f32,
+    accent: Rgba,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .when(a11y, |control| named_switch(control, name, on))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .rounded_full()
+        .focus_visible(ring_round(look.ink))
+        .relative()
+        .child(switch(look, on, slid, accent))
+}
+
+/// Settings' pop-up button showing `item`: ⇥ reaches it, its caller opens its menu on a press or
+/// on Space or Return, and an assistive app reads it by its row's `name`, with `item` its value.
+pub fn stop_popup(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<SharedString>,
+    item: SharedString,
+    width: f32,
+    open: bool,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    popup(look, item.clone(), width, open)
+        .relative()
+        .id(id)
+        .when(a11y, |control| named_popup(control, name, item))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+}
+
+/// What a Shortcuts chip holds: keys that can change, keys that can't, or none.
+#[derive(Clone, Copy)]
+pub enum Chip {
+    Keys,
+    Fixed,
+    None,
+}
+
+/// Keys as a chip, in `base`, the window's ink, as the command bar shows a command's: quieter for
+/// keys that can't change, and quieter still for None.
+pub fn chip(base: Rgba, keys: SharedString, kind: Chip) -> gpui::Div {
+    let (fill, text) = match kind {
+        Chip::Keys => (CHIP, CHIP_TEXT),
+        Chip::Fixed => (CHIP_FIXED, CHIP_FIXED_TEXT),
+        Chip::None => (CHIP, CHIP_NONE_TEXT),
+    };
+    div()
+        .flex_none()
+        .h(px(CHIP_HEIGHT))
+        .min_w(px(CHIP_WIDTH))
+        .px(px(CHIP_PADDING))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(CHIP_RADIUS))
+        .bg(base.opacity(fill))
+        .text_size(px(SMALL))
+        .text_color(base.opacity(text))
+        .child(keys)
+}
+
+/// A command's chip whose keys can change: ⇥ reaches it, Space or Return records new keys as its
+/// caller's click does, and an assistive app reads it as its row does, "New Tab, ⌘T", by the row's
+/// `name` and the `keys` it shows.
+pub fn stop_chip(
+    look: &Look,
+    base: Rgba,
+    id: impl Into<gpui::ElementId>,
+    name: &str,
+    keys: SharedString,
+    kind: Chip,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let (hovered, pressed) = (look.hovered, look.pressed);
+    let said = format!("{name}, {keys}");
+    chip(base, keys, kind)
+        .id(id)
+        .when(a11y, |chip| named_button(chip, said))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+        .hover(move |chip| chip.bg(hovered))
+        .active(move |chip| chip.bg(pressed))
+}
+
+/// ↺ beside a changed command's chip, which gives the command its row's `name` its own keys back:
+/// ⇥ reaches it, and an assistive app reads it as "Restore Defaults for New Tab", as the page's
+/// Restore Defaults does for every command.
+pub fn stop_restore(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: &str,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let (hovered, pressed) = (look.hovered, look.pressed);
+    let said = format!("Restore Defaults for {name}");
+    div()
+        .id(id)
+        .when(a11y, |restore| named_button(restore, said))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+        .size(px(CHIP_HEIGHT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(RESTORE_RADIUS))
+        .hover(move |restore| restore.bg(hovered))
+        .active(move |restore| restore.bg(pressed))
+        .relative()
+        .child(
+            svg()
+                .path("icons/rotate-ccw.svg")
+                .size(px(BUTTON_GLYPH))
+                .text_color(look.ink),
+        )
 }
 
 /// A switch's knob slides across over 150 ms (ours).
