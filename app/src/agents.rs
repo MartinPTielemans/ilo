@@ -204,6 +204,11 @@ pub trait Browser {
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
+    /// The user's Spaces, by id and name, in the switcher's order: no agent's.
+    fn user_spaces(&self) -> Vec<(u64, String)>;
+    /// Moves the user's Space `space` to `index` among them, as a drag in the switcher does
+    /// (bc_space_move). Whether it's one of theirs.
+    fn move_space(&self, space: u64, index: usize) -> bool;
 }
 
 /// What the server's threads hand the UI thread.
@@ -311,6 +316,8 @@ struct Act {
     what: String,
     /// What it does that asked first, once allowed, for its session's receipt.
     did: Option<Did>,
+    /// For move_space, the user's Space and the index among their Spaces it goes to.
+    space: Option<(u64, usize)>,
     reply: mpsc::Sender<ToolResult>,
 }
 
@@ -1069,6 +1076,7 @@ impl Agents {
                     text: String::new(),
                     note: String::new(),
                     show: Show::Full,
+                    space: None,
                     reply,
                 };
                 if !is_web(&act.url) {
@@ -1184,6 +1192,7 @@ impl Agents {
                 self.held.insert(tab, held);
                 self.asked(cx);
             }
+            "move_space" => self.move_space(agent, id, &arguments, reply, cx),
             "close_tab" => {
                 let Some(tab) = self.tab_for(&agent, &arguments, &reply, cx) else {
                     return;
@@ -1705,6 +1714,7 @@ impl Agents {
             show,
             what: String::new(),
             did: None,
+            space: None,
             reply,
         };
         let mut risk = None;
@@ -1839,6 +1849,76 @@ impl Agents {
 
     /// Runs the action, unless what it does on `site` asks the user first (`why`): then it waits
     /// for the user's answer, or the one they gave for good.
+    /// move_space: the user's Space named `space` goes to place `to` among the user's Spaces, 1
+    /// the first, as a drag in the switcher puts it. The Spaces are the user's, so it asks the
+    /// user first, unless they answered it for good under Your Spaces, which Settings › Agents
+    /// lists with its Revoke, and the activity log says what it did or was refused.
+    fn move_space(
+        &mut self,
+        agent: String,
+        call: u64,
+        arguments: &Value,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let name = (arguments.get("space").and_then(Value::as_str))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let to = arguments.get("to").and_then(Value::as_u64).unwrap_or(0);
+        let spaces = self.browser.user_spaces();
+        let named: Vec<u64> = (spaces.iter())
+            .filter(|(_, each)| each.eq_ignore_ascii_case(&name))
+            .map(|(id, _)| *id)
+            .collect();
+        let listed = || {
+            let names: Vec<String> = (spaces.iter())
+                .map(|(_, each)| format!("“{each}”"))
+                .collect();
+            names.join(", ")
+        };
+        let space = match named.as_slice() {
+            [space] => *space,
+            [] => {
+                let why = format!(
+                    "The user has no Space named “{name}”. Theirs are {}.",
+                    listed()
+                );
+                _ = reply.send(ToolResult::error(why));
+                return;
+            }
+            _ => {
+                let why = format!("The user has more than one Space named “{name}”.");
+                _ = reply.send(ToolResult::error(why));
+                return;
+            }
+        };
+        if to == 0 {
+            _ = reply.send(ToolResult::error(
+                "Say where it goes in to: its place among the user's Spaces, 1 for the first.",
+            ));
+            return;
+        }
+        let index = (to as usize - 1).min(spaces.len().saturating_sub(1));
+        let act = Act {
+            agent,
+            call,
+            action: "move_space",
+            tab: 0,
+            url: String::new(),
+            page: PageAction::Snapshot,
+            element: 0,
+            text: String::new(),
+            note: String::new(),
+            show: Show::Full,
+            what: format!("move the Space “{name}” to place {}", index + 1),
+            did: None,
+            space: Some((space, index)),
+            reply,
+        };
+        self.check(act, YOUR_SPACES.to_string(), Some(MOVES_SPACES), cx);
+    }
+
     fn check(
         &mut self,
         mut act: Act,
@@ -2058,9 +2138,22 @@ impl Agents {
             mut note,
             show,
             did,
+            space,
             reply,
             ..
         } = act;
+        // The user's Spaces, once the user allowed it (`move_space`), through the user's own call.
+        if let Some((space, index)) = space {
+            let moved = self.browser.move_space(space, index);
+            let refused = if moved { "" } else { NOT_USERS_SPACE };
+            self.note(&agent, action, YOUR_SPACES, refused);
+            cx.notify();
+            _ = reply.send(match moved {
+                true => ToolResult::text(format!("Moved the Space to place {}.", index + 1)),
+                false => ToolResult::error(NOT_USERS_SPACE),
+            });
+            return;
+        }
         if action == "open_tab" {
             let site = site(&url);
             // An agent's first call may be this one, and the core opens a tab only in its Space.
@@ -2400,6 +2493,11 @@ const NOT_HELD: &str = "The user doesn't have that tab from you, so there's noth
 
 /// What the log says of an action the user refused, now or for good on its site.
 const SAID_NO: &str = "You said no.";
+/// What an agent asks before it moves one of the user's Spaces, which are the user's: the place
+/// its answers for good are kept under, as a site's are, and why it asks.
+const YOUR_SPACES: &str = "Your Spaces";
+const MOVES_SPACES: &str = "It changes the order of your Spaces.";
+const NOT_USERS_SPACE: &str = "That isn't one of the user's Spaces any more.";
 const SAID_NEVER: &str = "You said never on this site.";
 /// Why an agent can't open a page that isn't on the web.
 const WEB_ONLY: &str = "Agents may open only http and https pages.";

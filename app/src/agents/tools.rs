@@ -177,6 +177,24 @@ fn shared() -> Value {
             "annotations": acts,
         },
         {
+            "name": "move_space",
+            "title": "Move Space",
+            "description": "Move one of the user's Spaces to another place in their order, as they would by dragging its dot in the sidebar's switcher. The Spaces are the user's, so this asks them first, and waits for their answer.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "space": { "type": "string", "description": "The Space's name, as the user calls it." },
+                    "to": { "type": "integer", "minimum": 1, "description": "Its place among the user's Spaces, 1 for the first." },
+                },
+                "required": ["space", "to"],
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "openWorldHint": false,
+            },
+        },
+        {
             "name": "close_tab",
             "title": "Close tab",
             "description": "Close a tab in your Space.",
@@ -516,6 +534,7 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "its tabs".to_string(),
         ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
+        "move_space" => ("Moving", "Moved", "Couldn't move", target("a Space")),
         "hand_off" => (
             "Handing you",
             "Handed you",
@@ -575,6 +594,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "screenshot" => "icons/eye.svg",
         "wait" => "icons/clock.svg",
         "list_tabs" | "close_tab" | "hand_off" | "ask_for_tab" => "icons/app-window.svg",
+        "move_space" => "icons/grip.svg",
         "ask" => "icons/circle-question-mark.svg",
         "thought" => "icons/lightbulb.svg",
         _ => "icons/globe.svg",
@@ -662,6 +682,7 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
+        "move_space" => "Moved a Space",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

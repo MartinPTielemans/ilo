@@ -230,6 +230,17 @@ impl Browser for Core {
         unsafe { bc::bc_tab_move_to_space(tab, space) }
     }
 
+    fn user_spaces(&self) -> Vec<(u64, String)> {
+        (ids(bc::bc_spaces).into_iter())
+            .filter(|&space| name(bc::bc_space_agent, space).is_empty())
+            .map(|space| (space, name(bc::bc_space_name, space)))
+            .collect()
+    }
+
+    fn move_space(&self, space: u64, index: usize) -> bool {
+        call(|| unsafe { bc::bc_space_move(space, index) })
+    }
+
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
         let users = |space: u64| {

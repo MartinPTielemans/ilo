@@ -41,6 +41,8 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// The user's Spaces, by id and name, in their order, as bc_space_move leaves it.
+    user_spaces: RefCell<Vec<(u64, String)>>,
 }
 
 impl Made {
@@ -230,6 +232,21 @@ impl Browser for Made {
     /// The user's Space is 1.
     fn user_space(&self, _: u64) -> u64 {
         1
+    }
+
+    fn user_spaces(&self) -> Vec<(u64, String)> {
+        self.user_spaces.borrow().clone()
+    }
+
+    fn move_space(&self, space: u64, index: usize) -> bool {
+        let mut spaces = self.user_spaces.borrow_mut();
+        let Some(from) = spaces.iter().position(|(id, _)| *id == space) else {
+            return false;
+        };
+        let moved = spaces.remove(from);
+        let at = index.min(spaces.len());
+        spaces.insert(at, moved);
+        true
     }
 }
 
@@ -1351,6 +1368,89 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// An agent moves one of the user's Spaces only once the user lets it (#1580): it asks first, by
+/// the Space's name and the place it would go, and Allow Once moves it through the user's own call
+/// (bc_space_move). Never refuses it, leaving the order as it was, and is kept under Your Spaces,
+/// so the next asks nothing and is refused; the activity log says each. A name the user has none
+/// of is an error that names theirs.
+#[gpui::test]
+fn an_agent_moves_a_users_space_only_once_allowed(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    *browser.user_spaces.borrow_mut() =
+        vec![(1, "Home".into()), (2, "Work".into()), (3, "Play".into())];
+    let order = |browser: &Made| -> Vec<u64> {
+        browser
+            .user_spaces
+            .borrow()
+            .iter()
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let move_play = |to: u64, cx: &mut TestAppContext| {
+        let arguments = json!({ "space": "Play", "to": to });
+        call(&agents, "claude-code", "move_space", arguments, cx)
+    };
+
+    let answer = move_play(1, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("it moved without asking");
+    assert_eq!(question.what.as_ref(), "move the Space “Play” to place 1");
+    assert_eq!(
+        order(&browser),
+        [1, 2, 3],
+        "it moved before the user answered"
+    );
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let moved = answer.recv().unwrap();
+    assert!(!moved.error, "{moved:?}");
+    assert_eq!(order(&browser), [3, 1, 2]);
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        ("move_space".into(), "Your Spaces".into(), "".into())
+    );
+
+    let answer = move_play(3, cx);
+    let question = browser.asked.borrow().clone().expect("it didn't ask again");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Never, cx)
+    });
+    assert!(answer.recv().unwrap().error);
+    assert_eq!(
+        order(&browser),
+        [3, 1, 2],
+        "it moved though the user said no"
+    );
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        (
+            "move_space".into(),
+            "Your Spaces".into(),
+            "You said no.".into()
+        )
+    );
+    let answer = move_play(3, cx);
+    assert_eq!(*browser.asked.borrow(), None, "it asked again after Never");
+    let refused = answer.recv().unwrap();
+    assert!(
+        refused.error && refused.text.contains("never"),
+        "{refused:?}"
+    );
+    assert_eq!(order(&browser), [3, 1, 2]);
+
+    let arguments = json!({ "space": "Garden", "to": 1 });
+    let unknown = call(&agents, "claude-code", "move_space", arguments, cx);
+    let unknown = unknown.recv().unwrap();
+    assert!(
+        unknown.error && unknown.text.contains("“Home”"),
+        "{unknown:?}"
+    );
+}
+
 /// What the user answered for good is listed, by site, and once revoked, one site or all, what
 /// asks first there asks again. Each revoke is logged.
 #[gpui::test]
@@ -2005,6 +2105,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         [
             "list_tabs",
             "open_tab",
+            // Asks the user first, under Your Spaces, and reads nothing (#1580).
+            "move_space",
             "close_tab",
             "navigate",
             "snapshot",

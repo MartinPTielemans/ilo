@@ -10,11 +10,11 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight,
-    HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful,
-    StyledText, Subscription, WeakEntity, Window, canvas, div, img, linear_color_stop,
-    linear_gradient, list, prelude::*, px, relative, svg,
+    AnyElement, ClickEvent, Context, CursorStyle, DispatchPhase, Div, DragMoveEvent, Entity,
+    Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage,
+    SharedString, Stateful, StyledText, Subscription, WeakEntity, Window, canvas, div, img,
+    linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -95,7 +95,9 @@ use crate::tokens::shell::library::TITLE_SIZE;
 use crate::tokens::shell::library::TITLE_X;
 use crate::tokens::shell::library::{LIBRARY_PLATE, SECTION_HOVERED};
 
+use super::space_drag::{DraggedSpace, SpaceGhost, standing_drop_line};
 use crate::elevation::Level;
+use crate::tokens::shell::DROP_RING;
 use crate::tokens::shell::library::CARD_BRUSH;
 use crate::tokens::shell::library::CARD_BRUSH_COLOR;
 use crate::tokens::shell::library::CARD_BRUSH_GLYPH;
@@ -122,7 +124,9 @@ use crate::tokens::shell::library::PLUS_SIZE;
 use crate::tokens::shell::library::SPACES_INSET;
 use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
-use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
+use crate::tokens::shell::library::{
+    CARD_HANDLE, CARD_HANDLE_X, CARD_HANDLE_Y, CARD_MORE_X, CARD_MORE_Y,
+};
 
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
@@ -1476,6 +1480,17 @@ impl Shell {
                     .size(px(PLUS_GLYPH))
                     .text_color(self.palette.accent_label),
             );
+        // The gap a card dragged by its handle would go into, between two cards or after the last.
+        let pitch = CARD_WIDTH + CARD_GAP;
+        let gap = self.space_gap(true).map(|gap| {
+            let x = SPACES_LEFT + gap as f32 * pitch - CARD_GAP / 2.;
+            standing_drop_line(0.)
+                .absolute()
+                .top(px(SPACES_INSET))
+                .bottom(px(SPACES_INSET))
+                .h_auto()
+                .left(px(x - DROP_RING / 2.))
+        });
         div()
             .id("library-spaces")
             .absolute()
@@ -1486,6 +1501,7 @@ impl Shell {
             .overflow_hidden()
             .child(
                 div()
+                    .id("library-space-cards")
                     .absolute()
                     .top_0()
                     .bottom_0()
@@ -1495,8 +1511,26 @@ impl Shell {
                     .gap(px(CARD_GAP))
                     .pl(px(SPACES_LEFT))
                     .py(px(SPACES_INSET))
+                    .on_drag_move(cx.listener(
+                        move |shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
+                            let dragged = *event.drag(cx);
+                            if !dragged.card {
+                                return;
+                            }
+                            let x = f32::from(event.event.position.x - event.bounds.left());
+                            let middle =
+                                |index: usize| SPACES_LEFT + index as f32 * pitch + CARD_WIDTH / 2.;
+                            shell.space_dragged_to(dragged, x, middle, cx);
+                        },
+                    ))
+                    .on_drop(cx.listener(|shell, dragged: &DraggedSpace, _, cx| {
+                        if dragged.card {
+                            shell.drop_space(*dragged, cx);
+                        }
+                    }))
                     .children(cards)
-                    .child(plus),
+                    .child(plus)
+                    .children(gap),
             )
     }
 
@@ -1514,53 +1548,7 @@ impl Shell {
             linear_color_stop(window_at(0.), 0.),
             linear_color_stop(window_at(1.), 1.),
         );
-        let rows = space.card_lines().into_iter().map(|line| match line {
-            Line::Divider => {
-                let clear = still_clear(&palette, space.clears_last(space.shown));
-                divider_box(&palette, self.hairline(), Some(clear)).into_any_element()
-            }
-            Line::Folder(folder, depth) => {
-                let name = space
-                    .folders
-                    .folders
-                    .get(&folder)
-                    .map(|(name, _)| name.clone());
-                let name = title(&palette, name.unwrap_or_default(), false).pr(px(PLATE_INSET));
-                let icon = folder_icon(&palette, space.is_open(folder));
-                card_row(depth, plate(icon, name))
-            }
-            Line::Tab(tab, depth) => {
-                let panes = space.panes(tab);
-                if panes.len() == 1 {
-                    let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
-                    let plate = plate(self.tab_icon_in(&palette, tab), label);
-                    let dragged = CardTab {
-                        tab,
-                        space: id,
-                        depth,
-                    };
-                    let shell = shell.clone();
-                    let plate =
-                        plate
-                            .id(("card-tab", tab))
-                            .on_drag(dragged, move |dragged, _, _, cx| {
-                                cx.new(|_| CardGhost {
-                                    shell: shell.clone(),
-                                    dragged: *dragged,
-                                })
-                            });
-                    return card_row(depth, plate);
-                }
-                let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
-                let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
-                let width = plate / panes.len() as f32;
-                let segments = panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &pane)| self.segment(&palette, pane, width, index == 0, false));
-                card_row(depth, split_plate(segments))
-            }
-        });
+        let rows = self.card_rows(space, &palette, Some(shell));
         let field = self.card_field(space, &palette, window_at(0.), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
@@ -1595,8 +1583,55 @@ impl Shell {
                     .size(px(URL_BUTTON_GLYPH))
                     .text_color(palette.glyph(NAV)),
             );
+        // Its move handle at the foot's other end (Arc): a drag by it moves the card along the
+        // Spaces. Its click stops there, as the •••'s press does, so the card isn't picked.
+        let dragged = DraggedSpace {
+            space: id,
+            card: true,
+        };
+        let ghost_shell = cx.weak_entity();
+        let handle = div()
+            .id(("space-card-handle", id))
+            .absolute()
+            .left(px(CARD_HANDLE_X - half))
+            .bottom(px(CARD_HANDLE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .cursor(CursorStyle::OpenHand)
+            .when(self.a11y, |handle| handle.button_named("Move Space"))
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .on_drag(dragged, move |dragged, _, _, cx| {
+                let dragged = *dragged;
+                ghost_shell
+                    .update(cx, |shell, cx| shell.space_ghost(dragged, cx))
+                    .unwrap_or_else(|_| cx.new(|_| SpaceGhost::gone(dragged)))
+            })
+            .child(
+                svg()
+                    .path("icons/grip.svg")
+                    .size(px(CARD_HANDLE))
+                    .text_color(palette.glyph(NAV)),
+            );
+        // Where it is from its place while the cards glide into a new order.
+        let pitch = CARD_WIDTH + CARD_GAP;
+        let glide = self.space_glide(id, |index| index as f32 * pitch, cx);
+        let height = self.card_height.clone();
+        let measured = canvas(
+            move |bounds, _, _| height.set(f32::from(bounds.size.height)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
         div()
             .id(("space-card", id))
+            .relative()
+            .left(px(glide))
             .flex_none()
             .w(px(CARD_WIDTH))
             .h_full()
@@ -1614,6 +1649,12 @@ impl Shell {
             )
             .on_drop(cx.listener(move |shell, dragged: &CardTab, _, cx| {
                 shell.drop_on_card(*dragged, id, cx)
+            }))
+            // A card dragged by its handle, let go over a card, goes where its gap was.
+            .on_drop(cx.listener(|shell, dragged: &DraggedSpace, _, cx| {
+                if dragged.card {
+                    shell.drop_space(*dragged, cx);
+                }
             }))
             .group("space-card")
             // Over the gradient and under the rows, ringed while another card's tab is over it.
@@ -1634,9 +1675,137 @@ impl Shell {
                             .border_color(palette.accent)
                     }),
             )
+            .child(measured)
             .child(field)
             .child(div().children(rows))
+            .child(handle)
             .child(more)
+    }
+
+    /// A card dragged by its handle: a picture of it as it is, its handle under the pointer where
+    /// the drag took it, so the card comes away from where it was.
+    pub(super) fn card_ghost_face(&self, space: u64) -> Option<AnyElement> {
+        let space = self.spaces.iter().find(|each| each.id == space)?;
+        let id = space.id;
+        let palette = self.palette_of(id);
+        let underlay = Hsla::from(palette.underlay);
+        let window_at = |y: f32| underlay.blend(Hsla::from(self.space_color_at(id, 0.5, y)));
+        let fill = linear_gradient(
+            180.,
+            linear_color_stop(window_at(0.), 0.),
+            linear_color_stop(window_at(1.), 1.),
+        );
+        let height = self.card_height.get().max(CARD_NAME_TOP + CARD_NAME_HEIGHT);
+        let icon = space_icon_drawn(&palette, &space.icon).unwrap_or_else(|| {
+            palette
+                .swatch
+                .draw(SPACE_SWATCH_SHOWN, &[window_at(0.).to_rgb()])
+                .into_any_element()
+        });
+        // The field at rest: the icon and the name, with no plate.
+        let field = div()
+            .flex_none()
+            .mt(px(CARD_NAME_TOP))
+            .h(px(CARD_NAME_HEIGHT))
+            .px(px(CARD_FIELD_INSET))
+            .flex()
+            .items_center()
+            .gap(px(CARD_NAME_GAP))
+            .pl(px(CARD_FIELD_INSET + CARD_SLOT_X))
+            .text_size(px(text::BODY))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(CARD_SLOT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(EMOJI_SIZE))
+                    .child(icon),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(palette.text(CARD_NAME_COLOR))
+                    .child(space.name.clone()),
+            );
+        let half = URL_BUTTON_SIZE / 2.;
+        Some(
+            div()
+                .ml(px(-(CARD_HANDLE_X - half)))
+                .mt(px(-(height - CARD_HANDLE_Y - half)))
+                .w(px(CARD_WIDTH))
+                .h(px(height))
+                .overflow_hidden()
+                .rounded(px(CARD_RADIUS))
+                .bg(fill)
+                .shadow(Level::Resting.shadow())
+                .child(field)
+                .child(div().children(self.card_rows(space, &palette, None)))
+                .into_any_element(),
+        )
+    }
+
+    /// A Space's card's rows, as the sidebar would show them, each tab's to drag to another card
+    /// while `shell` is the card's, and still in a card's ghost, with no `shell`.
+    fn card_rows(
+        &self,
+        space: &Space,
+        palette: &Palette,
+        shell: Option<WeakEntity<Shell>>,
+    ) -> Vec<AnyElement> {
+        let id = space.id;
+        let rows = space.card_lines().into_iter().map(|line| match line {
+            Line::Divider => {
+                let clear = still_clear(palette, space.clears_last(space.shown));
+                divider_box(palette, self.hairline(), Some(clear)).into_any_element()
+            }
+            Line::Folder(folder, depth) => {
+                let name = space
+                    .folders
+                    .folders
+                    .get(&folder)
+                    .map(|(name, _)| name.clone());
+                let name = title(palette, name.unwrap_or_default(), false).pr(px(PLATE_INSET));
+                let icon = folder_icon(palette, space.is_open(folder));
+                card_row(depth, plate(icon, name))
+            }
+            Line::Tab(tab, depth) => {
+                let panes = space.panes(tab);
+                if panes.len() == 1 {
+                    let label = title(palette, self.title(tab), false).pr(px(PLATE_INSET));
+                    let plate = plate(self.tab_icon_in(palette, tab), label);
+                    let dragged = CardTab {
+                        tab,
+                        space: id,
+                        depth,
+                    };
+                    let plate = plate.id(("card-tab", tab));
+                    // A card's ghost draws its rows as they are, with nothing to drag.
+                    let Some(shell) = shell.clone() else {
+                        return card_row(depth, plate);
+                    };
+                    let plate = plate.on_drag(dragged, move |dragged, _, _, cx| {
+                        cx.new(|_| CardGhost {
+                            shell: shell.clone(),
+                            dragged: *dragged,
+                        })
+                    });
+                    return card_row(depth, plate);
+                }
+                let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
+                let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
+                let width = plate / panes.len() as f32;
+                let segments = panes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &pane)| self.segment(palette, pane, width, index == 0, false));
+                card_row(depth, split_plate(segments))
+            }
+        });
+        rows.collect()
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
@@ -2820,7 +2989,7 @@ fn card_row(depth: usize, plate: impl IntoElement) -> AnyElement {
 }
 
 /// Where a card's left edge is in the Spaces section, the `index`th from the Library's left.
-fn card_x(index: usize) -> f32 {
+pub(super) fn card_x(index: usize) -> f32 {
     COLUMN_WIDTH + SPACES_LEFT + index as f32 * (CARD_WIDTH + CARD_GAP)
 }
 

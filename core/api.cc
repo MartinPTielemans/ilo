@@ -839,6 +839,10 @@ bool bc_space_delete(bc_id id) {
   return browser_core::Window::DeleteSpace(id);
 }
 
+bool bc_space_move(bc_id id, size_t index) {
+  return browser_core::Space::Move(id, index);
+}
+
 size_t bc_space_today(bc_id id, bc_id* tabs, size_t capacity) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   if (!space) {

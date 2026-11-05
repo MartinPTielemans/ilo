@@ -950,6 +950,11 @@ impl Browser for Recorder {
         self.record(format!("restore sidebar {time}"));
     }
 
+    fn move_space(&self, space: u64, index: usize, _: &mut App) -> bool {
+        self.edit(format!("move space {space} to {index}"));
+        true
+    }
+
     fn delete_space(&self, space: u64, _: &mut App) -> bool {
         self.edit(format!("delete space {space}"));
         let mut deleted = self.core.deleted.borrow_mut();

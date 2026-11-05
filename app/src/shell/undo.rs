@@ -70,6 +70,7 @@ impl What {
     pub const CLEAR: What = What::quiet("Clear");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
+    pub const MOVE_SPACE: What = What::quiet("Move Space");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
 }
@@ -218,6 +219,11 @@ pub(super) enum Edit {
     },
     /// Clears the Space shown again, if it's this one.
     Clear(u64),
+    /// Puts the Space back at `to` among the user's Spaces, where it was before it moved there.
+    MoveSpace {
+        space: u64,
+        to: usize,
+    },
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
@@ -344,6 +350,7 @@ impl Edit {
             },
             Edit::UndoClear { .. }
             | Edit::Clear(_)
+            | Edit::MoveSpace { .. }
             | Edit::UndoDeleteSpace(_)
             | Edit::DeleteSpace(_)
             | Edit::UndoArchive { .. }
@@ -586,6 +593,12 @@ impl Edit {
                 }
                 let clear = shell.clear_now(cx)?;
                 Some(Edit::UndoClear { space, clear })
+            }
+            Edit::MoveSpace { space, to } => {
+                let from = shell.spaces.iter().position(|each| each.id == space)?;
+                shell
+                    .reorder_space(space, to, cx)
+                    .then_some(Edit::MoveSpace { space, to: from })
             }
             Edit::UndoDeleteSpace(space) => shell
                 .browser

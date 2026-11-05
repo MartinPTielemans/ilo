@@ -1987,6 +1987,11 @@ impl Agents {
             "list_tabs" | "ask" => {
                 (did.site, did.tab, did.page) = (String::new(), None, String::new())
             }
+            // The user's Space, by its name, which is on no tab.
+            "move_space" => {
+                (did.site, did.tab, did.page) = (String::new(), None, String::new());
+                did.target = format!("“{}”", page::clip(&string("space"), 40));
+            }
             _ => {}
         }
         did

@@ -138,6 +138,33 @@ void Space::Delete(bc_id id) {
 }
 
 // static
+bool Space::Move(bc_id id, size_t index) {
+  std::vector<bc_id>& order = SpaceOrder();
+  const Space* space = FromId(id);
+  auto from = std::ranges::find(order, id);
+  if (!space || space->agent() || from == order.end()) {
+    return false;
+  }
+  const std::vector<bc_id> before = order;
+  order.erase(from);
+  // The user's Spaces, as the switcher lists them: an agent's Space keeps its place among them.
+  std::vector<bc_id> users;
+  std::ranges::copy_if(order, std::back_inserter(users),
+                       [](bc_id each) { return !FromId(each)->agent(); });
+  auto at = index < users.size() ? std::ranges::find(order, users[index])
+            : users.empty()      ? order.end()
+                                 : std::ranges::find(order, users.back()) + 1;
+  order.insert(at, id);
+  if (order == before) {
+    return true;
+  }
+  // Only the Space moved takes a new place, so sync sends the one change.
+  PlaceSpaces();
+  ReportSpacesChanged();
+  return true;
+}
+
+// static
 Space* Space::FromId(bc_id id) {
   auto it = Spaces().find(id);
   return it == Spaces().end() ? nullptr : it->second.get();

@@ -244,6 +244,8 @@ fn the_server_answers_what_needs_no_browser() {
         [
             "list_tabs",
             "open_tab",
+            // Asks the user first, under Your Spaces, and reads nothing (#1580).
+            "move_space",
             "close_tab",
             "navigate",
             "snapshot",

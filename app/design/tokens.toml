@@ -1357,6 +1357,13 @@ card-brush-color = 0.35
 # pointer on the card, as the brush shows only with it on the field.
 card-more-x = 22.0
 card-more-y = 21.5
+# Its move handle at the foot's other end, a 15 pt glyph whose middle is 22 in from the card's left
+# and 21.8 above its foot, on the •••'s line (Arc 1.170 rec), in a pressable box of the •••'s
+# size, with the pointer on the card as the ••• shows. A drag by it moves the card along the
+# Spaces (#1580); the rest of the card stays a click that shows the Space.
+card-handle = 15.0
+card-handle-x = 22.0
+card-handle-y = 21.8
 plus-gap = 33.0
 plus-size = 30.0
 # Ours: the + is the Space's accent where Arc's is blue (#319), with the palette's hovered and

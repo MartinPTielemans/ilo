@@ -71,6 +71,39 @@ class SpaceTest : public testing::Test {
   bc_id notes_ = 0;
 };
 
+// A user's Space moves to an index among the user's Spaces, an agent's keeping its place among
+// them, and only the one moved takes a new place for sync. An agent's Space doesn't move.
+TEST_F(SpaceTest, ASpaceMovesToAnIndexAmongTheUsersSpaces) {
+  Space* agent = Space::Create("Agent", 0, Space::Agent{.id = "claude-code", .name = "Claude"});
+  Space* play = Space::Create("Play");
+  const auto ids = [] {
+    Rows ids;
+    for (const Space* space : Space::All()) {
+      ids.push_back(space->id());
+    }
+    return ids;
+  };
+  ASSERT_EQ(ids(), (Rows{work_->id(), home_->id(), agent->id(), play->id()}));
+  const syncer::UniquePosition home_at = home_->node().position;
+
+  EXPECT_TRUE(Space::Move(play->id(), 0));
+  EXPECT_EQ(ids(), (Rows{play->id(), work_->id(), home_->id(), agent->id()}));
+  EXPECT_TRUE(home_->node().position.Equals(home_at));
+  EXPECT_TRUE(play->node().position.LessThan(work_->node().position));
+
+  // Past the last, it goes after the user's last.
+  EXPECT_TRUE(Space::Move(play->id(), 5));
+  EXPECT_EQ(ids(), (Rows{work_->id(), home_->id(), play->id(), agent->id()}));
+  // Second of the user's three: before Play.
+  EXPECT_TRUE(Space::Move(work_->id(), 1));
+  EXPECT_EQ(ids(), (Rows{home_->id(), work_->id(), play->id(), agent->id()}));
+
+  EXPECT_FALSE(Space::Move(agent->id(), 0));
+  EXPECT_FALSE(Space::Move(999999, 0));
+  Space::Delete(agent->id());
+  Space::Delete(play->id());
+}
+
 TEST_F(SpaceTest, AFolderMovesWholeAndInOrderToTheBottomOfThePinnedTabs) {
   Fill();
   const base::Uuid node = work_->NodeOf(docs_)->id;

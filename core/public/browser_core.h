@@ -1513,6 +1513,14 @@ BC_EXPORT void bc_space_set_theme(bc_id space, const char* theme);
 // with it. Then spaces_changed.
 BC_EXPORT bool bc_space_delete(bc_id space);
 
+// Moves the user's Space |space| to |index| among the user's Spaces, in the switcher's order, an
+// agent's Space being in none, or after the others for an index past the last, as a drag in the
+// switcher or the Library's Spaces drops it. The order is saved with the Spaces and synced, and
+// every window's switcher and Library follow it. The user's call, and an agent's once the user
+// allows it, which the app asks first and logs. Returns false, moving nothing, if |space| isn't
+// one of the user's Spaces. Then spaces_changed, if the order changed.
+BC_EXPORT bool bc_space_move(bc_id space, size_t index);
+
 // Copies up to |capacity| of the Space's Today tabs into |tabs|, top to bottom, and returns how many
 // it has. The ones the user opened are newest first; one a page opened sits under the page's tab.
 BC_EXPORT size_t bc_space_today(bc_id space, bc_id* tabs, size_t capacity);

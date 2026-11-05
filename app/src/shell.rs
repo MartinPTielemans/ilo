@@ -108,6 +108,7 @@ mod side_panel;
 mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
+mod space_drag;
 mod space_form;
 mod split_targets;
 pub(crate) mod swap;
@@ -1112,6 +1113,15 @@ pub struct Shell {
     unhovered: Vec<(Row, Instant)>,
     /// The row the pointer pressed, for its plate's shrinking and growing back.
     held_row: Option<HeldRow>,
+    /// Where a Space dragged by its dot or its card's handle would go, its drag's ghost, and the
+    /// Spaces gliding into a new order (space_drag.rs).
+    space_drop: Option<space_drag::SpaceDrop>,
+    space_ghost: Option<gpui::WeakEntity<space_drag::SpaceGhost>>,
+    space_glide: Option<space_drag::SpaceGlide>,
+    /// Where each Space's dot was drawn last, logged as it changes for check.sh.
+    dot_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
+    /// How tall the Library's Space cards were drawn last, for a dragged card's ghost.
+    card_height: Rc<std::cell::Cell<f32>>,
     /// The header button the pointer pressed, for its shrinking and growing back.
     held_nav: Option<HeldNav>,
     /// Rows on their way to their place: how far from it each started, and when.
@@ -1643,6 +1653,11 @@ impl Shell {
             menu_open: false,
             unhovered: Vec::new(),
             held_row: None,
+            space_drop: None,
+            space_ghost: None,
+            space_glide: None,
+            dot_frames: Rc::default(),
+            card_height: Rc::default(),
             held_nav: None,
             slides: HashMap::new(),
             drawn_rows: RefCell::default(),
@@ -2266,6 +2281,7 @@ impl Shell {
             .map(|&(id, ..)| id)
             .filter(|&id| listed.insert(id))
             .collect();
+        let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let mut old = std::mem::take(&mut self.spaces);
         self.spaces = spaces
             .into_iter()
@@ -2339,6 +2355,7 @@ impl Shell {
                 }
             })
             .collect();
+        self.spaces_reordered(order, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)

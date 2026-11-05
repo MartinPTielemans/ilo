@@ -72,6 +72,10 @@ class Space {
   static Space* CreateOwn(std::string profile, Own own);
   // Deletes the Space, which windows no longer show.
   static void Delete(bc_id id);
+  // Moves the user's Space |id| to |index| among the user's Spaces in the switcher's order, an
+  // agent's being in none, or after the others for an index past the last. False if |id| isn't
+  // one of the user's listed Spaces.
+  static bool Move(bc_id id, size_t index);
   static Space* FromId(bc_id id);
   // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
