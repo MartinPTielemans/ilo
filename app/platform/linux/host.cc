@@ -265,7 +265,8 @@ void host_centered(double width, double height, double* x, double* y) {
 // screen out twice, for it and then for the browser window. Chromium's window goes on screen as the
 // core opens it instead.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
-                             bool maximized) {}
+                             bool maximized, double picture_width, double picture_height,
+                             double foot_top) {}
 
 void host_close_launch_window(void) {}
 

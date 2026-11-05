@@ -2151,6 +2151,10 @@ struct LaunchWindow {
   HWND owner = nullptr;
   HBITMAP picture = nullptr;
   SIZE picture_size{};
+  // The picture's rows from |foot| down go |grows| rows lower than they were taken
+  // (host_show_launch_window).
+  LONG foot = 0;
+  LONG grows = 0;
   HBRUSH background = nullptr;
 };
 LaunchWindow g_launch;
@@ -2238,8 +2242,22 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       if (g_launch.picture) {
         HDC source = CreateCompatibleDC(dc);
         HGDIOBJ old = SelectObject(source, g_launch.picture);
-        BitBlt(dc, 0, 0, g_launch.picture_size.cx, g_launch.picture_size.cy, source, 0, 0,
-               SRCCOPY);
+        const LONG width = g_launch.picture_size.cx;
+        const LONG foot = g_launch.foot;
+        const LONG grows = g_launch.grows;
+        // Rows |from| to |to| of the picture, |at| rows down the window.
+        const auto place = [&](LONG from, LONG to, LONG at) {
+          if (to > from) {
+            BitBlt(dc, 0, at, width, to - from, source, 0, from, SRCCOPY);
+          }
+        };
+        // The top at the window's top and the foot at its bottom: a shorter window loses the
+        // room just above the foot, and a taller one repeats it (launch_picture.rs).
+        place(0, foot + std::min(grows, 0L), 0);
+        place(foot, g_launch.picture_size.cy, foot + grows);
+        if (grows > 0) {
+          place(foot - grows, foot, foot);
+        }
         SelectObject(source, old);
         DeleteDC(source);
       }
@@ -2559,7 +2577,8 @@ void host_centered(double width, double height, double* x, double* y) {
 }
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool maximized) {
+                             double height, bool maximized, double picture_width,
+                             double picture_height, double foot_top) {
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -2595,10 +2614,15 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   GetClientRect(window, &client);
   // As the Mac's: Dia's light composite over grey 20, and the dark near its dark one.
   COLORREF color = light ? RGB(232, 232, 232) : RGB(38, 38, 38);
-  // A picture is of the window at |width| by |height|; maximized it's another size, kept by none.
-  if (!maximized) {
-    g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height),
-                                         client.bottom, &g_launch.picture_size, &color);
+  // Maximized it's another size, kept by none. The picture is of the client area of a window
+  // |picture_height| high, whose frame is the same rows taller than its client area as this one's.
+  if (!maximized && picture_width > 0) {
+    const LONG grows = std::lround(height * scale) - std::lround(picture_height * scale);
+    g_launch.picture =
+        LoadLaunchPicture(LaunchPicturePath(profile_dir, picture_width, picture_height),
+                          client.bottom - grows, &g_launch.picture_size, &color);
+    g_launch.grows = grows;
+    g_launch.foot = std::clamp(std::lround(foot_top * scale), 0L, g_launch.picture_size.cy);
   }
   g_launch.background = CreateSolidBrush(color);
   g_launch.hwnd = window;

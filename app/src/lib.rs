@@ -106,6 +106,7 @@ pub mod hover_card;
 pub mod icon_picker;
 pub mod import;
 pub mod launch;
+pub mod launch_picture;
 pub mod link_preview;
 pub mod link_rules;
 pub mod link_target;

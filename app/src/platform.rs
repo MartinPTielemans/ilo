@@ -44,6 +44,9 @@ unsafe extern "C" {
         width: f64,
         height: f64,
         maximized: bool,
+        picture_width: f64,
+        picture_height: f64,
+        foot_top: f64,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
     #[cfg(any(target_os = "macos", target_os = "windows"))]
