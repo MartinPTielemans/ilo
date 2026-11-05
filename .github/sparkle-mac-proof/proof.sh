@@ -52,6 +52,7 @@ shot() {
     note "no capture of ilo's window for $1: $(tail -1 "$out/shots/$1.txt")"
 }
 plist() { plutil -extract "$1" raw "$installed/Contents/Info.plist" 2>/dev/null; }
+# macOS's grep takes a $ before \| as a character, so an alternation has no end anchors.
 await() {
   for _ in $(seq $((${3:-30} * 10))); do
     grep -q "$1" "$2" && return 0
@@ -203,7 +204,7 @@ await "GET ${feed#https://github.com}" "$out/server.log" 180 ||
 await "^browser: update $build found" "$out/from.log" 60 ||
   fail "$from didn't find build $build: $(updates "$out/from.log")"
 ok "$from's Sparkle checked the feed at launch and found $version (build $build)"
-await "^browser: update stage ready $version\$\|^browser: update stage failed\|^browser: update failed" \
+await "^browser: update stage ready $version\|^browser: update stage failed\|^browser: update failed" \
   "$out/from.log" 900
 grep -q "^browser: update stage ready $version\$" "$out/from.log" ||
   fail "$from didn't get $version ready: $(updates "$out/from.log" 8)"
@@ -244,7 +245,7 @@ ok "Sparkle installed $version over $from as ilo quit: $installed is $now (build
 note "5. $version launches on $from's profile"
 started=$(date +%s)
 launch "$out/to.log" "$version"
-await "^browser: update none: .*running $build\$\|^browser: update failed\|^browser: update [0-9]* found" \
+await "^browser: update none: .*running $build\|^browser: update failed\|^browser: update [0-9]* found" \
   "$out/to.log" 180
 grep -q "^browser: update none: .*running $build\$" "$out/to.log" ||
   fail "$version didn't find itself current: $(updates "$out/to.log")"
