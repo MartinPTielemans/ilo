@@ -967,10 +967,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(step(&shell, cx), Some(Step::Import));
     let choose = guide(cx);
     assert_eq!(choose.title, "What comes from Arc.");
-    assert_eq!(
-        choose.line,
-        "All of it, unless you turn something off."
-    );
+    assert_eq!(choose.line, "All of it, unless you turn something off.");
     assert_eq!(choose.button.as_deref(), Some("Import"));
     assert_eq!(choose.corner, Corner::Back);
     assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));

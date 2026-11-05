@@ -2732,7 +2732,9 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
         );
         assert_eq!(
             view.note().as_deref(),
-            Some("Into **Default**. Cards and sign-ins don't come: you sign in to each site again.")
+            Some(
+                "Into **Default**. Cards and sign-ins don't come: you sign in to each site again."
+            )
         );
     });
     fs::remove_dir_all(made).unwrap();
