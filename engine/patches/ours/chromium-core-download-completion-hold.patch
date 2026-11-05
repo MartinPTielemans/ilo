@@ -1,0 +1,67 @@
+Lets the core hold a download's completion until the user answers for it (#1446). The core asks the
+user before a page in an agent's Space puts a file on their disk, and pausing the download as it's
+created doesn't hold a small one, which comes whole in the same moment and is put in place before
+the answer, so a refused file stayed. Chrome holds a download's completion for its own checks in
+ChromeDownloadManagerDelegate::ShouldCompleteDownload, its file not yet renamed into place, which
+the core can't reach from //browser_core: this gives it a hook there. Downloads the core doesn't
+hold go through Chrome's checks as before.
+
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -20,6 +20,7 @@
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/path_service.h"
+@@ -1141,9 +1142,33 @@ void ChromeDownloadManagerDelegate::ShouldCompleteDownloadInternal(
+   }
+ }
+ 
++namespace {
++
++// browser_core: the hold SetCompletionHold gave, else none.
++ChromeDownloadManagerDelegate::CompletionHold& BrowserCoreCompletionHold() {
++  static base::NoDestructor<ChromeDownloadManagerDelegate::CompletionHold> hold;
++  return *hold;
++}
++
++}  // namespace
++
++// static
++void ChromeDownloadManagerDelegate::SetCompletionHold(CompletionHold hold) {
++  BrowserCoreCompletionHold() = std::move(hold);
++}
++
+ bool ChromeDownloadManagerDelegate::ShouldCompleteDownload(
+     DownloadItem* item,
+     base::OnceClosure user_complete_callback) {
++  // browser_core: a download the core holds waits for it, before Chrome's own checks, which run
++  // as it asks again.
++  if (const CompletionHold& hold = BrowserCoreCompletionHold(); !hold.is_null()) {
++    auto [held, not_held] = base::SplitOnceCallback(std::move(user_complete_callback));
++    if (hold.Run(item, std::move(held))) {
++      return false;
++    }
++    user_complete_callback = std::move(not_held);
++  }
+   return IsDownloadReadyForCompletion(
+       item, base::BindOnce(
+                 &ChromeDownloadManagerDelegate::ShouldCompleteDownloadInternal,
+--- a/chrome/browser/download/chrome_download_manager_delegate.h
++++ b/chrome/browser/download/chrome_download_manager_delegate.h
+@@ -126,6 +126,12 @@ class ChromeDownloadManagerDelegate
+                                    const base::FilePath& path) override;
+   bool ShouldAutomaticallyOpenFileByPolicy(const GURL& url,
+                                            const base::FilePath& path) override;
++  // browser_core: |hold| holds a download's completion, its file not yet put in place, while it
++  // returns true, keeping the closure that asks again, which it runs once the download may
++  // complete: the core asks the user before an agent's page puts a file on their disk (#1446).
++  using CompletionHold =
++      base::RepeatingCallback<bool(download::DownloadItem*, base::OnceClosure)>;
++  static void SetCompletionHold(CompletionHold hold);
+   bool ShouldCompleteDownload(download::DownloadItem* item,
+                               base::OnceClosure complete_callback) override;
+   bool ShouldOpenDownload(

@@ -15,12 +15,14 @@
 #include "base/task/cancelable_task_tracker.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "browser_core/agent_download_hold.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_crx_util.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/icon_loader.h"
@@ -52,13 +54,6 @@ constexpr size_t kMaxListed = 500;
 struct DownloadId : base::SupportsUserData::Data {
   static constexpr char kKey[] = "browser_core::DownloadId";
   bc_id id = NewId();
-};
-
-// Kept on a download a page in an agent's Space started, until it ends (#1446).
-struct AgentDownload : base::SupportsUserData::Data {
-  static constexpr char kKey[] = "browser_core::AgentDownload";
-  std::string agent;
-  bc_id tab = 0;
 };
 
 bc_id IdOf(download::DownloadItem* item) {
@@ -159,12 +154,12 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
-    auto* held = static_cast<AgentDownload*>(item->GetUserData(AgentDownload::kKey));
+    std::string agent;
+    bc_id tab = 0;
     const int state = StateOf(*item);
-    if (held && state != BC_DOWNLOAD_RUNNING && state != BC_DOWNLOAD_PAUSED) {
-      std::string agent = std::move(held->agent);
-      const bc_id tab = held->tab;
-      item->RemoveUserData(AgentDownload::kKey);
+    if (AgentDownloadOf(item, &agent, &tab) && state != BC_DOWNLOAD_RUNNING &&
+        state != BC_DOWNLOAD_PAUSED) {
+      ForgetAgentDownload(item);
       const bool done = state == BC_DOWNLOAD_DONE;
       ReportAgentDownload({.agent = std::move(agent),
                            .tab = tab,
@@ -207,11 +202,10 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     if (!request && Window::Showing(tab)) {
       return;
     }
+    // Paused, it takes nothing more while it asks, and a file that comes whole anyway isn't put
+    // in place until the user says yes (HoldCompletion).
     item->Pause();
-    auto held = std::make_unique<AgentDownload>();
-    held->agent = space->agent()->id;
-    held->tab = tab;
-    item->SetUserData(AgentDownload::kKey, std::move(held));
+    MarkAgentDownload(item, space->agent()->id, tab);
     // Its file isn't named until Chrome picks where it goes: the name the server gives, as Chrome
     // finds it.
     const base::FilePath name = net::GenerateFileName(
@@ -351,6 +345,12 @@ void RegisterDownloadPrefs() {
 }
 
 void ObserveDownloads(Profile* profile) {
+  // Chrome asks before it puts a download's file in place, which an agent's waits on the user for.
+  static const bool held = [] {
+    ChromeDownloadManagerDelegate::SetCompletionHold(base::BindRepeating(&HoldCompletion));
+    return true;
+  }();
+  (void)held;
   TheDownloads().Observe(profile);
 }
 
@@ -399,16 +399,14 @@ void ClearDownloads() {
 
 void AnswerAgentDownload(bc_id id, bool keep) {
   download::DownloadItem* item = TheDownloads().FindAny(id);
-  if (!item || !item->GetUserData(AgentDownload::kKey)) {
+  if (!item) {
     return;
   }
   if (keep) {
-    item->Resume(/*user_resume=*/true);
-    return;
+    AllowAgentDownload(item);
+  } else {
+    RefuseAgentDownload(item);
   }
-  // Cancelling deletes what it had written. Off the list, it leaves nothing behind.
-  item->Cancel(/*user_cancel=*/true);
-  item->Remove();
 }
 
 void FindDownloadIcon(bc_id id) {
