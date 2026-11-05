@@ -157,6 +157,19 @@ source_set("split_view") {
   ]
 }
 
+# An agent's download, held until the user answers, apart so browser_core_unittests tests the hold
+# alone.
+source_set("agent_download_hold") {
+  sources = [
+    "agent_download_hold.cc",
+    "agent_download_hold.h",
+  ]
+  deps = [
+    "//base",
+    "//components/download/public/common:public",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -295,6 +308,7 @@ source_set("browser_core") {
     ":archive_rule",
     ":drm_request",
     ":search_default",
+    ":agent_download_hold",
     ":sidebar_backups",
     ":site_searches",
     ":space_default",
@@ -557,6 +571,7 @@ source_set("browser_core") {
 test("browser_core_unittests") {
   sources = [
     "archive_rule_unittest.cc",
+    "agent_download_hold_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
@@ -571,6 +586,7 @@ test("browser_core_unittests") {
   ]
   deps = [
     ":archive_rule",
+    ":agent_download_hold",
     ":search_default",
     ":sidebar_backups",
     ":site_searches",
@@ -582,11 +598,13 @@ test("browser_core_unittests") {
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//components/search_engines",
+    "//components/download/public/common:test_support",
     "//components/search_engines:test_support",
     "//components/sync",
     "//components/sync/protocol",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//testing/gmock",
     "//testing/gtest",
     "//url",
   ]
