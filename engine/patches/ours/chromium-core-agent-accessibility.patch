@@ -1,0 +1,26 @@
+Lets the core's agent take accessibility actions in its tabs, which are hidden (#1625). Content
+gives a WebContents the accessibility mode only while it isn't hidden, and a hidden one when it's
+next shown, so a hidden tab's renderer never binds RenderAccessibility and
+RenderFrameHostImpl::AccessibilityPerformAction drops the action unheard. An agent chooses an
+option in a closed select through the option's kDoDefault, Blink's own path for a screen reader
+(HTMLSelectElement::SelectOptionByAccessKey: no popup, and the page's input and change events as
+a user's choice fires them), and its tab is in its own Space, never shown. A mode a scoper asked
+for that WebContents alone now reaches it hidden too; the process-wide and profile-wide modes still
+wait for it to be shown, as before.
+
+diff --color -ruN a/content/browser/accessibility/browser_accessibility_state_impl.cc b/content/browser/accessibility/browser_accessibility_state_impl.cc
+--- a/content/browser/accessibility/browser_accessibility_state_impl.cc
++++ b/content/browser/accessibility/browser_accessibility_state_impl.cc
+@@ -777,8 +777,10 @@
+     return;
+   }
+ 
+-  // Only update the WebContents if it is not hidden.
+-  if (web_contents->GetVisibility() != Visibility::HIDDEN) {
++  // Only update the WebContents if it is not hidden, or if a scoper asked for this WebContents
++  // itself: the core's agent takes accessibility actions in its tabs, which are hidden.
++  if (web_contents->GetVisibility() != Visibility::HIDDEN ||
++      web_contents_mode.has_mode(ui::AXMode::kWebContents)) {
+     web_contents->SetAccessibilityMode(effective_mode);
+   }  // else the WebContents will be updated when it is revealed.
+ }
