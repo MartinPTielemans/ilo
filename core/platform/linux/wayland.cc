@@ -8,7 +8,10 @@
 #include <memory>
 
 #include "base/auto_reset.h"
+#include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "browser_core/hooks.h"
 #include "chrome/browser/shell_integration_linux.h"
 #include "ui/aura/window.h"
@@ -18,6 +21,7 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/native_widget_types.h"
 #include "ui/ozone/platform/wayland/host/proxy/wayland_proxy.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/frame_view.h"
@@ -54,6 +58,49 @@ void DispatchApp() {
   base::AutoReset<bool> reset(&dispatching, true);
   g_app_dispatched();
 }
+
+// Hears each configure a window acks, which Chromium does as it draws the first frame of the state
+// the configure brought, and runs what waits for one with the state the window has. A state the
+// browser asks for is the window's at once, and the compositor's configure with its bounds comes
+// after, maybe after configures it had sent before, such as sway's answer to the last commit.
+class ConfigureWatcher : public wl::WaylandProxy::Delegate {
+ public:
+  // The proxy's one delegate, which nothing else sets outside tests.
+  static ConfigureWatcher& Get(wl::WaylandProxy* proxy) {
+    static ConfigureWatcher* const watcher = [proxy] {
+      auto* made = new ConfigureWatcher(proxy);
+      proxy->SetDelegate(made);
+      return made;
+    }();
+    return *watcher;
+  }
+
+  // The latest wait for a window replaces the one before it.
+  void Wait(gfx::AcceleratedWidget window, base::OnceClosure done) {
+    waiting_[window] = std::move(done);
+  }
+
+  // wl::WaylandProxy::Delegate:
+  void OnWindowAdded(gfx::AcceleratedWidget) override {}
+  void OnWindowRemoved(gfx::AcceleratedWidget window) override { waiting_.erase(window); }
+  void OnWindowConfigured(gfx::AcceleratedWidget window, bool configured) override {
+    auto waiting = waiting_.find(window);
+    if (waiting == waiting_.end() || !configured || !proxy_->IsWindowStateConfigured(window)) {
+      return;
+    }
+    base::OnceClosure done = std::move(waiting->second);
+    waiting_.erase(waiting);
+    // Posted, as the ack comes in the middle of Chromium's frame.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(done));
+  }
+  void OnWindowRoleAssigned(gfx::AcceleratedWidget) override {}
+
+ private:
+  explicit ConfigureWatcher(wl::WaylandProxy* proxy) : proxy_(proxy) {}
+
+  const raw_ptr<wl::WaylandProxy> proxy_;
+  base::flat_map<gfx::AcceleratedWidget, base::OnceClosure> waiting_;
+};
 
 // The window's content, in DIPs.
 gfx::Size ContentSizeOf(views::Widget* widget) {
@@ -115,30 +162,15 @@ void* JoinWaylandDisplay(void (*dispatched)()) {
   return wl_proxy_get_display(reinterpret_cast<wl_proxy*>(proxy->GetRegistry()));
 }
 
-void AfterRoundTrip(base::OnceClosure done) {
+void AfterStateConfigured(views::Widget* widget, base::OnceClosure done) {
   wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
-  if (!proxy) {
-    std::move(done).Run();
+  const gfx::AcceleratedWidget window =
+      widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget();
+  if (!proxy || proxy->IsWindowStateConfigured(window)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(done));
     return;
   }
-  // The sync's answer on Chromium's own queue, whose events are dispatched in the order they came,
-  // so the compositor's earlier ones, a configure's bounds too, have been handled when it lands.
-  auto* registry = reinterpret_cast<wl_proxy*>(proxy->GetRegistry());
-  wl_display* display = wl_proxy_get_display(registry);
-  auto* wrapped = static_cast<wl_display*>(wl_proxy_create_wrapper(display));
-  wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wrapped), wl_proxy_get_queue(registry));
-  wl_callback* callback = wl_display_sync(wrapped);
-  wl_proxy_wrapper_destroy(wrapped);
-  static const wl_callback_listener listener = {
-      .done =
-          [](void* data, wl_callback* callback, uint32_t) {
-            wl_callback_destroy(callback);
-            std::unique_ptr<base::OnceClosure> done(static_cast<base::OnceClosure*>(data));
-            std::move(*done).Run();
-          },
-  };
-  wl_callback_add_listener(callback, &listener, new base::OnceClosure(std::move(done)));
-  wl_display_flush(display);
+  ConfigureWatcher::Get(proxy).Wait(window, std::move(done));
 }
 
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {

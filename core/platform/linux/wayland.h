@@ -27,10 +27,10 @@ bool OnWayland();
 // (bc_wayland_display). Null off Wayland.
 void* JoinWaylandDisplay(void (*dispatched)());
 
-// Runs |done| once the compositor has answered all Chromium has sent it, after Chromium has handled
-// what it sent before the answer, such as the configure a full screen asked for brings. At once off
-// Wayland.
-void AfterRoundTrip(base::OnceClosure done);
+// Runs |done|, posted, once |widget|'s window has acked a configure of the compositor's with the
+// state the window has now, such as the one a full screen it asked for brings, whose bounds are
+// then in. Soon if it has already, or off Wayland.
+void AfterStateConfigured(views::Widget* widget, base::OnceClosure done);
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
 
