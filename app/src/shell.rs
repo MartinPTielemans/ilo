@@ -3711,7 +3711,7 @@ impl Render for Shell {
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
         self.step_foot(window, cx);
-        self.step_picture(window);
+        self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
         self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
