@@ -928,6 +928,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         #[cfg(target_os = "linux")]
         ui_committed: Some(ui_committed),
         history_added: Some(history_added),
+        history_deleted: Some(history_deleted),
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),

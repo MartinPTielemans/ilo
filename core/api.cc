@@ -751,6 +751,10 @@ size_t bc_profile_download_folder(bc_id profile_id, char* path, size_t capacity)
       path, capacity);
 }
 
+size_t bc_profile_dir(bc_id profile, char* path, size_t capacity) {
+  return CopyString(browser_core::ProfileFolder(profile).AsUTF8Unsafe(), path, capacity);
+}
+
 bool bc_profile_set_download_folder(bc_id profile_id, const char* path) {
   Profile* profile = browser_core::ProfileOrLoad(profile_id);
   const base::FilePath folder = base::FilePath::FromUTF8Unsafe(path ? path : "");

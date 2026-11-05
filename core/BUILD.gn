@@ -225,6 +225,8 @@ source_set("browser_core") {
     "held_keys.cc",
     "held_keys.h",
     "hooks.h",
+    "history_deletions.cc",
+    "history_deletions.h",
     "history_import.cc",
     "history_import.h",
     "idle_unload.cc",

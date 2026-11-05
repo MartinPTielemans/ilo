@@ -129,7 +129,7 @@ mod undo;
 mod update_banner;
 
 pub use assets::Assets;
-pub use bar_usage::{forget_bar_usage, picked_in_bar};
+pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
 pub use browser::{
     Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "browser_core/public/browser_core.h"
 
@@ -65,6 +66,8 @@ std::vector<bc_id> Profiles();
 bc_id ProfileId(const std::string& dir);
 // Empty for an id the core didn't give.
 std::string ProfileDir(bc_id profile);
+// The profile's folder, which Chrome deletes with it, or empty for an id the core didn't give.
+base::FilePath ProfileFolder(bc_id profile);
 // "Default" for one Chrome named itself.
 std::string ProfileName(bc_id profile);
 // Names |profile| |name|, unless |name| is empty.
