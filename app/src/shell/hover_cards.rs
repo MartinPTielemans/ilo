@@ -17,14 +17,11 @@ use crate::{icon_picker, theme_picker};
 use super::recent_downloads::{age, now};
 use super::{PLATE_INSET, Row, Shell, host};
 
-/// How long the switches are quiet before a page they hid is pictured: past the Dock dot's
-/// `QUIET`, and past the longest the core keeps the pages a switch left on screen over one that
-/// hasn't drawn yet (core/platform/mac/window_views.mm's kLeavingAtMost, 1 s), with a frame to
-/// spare. Asked while it's still there, a page isn't drawn unseen for its picture, and as it
-/// leaves during the copy, the copy comes back empty (#1658).
-pub(super) const PICTURE_HIDDEN: Duration = Duration::from_millis(1100);
-
-const _: () = assert!(PICTURE_HIDDEN.as_millis() > QUIET.as_millis());
+/// How long the switches are quiet before a page they hid is pictured: the Dock dot's `QUIET`. A
+/// page the core still keeps on screen then, as a switch does until the new one draws, it holds
+/// as captured until the copy answers (core/capture.cc), so the picture needn't wait it out
+/// (#1658).
+pub(super) const PICTURE_HIDDEN: Duration = QUIET;
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
