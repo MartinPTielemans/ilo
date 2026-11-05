@@ -332,6 +332,25 @@ const found = ["h", "hw", "n", "p", "w"].filter(name => cookies.includes(`${name
 document.title = "session " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari") +
   " sees " + (found.join(" ") || "none");
 </script>' > "$out/site/session.html"
+# The session sign-in page, a sign-in that lives in a session cookie, one with no expiry, and in
+# sessionStorage, as many work sites' do (#1934). Its title says whether it finds each, kept or
+# none, never a value, since the app logs every title, once it has drawn; "s" sets both. Their value
+# is the server's start, so a run finds only its own.
+printf '%s' '<title>loading</title><p>s signs in.</p><script src="painted.js"></script>
+<script>
+const mine = "'"$(date +%s)"'";
+const found = () => "sign-in cookie " +
+  (document.cookie.split("; ").includes("sign-in=" + mine) ? "kept" : "none") + " storage " +
+  (sessionStorage.getItem("sign-in") == mine ? "kept" : "none");
+painted(() => document.title = found() + ", drawn");
+onkeydown = e => {
+  if (e.key == "s") {
+    document.cookie = "sign-in=" + mine + "; path=/";
+    sessionStorage.setItem("sign-in", mine);
+    document.title = found() + ", set";
+  }
+};
+</script>' > "$out/site/session-sign-in.html"
 # A page whose whole area is a link to /bounce, which the server redirects to another site,
 # localhost, and from there, at hop.html, back to this one's engine page, as a sign-in through an
 # identity site does, or at hop.html?away, to localhost's engine page, where it stays.
