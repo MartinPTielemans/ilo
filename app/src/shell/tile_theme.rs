@@ -2,12 +2,13 @@
 //! (docs/ux-spec.md › Favorites). GPUI has no blur, colour filter or blend mode, so the blurred
 //! and adjusted images are made here, once for each favicon, and drawn as images.
 
-use std::sync::Arc;
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
 use gpui::{Bounds, Corners, Image, RenderImage, Window, canvas, div, point, prelude::*, px, size};
 use image::{Frame, RgbaImage};
 
 use super::{TILE_HEIGHT, TILE_RADIUS};
+use crate::palette::Tone;
 
 /// The icon is looked at, and blurred, at no more than this on its long side.
 const MAX_SIDE: usize = 32;
@@ -16,6 +17,7 @@ use crate::tokens::shell::tile_theme::BLUR_OPACITY;
 use crate::tokens::shell::tile_theme::BLUR_SCALE;
 use crate::tokens::shell::tile_theme::BLUR_SIGMA;
 use crate::tokens::shell::tile_theme::COLOURFUL;
+use crate::tokens::shell::tile_theme::LEGIBLE_ICON;
 use crate::tokens::shell::tile_theme::NEAR_WHITE;
 use crate::tokens::shell::tile_theme::NEAR_WHITE_RING;
 use crate::tokens::shell::tile_theme::OPAQUE;
@@ -372,12 +374,7 @@ impl TileTheme {
                     }
                     _ => (BLACK, NEAR_WHITE_RING),
                 };
-                let mut data = Vec::with_capacity(decoded.len());
-                for pixel in decoded.pixels() {
-                    data.extend([255, 255, 255, pixel.0[3]]);
-                }
-                let template =
-                    render_image(decoded.width() as usize, decoded.height() as usize, data);
+                let template = template(&decoded, [1., 1., 1., 1.]);
                 TileTheme::Flat {
                     fill,
                     ring,
@@ -443,6 +440,60 @@ fn paint_blur(
             false,
         )
         .ok();
+}
+
+/// `favicon` in the ink of `tone`, if it's one colour and would barely show on that tone's
+/// sidebar: under LEGIBLE_ICON's contrast with its tint, black or white. A tile or row draws this
+/// in its place, as the shown tile draws a one-colour icon in white, so a black favicon reads in
+/// a dark window and a white one in a light window.
+pub(super) fn ink_copy(favicon: &Image, tone: Tone) -> Option<Arc<RenderImage>> {
+    // Looked at once for each favicon and tone, not each frame. A session sees a few hundred
+    // favicons; past INK_COPIES the lot is dropped and made again as drawn.
+    const INK_COPIES: usize = 512;
+    thread_local! {
+        static MADE: RefCell<HashMap<(u64, Tone), Option<Arc<RenderImage>>>> = RefCell::default();
+    }
+    MADE.with_borrow_mut(|made| {
+        if made.len() >= INK_COPIES {
+            made.clear();
+        }
+        made.entry((favicon.id, tone))
+            .or_insert_with(|| make_ink_copy(favicon, tone))
+            .clone()
+    })
+}
+
+fn make_ink_copy(favicon: &Image, tone: Tone) -> Option<Arc<RenderImage>> {
+    let decoded = image::load_from_memory(&favicon.bytes).ok()?.into_rgba8();
+    let (mean, distance) = Icon::new(&decoded).colour()?;
+    let ink = tone.ink();
+    (distance < COLOURFUL && faint(mean, tone))
+        .then(|| template(&decoded, [ink.r, ink.g, ink.b, ink.a]))
+}
+
+/// Whether `colour` is under LEGIBLE_ICON's contrast with the tint of `tone`.
+fn faint(colour: [f32; 3], tone: Tone) -> bool {
+    let shade = luminance(colour) + 0.05;
+    let contrast = match tone {
+        Tone::Dark => shade / 0.05,
+        Tone::Light => 1.05 / shade,
+    };
+    contrast < LEGIBLE_ICON
+}
+
+/// `image`'s shape filled with `colour`, straight RGBA 0…1, keeping each pixel's alpha.
+fn template(image: &RgbaImage, [r, g, b, a]: [f32; 4]) -> Arc<RenderImage> {
+    let byte = |c: f32| (c * 255.).round() as u8;
+    let mut data = Vec::with_capacity(image.len());
+    for pixel in image.pixels() {
+        data.extend([
+            byte(b),
+            byte(g),
+            byte(r),
+            (pixel.0[3] as f32 * a).round() as u8,
+        ]);
+    }
+    render_image(image.width() as usize, image.height() as usize, data)
 }
 
 /// Draws the ring's image in nine parts' worth: the corners as they were made, and the top and
@@ -582,6 +633,18 @@ mod tests {
         assert!((r - 1.).abs() < 1e-4 && (a - 1.).abs() < 1e-4);
         let [r, _, _, a] = halved.pixels[halved.pixels.len() - 1];
         assert!(r == 0. && a == 0.);
+    }
+
+    #[test]
+    fn a_dark_icon_is_faint_on_a_dark_sidebar_and_a_light_one_on_a_light_sidebar() {
+        // Black, and a navy at 3:1's edge: 0.10 luminance is 3:1 against black.
+        assert!(faint([0., 0., 0.], Tone::Dark));
+        assert!(faint([0.1, 0.1, 0.25], Tone::Dark));
+        assert!(!faint([0.5, 0.5, 0.5], Tone::Dark));
+        assert!(!faint([0., 0., 0.], Tone::Light));
+        assert!(faint([1., 1., 1.], Tone::Light));
+        assert!(faint([0.8, 0.8, 0.8], Tone::Light));
+        assert!(!faint([0.4, 0.4, 0.4], Tone::Light));
     }
 
     #[test]
