@@ -3267,7 +3267,14 @@ impl Settings {
             let set = move |on, cx: &mut App| {
                 agents.update(cx, |agents, cx| agents.set_scripts_on(on, cx))
             };
-            self.toggle("scripts", on, set, accent, cx)
+            self.toggle(
+                "scripts",
+                "Let scripts control the browser",
+                on,
+                set,
+                accent,
+                cx,
+            )
         };
         let row = feature_row(
             look,
