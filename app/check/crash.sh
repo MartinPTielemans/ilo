@@ -20,10 +20,10 @@ rm -f "$saved" "$launch_frame"
 # the mark the crash test's launch writes as it starts, not one an earlier try left.
 python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     prefs = json.load(f)
 prefs.setdefault("profile", {})["exit_type"] = "Normal"
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" || fail "the session couldn't be marked clean in $prefs"
 # What no annotation may have: the switch that gives the profile, its folder and the home, which
@@ -187,10 +187,10 @@ if [ "$(uname)" = Darwin ] && [ "$active" = 1 ]; then
   expect '^browser: settings shown General$' "⌘, didn't show Settings"
   settings_drew General
   send clickkey $(drawn "toolbar Privacy")
-  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its tab"
+  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
   settings_drew Privacy
   ../tools/window-screenshot.sh "$pid" "$out/privacy.png" || fail "no window to capture"
-  send clickkey 592 133
+  send clickkey $(drawn "switch send crash reports")
   expect '^browser: send crash reports off$' "a click on the switch didn't turn crash reports off"
   expect '^browser: crash reports deleted 1$' "turning crash reports off didn't delete the report"
   [ "$(pending)" = 0 ] || fail "the report not sent outlived turning crash reports off"
