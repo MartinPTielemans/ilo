@@ -231,28 +231,9 @@ pub fn show(browser: bc::bc_id, tab: u64, cx: &mut App) {
             .update(cx, |input, cx| input.reset(text.into(), window, cx));
         bar.ui_view
     });
-    let Ok(ui_view) = ui_view else {
-        return;
-    };
-    // On Windows the field takes a character only once the bar has drawn with it, which a bar the
-    // host shows for the first time hasn't: the keys held since the shortcut, given as the bar
-    // takes the keyboard, came before its first frame, and the first was lost (#1917). So the bar
-    // shows first and takes the keyboard, and with it the held keys, once it has drawn: from a task
-    // its next frame starts, outside the frame, as taking the keyboard tells its window at once.
-    #[cfg(target_os = "windows")]
-    {
-        unsafe { platform::host_show_find_bar(ui_view, false) };
-        let shown = window.update(cx, |_, window, _| {
-            window.on_next_frame(move |_, cx| {
-                cx.spawn(async move |_| unsafe { platform::host_show_find_bar(ui_view, true) })
-                    .detach();
-            });
-        });
-        if shown.is_ok() {
-            return;
-        }
+    if let Ok(ui_view) = ui_view {
+        unsafe { platform::host_show_find_bar(ui_view, true) };
     }
-    unsafe { platform::host_show_find_bar(ui_view, true) };
 }
 
 /// Goes to `tab`'s next match, or the one before, opening its find bar over the browser window
