@@ -105,6 +105,9 @@ pub struct Conversation {
     pub title: SharedString,
     /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
     pub about: SharedString,
+    /// How far it has got while it works, after where it is, from its own steps: "step 5 · 4
+    /// pages", or empty.
+    pub progress: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
     pub page: Option<AskedOn>,
@@ -589,9 +592,13 @@ impl Agents {
                 });
             }
         }
-        let tabs = (self.pages(task, cx).into_iter())
+        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
+        let progress = match task.state == State::Working && !self.waits_on_user(task) {
+            true => progress(turn_steps(task).len(), tabs.len()),
+            false => String::new(),
+        };
         let about = match &task.state {
             State::Working if self.waits_on_user(task) => "Waiting for you".to_string(),
             State::Working => "Working".to_string(),
@@ -614,6 +621,7 @@ impl Agents {
             name: task.name.clone(),
             title: task.title.clone(),
             about: about.into(),
+            progress: progress.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
@@ -739,13 +747,12 @@ impl Agents {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
         let (status, dot) = match (&task.state, &question) {
-            (State::Working | State::Asking { .. }, Some(question)) => match question.handoff {
-                Some(_) => ("Waiting for you".into(), Dot::Waiting),
-                None => ("Waiting for your OK".into(), Dot::Waiting),
-            },
+            (State::Working | State::Asking { .. }, Some(question)) => {
+                (needs_you(question), Dot::Waiting)
+            }
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
-            (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
+            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -766,7 +773,7 @@ impl Agents {
                 Dot::Done,
             ),
             (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
-            (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
+            (State::Stopped, _) => (stopped(task), Dot::Ended),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
@@ -2246,16 +2253,88 @@ fn first_words(result: &str) -> SharedString {
         None => "Finished".into(),
     }
 }
-/// A task's status while it works: the step of the turn it's on, else the last it took, and
-/// Thinking until it takes one.
+/// What a card's status leads with when a confirmation or a handoff waits on the user, the one
+/// status the card sets heavier (`status_lead`).
+pub const NEEDS_YOU: &str = "Needs you";
+const NEEDS_OK: &str = "Needs your OK";
+
+/// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
+/// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
+/// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
+/// step comes, never on a clock.
 fn working(task: &Task) -> SharedString {
+    let taken = turn_steps(task);
+    match taken.first() {
+        Some(step) => format!(
+            "Step {} · {}",
+            taken.len(),
+            tools::step_title(&step.did, tense(step))
+        )
+        .into(),
+        None => "Thinking · no steps yet".into(),
+    }
+}
+
+/// The steps of the turn under way, newest first, its thoughts left out: what the card and the
+/// conversation's header count.
+fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
-    let last = (task.trace.iter().rev())
+    (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .find(|step| step.did.tool != "thought");
-    match last {
-        Some(step) => tools::step_title(&step.did, tense(step)).into(),
-        None => "Thinking".into(),
+        .filter(|step| step.did.tool != "thought")
+        .collect()
+}
+
+/// The header's progress while the task works: its steps this turn and its pages, each left out
+/// while there are none.
+fn progress(steps: usize, pages: usize) -> String {
+    let steps = (steps > 0).then(|| format!("step {steps}"));
+    let pages = match pages {
+        0 => None,
+        1 => Some("1 page".to_string()),
+        pages => Some(format!("{pages} pages")),
+    };
+    steps
+        .into_iter()
+        .chain(pages)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// A stopped task's status: how far it got before the user stopped it, by its steps, its thoughts
+/// left out.
+fn stopped(task: &Task) -> SharedString {
+    match (task.trace.iter())
+        .filter(|step| step.did.tool != "thought")
+        .count()
+    {
+        0 => "Stopped".into(),
+        1 => "Stopped after 1 step".into(),
+        steps => format!("Stopped after {steps} steps").into(),
+    }
+}
+
+/// The status while a confirmation or a handoff waits: what the user is needed for, after the
+/// words that say they are. A handoff says why, as the agent gave it; a confirmation, what the
+/// agent would do.
+fn needs_you(question: &Question) -> SharedString {
+    match question.handoff {
+        Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
+        Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
+        None => format!("{NEEDS_OK} · {}", question.what).into(),
+    }
+}
+
+/// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
+/// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
+/// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
+/// rolling out has left its card's state behind.
+pub fn status_lead(status: &str) -> usize {
+    let counts = (status.strip_prefix("Step "))
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    match counts || status.starts_with(NEEDS_YOU) {
+        true => status.find(" · ").unwrap_or(status.len()),
+        false => 0,
     }
 }
 

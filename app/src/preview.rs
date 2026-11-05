@@ -1623,10 +1623,14 @@ const FIRST_TASK: u64 = 9001;
 const TASKS: [(&str, &str, Dot); 3] = [
     (
         "Find two tickets for Saturday",
-        "Clicking “Tickets”",
+        "Step 3 · Clicking “Tickets”",
         Dot::Working,
     ),
-    ("Compare the museum passes", "Stopped", Dot::Ended),
+    (
+        "Compare the museum passes",
+        "Stopped after 6 steps",
+        Dot::Ended,
+    ),
     (
         "Book a table for four",
         "A table for four at 20:00 is held",
@@ -1729,6 +1733,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
+        progress: "step 3 · 4 pages".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {

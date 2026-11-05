@@ -76,7 +76,7 @@ use crate::tokens::command_bar::PLATE_RADIUS;
 pub use crate::tokens::command_bar::RADIUS;
 use crate::tokens::command_bar::ROW_END;
 use crate::tokens::command_bar::TITLE_X;
-use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP};
+use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
@@ -127,6 +127,15 @@ fn remove_keys() -> Vec<SharedString> {
 /// words the menus use, as the UI's font there has no keyboard symbols (#772).
 fn hint_key(key: &str, off_the_mac: bool) -> String {
     shell::key_name(key, off_the_mac)
+}
+
+/// What the hint says ⇥ does where it would make what's typed a task: ask the agent it would run
+/// on, the default the ask lists first, by name, or any while none is known yet.
+fn ask_words(agents: Option<&TaskAgents>) -> String {
+    match agents.and_then(|agents| agents.agents.first()) {
+        Some(agent) => format!("Ask {}", agent.name),
+        None => "Ask an agent".to_string(),
+    }
 }
 
 /// One of the core's suggestions for what's typed.
@@ -2538,7 +2547,7 @@ impl CommandBar {
     }
 
     /// "Search <site>" and the Tab key, at the input's end, while the row ↩ takes hints a site
-    /// search; "Ask" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
+    /// search; "Ask Claude" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
     fn site_hint(&self, cx: &App) -> Option<impl IntoElement + use<>> {
         let site = self
             .chosen()
@@ -2548,17 +2557,24 @@ impl CommandBar {
             None if self.ask.is_some() => {
                 ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
             }
-            None if self.offers_ask(cx) => ("Ask".to_string(), hint_key("tab", shell::OFF_THE_MAC)),
+            None if self.offers_ask(cx) => (
+                ask_words(self.task_agents.as_ref()),
+                hint_key("tab", shell::OFF_THE_MAC),
+            ),
             None => return None,
         };
         let palette = palette::current(cx);
+        // A key's chip, its rim saying it's a key and not a word: "Tab" by "Switch to Tab" reads
+        // as a tab otherwise.
         let key = div()
             .h(px(ICON_BOX))
-            .px(px(4.))
+            .px(px(HINT_KEY_X))
             .flex()
             .items_center()
             .rounded(px(CHIP_RADIUS))
             .bg(palette.plate(CHIP))
+            .border_1()
+            .border_color(palette.plate(HINT_KEY_RIM))
             .text_color(palette.on_overlay(TITLE))
             .child(key);
         Some(
@@ -2567,7 +2583,7 @@ impl CommandBar {
                 .ml(px(HINT_GAP))
                 .flex()
                 .items_center()
-                .gap(px(9.))
+                .gap(px(HINT_KEY_GAP))
                 .text_size(px(text::BODY))
                 .child(div().text_color(palette.on_overlay(DIM)).child(said))
                 .child(key),

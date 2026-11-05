@@ -2235,7 +2235,11 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.title.as_ref(), card.status.as_ref(), card.dot),
-            ("Find a flight to Lisbon", "Thinking", Dot::Working)
+            (
+                "Find a flight to Lisbon",
+                "Thinking · no steps yet",
+                Dot::Working
+            )
         );
         // At quit its CLI ends and its Space goes, and so does Claude Code's, which only its
         // sessions' cards show.
@@ -2747,7 +2751,10 @@ mod tasks {
             "Run ↩ shows nothing"
         );
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Thinking · no steps yet", Dot::Working)
+        );
         assert!(waiting(cx), "nothing ends a CLI that never answers");
 
         // Its first step takes the line's place, as a trace under way.
@@ -2789,7 +2796,10 @@ mod tasks {
             ]
         );
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Thinking · no steps yet", Dot::Working)
+        );
         // Its result folds it: the answer shows in its place.
         said(
             &agents,
@@ -2937,7 +2947,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
-            ("Waiting for your OK", Dot::Waiting)
+            ("Needs your OK · open chase.com", Dot::Waiting)
         );
         let question = card.question.expect("asked on the card");
         assert_eq!(
@@ -2961,7 +2971,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
-            ("Waiting for you", Dot::Waiting)
+            ("Needs you · Sign in, please", Dot::Waiting)
         );
         assert_eq!(
             card.question.and_then(|question| question.handoff),
@@ -3003,7 +3013,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.asks),
-            ("Waiting for your OK", false)
+            ("Needs your OK · open chase.com", false)
         );
     }
 
@@ -3102,6 +3112,78 @@ mod tasks {
         result
     }
 
+    /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
+    /// Thinking with no steps yet, then "Step N · <step>", "Needs you" ahead of what a handoff
+    /// waits for, and "Stopped after N steps" once the user stops it. Only the count and "Needs
+    /// you" lead it, which the card sets heavier.
+    #[gpui::test]
+    fn a_cards_status_says_how_far_its_task_has_got(cx: &mut TestAppContext) {
+        use crate::agents::task::status_lead;
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let status = |cx: &mut TestAppContext| card_of(&agents, cx).status.to_string();
+        assert_eq!(status(cx), "Thinking · no steps yet");
+        assert_eq!(status_lead(&status(cx)), 0);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(status(cx), "Step 1 · Read shop.example");
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            coupon,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(status(cx), "Step 2 · Typed “SPRING10” in “Coupon”");
+        assert_eq!(status_lead(&status(cx)), "Step 2".len());
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 100, "Sign in", "https://example.com/login"));
+        let _handed = call(
+            &agents,
+            &agent,
+            "hand_off",
+            json!({ "reason": "Sign in, please.", "tab": 31 }),
+            cx,
+        );
+        let card = card_of(&agents, cx);
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Needs you · Sign in, please", Dot::Waiting)
+        );
+        assert_eq!(status_lead(&card.status), "Needs you".len());
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let card = card_of(&agents, cx);
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Stopped after 3 steps", Dot::Ended)
+        );
+        assert_eq!(
+            status_lead(&card.status),
+            0,
+            "a stopped card asks for nothing"
+        );
+    }
+
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
@@ -3180,8 +3262,13 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             card.status.as_ref(),
-            "Looked at shop.example",
-            "the card says the step it's on"
+            "Step 4 · Looked at shop.example",
+            "the card says how far it has got and the step it's on"
+        );
+        assert_eq!(
+            conversation.progress.as_ref(),
+            "step 4 · 1 page",
+            "the conversation's header says how far it has got"
         );
         assert!(
             !format!("{conversation:?}{card:?}").contains("hunter2"),
@@ -3646,10 +3733,14 @@ mod tasks {
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
         assert_eq!(opening.recv().unwrap(), ToolResult::error(STOPPED));
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.question), ("Stopped", None));
+        // It says how far it got: the open_tab the stop answered.
+        assert_eq!(
+            (card.status.as_ref(), card.question),
+            ("Stopped after 1 step", None)
+        );
         // Its turn ending after the stop leaves it stopped.
         said(&agents, &agent, Out::Ended(None), cx);
-        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped");
+        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped after 1 step");
     }
 
     #[gpui::test]
