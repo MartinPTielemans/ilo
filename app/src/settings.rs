@@ -1880,8 +1880,12 @@ impl Settings {
             ),
             vec![edge],
         )];
-        // Where the host watches for it (host_watch_option_taps).
-        if cfg!(any(target_os = "macos", target_os = "linux")) {
+        // Where the host watches for it (host_watch_option_taps), or on Windows the core.
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             let option = unsafe { bc::bc_option_reveals_sidebar() };
             let option = self.toggle(
                 "option reveals sidebar",
