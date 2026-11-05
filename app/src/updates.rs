@@ -154,6 +154,12 @@ pub fn built(cx: &App) -> Track {
 
 /// The builds the updater takes, where About offers the choice: a copy that updates itself and
 /// carries a nightly feed.
+/// Whether the app updates itself, with its own updater, rather than the Store or nothing.
+pub fn own_updater(cx: &App) -> bool {
+    cx.try_global::<Updates>()
+        .is_some_and(|updates| updates.updater == Updater::Own)
+}
+
 pub fn followed(cx: &App) -> Option<Track> {
     let updates = cx.try_global::<Updates>()?;
     if updates.updater != Updater::Own {

@@ -190,6 +190,9 @@ bool SignedLikeThisApp(NSURL* app) {
 // Whether the updater reads the nightly feed (host_follow_nightly).
 bool g_follow_nightly = false;
 
+// Whether Sparkle checks and downloads on its schedule (host_set_automatic_update_checks).
+bool g_automatic = true;
+
 // The nightly feed the build carries, if it carries one.
 NSString* NightlyFeed() {
   id feed = [NSBundle.mainBundle objectForInfoDictionaryKey:@"NightlyFeedURL"];
@@ -614,6 +617,10 @@ void host_start_updater(void (*restart)(void), void (*changed)(int stage, const 
     Log([NSString stringWithFormat:@"no updates: %@", error.localizedDescription]);
     return;
   }
+  // Sparkle reads these as it starts, over the Info.plist's, so an updater the user turned off asks
+  // the feed nothing, not even the check a launch past its due time would make.
+  [NSUserDefaults.standardUserDefaults setBool:g_automatic forKey:@"SUEnableAutomaticChecks"];
+  [NSUserDefaults.standardUserDefaults setBool:g_automatic forKey:@"SUAutomaticallyUpdate"];
   g_updates = [[Updates alloc] init];
   g_updates.changed = changed;
   g_updates.restart = restart;
@@ -626,6 +633,16 @@ void host_start_updater(void (*restart)(void), void (*changed)(int stage, const 
 
 void host_check_for_updates(void) {
   [g_updates.controller checkForUpdates:nil];
+}
+
+void host_set_automatic_update_checks(bool on) {
+  g_automatic = on;
+  Log([NSString stringWithFormat:@"update checks automatic %@", on ? @"on" : @"off"]);
+  if (!g_updates) return;
+  // Sparkle resets its cycle as either changes: on, it schedules from the last check again.
+  SPUUpdater* updater = g_updates.controller.updater;
+  updater.automaticallyChecksForUpdates = on;
+  updater.automaticallyDownloadsUpdates = on;
 }
 
 void host_check_for_updates_quietly(void) {
