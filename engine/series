@@ -69,3 +69,4 @@ ours/chromium-policy-windows-key.patch
 ours/chromium-core-clear-history-element.patch
 ours/chromium-freezing-measure-on-battery-saver.patch
 ours/chromium-no-page-resource-monitor.patch
+ours/chromium-private-downloads-save.patch

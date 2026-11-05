@@ -17,6 +17,7 @@
 #include "base/values.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/host.h"
+#include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -71,6 +72,11 @@ bc_id IdOf(download::DownloadItem* item) {
   return data->id;
 }
 
+// The profile a download is of, its private session's for a private one.
+Profile* ProfileOf(download::DownloadItem* item) {
+  return Profile::FromBrowserContext(content::DownloadItemUtils::GetBrowserContext(item));
+}
+
 int StateOf(const download::DownloadItem& item) {
   switch (item.GetState()) {
     case download::DownloadItem::IN_PROGRESS:
@@ -86,15 +92,21 @@ int StateOf(const download::DownloadItem& item) {
 
 class Downloads : public download::AllDownloadItemNotifier::Observer {
  public:
-  // Adds |profile|'s downloads to the list.
+  // Adds |profile|'s downloads to the list, or its private session's, once.
   void Observe(Profile* profile) {
+    content::DownloadManager* manager = profile->GetDownloadManager();
+    if (std::ranges::any_of(notifiers_,
+                            [manager](const auto& each) { return each->GetManager() == manager; })) {
+      return;
+    }
     // Made here, as it tells of a manager that has read the history at once.
     notifiers_.push_back(
-        std::make_unique<download::AllDownloadItemNotifier>(profile->GetDownloadManager(), this));
+        std::make_unique<download::AllDownloadItemNotifier>(manager, this));
     Changed();
   }
 
-  // The ones Chrome's downloads page lists, of every profile the core uses, newest first.
+  // The ones Chrome's downloads page lists, of every profile the core uses and of their private
+  // sessions while they run, newest first.
   std::vector<download::DownloadItem*> Listed() {
     std::vector<download::DownloadItem*> listed;
     for (const auto& notifier : notifiers_) {
@@ -278,6 +290,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     std::vector<bc_download> downloads;
     downloads.reserve(items.size());
     for (download::DownloadItem* item : items) {
+      Profile* profile = ProfileOf(item);
       const std::string& name = text.emplace_back(item->GetFileNameToReportUser().AsUTF8Unsafe());
       const std::string& url = text.emplace_back(item->GetURL().spec());
       const std::string& path = text.emplace_back(item->GetTargetFilePath().AsUTF8Unsafe());
@@ -290,7 +303,9 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
                            .state = StateOf(*item),
                            .open_when_done = item->GetOpenWhenComplete(),
                            .held = item->IsDangerous() || item->IsInsecure(),
-                           .started = item->GetStartTime().InMillisecondsFSinceUnixEpoch()});
+                           .started = item->GetStartTime().InMillisecondsFSinceUnixEpoch(),
+                           .profile = profile ? ProfileId(DirOf(profile->GetOriginalProfile())) : 0,
+                           .off_the_record = profile && profile->IsOffTheRecord()});
     }
     Host().downloads_changed(Host().context, downloads.data(), downloads.size());
   }
@@ -389,8 +404,14 @@ void ActOnDownload(bc_id id, int action) {
   }
 }
 
-void ClearDownloads() {
+void ClearDownloads(bc_id profile, bool off_the_record) {
   for (download::DownloadItem* item : TheDownloads().Listed()) {
+    Profile* of = ProfileOf(item);
+    const bool session = of && of->IsOffTheRecord();
+    if (session != off_the_record ||
+        (off_the_record && ProfileId(DirOf(of->GetOriginalProfile())) != profile)) {
+      continue;
+    }
     if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
       item->Remove();
     }

@@ -768,10 +768,12 @@ impl Browser for Fake {
         self.report_downloads(cx);
     }
 
-    fn clear_downloads(&self, cx: &mut App) {
-        self.downloads
-            .borrow_mut()
-            .retain(|each| matches!(each.state, DownloadState::Running | DownloadState::Paused));
+    fn clear_downloads(&self, private: Option<u64>, cx: &mut App) {
+        self.downloads.borrow_mut().retain(|each| {
+            matches!(each.state, DownloadState::Running | DownloadState::Paused)
+                || each.private != private.is_some()
+                || private.is_some_and(|profile| profile != each.profile)
+        });
         self.report_downloads(cx);
     }
 
@@ -2090,9 +2092,19 @@ fn main() {
                                 open_when_done: false,
                                 held,
                                 started: now() - days * DAY,
+                                profile: 0,
+                                private: false,
                             },
                         )
                         .collect();
+                    // In a private window, the running one and the first finished one are its
+                    // session's, which its Library lists alone.
+                    let mut downloads: Vec<Download> = downloads;
+                    if std::env::var("PREVIEW_EMPTY").as_deref() == Ok("private") {
+                        for (index, download) in downloads.iter_mut().enumerate() {
+                            download.private = matches!(index, 0 | 3);
+                        }
+                    }
                     let first_favorite = first_download + DOWNLOADS.len() as u64;
                     let favorites: Vec<u64> = (first_favorite..).take(FAVORITES.len()).collect();
                     let folder = first_favorite + FAVORITES.len() as u64;

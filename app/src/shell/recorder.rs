@@ -655,7 +655,9 @@ impl Browser for Recorder {
 
     fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
 
-    fn clear_downloads(&self, _: &mut App) {}
+    fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
+        self.record(format!("clear downloads {private:?}"));
+    }
 
     fn download_icon(&self, _: u64, _: &mut App) {}
 

@@ -390,8 +390,8 @@ impl Browser for Engine {
         unsafe { bc::bc_download_act(download, action as i32) };
     }
 
-    fn clear_downloads(&self, _: &mut App) {
-        unsafe { bc::bc_downloads_clear() };
+    fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
+        unsafe { bc::bc_downloads_clear(private.unwrap_or(0), private.is_some()) };
     }
 
     fn download_icon(&self, download: u64, _: &mut App) {

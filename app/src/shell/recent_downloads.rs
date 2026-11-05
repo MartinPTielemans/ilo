@@ -777,6 +777,8 @@ mod tests {
             open_when_done: false,
             held: false,
             started: now() - ago,
+            profile: 0,
+            private: false,
         }
     }
 

@@ -36,6 +36,8 @@ pub(crate) unsafe extern "C" fn downloads_changed(
             open_when_done: download.open_when_done,
             held: download.held,
             started: download.started,
+            profile: download.profile,
+            private: download.off_the_record,
         })
         .collect();
     update_shells(|shell, cx| shell.set_downloads(downloads.clone(), cx));

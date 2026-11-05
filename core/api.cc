@@ -2119,8 +2119,8 @@ void bc_agent_download_answer(bc_id download, bool keep) {
   browser_core::AnswerAgentDownload(download, keep);
 }
 
-void bc_downloads_clear() {
-  browser_core::ClearDownloads();
+void bc_downloads_clear(bc_id profile, bool off_the_record) {
+  browser_core::ClearDownloads(profile, off_the_record);
 }
 
 void bc_download_icon(bc_id download) {

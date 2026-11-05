@@ -19,8 +19,9 @@ void ObserveDownloads(Profile* profile);
 // What bc_download_act does to the download |id|.
 void ActOnDownload(bc_id id, int action);
 
-// Takes the downloads not running or paused off the list, keeping their files.
-void ClearDownloads();
+// Takes the downloads not running or paused off the list, keeping their files: |profile|'s
+// private session's with |off_the_record|, else every profile's own.
+void ClearDownloads(bc_id profile, bool off_the_record);
 
 // Finds the icon the system shows for the download's file. Then download_icon.
 void FindDownloadIcon(bc_id id);
