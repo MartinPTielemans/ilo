@@ -621,6 +621,9 @@ void AgentPage::Heard(const std::string& session,
 
 void AgentPage::Settle() {
   settling_ = true;
+  // The quiet counts from the action's end: the requests it starts come after its last event's
+  // answer, which on a loaded machine is more than kQuiet after Listen began.
+  last_request_ = base::TimeTicks::Now();
   Quiet();
 }
 
