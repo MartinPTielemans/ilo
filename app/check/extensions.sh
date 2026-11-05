@@ -34,10 +34,7 @@ script='chrome.action.onClicked.addListener(async tab => {
   chrome.tabs.create({url: "clicked.html"});
 });
 chrome.commands.onCommand.addListener(() => chrome.tabs.create({url: "command.html"}));'
-# Chrome keeps running the script it first registered for an extension, so a changed script is a
-# new extension, in a folder of its own. In a profile the check ran in before, the old one still
-# holds ⇧⌘Y and the new one gets no key, so what changes goes in its page's script instead.
-clicked_dir="$extensions/clicked-$(printf %s "$script" | cksum | cut -d' ' -f1)"
+clicked_dir="$extensions/clicked"
 mkdir -p "$clicked_dir" "$extensions/popup" "$extensions/third" "$extensions/panel"
 printf '%s\n' "$script" > "$clicked_dir/background.js"
 cat > "$clicked_dir/manifest.json" << 'EOF'
@@ -115,10 +112,14 @@ echo '<title>the tab panel</title><body style="font:16px system-ui">the tab pane
   "$extensions/panel/tab.html"
 page='data:text/html,<title>loading</title>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
+# A profile of the run's own, new each time: an unpacked extension's id comes from its folder's
+# path, so one that loaded them from another checkout would keep its copies in the menu (#1890).
+profile_dir="$extensions/profile"
+rm -rf "$profile_dir"
+mkdir -p "$profile_dir"
 log="$out/extensions.log"
 step=0
-rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -603,11 +604,11 @@ fi
 echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, or on Windows only Edge's key, and hears its answer. Window: $out/native-host.png"
 
 # An extension's .crx from the served page, which Chrome installs from off the Web Store with
-# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, which the
-# check starts without, so no other run ever has it. Chrome takes a .crx signed with the key its id
-# comes from.
+# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, new each
+# time, so no other run ever has it. Chrome takes a .crx signed with the key its id comes from.
 serve
 crx="$PWD/$out/install"
+rm -rf "$crx"
 mkdir -p "$crx/source" "$crx/profile/Default"
 cat > "$crx/source/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Install", "version": "1", "permissions": ["tabs"],

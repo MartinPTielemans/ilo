@@ -6,12 +6,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, MouseButton, Rgba, Window, div, point, prelude::*, px, rgb, rgba,
-    svg,
+    AnyElement, App, BoxShadow, MouseButton, Rgba, Window,
+    accesskit::{Orientation, Role},
+    div, point,
+    prelude::*,
+    px, rgb, rgba, svg,
 };
 
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::{drawn, ring};
+use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
@@ -106,7 +109,8 @@ pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 /// the window is. While a search shows what it `found`, no plate is lit and the sections with
 /// nothing found dim. Each section logs where it's drawn as "toolbar {name}", as the toolbar's
 /// tabs did, for check.sh to click, with `logged`. A press on the column's ground moves the
-/// window, as a title bar does.
+/// window, as a title bar does. While an assistive app asks, `a11y`, the sections are a tab list, the one shown
+/// selected, and Chromium settings a button (#1381).
 pub fn column(
     shown: Section,
     dark: bool,
@@ -115,6 +119,7 @@ pub fn column(
     found: Option<&[Section]>,
     pick: Pick,
     foot: Foot,
+    a11y: bool,
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
     let groups = Section::GROUPS
@@ -127,6 +132,12 @@ pub fn column(
                 let pick = pick.clone();
                 plate(base, selected, dark)
                     .id(section.name())
+                    .when(a11y, |plate| {
+                        plate
+                            .role(Role::Tab)
+                            .aria_label(section.name())
+                            .aria_selected(selected)
+                    })
                     // ⇥ reaches the list, and ↑ and ↓ move in it, as in the sidebar; Space or
                     // Return shows the section.
                     .tab_index(0)
@@ -171,6 +182,7 @@ pub fn column(
     let chromium = plate(base, false, dark)
         .mb_0()
         .id("chromium-settings")
+        .when(a11y, |foot| named_button(foot, "Chromium settings"))
         .tab_index(0)
         .focus_from_keys_only()
         .focus_visible(ring(base))
@@ -207,8 +219,14 @@ pub fn column(
         .child(
             div()
                 .id("sections")
+                .when(a11y, |sections| {
+                    let sections = sections.role(Role::TabList).aria_label("Sections");
+                    sections.aria_orientation(Orientation::Vertical)
+                })
                 .tab_group()
                 .tab_index(0)
+                // Its sections are the stops, not the list that scrolls them.
+                .tab_stop(false)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
