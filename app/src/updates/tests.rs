@@ -460,3 +460,54 @@ fn with_whats_new_off_an_update_opens_no_notes() {
     assert_eq!(notes_to_open(notes(), &dir), notes(), "on again");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The version row's button is a button an assistive app calls by what it does, at each stage
+/// that offers one, and ⇥ stops at it (#1911): Try Again says it checks again.
+#[gpui::test]
+fn the_version_rows_button_says_what_it_does(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, stops, unnamed};
+    use gpui::accesskit::Role;
+    let mut about = shown(Updater::Own, cx);
+    for (stage, said) in [
+        (Stage::Idle, "Check for Updates"),
+        (Stage::Failed { found: true }, "Check for Updates Again"),
+        (Stage::Ready(Some("0.1.1".into())), "Restart to Update"),
+    ] {
+        about.says(stage);
+        let pressable = pressable(about.cx);
+        assert_eq!(unnamed(&pressable), [], "{pressable:?}");
+        assert_eq!(
+            pressable,
+            [(Role::Button, said.to_string(), None)],
+            "{said}"
+        );
+        let stops = stops(about.cx);
+        assert_eq!(stops, [(Role::Button, said.to_string(), None)], "{said}");
+    }
+}
+
+/// Get nightly builds is a switch an assistive app reads by its row's name, on or off (#1911).
+#[gpui::test]
+fn the_nightly_switch_is_named(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, unnamed};
+    use gpui::accesskit::{Role, Toggled};
+    let mut about = nightly(Updater::Own, Track::Release, Some(Track::Release), cx);
+    let switch = |about: &mut Nightly| {
+        let pressable = pressable(about.cx);
+        assert_eq!(unnamed(&pressable), [], "{pressable:?}");
+        let tree = about.cx.a11y_tree().expect("a tree");
+        (tree.nodes.iter())
+            .find(|(_, node)| node.role() == Role::Switch)
+            .map(|(_, node)| (node.label().unwrap_or_default().to_string(), node.toggled()))
+    };
+    assert_eq!(
+        switch(&mut about),
+        Some(("Get nightly builds".into(), Some(Toggled::False)))
+    );
+    about.click();
+    assert_eq!(about.asked(), ["follow nightlies", "check"]);
+    assert_eq!(
+        switch(&mut about),
+        Some(("Get nightly builds".into(), Some(Toggled::True)))
+    );
+}

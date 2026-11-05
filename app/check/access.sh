@@ -4,7 +4,8 @@
 # selected, and ↓ selects the next; ⇧F10 opens its field's menu on the first item. A tab's menu is
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
 # ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
-# Settings' column is a tab list of its sections, the one shown selected.
+# Settings' column is a tab list of its sections, the one shown selected, and its sub-views,
+# Links, Sync and About, name their controls.
 # It reads the tree from outside, as an assistive app does: on the Mac through tools/ax-tree.sh,
 # which needs this terminal to have the Accessibility permission, on Linux as Orca does, over
 # AT-SPI through tools/atspi-tree.sh, which needs dbus-daemon and at-spi2-core, and on Windows as
@@ -222,11 +223,73 @@ else
       fail "Settings' About isn't a tab in its Sections: $settings"
     grep -q " $button \"Chromium settings\"" "$settings" ||
       fail "Settings' Chromium settings isn't a button: $settings"
+    # Its sub-views name their controls too (#1911), as far as this copy draws them: Links' + and
+    # its pop-ups, a rule's where the profile has one, Sync's buttons signed in or out, and About's
+    # update button and nightly switch, which a copy with no updater or nightly feed has none of.
+    # A pop-up's role is each reader's own, so it's found by its name.
+    links="$out/access-settings-links.txt"
+    send clickkey $(drawn "toolbar Links")
+    expect '^browser: settings tab Links$' "a click on Links didn't show its tab"
+    settings_drew Links
+    read_tree '"Add Rule"' > "$links"
+    grep -q " $button \"Add Rule\"" "$links" || fail "Links' + isn't the button Add Rule: $links"
+    grep -q ' "Everything else opens in"' "$links" ||
+      fail "Links' pop-up for everything else isn't called by its row: $links"
+    if grep -q '^browser: settings link remove 0 at ' "$log"; then
+      grep -q " $button \"Remove Rule 1\"" "$links" ||
+        fail "the first rule's trash isn't the button Remove Rule 1: $links"
+      grep -q " $field \"Rule 1 Text\"" "$links" ||
+        fail "the first rule's field isn't the text field Rule 1 Text: $links"
+      for name in "Rule 1 Condition" "Rule 1 Space"; do
+        grep -q " \"$name\"" "$links" || fail "the first rule's pop-up isn't called $name: $links"
+      done
+      rule_read=read
+    fi
+    sync="$out/access-settings-sync.txt"
+    send clickkey $(drawn "toolbar Sync")
+    expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
+    settings_drew Sync
+    await '^browser: settings sync \(sign-in\|sign-out\|cancel\) at ' ||
+      fail "Sync drew none of Sign In, Sign Out and Cancel"
+    if grep -q '^browser: settings sync sign-in at ' "$log"; then
+      read_tree '"Sign In"' > "$sync"
+      grep -q " $button \"Sign In\"" "$sync" || fail "Sync's Sign In isn't a button: $sync"
+      grep -q " $button \"Change Server…\"" "$sync" ||
+        fail "Sync's Change… isn't the button Change Server…: $sync"
+    else
+      read_tree '"Sign Out"' > "$sync"
+      grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
+    fi
+    about="$out/access-settings-about.txt"
+    send clickkey $(drawn "toolbar About")
+    expect '^browser: settings tab About$' "a click on About didn't show its tab"
+    settings_drew About
+    # Read once, by which time About has drawn its button, if it has one, and logged where.
+    read_tree '"About"' > "$about"
+    update=$(sed -n 's/^browser: settings update \([a-z]*\) at .*/\1/p' "$log" | tail -1)
+    case $update in
+    check) said="Check for Updates" ;;
+    show) said="Show Update" ;;
+    restart) said="Restart to Update" ;;
+    *) said= ;;
+    esac
+    [ -z "$said" ] || read_tree "\"$said" > "$about"
+    # Check is also Try Again's, which says it checks again.
+    [ -z "$said" ] || grep -q " $button \"$said\( Again\)\{0,1\}\"" "$about" ||
+      fail "About's update button isn't the button $said: $about"
+    if grep -q '^browser: settings switch nightly builds at ' "$log"; then
+      grep -q ' "Get nightly builds"' "$about" ||
+        fail "About's nightly switch isn't called Get nightly builds: $about"
+    fi
+    echo "settings' sub-views: Links' rule ${rule_read:-not read, the profile has none}," \
+      "Sync's $(grep -c ' "Sign In"\| "Sign Out"' "$sync") account button," \
+      "About's update button: ${said:-none drawn}, nightly switch:" \
+      "$(grep -q ' "Get nightly builds"' "$about" && echo read || echo none drawn)"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
     exec 3>&-
     quit
-    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, the find bar's named buttons and its Matches, and Settings' sections as tabs with Chromium settings a button. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found, $settings"
+    echo "ok: $screen_reader reads the Space's name as a heading, the tab shown as the selected tab Docs in Today after New Tab, ⌘T's bar as a text field with its suggestions in a list whose selection ↓ moves, ⇧F10's field menu on its first item, the tab's menu, in front, as a menu with its items, separators and a submenu → opens, the find bar's named buttons and its Matches, Settings' sections as tabs with Chromium settings a button, and its sub-views' controls by name: Links' Add Rule and pop-ups, Sync's account buttons and About's update button and nightly switch where drawn. Trees: $tree, $bar, $moved, $menu, $submenu, $windows, $found, $settings, $links, $sync, $about"
   fi
 fi
 # The run's buses go with it.

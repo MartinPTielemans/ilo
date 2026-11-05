@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, button, group};
+use crate::settings_rows::{Look, button, group, named_button};
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
     BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
@@ -201,6 +201,8 @@ pub struct Account {
     /// It's the first launch's step, whose title, line and button say what its signed-out box
     /// would.
     step: bool,
+    /// An assistive app reads the window, as its last draw found: its controls are named then.
+    a11y: bool,
 }
 
 impl EventEmitter<AccountEvent> for Account {}
@@ -333,6 +335,7 @@ impl Account {
             entering: None,
             asked: false,
             drawn: Rc::default(),
+            a11y: false,
             look: Look::settings(true),
             step: false,
         }
@@ -480,6 +483,7 @@ impl Account {
         let server = self.state.server.clone();
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
+                .spoken("Sync Server Address")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
                 .with_text(server)
@@ -518,6 +522,7 @@ impl Account {
         }
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
+                .spoken("Recovery Words")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
         });
@@ -640,7 +645,8 @@ impl Account {
         );
     }
 
-    /// A button that records where it's drawn, by `name`.
+    /// A button that records where it's drawn, by `name`, which an assistive app calls by its
+    /// `title`.
     fn button(
         &self,
         name: impl Into<String>,
@@ -648,8 +654,23 @@ impl Account {
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        let title = title.into();
+        self.button_said(name, title.clone(), title, cx, clicked)
+    }
+
+    /// As `button`, called `spoken` where its title alone doesn't say what it does, as a device's
+    /// Remove doesn't say which.
+    fn button_said(
+        &self,
+        name: impl Into<String>,
+        title: impl Into<SharedString>,
+        spoken: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+        clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
         let name = name.into();
         button(&self.look, SharedString::from(name.clone()), title)
+            .when(self.a11y, |button| named_button(button, spoken))
             .relative()
             .child(self.place(name))
             .on_click(cx.listener(move |account, _, window, cx| clicked(account, window, cx)))
@@ -657,16 +678,19 @@ impl Account {
 
     /// A quiet link in a line of small grey text, brightening under the pointer, that records where
     /// it's drawn, by `name`.
+    /// An assistive app reads it as a button called `spoken`, as it acts here, not elsewhere.
     fn link(
         &self,
         name: &'static str,
         title: &'static str,
+        spoken: &'static str,
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let ink = self.look.ink;
         div()
             .id(name)
+            .when(self.a11y, |link| named_button(link, spoken))
             .relative()
             .hover(move |link| link.text_color(ink))
             .child(title)
@@ -701,10 +725,16 @@ impl Account {
     fn signed_out(&self, cx: &mut Context<Self>) -> gpui::Div {
         let signing_in = self.state.status == Status::SigningIn;
         let control = match signing_in {
-            true => self.button("cancel", "Cancel", cx, |account, _, cx| {
-                account.host.cancel();
-                cx.notify();
-            }),
+            true => self.button_said(
+                "cancel",
+                "Cancel",
+                "Cancel Sign In",
+                cx,
+                |account, _, cx| {
+                    account.host.cancel();
+                    cx.notify();
+                },
+            ),
             false => self.button("sign-in", "Sign In", cx, |account, window, cx| {
                 account.sign_in(window, cx)
             }),
@@ -729,9 +759,13 @@ impl Account {
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
                     .when(!signing_in, |row| {
-                        row.child(self.link("change-server", "Change…", cx, |account, _, cx| {
-                            account.change_server(cx)
-                        }))
+                        row.child(self.link(
+                            "change-server",
+                            "Change…",
+                            "Change Server…",
+                            cx,
+                            |account, _, cx| account.change_server(cx),
+                        ))
                     })
             }
         };
@@ -824,7 +858,13 @@ impl Account {
         let now = cx.background_executor().now();
         let copied = words.copied.is_some_and(|at| now - at < COPIED);
         let title = if copied { "Copied" } else { "Copy" };
-        let copy = self.button("copy", title, cx, |account, _, cx| account.copy_words(cx));
+        let spoken = match copied {
+            true => "Recovery Words Copied",
+            false => "Copy Recovery Words",
+        };
+        let copy = self.button_said("copy", title, spoken, cx, |account, _, cx| {
+            account.copy_words(cx)
+        });
         // Copied says it happened, with a check, until it's Copy again.
         let check = svg()
             .path("icons/check.svg")
@@ -911,20 +951,20 @@ impl Account {
                         .child(self.link(
                             "start-over",
                             "Start over…",
+                            "Start Over…",
                             cx,
                             |account, window, cx| account.start_over(window, cx),
                         )),
                 );
         }
         let pairing = self.state.status == Status::Pairing;
-        let waiting =
-            match pairing {
-                true => {
-                    let code = match self.state.code.is_empty() {
-                        true => div().text_color(self.look.detail).child("––– –––"),
-                        false => div().child(grouped(&self.state.code)),
-                    };
-                    lines(
+        let waiting = match pairing {
+            true => {
+                let code = match self.state.code.is_empty() {
+                    true => div().text_color(self.look.detail).child("––– –––"),
+                    false => div().child(grouped(&self.state.code)),
+                };
+                lines(
                     &self.look,
                     format!(
                         "On a device signed in to {}, {} asks to add this one. Add it there if it \
@@ -933,33 +973,41 @@ impl Account {
                         env!("APP_NAME"),
                     ),
                     None,
-                    Some(self.button("cancel", "Cancel", cx, |account, _, cx| {
-                        account.host.cancel();
-                        cx.notify();
-                    })
-                    .into_any_element()),
+                    Some(
+                        self.button_said(
+                            "cancel",
+                            "Cancel",
+                            "Cancel Request",
+                            cx,
+                            |account, _, cx| {
+                                account.host.cancel();
+                                cx.notify();
+                            },
+                        )
+                        .into_any_element(),
+                    ),
                 )
                 .child(
                     code.mt(px(PADDING))
                         .text_size(px(text::HEADING))
                         .font_weight(FontWeight::SEMIBOLD),
                 )
-                }
-                false => lines(
-                    &self.look,
-                    self.state.problem.map_or(
-                        "Ask a device already signed in to add this one.",
-                        problem_text,
-                    ),
-                    None,
-                    Some(
-                        self.button("ask-again", "Ask Again", cx, |account, _, cx| {
-                            account.ask_again(cx)
-                        })
-                        .into_any_element(),
-                    ),
+            }
+            false => lines(
+                &self.look,
+                self.state.problem.map_or(
+                    "Ask a device already signed in to add this one.",
+                    problem_text,
                 ),
-            };
+                None,
+                Some(
+                    self.button("ask-again", "Ask Again", cx, |account, _, cx| {
+                        account.ask_again(cx)
+                    })
+                    .into_any_element(),
+                ),
+            ),
+        };
         div()
             .child(header(&self.look, "Approve on another device", true))
             .child(group(&self.look, [waiting]))
@@ -1006,8 +1054,15 @@ impl Account {
                             account.host.remove_device(&id);
                             cx.notify();
                         };
-                    self.button(format!("remove {}", device.id), "Remove", cx, remove)
-                        .into_any_element()
+                    let spoken = format!("Remove {}", device.name);
+                    self.button_said(
+                        format!("remove {}", device.id),
+                        "Remove",
+                        spoken,
+                        cx,
+                        remove,
+                    )
+                    .into_any_element()
                 }
             };
             div()
@@ -1122,6 +1177,7 @@ impl Focusable for Account {
 
 impl Render for Account {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         self.ask_what_shows();
         self.focus_field(window, cx);
         self.drawn.borrow_mut().clear();
