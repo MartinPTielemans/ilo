@@ -162,6 +162,8 @@ struct Settings {
   // How long a Little ilo window that isn't active waits before it closes into the archive (Arc's
   // default).
   base::TimeDelta little_archive_after = base::Hours(6);
+  // Whether Little ilo is on: off, nothing opens a Little ilo window (bc_little_windows).
+  bool little_windows = true;
   // Whether the app taps the trackpad at its detents.
   bool haptics = true;
   // Whether the app asks before the user's Quit quits.

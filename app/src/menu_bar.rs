@@ -103,10 +103,15 @@ pub(crate) fn menus(
         menu(env!("APP_NAME"), app),
         menu(
             "File",
-            vec![
-                item("New Tab…", Command::NewTab),
-                item("New Window", Command::NewWindow),
-                item("New Little ilo Window", Command::NewLittleWindow),
+            [
+                Some(item("New Tab…", Command::NewTab)),
+                Some(item("New Window", Command::NewWindow)),
+                // Not with Little ilo off in Settings › Features.
+                (!bar.little_off).then(|| item("New Little ilo Window", Command::NewLittleWindow)),
+            ]
+            .into_iter()
+            .flatten()
+            .chain([
                 item("New Incognito Window", Command::NewPrivateWindow),
                 item("Blank Window", Command::NewBlankWindow),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
@@ -121,7 +126,8 @@ pub(crate) fn menus(
                 item("Capture Full Page", Command::CaptureFullPage),
                 item("Save Page As", Command::SavePage),
                 item("Print", Command::Print),
-            ],
+            ])
+            .collect(),
         ),
         menu(
             "Edit",

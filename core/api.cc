@@ -1424,6 +1424,15 @@ void bc_set_little_archive_after(double seconds) {
   browser_core::SessionChanged();
 }
 
+bool bc_little_windows(void) {
+  return browser_core::UserSettings().little_windows;
+}
+
+void bc_set_little_windows(bool on) {
+  browser_core::UserSettings().little_windows = on;
+  browser_core::SessionChanged();
+}
+
 bool bc_haptics(void) {
   return browser_core::UserSettings().haptics;
 }
@@ -2245,6 +2254,10 @@ bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile_id) {
 }
 
 bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  // Off in Settings › Features, nothing opens one.
+  if (!browser_core::UserSettings().little_windows) {
+    return 0;
+  }
   Profile* profile = LoadedProfile(profile_id);
   browser_core::Window* window =
       profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,

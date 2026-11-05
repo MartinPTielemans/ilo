@@ -2055,6 +2055,13 @@ BC_EXPORT void bc_set_archive_after(double seconds);
 BC_EXPORT double bc_little_archive_after(void);
 BC_EXPORT void bc_set_little_archive_after(double seconds);
 
+// Whether Little ilo is on, as Settings › Features has it: on by default. Off, nothing opens a
+// Little ilo window: bc_window_open_little returns 0, ⌥⌘-click on a link opens it in a tab behind
+// as ⌘-click does, and ⇧⌘T reopens a Little ilo window's tab as a Today tab. The windows open
+// stay. The core keeps it with the Spaces. The user's alone: agents get no Little ilo window.
+BC_EXPORT bool bc_little_windows(void);
+BC_EXPORT void bc_set_little_windows(bool on);
+
 // Whether to show the note that auto-archive took Today tabs: from the first time it takes some
 // until the user dismisses it with bc_dismiss_archive_note, after which it never shows again, as
 // the core keeps that with the Spaces. Each change comes with archive_note_changed.

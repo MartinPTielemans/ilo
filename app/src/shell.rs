@@ -1585,6 +1585,9 @@ pub struct Shell {
     /// watches that draw the window again once either changes.
     system_tone: Tone,
     app_appearance: Appearance,
+    /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
+    /// offers or opens a Little ilo window.
+    little_windows: bool,
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
@@ -1900,6 +1903,7 @@ impl Shell {
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
+            little_windows: true,
             forced_tone: None,
             window_active: true,
             window_main: true,

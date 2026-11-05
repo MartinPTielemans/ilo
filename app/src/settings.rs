@@ -1967,21 +1967,29 @@ impl Settings {
             true => ("⌥⌘N", "⌥⌘-click", "⇧-click"),
             false => ("Ctrl+Alt+N", "Ctrl+Alt-click", "Shift-click"),
         };
+        let little_on = unsafe { bc::bc_little_windows() };
+        let little_switch =
+            self.toggle("little windows", little_on, set_little_windows, accent, cx);
+        // Off, the line is the receipt: what's gone, and where things go instead.
+        let little_line = match little_on {
+            true => format!(
+                "A small window for a quick look: {little_keys}, {little_click} a link, or a link \
+                 from another app."
+            ),
+            false => format!(
+                "Off: {little_keys} does nothing, {little_click} opens a tab behind, and links \
+                 from other apps open in the Space in front."
+            ),
+        };
         let little = feature(
             look,
             "icons/app-window.svg",
             concat!("Little ", env!("APP_NAME")),
-            Some(
-                format!(
-                    "A small window for a quick look: {little_keys}, {little_click} a link, or a \
-                     link from another app."
-                )
-                .into(),
-            ),
-            Vec::new(),
+            Some(little_line.into()),
+            vec![little_switch],
         );
         // The Mac's alone, the one with a host for the button so far.
-        let menu_bar = mac.then(|| {
+        let menu_bar = (mac && little_on).then(|| {
             let on = crate::little_in_menu_bar();
             let switch = self.toggle(
                 "little in the menu bar",
@@ -2014,10 +2022,11 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
-            .chain([little_archive])
+            .chain(little_on.then_some(little_archive))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle("link previews", previews, set_link_previews, accent, cx);
@@ -3520,9 +3529,18 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
+        // Little ilo's commands have no row while it's off.
+        let little = unsafe { bc::bc_little_windows() };
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
+                .filter(|(_, keys)| {
+                    little
+                        || !matches!(
+                            keys,
+                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
+                        )
+                })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
                         (Keys::Of(command), _) => self.shortcut(*command, accent, cx),
@@ -3933,6 +3951,10 @@ fn set_warn_before_quitting(warn: bool, _: &mut App) {
 
 fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
+}
+
+fn set_little_windows(on: bool, cx: &mut App) {
+    crate::set_little_windows(on, cx);
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {

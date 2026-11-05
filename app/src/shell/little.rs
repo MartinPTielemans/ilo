@@ -137,6 +137,17 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings › Features' Little ilo switch: off, File, the command bar and ⌥⌘N offer no Little
+    /// ilo window, and ⌥⌘-click on a row is a click. The windows open stay.
+    pub fn set_little_windows(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.little_windows == on {
+            return;
+        }
+        self.little_windows = on;
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// An Esc the page didn't use closes a Little ilo window, once there's no load for it to stop
     /// and no page full screen for it to leave (Arc), and says whether it did.
     pub fn escape_unused(&mut self, cx: &mut Context<Self>) -> bool {
@@ -163,7 +174,14 @@ impl Shell {
             .is_some_and(|space| space.agent.is_empty());
         // ⌘ is Control off the Mac, where the platform key is Super.
         let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
-        if !takes || !users || self.one_space() || self.little.is_some() || self.is_folder(tab) {
+        // With Little ilo off it's a click, as on any row.
+        if !takes
+            || !users
+            || self.one_space()
+            || !self.little_windows
+            || self.little.is_some()
+            || self.is_folder(tab)
+        {
             return false;
         }
         if !self.today().contains(&tab) || self.panes(tab).len() > 1 {

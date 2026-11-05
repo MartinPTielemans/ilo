@@ -135,7 +135,8 @@ bool host_window_shown(void* ui_view);
 // Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
-// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// window open, 1 with one on screen, 2 with all hidden, and -1 with Little ilo off in Settings,
+// which leaves out all of Little ilo's items. |chosen| gets the item picked: 0 New, 1
 // Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
 // Off the Mac, which has no Dock menu: on Windows the taskbar's jump list gets New window and New
 // incognito window, which launch ilo again with --new-window and --incognito (bc_host's

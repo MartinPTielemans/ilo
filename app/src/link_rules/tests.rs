@@ -221,9 +221,14 @@ struct Recorder {
     menus: RefCell<Vec<String>>,
     /// The item the next menu's user picks.
     answer: Cell<Option<usize>>,
+    /// Little ilo is off in Settings › Features.
+    little_off: Cell<bool>,
 }
 
 impl Host for Recorder {
+    fn little_windows(&self) -> bool {
+        !self.little_off.get()
+    }
     fn spaces(&self) -> Vec<(u64, SharedString)> {
         self.spaces.clone()
     }
@@ -634,4 +639,55 @@ fn the_meet_rule_is_added_once() {
     let text = trashed.to_text(&spaces);
     assert_eq!(text, "seeded\tmeet\n");
     assert_eq!(Rules::parse(&text, &spaces), trashed);
+}
+
+/// With Little ilo off in Settings › Features, a rule to it and everything else to it send links
+/// to the Space in front, and the choice stays for when it's on again.
+#[test]
+fn off_little_ilo_sends_its_links_to_the_space_in_front() {
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "quick", LITTLE)],
+        otherwise: LITTLE,
+    };
+    let spaces = [WORK, HOME];
+    assert_eq!(
+        rules.route_with("https://quick.example/", &spaces, true),
+        (LITTLE, Some(0))
+    );
+    assert_eq!(
+        rules.route_with("https://news.example/", &spaces, true),
+        (LITTLE, None)
+    );
+    assert_eq!(
+        rules.route_with("https://quick.example/", &spaces, false),
+        (0, Some(0))
+    );
+    assert_eq!(
+        rules.route_with("https://news.example/", &spaces, false),
+        (0, None)
+    );
+    assert_eq!(rules.otherwise, LITTLE);
+}
+
+/// With Little ilo off, neither a rule's Space pop-up nor Everything else's offers it.
+#[gpui::test]
+fn off_the_pop_ups_have_no_little_ilo(cx: &mut TestAppContext) {
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "work", WORK)],
+        otherwise: 0,
+    };
+    let (host, view, cx) = tab_view(rules, cx);
+    host.little_off.set(true);
+    click(cx, (SPACE_X, row_y(0)));
+    let everything = otherwise(&view, cx);
+    click(cx, everything);
+    let menus = host.menus.take();
+    assert_eq!(menus.len(), 2);
+    for menu in &menus {
+        assert!(
+            menu.ends_with("The Space in Front, Work (checked), Home")
+                || menu.ends_with("The Space in Front (checked), Work, Home"),
+            "{menu}"
+        );
+    }
 }
