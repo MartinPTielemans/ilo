@@ -1,0 +1,62 @@
+# A proof for a release's cut, on test branches only and never in a pull request: a user's Mac copy
+# of the last release takes the next one through Sparkle, as it would from the real feed. The
+# appcast and DMG are a release's or a release.yml dry run's, signed with the real update key;
+# github.com resolves to a server on the runner's 127.0.0.1 for the run, so nothing reads or touches
+# the real feed. .github/sparkle-mac-proof/from-to names the two.
+name: Sparkle Mac update proof
+
+on:
+  push:
+    branches: ['test/sparkle-mac-0116-*', 'test/sparkle-mac-0117-*']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  proof:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Screen Recording for tools/window-screenshot.sh, which captures ilo's window alone: macOS
+      # asks it of the process responsible, the runner's agent, and replayd keeps its own list.
+      # The runner is a throwaway VM with SIP off. A capture that fails costs only its picture.
+      - continue-on-error: true
+        run: |
+          now=$(date +%s)
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in
+            /*)
+              sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service, client, client_type,
+                auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+                VALUES ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+              defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+              echo "granted $path"
+              ;;
+            esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      - name: Proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/sparkle-mac-proof/proof.sh "$RUNNER_TEMP/proof" $(cat .github/sparkle-mac-proof/from-to)
+
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sparkle-mac-proof
+          path: |
+            ${{ runner.temp }}/proof/*.log
+            ${{ runner.temp }}/proof/*.txt
+            ${{ runner.temp }}/proof/shots
+          if-no-files-found: warn
