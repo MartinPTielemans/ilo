@@ -71,7 +71,7 @@ Darwin)
   # An applet that handles the scheme's open location, registered with Launch Services.
   if [ -n "${CI:-}" ] || [ "$(sysctl -n kern.hv_vmm_present 2> /dev/null)" = 1 ]; then
     handback_applet="$here/Handback.app"
-    printf 'on open location given\n  do shell script "printf %%s\\\\\\\\n " & quoted form of given & " >> " & quoted form of "%s"\nend open location\n' \
+    printf 'on open location theURL\n  do shell script "printf %%s\\\\\\\\n " & quoted form of theURL & " >> " & quoted form of "%s"\nend open location\n' \
       "$handled" > "$out/handback.applescript"
     osacompile -o "$handback_applet" "$out/handback.applescript" || fail "osacompile didn't make the stand-in"
     plist="$handback_applet/Contents/Info.plist"
