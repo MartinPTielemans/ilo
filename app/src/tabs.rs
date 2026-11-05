@@ -374,7 +374,7 @@ pub(crate) unsafe extern "C" fn tab_opened(
             .and_then(|each| each.little)
     });
     if let Some(home) = little.filter(|_| opener != 0) {
-        update_app_later(move |_| little_tab_opened(window, tab, home));
+        update_app_later(move |cx| little_tab_opened(window, tab, home, cx));
         return;
     }
     // A link ⌥⌘-clicked, or opened in a split view from the page's menu, joined its page's split,

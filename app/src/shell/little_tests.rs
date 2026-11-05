@@ -723,3 +723,145 @@ fn it_grows_in_from_its_first_frame_on_screen_once(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(drawn(&host), 0, "a regular window asked to grow in");
 }
+
+/// A Little ilo window drawn for the Space One, its own Space 9 holding the page 10.
+fn drawn_little(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut gpui::VisualTestContext, Rc<Recorder>) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://signin.example/".into();
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    (shell, cx, host)
+}
+
+/// A page's question has no URL field to hang from in a Little ilo window, and nothing can be drawn
+/// over the page, so it hangs from the bar and the page makes room under it, until it's answered
+/// (#1914).
+#[gpui::test]
+fn a_question_hangs_under_the_bar_and_the_page_makes_room(cx: &mut TestAppContext) {
+    use crate::shell::Question;
+    use crate::tokens::shell::LITTLE_BAR;
+    use gpui::px;
+
+    let (shell, cx, _) = drawn_little(cx);
+    let page_top = |cx: &mut gpui::VisualTestContext| {
+        shell.update(cx, |shell, _| {
+            let viewport = shell.viewport;
+            shell.card_frames(viewport).0.top()
+        })
+    };
+    assert_eq!(page_top(cx), px(LITTLE_BAR));
+    shell.update(cx, |shell, cx| {
+        let permissions = vec!["Access other apps and services on this device".into()];
+        let question = Question {
+            site: "signin.example".into(),
+            permissions,
+        };
+        shell.set_question(10, Some(question), cx);
+    });
+    cx.run_until_parked();
+    let card = shell.read_with(cx, |shell, _| shell.question_drawn.get());
+    let card = card.expect("the question wasn't drawn");
+    // Its drawn bounds are inside its 1-point edge, which starts at the bar's foot.
+    assert_eq!(card.top(), px(LITTLE_BAR + 1.), "it hangs from the bar");
+    assert_eq!(
+        page_top(cx),
+        card.bottom() + px(crate::shell::CARD_INSET),
+        "the page goes under it"
+    );
+    shell.update(cx, |shell, cx| shell.set_question(10, None, cx));
+    cx.run_until_parked();
+    assert_eq!(page_top(cx), px(LITTLE_BAR), "the page takes its room back");
+}
+
+/// A tab the window's page opened goes behind, where no window shows it, so when its page asks to
+/// open another app, as a sign-in's pop-up hands back to its app, the Little ilo window asks
+/// instead, over its page (#1914). Its own page's dialog comes first, and the other's other dialogs
+/// wait for their tab.
+#[gpui::test]
+fn a_tab_sent_behind_asks_to_open_an_app_here(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog};
+
+    let (shell, cx, host) = drawn_little(cx);
+    let dialog = |id: u64, kind: DialogKind| PageDialog {
+        id,
+        kind,
+        title: "Open Handback?".into(),
+        message: "".into(),
+        text: "".into(),
+        accept: "Open Handback".into(),
+        cancel: "Cancel".into(),
+        check: "".into(),
+        username: "".into(),
+        password: "".into(),
+    };
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("page dialog"))
+            .collect::<Vec<_>>()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.little_sent(11, cx);
+        shell.set_page_dialog(11, Some(dialog(1, DialogKind::Alert)), cx);
+    });
+    assert_eq!(
+        shown(cx),
+        Vec::<String>::new(),
+        "a sent tab's alert waits for it"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(11, Some(dialog(2, DialogKind::OpenApp)), cx)
+    });
+    assert_eq!(shown(cx), ["page dialog 11 2"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(10, Some(dialog(3, DialogKind::Alert)), cx)
+    });
+    assert_eq!(
+        shown(cx),
+        ["page dialog 10 3"],
+        "its own page's comes first"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.answer_page_dialog(10, 3, accept(), cx);
+    });
+    let after: Vec<String> = shown(cx);
+    assert!(
+        after.iter().any(|call| call == "page dialog 11 2"),
+        "the sent tab's asks again once its page's is answered: {after:?}"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.answer_page_dialog(11, 2, accept(), cx)
+    });
+    let answered = host.take();
+    assert!(
+        answered
+            .iter()
+            .any(|call| call == "answer dialog 11 2 accept"),
+        "Open answered the sent tab's page: {answered:?}"
+    );
+}
+
+fn accept() -> crate::shell::PageReply {
+    crate::shell::PageReply {
+        accept: true,
+        text: String::new(),
+        password: String::new(),
+        checked: false,
+    }
+}
