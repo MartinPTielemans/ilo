@@ -41,6 +41,7 @@
 #include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "build/build_config.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
@@ -64,11 +65,15 @@ namespace {
 struct SavedWindow {
   // The Space it showed, among the session's.
   int space = 0;
-  // Its frame out of full screen, empty if it was saved before frames were kept.
+  // Its frame out of full screen and maximized, empty if it was saved before frames were kept.
   gfx::Rect bounds;
   // Its docked sidebar's width, or 0 for none.
   double sidebar_width = 0;
   bool fullscreen = false;
+  // Its show state, as Chromium's session keeps a window's (ui::mojom::WindowShowState): maximized,
+  // or normal. A minimized window comes back normal, as Chrome's does. Never on the Mac, where
+  // Chromium's widget calls a zoomed window maximized, and its zoom is a frame, which |bounds| has.
+  bool maximized = false;
 };
 
 struct Saved {
@@ -333,11 +338,15 @@ Saved Collect() {
     views::Widget* widget = window->widget();
     saved.windows.push_back(
         {.space = space == spaces.end() ? 0 : space->second,
-         .bounds = widget ? widget->GetRestoredBounds() : gfx::Rect(),
+         .bounds = window->RestoredFrame(),
          .sidebar_width = window->sidebar_width(),
          // The user's full screen, not a page's: one saved as a video plays would come back
          // without it.
-         .fullscreen = widget && widget->IsFullscreen() && !window->FullScreenForPage()});
+         .fullscreen = widget && widget->IsFullscreen() && !window->FullScreenForPage(),
+#if !BUILDFLAG(IS_MAC)
+         .maximized = widget && widget->IsMaximized() && !widget->IsFullscreen(),
+#endif
+        });
   }
   saved.archive = Archived();
   return saved;
@@ -474,6 +483,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
     }
     if (window.fullscreen) {
       dict.Set("fullscreen", true);
+    }
+    if (window.maximized) {
+      dict.Set("maximized", true);
     }
     windows.Append(std::move(dict));
   }
@@ -707,6 +719,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
       }
       to.sidebar_width = window->FindDouble("sidebar_width").value_or(0);
       to.fullscreen = window->FindBool("fullscreen").value_or(false);
+      to.maximized = window->FindBool("maximized").value_or(false);
     }
   } else {
     // Saved when the session kept one window, without its frame.
@@ -1098,7 +1111,8 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
       UserSettings() = saved->settings;
       LoadedWindows() = std::exchange(saved->windows, {});
       // Without the last session's windows, the launch opens one, where the front one was, and
-      // windowed, as a new window would be.
+      // out of full screen, as a new window would be. Maximized it stays so, as Windows' launch
+      // window had it.
       if (!UserSettings().restore_windows && !LoadedWindows().empty()) {
         LoadedWindows().erase(LoadedWindows().begin() + 1, LoadedWindows().end());
         LoadedWindows().front().fullscreen = false;
@@ -1179,6 +1193,10 @@ std::vector<gfx::Rect> SavedWindowFrames() {
     frames.push_back(window.bounds);
   }
   return frames;
+}
+
+bool SavedWindowMaximized(size_t index) {
+  return index < LoadedWindows().size() && LoadedWindows()[index].maximized;
 }
 
 bool RestoreSavedWindow(Window& window, size_t index) {

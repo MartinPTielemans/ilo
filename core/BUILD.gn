@@ -123,6 +123,16 @@ source_set("sidebar_backups") {
   deps = [ "//base" ]
 }
 
+# The frame a window the window manager maximized un-maximizes to, apart so browser_core_unittests
+# tests the rule alone.
+source_set("window_frames") {
+  sources = [
+    "window_frames.cc",
+    "window_frames.h",
+  ]
+  deps = [ "//ui/gfx/geometry" ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -256,6 +266,7 @@ source_set("browser_core") {
     ":space_default",
     ":sync_guard",
     ":sync_keys",
+    ":window_frames",
     "//base",
     "//base:i18n",
     "//chrome/app:command_ids",
@@ -520,6 +531,7 @@ test("browser_core_unittests") {
     "space_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "window_frames_unittest.cc",
   ]
   deps = [
     ":search_default",
@@ -527,6 +539,7 @@ test("browser_core_unittests") {
     ":space_default",
     ":sync_guard",
     ":sync_keys",
+    ":window_frames",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
