@@ -273,9 +273,10 @@ pub(super) fn card_listener(
     canvas(
         move |bounds, window, _| {
             // A Little ilo window's page makes room for the card where it's drawn, so a card
-            // that moved is laid out again.
+            // that moved is laid out again: at the next frame, as a refresh while the window draws
+            // does nothing, and the page would cover a question until something else drew (#1930).
             if logged_at(what, &drawn, tab, bounds) {
-                window.refresh();
+                window.on_next_frame(|window, _| window.refresh());
             }
         },
         |_, _, _, _| {},

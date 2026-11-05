@@ -54,6 +54,7 @@ if [ "$(cat "$src/.portablelinux-tag" 2>/dev/null)" != "$tag" ]; then
   apply_domsub
   write_gn_args
   fix_tool_downloading
+  unlink_esbuild "$_src_dir"
   setup_toolchain
   remove_agent_instructions "$_src_dir"
   apply_series "$_src_dir"

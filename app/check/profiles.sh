@@ -8,7 +8,8 @@
 # menu then shows, and makes and deletes one. Each profile there has its own search engine, which
 # the command bar searches with in its Spaces, its own archive time, its own download folder, which
 # its Space's downloads go in, and Clear… for its browsing data, as ⇧⌘⌫ opens it for the Space
-# shown. Little ilo's bar picks the other profile for its page, which is kept for the site.
+# shown. Little ilo's bar picks the other profile for its page, which is kept for the site, and a
+# link from another app to the site opens in Little ilo in that profile.
 # Deleting the Space leaves its profile unused, and Delete in the menu deletes it once the
 # user confirms.
 
@@ -39,7 +40,8 @@ onkeydown = e => {
 cookie_page="$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')profile.html"
 log="$out/profiles.log"
 step=0
-rm -f "$saved" "$launch_frame" "$(dirname "$saved")/Little ilo profiles"
+# Links from other apps go to Little ilo, the rules' default, whatever a links run left.
+rm -f "$saved" "$launch_frame" "$(dirname "$saved")/Little ilo profiles" "$(dirname "$saved")/Link rules"
 BROWSER_DRIVE=1 BROWSER_URL="$cookie_page" "$browser" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -246,6 +248,31 @@ grep -q "^localhost	Profile 2\$" "$(dirname "$saved")/Little ilo profiles" ||
 # New too, so ⌘W closing it shows it's key.
 send key w cmd
 expect "^browser: window closed $moved\$" "the Profile 2 Little ilo window didn't come to the front: ⌘W didn't close it"
+# A link to the site from another app, as one clicked in Mail, opens in Little ilo in the profile
+# kept for the site, Profile 2, in its Space, though the window in front shows the first's (#693).
+# It's sent as the system sends one: on Windows by the command ilo.iss registers, on Linux by a
+# second launch, which hands it to the browser running, and on the Mac by open.
+send window 1
+linked="${cookie_page}?from-another-app"
+if [ "$(uname)" = Darwin ]; then
+  open -a "$app" "$linked"
+elif windows; then
+  ("$browser" --single-argument "$linked" < /dev/null)
+else
+  "$browser" "$linked"
+fi >> "$out/profiles-link.log" 2>&1 || fail "the link from another app didn't reach the browser"
+expect_late "^browser: little ilo opens $linked in profile $work\$" \
+  "the link from another app to the kept site didn't open in Profile 2: $(grep '^browser: link from another app' "$log" | tail -1)"
+expect "^browser: link from another app $linked: tab [0-9]* in little window [0-9]* of space $second\$" \
+  "the link from another app to the kept site didn't open in Profile 2's Space"
+linked_window=$(sed -n "s|^browser: link from another app $linked: tab [0-9]* in little window \([0-9]*\) .*|\1|p" "$log" | tail -1)
+expect "^browser: little window opened $linked_window profile $work home $second\$" \
+  "the link's Little ilo window isn't in Profile 2"
+expect "^browser: title [0-9]* cookie none\$" "the link's page in Profile 2 saw the first profile's cookie"
+../tools/window-screenshot.sh "$pid" "$out/little-kept-profile.png" all || fail "no window to capture"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd
+expect "^browser: window closed $linked_window\$" "⌘W didn't close the link's Little ilo window"
 send window 1
 exec 3>&-
 quit
@@ -568,4 +595,4 @@ send key return
 expect "^browser: removed profile $work personal\$" "the profile wasn't deleted"
 exec 3>&-
 quit
-echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms; a profile nothing is in is deleted from the menu once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site. Windows: $out/profile-popup.png, $out/little-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"
+echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms; a profile nothing is in is deleted from the menu once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"

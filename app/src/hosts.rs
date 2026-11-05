@@ -62,6 +62,14 @@ impl dialog::Host for DialogHost {
     fn hide(&self) {
         unsafe { platform::host_hide_dialog() };
     }
+
+    fn hold_keys(&self) {
+        unsafe { platform::host_hold_keys() };
+    }
+
+    fn give_held_keys(&self) {
+        unsafe { platform::host_release_held_keys() };
+    }
 }
 
 /// The Dock icon's dot, swapped by the host (platform/mac/dock.mm).

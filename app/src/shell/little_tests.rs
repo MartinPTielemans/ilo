@@ -783,6 +783,16 @@ fn a_question_hangs_under_the_bar_and_the_page_makes_room(cx: &mut TestAppContex
         card.bottom() + px(crate::shell::CARD_INSET),
         "the page goes under it"
     );
+    // The core lays the page out there by the next frame, with nothing else to draw the window
+    // again: the page covered the question until something else did (#1930).
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let laid = shell.read_with(cx, |shell, _| shell.page_laid.map(|(frame, _)| frame.top()));
+    assert_eq!(
+        laid,
+        Some(card.bottom() + px(crate::shell::CARD_INSET)),
+        "the core wasn't told to lay the page out under the question"
+    );
     shell.update(cx, |shell, cx| shell.set_question(10, None, cx));
     cx.run_until_parked();
     assert_eq!(page_top(cx), px(LITTLE_BAR), "the page takes its room back");

@@ -1181,10 +1181,22 @@ CARD
   outline=$(call snapshot "{\"tab\":$opened_tab}")
   user_field=$(printf '%s\n' "$outline" | sed -n 's/.*- textbox[^[]*\[\(e[0-9]*\)\].*/\1/p' | head -1)
   [ -n "$user_field" ] || fail "the login page's outline had no username field: $outline"
+  pointers=$(grep -c "^browser: agent pointer $opened_tab " "$log" || true)
+  gone=$(grep -c '^browser: agent pointer gone$' "$log" || true)
+  floats=$(grep -c '^browser: drop targets shown$' "$log" || true)
+  hidden=$(grep -c '^browser: drop targets hidden$' "$log" || true)
   call click "{\"tab\":$opened_tab,\"ref\":\"$user_field\"}" > /dev/null
   # Chrome fills and offers a saved login within a moment of the load and the click. Here none
-  # may come, so this waits out that moment.
-  sleep 1
+  # may come. The agent's pointer comes to the field and goes 2 s later, longer than that moment,
+  # and where its window over the page is a child (the drop targets' float) that goes with it, so
+  # the children are counted after both (#1935).
+  await_more "^browser: agent pointer $opened_tab " "$pointers" ||
+    fail "the agent's pointer didn't come to the username field"
+  await_more '^browser: agent pointer gone$' "$gone" || fail "the agent's pointer didn't go"
+  if [ "$(grep -c '^browser: drop targets shown$' "$log" || true)" -gt "$floats" ]; then
+    await_more '^browser: drop targets hidden$' "$hidden" ||
+      fail "the agent's pointer's window stayed over the page"
+  fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-empty.png" || fail "no window to capture"
   [ "$(children)" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
   grep -q "^browser: title $opened_tab filled\$" "$log" &&

@@ -178,6 +178,12 @@ pub trait Host {
     fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
+    /// Holds the keys typed from now, while the dialog leaves with the keyboard still its own, so
+    /// none is lost to it (host_hold_keys).
+    fn hold_keys(&self) {}
+    /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
+    /// (host_release_held_keys).
+    fn give_held_keys(&self) {}
 }
 
 /// Where the motion is: how far the window has dimmed and the card has faded in, from 0 to 1,
@@ -925,6 +931,9 @@ impl Dialog {
             return;
         };
         asked.answered_at = Some((Instant::now(), asked.pose()));
+        // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
+        // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
+        self.host.hold_keys();
         let (answered, also_chosen) = match answer {
             Some(Answer::Also) => (None, asked.also_chosen.take()),
             Some(answer) => {
@@ -949,6 +958,7 @@ impl Dialog {
             let hidden = dialog.update(cx, |dialog, cx| {
                 dialog.asked = None;
                 dialog.host.hide();
+                dialog.host.give_held_keys();
                 // check.sh reads this line.
                 log!("browser: dialog hidden");
                 cx.notify();
