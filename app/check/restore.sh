@@ -785,7 +785,7 @@ quit
 # A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q: the relaunch puts its
 # tab back, and its page finds both, as Chromium keeps them when it restores the last session
 # (#1934). A crash kept the cookie and a clean quit didn't, and neither kept the sessionStorage.
-sign_in_page="${site}session-sign-in.html"
+sign_in_page="${site}session-sign-in.html?restore"
 log="$out/sign-in-a.log"
 step=0
 rm -f "$saved" "$launch_frame"

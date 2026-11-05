@@ -335,17 +335,19 @@ document.title = "session " + (/Chrome\//.test(navigator.userAgent) ? "chromium"
 # The session sign-in page, a sign-in that lives in a session cookie, one with no expiry, and in
 # sessionStorage, as many work sites' do (#1934). Its title says whether it finds each, kept or
 # none, never a value, since the app logs every title, once it has drawn; "s" sets both. Their value
-# is the server's start, so a run finds only its own.
+# is the server's start, so a run finds only its own, and the cookie is named for the page's query,
+# so a step finds only its own: the cookie outlives a relaunch, and a run's steps share the server.
 printf '%s' '<title>loading</title><p>s signs in.</p><script src="painted.js"></script>
 <script>
 const mine = "'"$(date +%s)"'";
+const name = "sign-in" + location.search.replace("?", "-");
 const found = () => "sign-in cookie " +
-  (document.cookie.split("; ").includes("sign-in=" + mine) ? "kept" : "none") + " storage " +
+  (document.cookie.split("; ").includes(name + "=" + mine) ? "kept" : "none") + " storage " +
   (sessionStorage.getItem("sign-in") == mine ? "kept" : "none");
 painted(() => document.title = found() + ", drawn");
 onkeydown = e => {
   if (e.key == "s") {
-    document.cookie = "sign-in=" + mine + "; path=/";
+    document.cookie = name + "=" + mine + "; path=/";
     sessionStorage.setItem("sign-in", mine);
     document.title = found() + ", set";
   }

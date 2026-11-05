@@ -1414,7 +1414,7 @@ chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete,
 log="$out/tabs-sign-in.log"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="${site}session-sign-in.html" "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DRIVE=1 BROWSER_URL="${site}session-sign-in.html?tabs" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
