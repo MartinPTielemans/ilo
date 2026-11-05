@@ -65,6 +65,12 @@ input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
 hint-end = 22.0
 hint-gap = 11.0
+# The hint's key, "Ask Claude ⇥": a key's chip on the bar's chip plate with a hairline of the ink
+# at `hint-key-rim` inside its edge, as the dialog's return key has, its glyph `hint-key-x` in from
+# each side, `hint-key-gap` after the words, so the two read as one (#1080).
+hint-key-rim = 0.2
+hint-key-x = 6.0
+hint-key-gap = 6.0
 # A long ask scrolls to keep the caret in view, and an edge with more text past it fades over this
 # far into the bar (ours).
 field-fade = 24.0
@@ -1150,6 +1156,10 @@ tag-radius = 6.0
 # words say who works and what it does; the chips are the toast's, its key after its words.
 strip = 40.0
 page-room = 46.0
+# Its chips are quiet while the agent works, and only when it waits on the user is the answer it
+# waits for, Hand Back, the one primary, in the Space's accent, its key in the accent's label at
+# this (#1080). The card's glyph leads the words, `gap` from back and from them.
+primary-key = 0.75
 gap = 10.0
 back = 26.0
 back-glyph = 16.0
@@ -1696,6 +1706,11 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
+# The status line's ink, above the sidebar's secondary so its 11 pt reads at 4.5:1 or more on the
+# card's plate over a white backdrop, where secondary's 0.62 measured 4.3:1 (#1080). What leads it
+# while the agent works, its step count, and while it needs the user, "Needs you", is in the title's
+# ink at medium.
+status = 0.75
 # The status while it works: a highlight sweeping along it, from the status's own colour to the
 # ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
 # goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
@@ -1805,8 +1820,18 @@ pictures-row-gap = 24.0
 pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+# A page with no picture yet has its site's globe in its tile's middle at this size, over "No
+# picture yet", in the card status's ink (#1080), and once the core had none to give, when the
+# next comes.
+picture-empty-glyph = 16.0
+picture-empty-gap = 6.0
+# Its header's Talk and Pages, one switch: a track of the ink at `views-track`, the view shown on
+# the sidebar's light selected plate (palette light-selected) `views-inset` inside it, at the
+# control radius less the inset, the two `views-gap` apart. Stop stands apart on a card button's
+# plate, the URL field's.
 views-gap = 4.0
+views-track = 0.07
+views-inset = 2.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1871,9 +1896,14 @@ shimmer-band = 0.3
 # The question's answers, and the result's Open, under its text.
 chips-top = 10.0
 chips-below = 16.0
+# The reply field: the ink at `reply-fill` with a hairline of it at `reply-rim` inside its edge, so
+# it reads as a field (#1080), and the key that sends it in a chip at its end, the command bar's
+# hint key, `reply-key-end` in from it.
 reply-height = 34.0
 reply-inset = 12.0
-reply-fill = 0.07
+reply-fill = 0.1
+reply-rim = 0.14
+reply-key-end = 7.0
 reply-bottom = 16.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:

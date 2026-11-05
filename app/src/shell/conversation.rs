@@ -34,6 +34,7 @@ use crate::agents::task::{
 };
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
+use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
@@ -43,14 +44,17 @@ use crate::tokens::shell::conversation::{
     CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW, LINK_LINE,
     LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW,
     PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT,
-    PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH,
-    PICTURES_COLUMNS, PICTURES_ROW_GAP, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
-    REPLY_INSET, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP,
-    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
+    PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GAP, PICTURE_EMPTY_GLYPH, PICTURE_GAP,
+    PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH, PICTURES_COLUMNS, PICTURES_ROW_GAP, RADIUS,
+    REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM,
+    SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
+    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
     TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
     TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X, TRACE_TITLE, VIEWS_GAP,
+    VIEWS_INSET, VIEWS_TRACK,
 };
 use crate::tokens::shell::empty::KEYS_FILL;
+use crate::tokens::shell::task::STATUS;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
 use crate::tokens::text;
 use crate::tokens::toast::{
@@ -70,6 +74,17 @@ pub(super) fn page_chip(
     words: impl Into<SharedString>,
     key: Option<String>,
 ) -> gpui::Stateful<gpui::Div> {
+    page_chip_keyed(palette, id, words, key, palette.text(KEY_COLOR))
+}
+
+/// A page chip whose key is in `key_color`, as on a primary's fill.
+pub(super) fn page_chip_keyed(
+    palette: super::Palette,
+    id: impl Into<ElementId>,
+    words: impl Into<SharedString>,
+    key: Option<String>,
+    key_color: Hsla,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
@@ -87,7 +102,7 @@ pub(super) fn page_chip(
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))
         .child(words.into())
-        .children(key.map(|key| div().text_color(palette.text(KEY_COLOR)).child(key)))
+        .children(key.map(|key| div().text_color(key_color).child(key)))
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
@@ -157,6 +172,8 @@ pub struct TalkView {
     replies: bool,
     /// Its pages' pictures, by tab: the request out for each, and the picture once it came.
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
+    /// The pages the core last answered with no picture of, which the next action asks again.
+    unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
     /// Where each picture was drawn when that was logged last.
@@ -283,6 +300,7 @@ impl Shell {
                     reply,
                     replies,
                     pictures: Vec::new(),
+                    unpictured: Vec::new(),
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
                     stop_logged: Rc::default(),
@@ -554,7 +572,13 @@ impl TalkView {
             .pictures
             .iter_mut()
             .find(|(_, each, _)| *each == request)?;
+        let tab = entry.0;
+        self.unpictured.retain(|each| *each != tab);
         let Some(picture) = picture else {
+            if entry.2.is_none() {
+                self.unpictured.push(tab);
+                cx.notify();
+            }
             return Some(Vec::new());
         };
         let old = entry.2.replace(picture.clone());
@@ -820,10 +844,21 @@ impl TalkView {
         // Where it is rolls over as it changes, after what it runs on.
         let status = motion::status(&about).to_string();
         let runs = about[..about.len() - status.len()].to_string();
+        // How far it has got follows, as its steps come, without rolling: the status rolls only as
+        // the work's state changes.
+        let progress = shown
+            .map(|shown| shown.progress.clone())
+            .filter(|progress| !progress.is_empty());
         let about = div()
             .flex()
             .child(div().min_w_0().truncate().child(runs))
-            .child(rolled(status.into(), self.motion.status(), META_LINE, look));
+            .child(rolled(status.into(), self.motion.status(), META_LINE, look))
+            .children(progress.map(|progress| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(format!("\u{a0}· {progress}"))
+            }));
         // Stop comes and goes with the work it stops.
         let stoppable = shown.is_some_and(|shown| shown.stoppable);
         let opacity = self.motion.stop(stoppable, look.now);
@@ -880,22 +915,47 @@ impl TalkView {
                     .whitespace_nowrap()
                     .text_size(px(text::SMALL))
                     .line_height(px(META_LINE))
-                    .text_color(palette.text(SECONDARY))
+                    .text_color(palette.text(STATUS))
                     .child(about),
             );
-        // Talk and Pages N, once it has a page, the one shown filled.
+        // Talk and Pages N, once it has a page: one switch, its track a chip's shape, the view
+        // shown lifted on the selected tab's plate, so it reads as a switch and not as Stop's kind.
         let count = shown.map_or(0, |shown| shown.tabs.len());
         let views = (count > 0).then(|| {
             let pages = self.on_pages();
             let chip = |id: &'static str, words: SharedString, on: bool, to: bool| {
-                page_chip(palette, id, words, None)
-                    .when(on, |chip| chip.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
-                    .when(!on, |chip| chip.bg(gpui::transparent_black()))
+                div()
+                    .id(id)
+                    .flex_none()
+                    .h_full()
+                    .px(px(CHIP_X - VIEWS_INSET))
+                    .flex()
+                    .items_center()
+                    .rounded(px(CHIP_RADIUS - VIEWS_INSET))
+                    .whitespace_nowrap()
+                    .text_size(px(text::BODY))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(on, |chip| {
+                        chip.bg(palette.selected(0.))
+                            .shadow(palette.selected_shadow(1.))
+                            .text_color(palette.text(TITLE))
+                    })
+                    .when(!on, |chip| {
+                        chip.text_color(palette.text(STATUS))
+                            .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
+                            .active(move |style| style.bg(palette.plate(STATE_PRESSED)))
+                    })
+                    .child(words)
                     .on_click(cx.listener(move |view, _, _, cx| view.show_pages(to, cx)))
             };
             div()
+                .flex_none()
+                .h(px(CHIP_HEIGHT))
+                .p(px(VIEWS_INSET))
                 .flex()
                 .gap(px(VIEWS_GAP))
+                .rounded(px(CHIP_RADIUS))
+                .bg(palette.plate(VIEWS_TRACK))
                 .child(chip("conversation-talk", "Talk".into(), !pages, false))
                 .child({
                     let logged = self.pages_logged.clone();
@@ -959,6 +1019,7 @@ impl TalkView {
                 };
                 let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                     .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
+                let pictured = image.is_some();
                 let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
                 let paint = canvas(
                     |_, _, _| {},
@@ -985,6 +1046,33 @@ impl TalkView {
                 .absolute()
                 .size_full();
                 let working = on == Some(tab);
+                // Until its picture comes, the tile says it has none yet, rather than show nothing,
+                // and once the core had none to give, that the next action takes one.
+                let empty = (!pictured).then(|| {
+                    let pending = !self.unpictured.contains(&tab);
+                    let name = self.shown.as_ref().map(|shown| shown.name.clone());
+                    div()
+                        .absolute()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(PICTURE_EMPTY_GAP))
+                        .text_size(px(text::SMALL))
+                        .text_color(look.palette.text(STATUS))
+                        .child(
+                            svg()
+                                .path("icons/globe.svg")
+                                .size(px(PICTURE_EMPTY_GLYPH))
+                                .text_color(look.palette.text(SECONDARY)),
+                        )
+                        .child("No picture yet")
+                        .children((!pending).then(|| {
+                            let name = name.unwrap_or_else(|| "the agent".into());
+                            format!("Taken when {name} next acts here")
+                        }))
+                });
                 let picture = div()
                     .relative()
                     .w(px(PICTURE_WIDTH))
@@ -992,6 +1080,7 @@ impl TalkView {
                     .rounded(px(PICTURE_RADIUS))
                     .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
                     .overflow_hidden()
+                    .children(empty)
                     .child(paint)
                     .when(working, |picture| {
                         picture.child(
@@ -1665,21 +1754,42 @@ impl TalkView {
         }
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
+        let palette = look.palette;
+        // The key that sends it, in the command bar's hint key, as a button with a key shows it.
+        let send = div()
+            .flex_none()
+            .h(px(PAGE_CHIP_HEIGHT))
+            .px(px(HINT_KEY_X))
+            .flex()
+            .items_center()
+            .rounded(px(CHIP_RADIUS))
+            .bg(palette.plate(BAR_CHIP))
+            .border_1()
+            .border_color(palette.plate(HINT_KEY_RIM))
+            .text_size(px(text::SMALL))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(palette.text(KEY_COLOR))
+            .child(super::key_name("enter", super::OFF_THE_MAC));
         div()
             .id("conversation-reply")
             .relative()
             .flex_none()
             .h(px(REPLY_HEIGHT))
-            .px(px(REPLY_INSET))
+            .pl(px(REPLY_INSET))
+            .pr(px(REPLY_KEY_END))
             .flex()
             .items_center()
+            .gap(px(REPLY_KEY_END))
             .rounded(px(RADIUS))
-            .bg(look.palette.plate(REPLY_FILL))
+            .bg(palette.plate(REPLY_FILL))
+            .border_1()
+            .border_color(palette.plate(REPLY_RIM))
             .font_weight(FontWeight::NORMAL)
             .on_click(cx.listener(move |_, _, window, cx| {
                 window.focus(&reply.focus_handle(cx), cx);
             }))
-            .child(div().flex_1().child(self.reply.clone()))
+            .child(div().flex_1().min_w_0().child(self.reply.clone()))
+            .child(send)
             .child(
                 canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
                     .absolute()

@@ -3135,3 +3135,24 @@ fn settings_rows_wait_for_nothing(cx: &mut TestAppContext) {
         "the bar didn't ask again, or asked once it had it"
     );
 }
+
+/// The hint names who ⇥ asks (#1080): the agent the ask lists first, which ↩ runs on, so "Ask"
+/// beside its key isn't read as two words, or any agent while the browser hasn't learned them.
+#[test]
+fn the_ask_hint_names_the_agent_it_asks() {
+    use super::ask_words;
+    let named = |listed: &[(&str, Option<&str>)]| {
+        let mut agents = agents(listed).unwrap();
+        for agent in &mut agents.agents {
+            agent.name = match agent.id.as_ref() {
+                "claude" => "Claude".into(),
+                _ => "Codex".into(),
+            };
+        }
+        ask_words(Some(&agents))
+    };
+    assert_eq!(named(&[("claude", None), ("codex", None)]), "Ask Claude");
+    assert_eq!(named(&[("codex", None), ("claude", None)]), "Ask Codex");
+    assert_eq!(named(&[]), "Ask an agent");
+    assert_eq!(ask_words(None), "Ask an agent");
+}

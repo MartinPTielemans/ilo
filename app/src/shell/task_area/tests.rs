@@ -784,3 +784,87 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
     });
     assert_eq!(says(&shell, cx).0, "MCP client needs you");
 }
+
+/// Quiet until it needs you (#1080): a card under the URL field only ever asks, so each has one
+/// primary, the answer its agent waits on; the strip under a page watched has one only while the
+/// user holds the page its card waits for, Hand Back, and none while the agent works, has done or
+/// stopped.
+#[test]
+fn only_what_needs_the_user_has_a_primary() {
+    use super::{StripChip, strip_chips};
+    use crate::agents::Question;
+    use crate::agents::task::Dot;
+    use crate::shell::agent_question::buttons;
+    use crate::shell::permission::Look;
+
+    let question = |handoff: Option<u64>, back: bool| Question {
+        id: 1,
+        agent: "Claude Code".into(),
+        from: "claude-code".into(),
+        what: "open bank.example".into(),
+        why: "It's a bank's site.".into(),
+        handoff,
+        back,
+    };
+    for (asked, primary) in [
+        (question(None, false), "Allow Once"),
+        (question(Some(30), false), "Show Tab"),
+        (question(Some(30), true), "Hand Back"),
+    ] {
+        let buttons = buttons(&asked);
+        let primaries: Vec<_> = (buttons.iter())
+            .filter(|button| button.look == Look::Primary)
+            .map(|button| button.label)
+            .collect();
+        assert_eq!(primaries, [primary], "{asked:?}");
+        assert_eq!(
+            buttons.last().map(|button| button.look),
+            Some(match asked.handoff {
+                Some(_) => Look::Primary,
+                None => Look::Text,
+            }),
+            "the primary is on the right, and Always Allow on a row of its own"
+        );
+    }
+
+    let primaries = |held, working, dot, open| -> Vec<StripChip> {
+        (strip_chips(held, working, dot, open).into_iter())
+            .filter(|(_, look)| *look == Look::Primary)
+            .map(|(chip, _)| chip)
+            .collect()
+    };
+    assert_eq!(
+        primaries(true, false, Some(Dot::Waiting), false),
+        [StripChip::HandBack],
+        "a handoff the user holds"
+    );
+    for (held, working, dot, open, what) in [
+        (false, true, Some(Dot::Working), false, "at work"),
+        (
+            true,
+            false,
+            Some(Dot::Working),
+            false,
+            "taken over, nothing asked",
+        ),
+        (
+            false,
+            true,
+            Some(Dot::Waiting),
+            false,
+            "waiting on another tab",
+        ),
+        (false, false, Some(Dot::Done), true, "done, with Open"),
+        (false, false, Some(Dot::Ended), false, "stopped"),
+    ] {
+        assert!(primaries(held, working, dot, open).is_empty(), "{what}");
+    }
+    assert_eq!(
+        strip_chips(false, true, Some(Dot::Working), false),
+        [
+            (StripChip::TakeOver, Look::Quiet),
+            (StripChip::Stop, Look::Quiet)
+        ],
+        "at work, Take Over and Stop both quiet"
+    );
+}

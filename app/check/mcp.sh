@@ -653,8 +653,8 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
-  # Hand Back, at the right end of the card's buttons.
-  send click $((qx + qw - 16)) $((qy + qh - 26))
+  # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
+  send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
   handed=$(next_answer) || fail "the browser didn't answer hand_off"
   handed=$(printf '%s\n' "$handed" | answered)
