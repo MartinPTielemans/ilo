@@ -33,7 +33,8 @@ unsafe extern "C" {
     #[cfg(target_os = "linux")]
     pub fn host_window_active(ui_view: *mut c_void, active: bool, whole_window: bool);
     pub fn host_capture_name(name: *mut c_char, capacity: usize);
-    pub fn host_set_window_little(ui_view: *mut c_void);
+    pub fn host_set_window_little(ui_view: *mut c_void, grows: bool);
+    pub fn host_grow_little_window(ui_view: *mut c_void);
     pub fn host_show_window(ui_view: *mut c_void);
     pub fn host_show_window_behind(ui_view: *mut c_void, above_ui_view: *mut c_void);
     pub fn host_show_launch_window(

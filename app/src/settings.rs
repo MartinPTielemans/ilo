@@ -3237,6 +3237,19 @@ impl Settings {
                 blocks.push(Block::Group(group(look, entries)));
             }
         }
+        // ⌘T tasks' answers are their CLI's, as each task is new (#1913).
+        let bar = shell::keystroke_label("cmd-t");
+        for cli in Cli::ALL {
+            let rows = self.answers(agents, &agents::task_answers(cli), cx);
+            if rows.is_empty() {
+                continue;
+            }
+            listed_any = true;
+            blocks.push(Block::Heading(
+                format!("What {} may do from {bar}", cli.name()).into(),
+            ));
+            blocks.push(Block::Group(group(look, rows)));
+        }
         if !listed_any {
             blocks.push(Block::Heading("Activity".into()));
             blocks.push(Block::Group(group(
@@ -3251,8 +3264,7 @@ impl Settings {
         }
         Page::new(
             Section::Agents,
-            "Agents work in a Space of their own that you can watch. They never see your \
-             passwords, cookies or autofill.",
+            "Agents never see your passwords, cookies or autofill.",
             blocks,
         )
     }
@@ -3488,18 +3500,43 @@ impl Settings {
     /// for none.
     fn grants(&self, agents: &Entity<Agents>, client: Client, cx: &App) -> Option<gpui::Div> {
         let look = &self.look;
-        let grants = agents.read(cx).grants(client.id());
-        let revoke = |site: Option<SharedString>, title| {
-            let id = format!("revoke-{}-{}", client.id(), site.as_deref().unwrap_or(""));
-            let at = self.drawn(format!("revoke {}", site.as_deref().unwrap_or("all")));
+        let mut rows = self.answers(agents, client.id(), cx);
+        let tabs = agents.read(cx).tabs_to_take(client.id(), cx).len();
+        if tabs > 0 {
             let agents = agents.clone();
+            let take = self
+                .button(("take-back-agent-tabs", client as usize), "Take Back All")
+                .on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| agents.take_back_all(client.id(), cx))
+                });
+            let open = match tabs {
+                1 => "1 tab it may act in".into(),
+                _ => format!("{tabs} tabs it may act in"),
+            };
+            rows.push(line_row(
+                look,
+                "Its tabs",
+                Some(open.into()),
+                vec![take.into_any_element()],
+            ));
+        }
+        (!rows.is_empty()).then(|| group(look, rows))
+    }
+
+    /// The sites where the user answered for good, by `key`, the answers' keeper: a connected
+    /// app's id, or a ⌘T CLI's (agents::task_answers). Each has Revoke, and several Revoke All.
+    fn answers(&self, agents: &Entity<Agents>, key: &str, cx: &App) -> Vec<gpui::Div> {
+        let look = &self.look;
+        let grants = agents.read(cx).grants(key);
+        let revoke = |site: Option<SharedString>, title| {
+            let id = format!("revoke-{key}-{}", site.as_deref().unwrap_or(""));
+            let at = self.drawn(format!("revoke {}", site.as_deref().unwrap_or("all")));
+            let (agents, key) = (agents.clone(), key.to_string());
             self.button(gpui::ElementId::Name(id.into()), title)
                 .relative()
                 .child(at)
                 .on_click(move |_, _, cx| {
-                    agents.update(cx, |agents, cx| {
-                        agents.revoke(client.id(), site.as_deref(), cx)
-                    })
+                    agents.update(cx, |agents, cx| agents.revoke(&key, site.as_deref(), cx))
                 })
                 .into_any_element()
         };
@@ -3523,26 +3560,7 @@ impl Settings {
                 vec![revoke(None, "Revoke All")],
             ));
         }
-        let tabs = agents.read(cx).tabs_to_take(client.id(), cx).len();
-        if tabs > 0 {
-            let agents = agents.clone();
-            let take = self
-                .button(("take-back-agent-tabs", client as usize), "Take Back All")
-                .on_click(move |_, _, cx| {
-                    agents.update(cx, |agents, cx| agents.take_back_all(client.id(), cx))
-                });
-            let open = match tabs {
-                1 => "1 tab it may act in".into(),
-                _ => format!("{tabs} tabs it may act in"),
-            };
-            rows.push(line_row(
-                look,
-                "Its tabs",
-                Some(open.into()),
-                vec![take.into_any_element()],
-            ));
-        }
-        (!rows.is_empty()).then(|| group(look, rows))
+        rows
     }
 
     /// A client's row: whether it's connected, and Connect, or Disconnect, with Copy Setup for a

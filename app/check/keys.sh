@@ -752,11 +752,24 @@ send ime off
 send type .invalid
 send key return
 expect '^browser: command bar typed 日本語.invalid$' "the command bar didn't keep the committed text: $(grep '^browser: command bar typed' "$log" | tail -1)"
-# ⌘L goes to the page first, and a key the page being replaced hasn't answered leaves with it.
-expect '^browser: loaded [0-9]* https://duckduckgo.com/' "the search for the committed text didn't load"
+searching '%E6%97%A5%E6%9C%AC%E8%AA%9E\.invalid' \
+  "the committed text didn't start a search for it: $(grep '^browser: page ' "$log" | tail -1)"
 
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# ⌘L from the page the search $searched started in. ⌘L goes to the page first, and a key the page
+# being replaced hasn't answered leaves with it: DuckDuckGo's page replaces it once DuckDuckGo
+# answers, if it does (#1875). So a ⌘L that opened nothing while that page came, its title logged,
+# is pressed again, and one that opened nothing with no page coming fails.
+edit_url_over_search() {
+  send key l cmd
+  for _ in $(seq 100); do
+    logged '^browser: command bar shown$' && return 0
+    sleep 0.1
+  done
+  logged "^browser: title $searched " || fail "⌘L didn't open the command bar"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar, again once the search's page came"
+}
+edit_url_over_search
 send type example.com
 ../tools/window-screenshot.sh "$pid" "$out/command-bar.png" || fail "no window to capture"
 send key return
@@ -765,14 +778,19 @@ expect '^browser: command bar hidden$' "going somewhere didn't close the command
 expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't load what was typed in the command bar"
 send state
 in_browser RenderWidgetHostViewCocoa "after the command bar loaded a page"
-# Words that name no page are a search, with DuckDuckGo until the user picks an engine.
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# Words that name no page are a search, with DuckDuckGo until the user picks an engine. In a tab of
+# its own, which ⌘W closes: the steps below click the page the first tab shows, which DuckDuckGo's
+# results would put a link of theirs under (#1875).
+searched_from=$(today)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type arc browser
 send key return
 expect '^browser: command bar go https://duckduckgo.com/?q=arc+browser$' "words in the command bar didn't search: $(grep '^browser: command bar go' "$log" | tail -1)"
-expect '^browser: loaded [0-9]* https://duckduckgo.com/?q=arc+browser' "the search didn't load"
+searching 'arc+browser' "the search didn't start: $(grep '^browser: page ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/search.png" || fail "no window to capture"
+send key w cmd
+expect "^browser: today $searched_from\$" "⌘W didn't close the search's tab"
 # A .new address typed names what it makes, first, and ↩ opens it in a new tab though ⌘L's bar
 # edits the tab shown (#698). docs.new sends a browser that isn't signed in to Google's sign-in.
 before=$(today)

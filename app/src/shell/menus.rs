@@ -17,6 +17,7 @@ use crate::{
     menu::{Highlight, Look, Swatch},
     palette::Tone,
     space_icon::{SpaceIcon, has_icon},
+    theme::Theme,
 };
 
 /// ilo's nouns, which stay capitalized in a sentence, as Chrome's Incognito does.
@@ -1466,21 +1467,29 @@ impl Shell {
     /// `space`'s swatch: its theme's first two colours, or its one colour going lighter down as
     /// the window's gradient does, with the untinted palette's accent for a Space without one.
     pub(super) fn space_swatch(&self, space: u64) -> Swatch {
-        let theme = self
-            .theme_of(space)
-            .map(|theme| theme.shown(self.tone_of(space) == Tone::Dark));
+        let color = self
+            .spaces
+            .iter()
+            .find(|each| each.id == space)
+            .and_then(|each| each.color);
+        self.swatch_of(self.theme_of(space), color)
+    }
+
+    /// The mark of a Space with `theme` and `color`, which a Little ilo window knows of the
+    /// user's Spaces without holding them.
+    pub(super) fn swatch_of(&self, theme: Option<Theme>, color: Option<u32>) -> Swatch {
+        let tone = self.tone_with(theme.as_ref());
+        let theme = theme.map(|theme| theme.shown(tone == Tone::Dark));
         if let Some(theme) = theme {
             let colors = theme.colors();
             if let [from, to, ..] = colors[..] {
                 return Swatch { from, to };
             }
         }
-        let entry = self.spaces.iter().find(|each| each.id == space);
-        let color = theme.map(|theme| theme.main_color());
-        let untinted =
-            || crate::theme::packed(crate::palette::Palette::of(None, self.tone_of(space)).accent);
-        let color = color
-            .or(entry.and_then(|each| each.color))
+        let untinted = || crate::theme::packed(crate::palette::Palette::of(None, tone).accent);
+        let color = theme
+            .map(|theme| theme.main_color())
+            .or(color)
             .unwrap_or_else(untinted);
         let hsla = Hsla::from(rgb(color));
         let lighter = crate::theme::packed(Rgba::from(Hsla {

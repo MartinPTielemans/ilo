@@ -769,32 +769,42 @@ went=$(grep '^browser: command bar go' "$log" | tail -1)
 expect '^browser: command bar go https://duckduckgo.com/?q=dogs' \
   "↩ in the site search didn't search DuckDuckGo: $went"
 expect '^browser: command bar hidden$' "↩ in the site search didn't close the command bar"
-# History has the search once its page commits, which can come after the next ⌘T. The page's
-# title says it has: its first page line comes as it starts.
-expect '^browser: title [0-9]* .*dogs' "the search for dogs didn't reach DuckDuckGo"
+searching dogs "↩ in the site search didn't start DuckDuckGo's search for dogs: $went"
 # ⌥⌘⌫ takes the selected row out too, beside ⇧⌦, as Arc's does: here the search for dogs, typed
 # before. Off the Mac it would be Ctrl+Alt+Backspace, which X11 can take to end the session, so
 # there ⇧⌦ alone does (command_bar.rs).
-dogs='https://duckduckgo.com/?q=dogs'
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type dog
-expect "^browser: command bar suggestions \"dog\" in .*$dogs[^,]* removable" \
-  "the command bar didn't suggest the search for dogs typed before: $(suggestions | tr '\n' ' ')"
-for _ in 1 2 3 4 5 6 7 8; do
-  send key down
-  grep '^browser: command bar selected' "$log" | tail -1 | grep -q " $dogs" && break
-done
 if [ "$(uname)" = Darwin ]; then
   remove="backspace alt cmd" removed=⌥⌘⌫
 else
   remove="delete shift" removed=⇧⌦
 fi
-send key $remove
-expect "^browser: command bar removes $dogs" "$removed didn't take the search for dogs out"
-expect '^browser: command bar suggestions "dog" in ' "the command bar didn't list its rows again after $removed"
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar"
+# History has the search only once its page commits, which can come after the next ⌘T. The page's
+# title says it has: its first page line comes as it starts. Where DuckDuckGo doesn't answer the
+# runner, history never has it (#1875), and the step says it skipped.
+answered=
+for _ in $(seq 100); do
+  logged "^browser: title $searched .*dogs" && answered=1 && break
+  sleep 0.1
+done
+dogs='https://duckduckgo.com/?q=dogs'
+if [ -z "$answered" ]; then
+  echo "skip: $removed on the search for dogs typed before: DuckDuckGo didn't answer, and history has a search only once its page commits."
+else
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+  send type dog
+  expect "^browser: command bar suggestions \"dog\" in .*$dogs[^,]* removable" \
+    "the command bar didn't suggest the search for dogs typed before: $(suggestions | tr '\n' ' ')"
+  for _ in 1 2 3 4 5 6 7 8; do
+    send key down
+    grep '^browser: command bar selected' "$log" | tail -1 | grep -q " $dogs" && break
+  done
+  send key $remove
+  expect "^browser: command bar removes $dogs" "$removed didn't take the search for dogs out"
+  expect '^browser: command bar suggestions "dog" in ' "the command bar didn't list its rows again after $removed"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar"
+fi
 # A sum's result is the row after the first, and ↩ on it copies the result, to a pasteboard of the
 # run's own.
 send key t cmd

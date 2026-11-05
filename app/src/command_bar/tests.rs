@@ -3046,6 +3046,69 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     assert!(bar.calls().contains(&"task codex book a table".to_string()));
 }
 
+/// A Little ilo window's Spaces menu is the compact bar where it was asked for, listing its Spaces
+/// alone, each with its mark. What's typed filters them by a word's start and asks the core for
+/// nothing, no key goes to a page or a search, and ↩ runs Move to Space for the one selected.
+#[gpui::test]
+fn the_spaces_menu_lists_its_spaces_and_filters_them(cx: &mut TestAppContext) {
+    use shell::Command::MoveToSpace;
+
+    let swatch = crate::menu::Swatch {
+        from: 0x3f9d5b,
+        to: 0x7fcf9b,
+    };
+    let space = |space, name: &str| shell::BarSpace {
+        space,
+        name: name.into(),
+        swatch,
+    };
+    let spaces = vec![space(1, "Home"), space(2, "Side Project"), space(4, "Work")];
+    let at = Bounds::new(point(px(516.), px(43.5)), gpui::size(px(240.), px(50.)));
+    let mut bar = Bar::opened(cx, Recorder::default(), |cx| show_spaces(spaces, at, cx));
+    assert_eq!(bar.shown(), ["at 516 43.5, 240 wide, radius 20"]);
+    let listed = |bar: &mut Bar| {
+        (bar.window)
+            .read_with(&bar.cx.cx, |bar, _| {
+                let rows = bar
+                    .rows
+                    .iter()
+                    .map(|row| (row.text.to_string(), row.command, row.icon()));
+                rows.collect::<Vec<_>>()
+            })
+            .unwrap()
+    };
+    let row = |name: &str, space| {
+        (
+            name.to_string(),
+            Some(MoveToSpace(space)),
+            Icon::Swatch(swatch),
+        )
+    };
+    assert_eq!(
+        listed(&mut bar),
+        [row("Home", 1), row("Side Project", 2), row("Work", 4)]
+    );
+    bar.type_text("pro");
+    assert_eq!(listed(&mut bar), [row("Side Project", 2)]);
+    bar.keys("backspace backspace backspace");
+    bar.type_text("o");
+    assert!(
+        listed(&mut bar).is_empty(),
+        "no Space has a word starting with o"
+    );
+    bar.keys("enter shift-enter cmd-enter alt-enter shift-cmd-enter ctrl-enter");
+    assert!(bar.calls().is_empty(), "{:?}", bar.calls());
+    assert!(
+        bar.host.asked.borrow().is_empty(),
+        "it asked the core for {:?}",
+        bar.host.asked
+    );
+    bar.keys("backspace");
+    bar.type_text("w");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide"]);
+}
+
 /// Settings' rows as its search reads them: Peek and the Mini Player in Features, and Shortcuts'
 /// row for a command, which the bar lists itself.
 fn settings_rows() -> Vec<settings_search::Entry> {

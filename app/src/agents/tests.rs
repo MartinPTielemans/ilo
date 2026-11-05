@@ -2284,6 +2284,127 @@ mod tasks {
         })
     }
 
+    /// A run of the browser whose agents keep their settings at `path`, with ⌘T's Claude and Codex
+    /// signed in.
+    fn run_at(path: &std::path::Path, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, Some(path.to_path_buf()), cx);
+        // As the app reads them at launch.
+        let saved = std::fs::read_to_string(path).unwrap_or_default();
+        agents.update(cx, |agents, cx| {
+            agents.load(&saved, cx);
+            agents.set_on(true, cx);
+            for cli in Cli::ALL {
+                let found = Found {
+                    ready: Ready::SignedIn,
+                    ..Default::default()
+                };
+                agents.tasks.found.insert(cli, found);
+            }
+            agents.tasks.default = Some(Cli::Claude);
+        });
+        (agents, browser)
+    }
+
+    /// Whether `agent` opening a bank's site asks the user first.
+    fn asks_to_open_the_bank(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        cx: &mut TestAppContext,
+    ) -> Option<Question> {
+        browser.asked.replace(None);
+        let _ = call(agents, agent, "open_tab", json!({ "url": "chase.com" }), cx);
+        browser.asked.borrow().clone()
+    }
+
+    /// A ⌘T task's answer for good is its CLI's (#1913), as a task's own id is new each task and
+    /// numbered from 1 again each run: the next run's first task, Codex's, still asks where Claude's
+    /// was told Always, and that run's Claude task doesn't. It's listed as Claude's tasks' to revoke,
+    /// and an earlier build's answer kept under a task's own id is gone.
+    #[gpui::test]
+    fn a_tasks_answer_for_good_is_its_clis_from_run_to_run(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("ilo-task-answers-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agents.json");
+        let _ = std::fs::remove_file(&path);
+
+        let (agents, browser) = run_at(&path, cx);
+        let claude = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Pay the card", page(), 1, cx)
+            })
+            .expect("started");
+        let question = asks_to_open_the_bank(&agents, &browser, &claude, cx)
+            .expect("Claude's task didn't ask before opening a bank's site");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Always, cx)
+        });
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
+            "Always didn't hold in the task that was told it"
+        );
+        let listed = |agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                agents.grants(&crate::agents::task_answers(cli))
+            })
+        };
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(listed(&agents, Cli::Codex, cx).is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.grants(&claude).is_empty()));
+        // As an earlier build left it, under the task's own id.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let mut saved: Value = serde_json::from_str(&saved).unwrap();
+        saved["grants"]["task-7"] = json!({ "chase.com": "always" });
+        std::fs::write(&path, saved.to_string()).unwrap();
+
+        // The next run, from the same settings.
+        let (agents, browser) = run_at(&path, cx);
+        let codex = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Codex, "Check the balance", page(), 1, cx)
+            })
+            .expect("started");
+        assert_eq!(codex, claude, "the next run's first task has the same id");
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &codex, cx).is_some(),
+            "the next run's Codex task inherited Claude's Always"
+        );
+        let claude = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Pay the card again", page(), 1, cx)
+            })
+            .expect("started");
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
+            "Claude's Always didn't carry to its next task"
+        );
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(
+            agents.read_with(cx, |agents, _| agents.grants("task-7").is_empty()),
+            "an answer kept under a task's own id came back"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.revoke(
+                &crate::agents::task_answers(Cli::Claude),
+                Some("chase.com"),
+                cx,
+            )
+        });
+        assert!(listed(&agents, Cli::Claude, cx).is_empty());
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_some(),
+            "Revoke didn't have Claude's task ask again"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
         agents
             .update(cx, |agents, cx| {

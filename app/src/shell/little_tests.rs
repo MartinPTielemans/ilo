@@ -323,8 +323,6 @@ fn option_command_click_is_the_users_spaces_alone(cx: &mut TestAppContext) {
 fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
     use gpui::{Modifiers, point, px};
 
-    use super::little::little_button_middle;
-
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
@@ -343,9 +341,8 @@ fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
         shell.set_profiles(vec![(1, "Default".into())], cx);
     });
     cx.run_until_parked();
-    let width = cx.update(|window, _| window.viewport_size().width);
-    // The third plate from the bar's end, before Copy Link.
-    let picker = little_button_middle(width, 2);
+    // Before Copy Link.
+    let picker = shell.read_with(cx, |shell, cx| shell.little_end(cx).profile);
     let click = |cx: &mut gpui::VisualTestContext| {
         cx.simulate_click(picker, Modifiers::none());
         cx.run_until_parked();
@@ -389,8 +386,6 @@ fn its_bar_picks_the_pages_profile_once_there_are_two(cx: &mut TestAppContext) {
 fn its_bar_has_the_picker_from_the_start(cx: &mut TestAppContext) {
     use gpui::Modifiers;
 
-    use super::little::little_button_middle;
-
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| {
@@ -415,24 +410,38 @@ fn its_bar_has_the_picker_from_the_start(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
-    let width = cx.update(|window, _| window.viewport_size().width);
-    cx.simulate_click(little_button_middle(width, 2), Modifiers::none());
+    let picker = shell.read_with(cx, |shell, cx| shell.little_end(cx).profile);
+    cx.simulate_click(picker, Modifiers::none());
     cx.run_until_parked();
     let menu = host.menus.borrow().last().cloned().unwrap_or_default();
     assert_eq!(menu, [("Default".into(), true), ("Work".into(), true)]);
 }
 
-/// The bar is the header's row. Open in Main Window's glyph is as far in from the window's right
-/// edge as the close button's is from its left, 20, and Copy Link's the header's pitch, 34, before
-/// it; each names itself and its key as the header's buttons do. The title, from where the
-/// header's first button is, opens the command bar over itself.
+/// The bar is the header's row. Open in <Space> ⌘O | ⌄ ends it: its chevron's plate ends 4 in from
+/// the window's right edge, where a header button's would whose glyph mirrors the close button's,
+/// and its words name the window's Space and ⌘O. Copy Link's plate is 2 before it and names itself
+/// and its key as the header's buttons do. The title, from where the header's first button is,
+/// opens the command bar over itself.
 #[gpui::test]
 fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
     use gpui::{Modifiers, VisualTestContext, point, px};
 
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let main = cx.new(|cx| {
+            let mut main = Shell::new(browser.clone(), cx);
+            main.set_spaces(
+                vec![
+                    (1, "One".into(), Some(7), 1, "".into(), "".into(), "".into()),
+                    (2, "Two".into(), None, 1, "".into(), "".into(), "".into()),
+                ],
+                cx,
+            );
+            main
+        });
+        Shell::little_window(browser, 9, 1, 1, Some(&main), cx)
+    });
     shell.update(cx, |shell, cx| {
         shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
         shell.set_selected(10, cx);
@@ -448,6 +457,20 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let width = cx.update(|window, _| f32::from(window.viewport_size().width));
+    let (end, words) = shell.read_with(cx, |shell, cx| {
+        (shell.little_end(cx), shell.little_open_words(cx))
+    });
+    assert_eq!(words, ("Open in One".into(), Some("⌘O".into())));
+    let x = |at: gpui::Pixels| f32::from(at);
+    assert_eq!(
+        (x(end.chevron.left()), x(end.chevron.right())),
+        (width - 32., width - 4.)
+    );
+    assert_eq!(
+        (x(end.line), x(end.words.right())),
+        (width - 33., width - 33.)
+    );
+    assert_eq!(x(end.copy.x), x(end.words.left()) - 2. - 16.);
     // The header's row: its plates 7.5 from the top, 32 tall.
     let row = 7.5 + 16.;
     let rest = |cx: &mut VisualTestContext, x: f32| {
@@ -465,13 +488,11 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
         cx.run_until_parked();
         host.take()
     };
-    assert_eq!(rest(cx, width - 20.), ["tooltip Open in Main Window ⌘O"]);
-    assert_eq!(
-        rest(cx, width - 54.),
-        ["tooltip none", "tooltip Copy URL ⇧⌘C"]
-    );
-    assert!(click(cx, width - 54.).contains(&"copy https://example.com/".to_string()));
-    assert!(click(cx, width - 20.).contains(&"open in main window 10 1".to_string()));
+    let words_middle = x(end.words.center().x);
+    assert_eq!(rest(cx, x(end.copy.x)), ["tooltip Copy URL ⇧⌘C"]);
+    assert_eq!(rest(cx, words_middle), ["tooltip none"]);
+    assert!(click(cx, x(end.copy.x)).contains(&"copy https://example.com/".to_string()));
+    assert!(click(cx, words_middle).contains(&"open in main window 10 1".to_string()));
     click(cx, 77. + 16.);
     let field = host
         .command_bars
@@ -484,5 +505,363 @@ fn its_bar_is_the_headers_row(cx: &mut TestAppContext) {
         (f32::from(field.origin.x), f32::from(field.origin.y)),
         (77., 7.5)
     );
-    assert!(f32::from(field.right()) < width - 54. - 16.);
+    assert!(f32::from(field.right()) < x(end.copy.x) - 16.);
+}
+
+/// The chevron opens the Spaces menu: the compact command bar 240 wide, its right edge the
+/// button's and its top 4 under it, listing the user's Spaces in the sidebar's order, an agent's
+/// left out. A Space picked takes the page there; one in another profile asks first, the first
+/// time, as Move to Space does.
+#[gpui::test]
+fn its_chevron_lists_the_users_spaces_to_send_the_page_to(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, point, px};
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let main = cx.new(|cx| {
+            let mut main = Shell::new(browser.clone(), cx);
+            main.set_spaces(
+                vec![
+                    (1, "One".into(), Some(7), 1, "".into(), "".into(), "".into()),
+                    (
+                        3,
+                        "Agent".into(),
+                        None,
+                        1,
+                        "".into(),
+                        "claude".into(),
+                        "".into(),
+                    ),
+                    (2, "Two".into(), None, 1, "".into(), "".into(), "".into()),
+                    (4, "Work".into(), None, 5, "".into(), "".into(), "".into()),
+                ],
+                cx,
+            );
+            main.profiles = vec![(1, "Default".into()), (5, "Job".into())];
+            main
+        });
+        Shell::little_window(browser, 9, 1, 1, Some(&main), cx)
+    });
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let end = shell.read_with(cx, |shell, cx| shell.little_end(cx));
+    host.take();
+    cx.simulate_click(end.chevron.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        host.take()
+            .contains(&"spaces menu 1 One, 2 Two, 4 Work".to_string())
+    );
+    let menu = host.spaces_menus.borrow().last().copied().expect("no menu");
+    // Its right edge 8 in from the window's, as every overlay's is, which is 4 inside the chevron's.
+    let at = (menu.origin, menu.size.width, end.chevron.right());
+    let width = shell.read_with(cx, |shell, _| shell.viewport.width);
+    let right = width - px(8.);
+    assert_eq!(
+        at,
+        (
+            point(right - px(240.), px(7.5 + 32. + 4.)),
+            px(240.),
+            width - px(4.)
+        )
+    );
+
+    // A Space renamed is named so the next time.
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "One".into(), Some(7), 1, "".into(), "".into(), "".into()),
+                (2, "Deux".into(), None, 1, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    cx.simulate_click(end.chevron.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        host.take()
+            .contains(&"spaces menu 1 One, 2 Deux".to_string())
+    );
+
+    // The bar's row runs Move to Space, which here sends the page there.
+    run(&shell, cx, Command::MoveToSpace(2), "command bar");
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open in main window 10 2")
+    );
+    // Another profile's Space, once there's one again, asks first.
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "One".into(), Some(7), 1, "".into(), "".into(), "".into()),
+                (4, "Work".into(), None, 5, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    host.warn_profiles.set(true);
+    run(&shell, cx, Command::MoveToSpace(4), "command bar");
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|call| call.starts_with("open in main window"))
+    );
+    let (message, _, confirmed) = host.confirming.borrow_mut().take().expect("no warning");
+    assert_eq!(message, "Move this tab to the “Job” profile?");
+    cx.update(|_, cx| confirmed(cx));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("open in main window 10 4")
+    );
+}
+
+/// ⌘L and ⌘T open the command bar inside the window, on its page, 500 wide and centred across it,
+/// its top a third of the way down, as Arc's does; only a click on the title opens it over the
+/// title.
+#[gpui::test]
+fn its_keys_open_the_command_bar_inside_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let size = cx.update(|window, _| window.viewport_size());
+    let (width, height) = (f32::from(size.width), f32::from(size.height));
+    for command in [Command::EditUrl, Command::NewTab] {
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+        let bar = host
+            .bars_in
+            .borrow_mut()
+            .pop()
+            .expect("no bar inside the window");
+        let bar_width = 500f32.min(width);
+        let at = (
+            f32::from(bar.origin.x),
+            f32::from(bar.origin.y),
+            f32::from(bar.size.width),
+        );
+        assert_eq!(
+            at,
+            ((width - bar_width) / 2., height * 0.333_333, bar_width)
+        );
+        assert_eq!(host.bar_edits.borrow_mut().pop(), Some(Some(10)));
+        assert!(
+            host.command_bars.borrow().is_empty(),
+            "{command:?} opened over the title"
+        );
+    }
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::EditUrl, "little bar", cx)
+    });
+    assert!(host.bars_in.borrow().is_empty());
+    assert!(
+        host.command_bars
+            .borrow()
+            .last()
+            .copied()
+            .flatten()
+            .is_some()
+    );
+}
+
+#[gpui::test]
+fn it_grows_in_from_its_first_frame_on_screen_once(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| {
+        let main = cx.new(|cx| Shell::new(browser.clone(), cx));
+        Shell::little_window(browser, 9, 1, 1, Some(&main), cx)
+    });
+    cx.run_until_parked();
+    let drawn = |host: &Recorder| {
+        host.take()
+            .iter()
+            .filter(|call| *call == "little drawn")
+            .count()
+    };
+    assert_eq!(
+        drawn(&host),
+        1,
+        "its first frame on screen didn't start its opening"
+    );
+    // Drawn again, it has grown already.
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(drawn(&host), 0, "a later frame started its opening again");
+
+    // A regular window has no opening of its own.
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (_, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.run_until_parked();
+    assert_eq!(drawn(&host), 0, "a regular window asked to grow in");
+}
+
+/// A Little ilo window drawn for the Space One, its own Space 9 holding the page 10.
+fn drawn_little(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut gpui::VisualTestContext, Rc<Recorder>) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://signin.example/".into();
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    (shell, cx, host)
+}
+
+/// A page's question has no URL field to hang from in a Little ilo window, and nothing can be drawn
+/// over the page, so it hangs from the bar and the page makes room under it, until it's answered
+/// (#1914).
+#[gpui::test]
+fn a_question_hangs_under_the_bar_and_the_page_makes_room(cx: &mut TestAppContext) {
+    use crate::shell::Question;
+    use crate::tokens::shell::LITTLE_BAR;
+    use gpui::px;
+
+    let (shell, cx, _) = drawn_little(cx);
+    let page_top = |cx: &mut gpui::VisualTestContext| {
+        shell.update(cx, |shell, _| {
+            let viewport = shell.viewport;
+            shell.card_frames(viewport).0.top()
+        })
+    };
+    assert_eq!(page_top(cx), px(LITTLE_BAR));
+    shell.update(cx, |shell, cx| {
+        let permissions = vec!["Access other apps and services on this device".into()];
+        let question = Question {
+            site: "signin.example".into(),
+            permissions,
+        };
+        shell.set_question(10, Some(question), cx);
+    });
+    cx.run_until_parked();
+    let card = shell.read_with(cx, |shell, _| shell.question_drawn.get());
+    let card = card.expect("the question wasn't drawn");
+    // Its drawn bounds are inside its 1-point edge, which starts at the bar's foot.
+    assert_eq!(card.top(), px(LITTLE_BAR + 1.), "it hangs from the bar");
+    assert_eq!(
+        page_top(cx),
+        card.bottom() + px(crate::shell::CARD_INSET),
+        "the page goes under it"
+    );
+    shell.update(cx, |shell, cx| shell.set_question(10, None, cx));
+    cx.run_until_parked();
+    assert_eq!(page_top(cx), px(LITTLE_BAR), "the page takes its room back");
+}
+
+/// A tab the window's page opened goes behind, where no window shows it, so when its page asks to
+/// open another app, as a sign-in's pop-up hands back to its app, the Little ilo window asks
+/// instead, over its page (#1914). Its own page's dialog comes first, and the other's other dialogs
+/// wait for their tab.
+#[gpui::test]
+fn a_tab_sent_behind_asks_to_open_an_app_here(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog};
+
+    let (shell, cx, host) = drawn_little(cx);
+    let dialog = |id: u64, kind: DialogKind| PageDialog {
+        id,
+        kind,
+        title: "Open Handback?".into(),
+        message: "".into(),
+        text: "".into(),
+        accept: "Open Handback".into(),
+        cancel: "Cancel".into(),
+        check: "".into(),
+        username: "".into(),
+        password: "".into(),
+    };
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        cx.run_until_parked();
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("page dialog"))
+            .collect::<Vec<_>>()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.little_sent(11, cx);
+        shell.set_page_dialog(11, Some(dialog(1, DialogKind::Alert)), cx);
+    });
+    assert_eq!(
+        shown(cx),
+        Vec::<String>::new(),
+        "a sent tab's alert waits for it"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(11, Some(dialog(2, DialogKind::OpenApp)), cx)
+    });
+    assert_eq!(shown(cx), ["page dialog 11 2"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(10, Some(dialog(3, DialogKind::Alert)), cx)
+    });
+    assert_eq!(
+        shown(cx),
+        ["page dialog 10 3"],
+        "its own page's comes first"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.answer_page_dialog(10, 3, accept(), cx);
+    });
+    let after: Vec<String> = shown(cx);
+    assert!(
+        after.iter().any(|call| call == "page dialog 11 2"),
+        "the sent tab's asks again once its page's is answered: {after:?}"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.answer_page_dialog(11, 2, accept(), cx)
+    });
+    let answered = host.take();
+    assert!(
+        answered
+            .iter()
+            .any(|call| call == "answer dialog 11 2 accept"),
+        "Open answered the sent tab's page: {answered:?}"
+    );
+}
+
+fn accept() -> crate::shell::PageReply {
+    crate::shell::PageReply {
+        accept: true,
+        text: String::new(),
+        password: String::new(),
+        checked: false,
+    }
 }

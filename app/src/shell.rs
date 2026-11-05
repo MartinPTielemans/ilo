@@ -129,10 +129,10 @@ pub use cast::{Cast, CastDevice, CastState};
 use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
-    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
-    KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
-    find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
-    shown_tab, task_page_shown, window_became_key, with_named_rows,
+    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
+    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar,
+    copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label, menu_item,
+    pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
 pub use display_face::display_text;
 pub use drag::{WindowDragEnd, dropped_urls};
@@ -3759,6 +3759,7 @@ impl Render for Shell {
         self.step_pinned_turn(window);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
+        self.step_little(window, cx);
         let drop_targets = self
             .drag
             .as_ref()
@@ -3929,6 +3930,12 @@ impl Render for Shell {
                 shell
                     .children(self.cards())
                     .children(self.little_bar(cx))
+                    .children(
+                        self.little
+                            .is_some()
+                            .then(|| self.question_card(cx))
+                            .flatten(),
+                    )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
                     .children(self.crash_cards(cx))

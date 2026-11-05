@@ -736,6 +736,15 @@ start_with_cdp() {
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
 }
+# Waits for the tab $3, or any, to start loading the default engine's search for $1, the query as
+# its URL has it, failing with $2, and sets $searched to the tab. The app logs where a page goes as
+# its load starts, so this proves the search without DuckDuckGo's page, which a runner may never
+# get an answer for (#1875).
+searching() {
+  local line="^browser: page ${3:-[0-9]*} back [0-9]* forward [0-9]* loading [01] https://duckduckgo\.com/?q=$1\$"
+  expect "$line" "$2"
+  searched=$(grep "$line" "$log" | tail -1 | cut -d' ' -f3)
+}
 # Of the addresses on stdin, one a line, those of Google's servers, with ungoogled-chromium's
 # substitutes for its domains, but the security components' updates that engine/README.md › What
 # reaches Google lets through and every user's browser makes, the first a minute after launch: the

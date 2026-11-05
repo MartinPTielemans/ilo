@@ -2864,9 +2864,12 @@ void host_activate(void* ui_view) {
 }
 
 // Windows opens a window on the virtual desktop shown, and has no full-screen desktops.
-void host_set_window_little(void* ui_view) {
+// Windows draws a new window's motion its own way, so a Little ilo window doesn't grow in, |grows|
+// or not: it's only recorded, for closing it over another app's window (#1692).
+void host_set_window_little(void* ui_view, bool grows) {
   LittleViews().push_back(Hwnd(ui_view));
 }
+void host_grow_little_window(void* ui_view) {}
 
 // Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
 // isn't ours yet.

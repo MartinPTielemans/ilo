@@ -419,6 +419,20 @@ pub fn press_takes_over(button: u32) -> bool {
     !(4..=7).contains(&button)
 }
 
+/// The key a ⌘T task on `cli` keeps its answers for good under, the CLI's for its tasks, apart
+/// from the app of the same name that connects, whose answers are its own: "claude-tasks".
+pub fn task_answers(cli: runner::Cli) -> String {
+    format!("{}-tasks", cli.id())
+}
+
+/// Whether `agent` is a ⌘T task's own id, task-N, which earlier builds kept answers under and no
+/// task keeps for good.
+fn is_task_id(agent: &str) -> bool {
+    agent
+        .strip_prefix("task-")
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The entries the log keeps, all agents' together, as they're for this run of the browser.
 const LOG_LENGTH: usize = 1000;
 
@@ -638,6 +652,7 @@ impl Agents {
                 .collect();
             Some((agent.clone(), sites))
         }))
+        .filter(|(agent, _)| !is_task_id(agent))
         .collect();
         let tasks = saved.get("tasks").unwrap_or(&Value::Null);
         self.tasks.default = tasks
@@ -1860,7 +1875,7 @@ impl Agents {
         act.did = Did::of(why);
         match self
             .grants
-            .get(&act.agent)
+            .get(&self.answers_of(&act.agent))
             .and_then(|sites| sites.get(&site))
         {
             Some(true) => return self.run(act, cx),
@@ -1916,7 +1931,7 @@ impl Agents {
         // check.sh reads this line.
         log!("browser: agent {} answered {id} {answer:?}", act.agent);
         if let Answer::Always | Answer::Never = answer {
-            let sites = self.grants.entry(act.agent.clone()).or_default();
+            let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();
             sites.insert(site.clone(), answer == Answer::Always);
             self.save();
         }
@@ -1964,8 +1979,20 @@ impl Agents {
         grants
     }
 
+    /// Whose answers for good `agent`'s are, by the key they're kept under: a connected app's its
+    /// own, and a ⌘T task's its CLI's (task_answers), as a task's own id is new each task and
+    /// numbered from 1 again each run, so kept under it an answer was listed nowhere and the next
+    /// run's task of that number took it (#1913).
+    fn answers_of(&self, agent: &str) -> String {
+        match self.task(agent).and_then(|task| task.cli) {
+            Some(cli) => task_answers(cli),
+            None => agent.to_string(),
+        }
+    }
+
     /// Forgets the user's answer for good to the agent on `site`, or on every site with None, so
-    /// what asks first there asks again.
+    /// what asks first there asks again. `agent` is the key the answers are kept under: a connected
+    /// app's id, or a ⌘T CLI's task_answers.
     pub fn revoke(&mut self, agent: &str, site: Option<&str>, cx: &mut Context<Self>) {
         let Some(sites) = self.grants.get_mut(agent) else {
             return;
