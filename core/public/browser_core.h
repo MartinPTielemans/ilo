@@ -1605,10 +1605,13 @@ BC_EXPORT size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t c
 // returns whether it did.
 BC_EXPORT bool bc_profile_set_search_engine(bc_id profile, const char* keyword);
 // How long, in seconds, a Today tab in the profile's Spaces that no window shows waits before it
-// goes in the archive, or 0 for a profile that isn't loaded.
+// goes in the archive, BC_ARCHIVE_NEVER for Never, or 0 for a profile that isn't loaded.
 BC_EXPORT double bc_profile_archive_after(bc_id profile);
 // Sets it, and returns whether it did: not for a profile that isn't loaded or a time that isn't
-// positive. The tabs that have waited that long go in the archive at once.
+// positive. The tabs that have waited that long go in the archive at once. BC_ARCHIVE_NEVER is
+// Never: auto-archive takes none of the profile's tabs however long they wait, while Clear and
+// Close Tab still archive them (Arc had no Never; ours, #1636).
+#define BC_ARCHIVE_NEVER -1.0
 BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
 
 // Copies the profile's notes service, which New Note opens a new document in, into |service| as
@@ -2137,6 +2140,23 @@ BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
+
+// Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
+// every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
+// is Chromium's own default stays as a profile's chrome://settings has it until the user changes
+// the row. The core keeps them with the Spaces. The user's alone: agents get none.
+// Whether each download asks where to save it (Chrome's "Ask where to save each file"): off by
+// default.
+BC_EXPORT bool bc_ask_where_to_save(void);
+BC_EXPORT void bc_set_ask_where_to_save(bool ask);
+// The pages' zoom, as a factor, 1 for 100%: the profiles' default zoom level. A site zoomed with
+// ⌘+ keeps its own.
+BC_EXPORT double bc_page_zoom(void);
+BC_EXPORT void bc_set_page_zoom(double factor);
+// Whether sites may ask to send notifications: on by default, as Chrome's is. Off blocks the
+// question by default; a site the user allowed or blocked keeps its own choice.
+BC_EXPORT bool bc_notification_prompts(void);
+BC_EXPORT void bc_set_notification_prompts(bool on);
 // Whether a page may take its video or call into Picture in Picture as its tab is hidden, the
 // Mini Player, in every profile: on unless the user turned it off. Off blocks it by default, as
 // Chrome's settings do, and a site the user allows in its Site Controls still may. The core keeps

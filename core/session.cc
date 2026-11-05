@@ -575,7 +575,10 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("option_reveals_sidebar", saved.settings.option_reveals_sidebar)
                            .Set("hover_kinds", saved.settings.hover_kinds)
                            .Set("crash_report_offered", saved.settings.crash_report_offered)
-                           .Set("widevine", saved.settings.widevine));
+                           .Set("widevine", saved.settings.widevine)
+                           .Set("ask_where_to_save", saved.settings.ask_where_to_save)
+                           .Set("page_zoom", saved.settings.page_zoom)
+                           .Set("notification_prompts", saved.settings.notification_prompts));
   return base::WriteJson(root);
 }
 
@@ -842,6 +845,11 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.crash_report_offered =
         settings->FindDouble("crash_report_offered").value_or(0);
     saved.settings.widevine = settings->FindBool("widevine").value_or(false);
+    saved.settings.ask_where_to_save = settings->FindBool("ask_where_to_save").value_or(false);
+    const double page_zoom = settings->FindDouble("page_zoom").value_or(1);
+    saved.settings.page_zoom = page_zoom > 0 ? page_zoom : 1;
+    saved.settings.notification_prompts =
+        settings->FindBool("notification_prompts").value_or(true);
   }
   return saved;
 }

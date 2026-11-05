@@ -818,12 +818,20 @@ bool bc_profile_set_search_engine(bc_id profile, const char* keyword) {
 
 double bc_profile_archive_after(bc_id profile_id) {
   Profile* profile = browser_core::ProfileOrLoad(profile_id);
-  return profile ? browser_core::ProfileArchiveAfter(profile).InSecondsF() : 0;
+  if (!profile) {
+    return 0;
+  }
+  const std::optional<base::TimeDelta> after = browser_core::ProfileArchiveAfter(profile);
+  return after ? after->InSecondsF() : BC_ARCHIVE_NEVER;
 }
 
 bool bc_profile_set_archive_after(bc_id profile, double seconds) {
-  return seconds > 0 && browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile),
-                                                              base::Seconds(seconds));
+  if (seconds != BC_ARCHIVE_NEVER && !(seconds > 0)) {
+    return false;
+  }
+  const std::optional<base::TimeDelta> after =
+      seconds == BC_ARCHIVE_NEVER ? std::nullopt : std::optional(base::Seconds(seconds));
+  return browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile), after);
 }
 
 size_t bc_profile_notes_service(bc_id profile_id, char* service, size_t capacity) {
@@ -1545,6 +1553,39 @@ void bc_set_battery_saver_enabled(bool enabled) {
 
 void bc_battery_for_testing(int percent, bool plugged) {
   browser_core::SetBatteryForTesting(percent, plugged);
+}
+
+bool bc_ask_where_to_save(void) {
+  return browser_core::UserSettings().ask_where_to_save;
+}
+
+void bc_set_ask_where_to_save(bool ask) {
+  browser_core::UserSettings().ask_where_to_save = ask;
+  browser_core::ApplyEveryday(browser_core::Everyday::kAskWhereToSave);
+  browser_core::SessionChanged();
+}
+
+double bc_page_zoom(void) {
+  return browser_core::UserSettings().page_zoom;
+}
+
+void bc_set_page_zoom(double factor) {
+  if (!(factor > 0)) {
+    return;
+  }
+  browser_core::UserSettings().page_zoom = factor;
+  browser_core::ApplyEveryday(browser_core::Everyday::kPageZoom);
+  browser_core::SessionChanged();
+}
+
+bool bc_notification_prompts(void) {
+  return browser_core::UserSettings().notification_prompts;
+}
+
+void bc_set_notification_prompts(bool on) {
+  browser_core::UserSettings().notification_prompts = on;
+  browser_core::ApplyEveryday(browser_core::Everyday::kNotificationPrompts);
+  browser_core::SessionChanged();
 }
 
 bool bc_ad_blocking(void) {
