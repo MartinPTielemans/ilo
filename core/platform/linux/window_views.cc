@@ -585,11 +585,13 @@ class WindowViews : public views::WidgetObserver,
   void OnWidgetShowStateChanged(views::Widget*) override {
     ShowThrough();
     // The app asks whether the window is full screen or maximized as it hears the window's size,
-    // and a window already its screen's size goes either way at that size (#1220). Posted, after
-    // the size Wayland's configure brings with the state, so the app lays the page out once.
+    // and a window already its screen's size goes either way at that size (#1220). Told once the
+    // window has the compositor's configure for the state, with its bounds: a state the browser
+    // asks for changes here at once, before that configure comes, and the app would lay the page
+    // out at the size the window is leaving (#1907).
     if (OnWayland()) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
+      AfterStateConfigured(widget_,
+                           base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
     }
   }
 
