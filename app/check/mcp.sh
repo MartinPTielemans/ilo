@@ -907,7 +907,7 @@ CARD
     fail "the denied change answered: $changed"
   [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
 
-  # It opens a page in its Space, clicks its link, scrolls and takes a screenshot.
+  # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
   case "$opened" in
     "Opened tab "*"URL: https://example.com/"*) ;;
@@ -928,6 +928,13 @@ CARD
   case "$went" in "Went back."*"Example Domain"*) ;; *) fail "navigate back answered: $went" ;; esac
   await_more "^browser: title $opened_tab Example Domain\$" "$titles" ||
     fail "back on example.com, the tab kept the title of the page it left: $(grep "^browser: title $opened_tab " "$log" | tail -1)"
+  # example.com is shorter than the view, where a scroll says nothing moved (#1445), so the tab
+  # goes on to a page taller than the view, whose heading the steps below wait for, and a scroll
+  # down, the steps' scroll up and the one after Hand Back each move it.
+  printf '%s' '<title>Long page</title><h1>Example Domain</h1>
+<p style="height:3000px">A page taller than the view.</p>' > "$out/site/long.html"
+  call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/long.html\"}" > /dev/null
+  await_log "^browser: title $opened_tab Long page\$" "the long page didn't load in the agent's tab"
   scrolled=$(call scroll "{\"tab\":$opened_tab}")
   case "$scrolled" in "Scrolled down."*) ;; *) fail "scroll answered: $scrolled" ;; esac
   picture=$(call screenshot "{\"tab\":$opened_tab}")
