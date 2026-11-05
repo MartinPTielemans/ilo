@@ -113,6 +113,11 @@
 //                                         T3 Code's window capture takes. Each is "driven",
 //                                         "window <n>" for another browser window, "none", or
 //                                         "<class> <width>x<height> <accessibility role>"
+//   stack                                 logs the windows on screen at the normal level over
+//                                         the driven one and overlapping it, front first, down
+//                                         to it, as Windows' driver does, as "browser: stack
+//                                         <window>, …, driven": each as front names it, or
+//                                         another app's as "other <its process's name>"
 //   backdrop <grey>|off                   a window of the driver's in <grey> (0–255, sRGB) behind
 //                                         the browser window and 100 points past its edges, for
 //                                         the window's material to blur something known. Each
@@ -1641,6 +1646,43 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     bc_age_tabs_for_testing(seconds);
+    done();
+    return true;
+  }
+  if (action == "stack") {
+    NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    const auto bounds = [](NSDictionary* info) {
+      CGRect rect = CGRectNull;
+      CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds],
+                                             &rect);
+      return rect;
+    };
+    CGRect over = CGRectNull;
+    for (NSDictionary* info in windows) {
+      if ([info[(id)kCGWindowNumber] integerValue] == window.windowNumber) {
+        over = bounds(info);
+      }
+    }
+    NSMutableArray<NSString*>* stack = [NSMutableArray array];
+    for (NSDictionary* info in windows) {
+      const NSInteger number = [info[(id)kCGWindowNumber] integerValue];
+      if (number == window.windowNumber) {
+        [stack addObject:@"driven"];
+        break;
+      }
+      if ([info[(id)kCGWindowLayer] intValue] != 0 || [info[(id)kCGWindowAlpha] doubleValue] == 0 ||
+          !CGRectIntersectsRect(bounds(info), over)) {
+        continue;
+      }
+      if ([info[(id)kCGWindowOwnerPID] intValue] == getpid()) {
+        [stack addObject:Describe([NSApp windowWithWindowNumber:number]
+                                      ?: [NSString stringWithFormat:@"number %ld", (long)number])];
+      } else {
+        [stack addObject:[NSString stringWithFormat:@"other %@", info[(id)kCGWindowOwnerName]]];
+      }
+    }
+    fprintf(stderr, "browser: stack %s\n", [stack componentsJoinedByString:@", "].UTF8String);
     done();
     return true;
   }

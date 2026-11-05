@@ -1556,6 +1556,94 @@ static void ToActiveSpace(NSWindow* window) {
   });
 }
 
+// The window on screen right behind |window| at the normal level, one with something to see, and
+// its process, as the window server stacks every app's windows.
+static bool WindowBehind(NSWindow* window, CGWindowID* behind, pid_t* owner) {
+  NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenBelowWindow | kCGWindowListExcludeDesktopElements,
+      (CGWindowID)window.windowNumber));
+  for (NSDictionary* info in windows) {
+    if ([info[(id)kCGWindowLayer] intValue] == 0 && [info[(id)kCGWindowAlpha] doubleValue] > 0) {
+      *behind = [info[(id)kCGWindowNumber] unsignedIntValue];
+      *owner = [info[(id)kCGWindowOwnerPID] intValue];
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether |window| is on screen in front of the window |behind|.
+static bool InFrontOf(NSWindow* window, CGWindowID behind) {
+  NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenAboveWindow, behind));
+  for (NSDictionary* info in windows) {
+    if ([info[(id)kCGWindowNumber] integerValue] == window.windowNumber) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// NativeWidgetMacNSWindow's, which a Little ilo window's goes on to.
+static IMP g_order_out;
+
+// A Little ilo window going with the keyboard leaves another app's window right behind it in front
+// and active, as closing any app's window does (#1689): AppKit would hand the keyboard to the app's
+// next window and bring it in front of that app. Chromium orders a closing window out before it
+// closes it, so the Dock's Hide All comes here too. A Little ilo window without the keyboard, as
+// the archive closes one and ⌘O, which gives the main window the keyboard first, leaves all as is.
+static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
+  Browser* browser = BrowserOf(self);
+  NSWindow* key = NSApp.keyWindow;
+  while (key && key != self) {
+    key = key.parentWindow;
+  }
+  CGWindowID behind = 0;
+  pid_t owner = 0;
+  NSRunningApplication* to = nil;
+  if (browser && browser->little && key && NSApp.active && self.visible &&
+      WindowBehind(self, &behind, &owner) && owner != getpid()) {
+    to = [NSRunningApplication runningApplicationWithProcessIdentifier:owner];
+  }
+  if (to) {
+    // Always, as the app needs macOS 15 (build.sh), but mac-syntax.yml compiles for macOS 11.
+    if (@available(macOS 14, *)) {
+      [NSApp yieldActivationToApplication:to];
+      [to activateFromApplication:NSRunningApplication.currentApplication options:0];
+    }
+    // Inactive, the app has no key window for AppKit to hand on from.
+    [NSApp deactivate];
+  }
+  ((void (*)(id, SEL, id))g_order_out)(self, selector, sender);
+  if (!to) {
+    return;
+  }
+  // Any of the app's windows AppKit brought in front anyway goes back behind that window.
+  for (NSWindow* each in NSApp.orderedWindows) {
+    if (BrowserOf(each) && each != self && each.visible && InFrontOf(each, behind)) {
+      [each orderWindow:NSWindowBelow relativeTo:behind];
+    }
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: little window gave way to %s\n", to.localizedName.UTF8String ?: "");
+}
+
+// Little ilo windows order out through OrderLittleOut. They're Chromium's class, whose browser
+// windows all share it, so it's added once, and it passes the others on.
+static void WatchLittleOrderingOut(NSWindow* window) {
+  const SEL selector = @selector(orderOut:);
+  Class kind = object_getClass(window);
+  if (class_getMethodImplementation(kind, selector) == (IMP)OrderLittleOut) {
+    return;
+  }
+  Method inherited = class_getInstanceMethod(kind, selector);
+  g_order_out = method_getImplementation(inherited);
+  if (!class_addMethod(kind, selector, (IMP)OrderLittleOut, method_getTypeEncoding(inherited))) {
+    g_order_out = method_setImplementation(class_getInstanceMethod(kind, selector),
+                                           (IMP)OrderLittleOut);
+  }
+}
+
 void host_show_window(void* ui_view) {
   host_show_window_behind(ui_view, nullptr);
 }
@@ -1586,6 +1674,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
       }
     }
     ToActiveSpace(window);
+    WatchLittleOrderingOut(window);
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
