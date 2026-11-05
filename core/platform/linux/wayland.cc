@@ -166,10 +166,12 @@ void AfterStateConfigured(views::Widget* widget, base::OnceClosure done) {
   wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
   const gfx::AcceleratedWidget window =
       widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget();
-  if (!proxy || proxy->IsWindowStateConfigured(window)) {
+  if (!proxy) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(done));
     return;
   }
+  // An ack from now on, never the state as it is: a state left before the compositor's configure
+  // for it was acked still has the one before it latched, which is the window's again.
   ConfigureWatcher::Get(proxy).Wait(window, std::move(done));
 }
 
