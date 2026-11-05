@@ -44,8 +44,8 @@ use gpui::{
 
 pub use crate::settings_rows::Look;
 use crate::settings_rows::{
-    SLIDE, button, checked_row, detailed_row, drawn, end, frame, glyph_plate, group, primary, row,
-    switch, text as words,
+    SLIDE, button, checked_row, detailed_row, drawn, end, frame, glyph_plate, group, named_button,
+    named_check, named_dimmed, named_switch, primary, row, switch, text as words,
 };
 use crate::theme::Theme;
 use crate::tokens::radius;
@@ -561,6 +561,8 @@ pub struct ImportView {
     host: Rc<dyn Host>,
     skip: bool,
     look: Look,
+    /// An assistive app reads the window, as its last draw found: its controls are named then.
+    a11y: bool,
     sources: Vec<Source>,
     /// Each browser's app icon, or none, as the system gave it at the window's scale it was asked
     /// for at, which it's asked for again at once the window's scale changes.
@@ -653,6 +655,7 @@ impl ImportView {
             host,
             skip,
             look: Look::settings(true),
+            a11y: false,
             sources,
             icons: Vec::new(),
             icons_scale: None,
@@ -809,16 +812,28 @@ impl ImportView {
         self.suggested.as_deref().filter(|tabs| !tabs.is_empty())
     }
 
-    /// A push button titled `title`, in the accent if it's the state's primary().
+    /// A push button titled `title`, in the accent if it's the state's primary(), which an
+    /// assistive app calls by its title.
     fn control(
         &self,
         id: impl Into<gpui::ElementId>,
         title: &'static str,
     ) -> gpui::Stateful<gpui::Div> {
-        match self.primary() == Some(title) {
+        self.control_said(id, title, title)
+    }
+
+    /// As `control`, called `spoken` where its title alone doesn't say what it does.
+    fn control_said(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        title: &'static str,
+        spoken: impl Into<SharedString>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let control = match self.primary() == Some(title) {
             true => primary(&self.look, id, title),
             false => button(&self.look, id, title),
-        }
+        };
+        control.when(self.a11y, |control| named_button(control, spoken))
     }
 
     /// What Esc does: from what comes from a browser, or the wait for Full Disk Access, back to
@@ -1340,6 +1355,9 @@ impl ImportView {
             let url = tab.url.clone();
             div()
                 .id(("import-favorite", tile.index))
+                .when(self.a11y, |favorite| {
+                    named_check(favorite, tile.name.clone(), tile.on)
+                })
                 .relative()
                 .flex_1()
                 .min_w_0()
@@ -2325,7 +2343,9 @@ impl ImportView {
                 format!("import-add-extension {}", extension.id),
                 self.drawn_at.clone(),
             );
+            let spoken = format!("Add {}…", extension.name);
             let add = button(look, ("import-add-extension", index), "Add…")
+                .when(self.a11y, |add| named_button(add, spoken))
                 .relative()
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.add_extension(&id, cx)))
@@ -2336,13 +2356,14 @@ impl ImportView {
         let names: Vec<String> = blockers.iter().map(|each| each.name.clone()).collect();
         let ids: Vec<String> = blockers.iter().map(|each| each.id.clone()).collect();
         if !blockers.is_empty() {
-            let anyway = button(look, "import-add-ad-blocker", "Add Anyway").on_click(cx.listener(
-                move |view, _, _, cx| {
-                    for id in &ids {
-                        view.add_extension(id, cx);
-                    }
-                },
-            ));
+            let spoken = format!("Add {} Anyway", self::listed(&names));
+            let anyway = button(look, "import-add-ad-blocker", "Add Anyway");
+            let anyway = anyway.when(self.a11y, |anyway| named_button(anyway, spoken));
+            let anyway = anyway.on_click(cx.listener(move |view, _, _, cx| {
+                for id in &ids {
+                    view.add_extension(id, cx);
+                }
+            }));
             let said = format!("{} blocks ads itself", env!("APP_NAME"));
             rows.push(detailed_row(
                 look,
@@ -2373,6 +2394,9 @@ impl ImportView {
         };
         let disclosure = div()
             .id("import-choose-folders")
+            .when(self.a11y, |disclosure| {
+                named_button(disclosure, "Choose Folders").aria_expanded(folders.open)
+            })
             .relative()
             .child(drawn("import-choose-folders".into(), self.drawn_at.clone()))
             .px(px(ROW_X))
@@ -2399,6 +2423,7 @@ impl ImportView {
                     let toggled = name.clone();
                     div()
                         .id(("import-folder", index))
+                        .when(self.a11y, |folder| named_check(folder, name.clone(), on))
                         .relative()
                         .child(drawn(
                             format!("import-folder {name}"),
@@ -2504,7 +2529,11 @@ impl ImportView {
             if self.guided {
                 return self.guided_row(index, source, line, at, cx);
             }
-            let choose = button(look, ("import-from", index), self.row_button(source))
+            // "Import from Chrome…", as the row's name says where.
+            let title = self.row_button(source);
+            let spoken = format!("{} from {}…", title.trim_end_matches('…'), source.name());
+            let choose = button(look, ("import-from", index), title)
+                .when(self.a11y, |choose| named_button(choose, spoken))
                 .relative()
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.pick(index, cx)))
@@ -2651,10 +2680,16 @@ impl ImportView {
     fn files(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let bookmarks = button(look, "import-bookmarks", "Bookmarks…")
+            .when(self.a11y, |button| {
+                named_button(button, "Import a Bookmarks File…")
+            })
             .relative()
             .child(drawn("import-bookmarks".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_bookmarks(cx)));
         let passwords = button(look, "import-passwords", "Passwords…")
+            .when(self.a11y, |button| {
+                named_button(button, "Import a Passwords File…")
+            })
             .relative()
             .child(drawn("import-passwords".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
@@ -2765,6 +2800,7 @@ impl ImportView {
             let on = picked.contains(&kind);
             let toggle = div()
                 .id(("import-kind", kind as usize))
+                .when(self.a11y, |toggle| named_switch(toggle, kind.label(), on))
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
                 .child(switch(look, on, slid, look.accent));
             let chips = (read.as_ref())
@@ -2793,6 +2829,7 @@ impl ImportView {
         let any = !picked.is_empty() || passwords.as_ref().is_some_and(|(_, on)| *on);
         let import = self
             .control("import", "Import")
+            .when(self.a11y, |button| named_dimmed(button, "Import", any))
             .when(!any, |button| button.opacity(0.5))
             .when(any, |button| {
                 button.on_click(cx.listener(|view, _, _, cx| view.import(cx)))
@@ -2854,6 +2891,9 @@ impl ImportView {
                     None => format!("**{place}**"),
                 };
                 let choose = button(look, "import-pick-passwords", "Choose File…")
+                    .when(self.a11y, |choose| {
+                        named_button(choose, "Choose Passwords File…")
+                    })
                     .relative()
                     .child(drawn("import-pick-passwords".into(), self.drawn_at.clone()))
                     .on_click(cx.listener(|view, _, _, cx| view.choose_picked_passwords(cx)));
@@ -2862,6 +2902,7 @@ impl ImportView {
             Some((file, on)) => {
                 let toggle = div()
                     .id("import-pick-passwords-switch")
+                    .when(self.a11y, |toggle| named_switch(toggle, "Passwords", *on))
                     .on_click(cx.listener(|view, _, _, cx| view.toggle_passwords(cx)))
                     .child(switch(look, *on, 1., look.accent));
                 let said = format!("**{}**, read by Chromium's importer", file_name(file));
@@ -3334,6 +3375,7 @@ fn summary(name: &str, counts: Counts, listed: usize) -> SharedString {
 
 impl Render for ImportView {
     fn render(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         if self
             .switched
             .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE)
@@ -3372,12 +3414,12 @@ impl Render for ImportView {
                 // Cancel while there's still something it stops, and Try Again once a profile
                 // hasn't opened, the one thing to do then.
                 let cancel = (!run.placed).then(|| {
-                    self.control("import-cancel", "Cancel")
+                    self.control_said("import-cancel", "Cancel", "Cancel Import")
                         .on_click(cx.listener(|view, _, _, cx| view.cancel(cx)))
                         .into_any_element()
                 });
                 let again = run.stalled.is_some().then(|| {
-                    self.control("import-try-again", "Try Again")
+                    self.control_said("import-try-again", "Try Again", "Try the Import Again")
                         .on_click(cx.listener(|view, _, _, cx| view.try_again(cx)))
                         .into_any_element()
                 });
@@ -3493,8 +3535,9 @@ impl Render for ImportView {
                 // The file holds the passwords in plain text, so the end offers to delete it, in a
                 // row of its own that reads as the warning it is.
                 let file = self.passwords_file.as_ref().map(|file| {
+                    let spoken = format!("Delete {}", file_name(file));
                     let delete = self
-                        .control("import-delete-passwords", "Delete File")
+                        .control_said("import-delete-passwords", "Delete File", spoken)
                         .relative()
                         .child(drawn("import-delete".into(), self.drawn_at.clone()))
                         .on_click(cx.listener(|view, _, _, cx| view.delete_passwords_file(cx)));
@@ -3512,7 +3555,9 @@ impl Render for ImportView {
                 let favorites = favorites.take();
                 let add = self.offered().map(|_| {
                     let any = !self.ticked().is_empty();
-                    primary(&look, "import-add-favorites", self.add_favorites_title())
+                    let title = self.add_favorites_title();
+                    primary(&look, "import-add-favorites", title.clone())
+                        .when(self.a11y, |button| named_dimmed(button, title, any))
                         .when(!any, |button| button.opacity(0.5))
                         .when(any, |button| {
                             button.on_click(cx.listener(|view, _, _, cx| view.add_ticked(cx)))
@@ -3545,6 +3590,7 @@ impl Render for ImportView {
             ))
         .then(|| {
             button(&look, "import-skip", "Skip")
+                .when(self.a11y, |skip| named_button(skip, "Skip Import"))
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ImportEvent::Skipped)))
         });
         let escape = cx.listener(|view, event: &KeyDownEvent, _, cx| {

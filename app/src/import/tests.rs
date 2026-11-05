@@ -3859,3 +3859,105 @@ fn done_comes_at_the_foot_after_the_extensions_to_add(cx: &mut TestAppContext) {
     );
     fs::remove_dir_all(home).unwrap();
 }
+
+/// Every control of the import has a role and a name, on its list, the choices for the browser
+/// picked and the end with its favorites, and ⇥ stops only at those (#1911): a browser's button
+/// says which browser, the kinds are switches by their names, the favorites boxes to tick by
+/// their sites, and Add Favorites says it's off with none ticked.
+#[gpui::test]
+fn every_control_in_the_import_has_a_name(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{Said, pressable, stops, unnamed};
+    use gpui::accesskit::{Role, Toggled};
+    let made = chrome("chrome-named", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    cx.run_until_parked();
+    let named = |cx: &mut gpui::VisualTestContext| -> Vec<Said> {
+        let pressable = pressable(cx);
+        assert_eq!(
+            unnamed(&pressable),
+            [],
+            "a control without a name: {pressable:?}"
+        );
+        let stops = stops(cx);
+        assert_eq!(unnamed(&stops), [], "a stop without a name: {stops:?}");
+        pressable
+    };
+    let names =
+        |said: &[Said]| -> Vec<String> { said.iter().map(|(_, name, _)| name.clone()).collect() };
+    let source = view.read_with(cx, |view, _| view.sources[0].name());
+    let list = names(&named(cx));
+    for name in [
+        format!("Import from {source}…"),
+        "Import a Bookmarks File…".into(),
+        "Import a Passwords File…".into(),
+    ] {
+        assert!(list.contains(&name), "{name} in {list:?}");
+    }
+
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
+    let picking = named(cx);
+    for name in ["Import", "Back", "Choose Passwords File…"] {
+        assert!(
+            names(&picking).contains(&name.into()),
+            "{name} in {picking:?}"
+        );
+    }
+    assert!(
+        (picking.iter()).any(|(role, _, _)| *role == Role::Switch),
+        "no kind's switch: {picking:?}"
+    );
+
+    view.update(cx, |view, cx| view.import(cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| browser.added(cx));
+    let tab = |url: &str| Tab {
+        url: url.into(),
+        name: String::new(),
+    };
+    view.update(cx, |view, cx| {
+        view.offer(vec![
+            tab("https://news.example.org/"),
+            tab("https://mail.example.org/"),
+        ]);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let end = named(cx);
+    for name in ["Add 2 Favorites", "Done"] {
+        assert!(names(&end).contains(&name.into()), "{name} in {end:?}");
+    }
+    let ticks = |cx: &mut gpui::VisualTestContext| {
+        let tree = cx.a11y_tree().expect("a tree");
+        let mut ticks: Vec<(String, Option<Toggled>)> = (tree.nodes.iter())
+            .filter(|(_, node)| node.role() == Role::CheckBox)
+            .map(|(_, node)| (node.label().unwrap_or_default().to_string(), node.toggled()))
+            .collect();
+        ticks.sort_by(|a, b| a.0.cmp(&b.0));
+        ticks
+    };
+    assert_eq!(
+        ticks(cx),
+        [
+            ("mail.example.org".into(), Some(Toggled::True)),
+            ("news.example.org".into(), Some(Toggled::True)),
+        ]
+    );
+    view.update(cx, |view, cx| {
+        view.toggle_favorite("https://news.example.org/", cx);
+        view.toggle_favorite("https://mail.example.org/", cx);
+    });
+    cx.run_until_parked();
+    pressable(cx);
+    assert!(ticks(cx).iter().all(|(_, on)| *on == Some(Toggled::False)));
+    let tree = cx.a11y_tree().expect("a tree");
+    let add = (tree.nodes.iter()).find(|(_, node)| node.label() == Some("Add Favorites"));
+    assert_eq!(
+        add.map(|(_, node)| node.is_disabled()),
+        Some(true),
+        "Add Favorites with none ticked doesn't say it's off"
+    );
+    fs::remove_dir_all(made).unwrap();
+}
