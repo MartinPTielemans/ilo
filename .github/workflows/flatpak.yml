@@ -122,6 +122,43 @@ jobs:
           cat ilo.log
           grep -q "browser: UI shown" ilo.log
 
+      # The Flatpak signs in to sync as the build does, by check.sh's sync-account run, driven in its
+      # sandbox (BROWSER_FLATPAK), on an ilo-server of the run's own, on SQLite with a throwaway
+      # account, never the hosted one, at the commit check-linux.yml builds. Not in a release,
+      # which a check's flake would hold up.
+      - id: server
+        if: ${{ steps.engine.outputs.found == 'true' && !inputs.release }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - name: Sign in
+        if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app
+        env:
+          # The runner's C.UTF-8 names no country, as check-linux.yml says.
+          LANG: en_US.UTF-8
+        run: |
+          (cd .deps/ilo-server && cargo build --release --locked)
+          sudo apt-get install -yq xdotool openbox xauth
+          XDG_RUNTIME_DIR=$(mktemp -d) ILO_SERVER=$PWD/.deps/ilo-server/target/release/ilo-server \
+            BROWSER_FLATPAK=1 BROWSER_XVFB=1 dbus-run-session -- ./check.sh sync-account
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.server.outcome == 'success' }}
+        with:
+          name: ilo-flatpak-sign-in
+          path: app/build/check
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         if: ${{ always() && steps.engine.outputs.found == 'true' }}
         with:

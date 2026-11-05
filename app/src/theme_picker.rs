@@ -4,6 +4,12 @@
 //! intensity and a dial for the grain (docs/ux-spec.md › Themes). The window's colour follows
 //! each move live. Like the icon picker, it's a window of its own that the host shows over the
 //! browser window, as its child; what it asks of that window goes through `Host`.
+//!
+//! The keyboard (#1383, ours: Arc's isn't recorded): tab and shift-tab go round the appearance
+//! buttons, − and +, the swatches and the wave, ringed as Focus Sidebar rings a row; left and right
+//! go along the buttons or swatches, or move the wave's knob; space and return press what's ringed.
+//! The handles and the dial stay the mouse's: a swatch places a colour, as a click on the field
+//! does.
 
 use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
@@ -23,82 +29,90 @@ use crate::{
     theme::{self, Appearance, DEFAULT_INTENSITY, MAX_COLORS, Place, Theme},
 };
 
-actions!(theme_picker, [Dismiss]);
+actions!(
+    theme_picker,
+    [Dismiss, NextStop, PreviousStop, KeyLeft, KeyRight, KeyPress]
+);
 
+use crate::tokens::theme_picker::ARROW;
+use crate::tokens::theme_picker::ARROW_FOOT_RADIUS;
+use crate::tokens::theme_picker::ARROW_TIP_RADIUS;
 use crate::tokens::theme_picker::CARD_WIDTH;
 pub use crate::tokens::theme_picker::HEIGHT;
-use crate::tokens::theme_picker::ARROW;
-use crate::tokens::theme_picker::ARROW_TIP_RADIUS;
-use crate::tokens::theme_picker::ARROW_FOOT_RADIUS;
 /// How far inside where its sides meet the rounded tip is.
 const TIP_SHORT: f32 = ARROW_TIP_RADIUS * (std::f32::consts::SQRT_2 - 1.);
 pub const WIDTH: f32 = ARROW + CARD_WIDTH;
-use crate::tokens::theme_picker::RADIUS;
-use crate::tokens::theme_picker::GAP;
-use crate::tokens::theme_picker::MARGIN;
-use crate::tokens::theme_picker::FIELD_INSET;
-use crate::tokens::theme_picker::FIELD;
-use crate::tokens::theme_picker::FIELD_RADIUS;
-use crate::tokens::theme_picker::FIELD_FILL;
-use crate::tokens::theme_picker::FIELD_RIM;
+use crate::tokens::theme_picker::DOT_ALPHA;
 /// Its grid of 1 pt dots.
 use crate::tokens::theme_picker::DOT_PITCH;
-use crate::tokens::theme_picker::DOT_ALPHA;
+use crate::tokens::theme_picker::FIELD;
+use crate::tokens::theme_picker::FIELD_FILL;
+use crate::tokens::theme_picker::FIELD_INSET;
+use crate::tokens::theme_picker::FIELD_RADIUS;
+use crate::tokens::theme_picker::FIELD_RIM;
+use crate::tokens::theme_picker::GAP;
+use crate::tokens::theme_picker::MARGIN;
+use crate::tokens::theme_picker::RADIUS;
 const HINT: &str = "Tap to pick a color for this space";
-/// The appearance buttons, across the field's top: automatic, light and dark.
-use crate::tokens::theme_picker::APPEARANCE_Y;
-use crate::tokens::theme_picker::APPEARANCE_X;
+use crate::tokens::theme_picker::ADD_X;
+use crate::tokens::theme_picker::APPEARANCE_CHOSEN;
+use crate::tokens::theme_picker::APPEARANCE_COLOR;
+use crate::tokens::theme_picker::APPEARANCE_GLYPH;
 use crate::tokens::theme_picker::APPEARANCE_PLATE;
 use crate::tokens::theme_picker::APPEARANCE_RADIUS;
-use crate::tokens::theme_picker::APPEARANCE_CHOSEN;
-use crate::tokens::theme_picker::APPEARANCE_GLYPH;
-use crate::tokens::theme_picker::APPEARANCE_COLOR;
-use crate::tokens::theme_picker::COUNT_Y;
-use crate::tokens::theme_picker::REMOVE_X;
-use crate::tokens::theme_picker::ADD_X;
-use crate::tokens::theme_picker::COUNT_GLYPH;
+use crate::tokens::theme_picker::APPEARANCE_X;
+/// The appearance buttons, across the field's top: automatic, light and dark.
+use crate::tokens::theme_picker::APPEARANCE_Y;
 use crate::tokens::theme_picker::COUNT_COLOR;
-use crate::tokens::theme_picker::COUNT_PRESSED;
 use crate::tokens::theme_picker::COUNT_DISABLED;
+use crate::tokens::theme_picker::COUNT_GLYPH;
+use crate::tokens::theme_picker::COUNT_PRESSED;
 use crate::tokens::theme_picker::COUNT_TARGET;
-use crate::tokens::theme_picker::SWATCH_Y;
-use crate::tokens::theme_picker::SWATCH_X;
-use crate::tokens::theme_picker::SWATCH_PITCH;
-use crate::tokens::theme_picker::SWATCH;
-pub use crate::tokens::theme_picker::SWATCHES;
-use crate::tokens::theme_picker::SLIDER_Y;
-use crate::tokens::theme_picker::TRACK_LEFT;
-use crate::tokens::theme_picker::TRACK_RIGHT;
-use crate::tokens::theme_picker::TRACK_HEIGHT;
-use crate::tokens::theme_picker::TRACK_FILL;
-use crate::tokens::theme_picker::WAVE_LEFT;
-use crate::tokens::theme_picker::WAVE_RIGHT;
-use crate::tokens::theme_picker::WAVE_PERIODS;
-use crate::tokens::theme_picker::WAVE_STROKE;
-use crate::tokens::theme_picker::WAVE_AMPLITUDE;
-use crate::tokens::theme_picker::WAVE_ON;
-use crate::tokens::theme_picker::WAVE_OFF;
-use crate::tokens::theme_picker::KNOB_WIDTH;
+use crate::tokens::theme_picker::COUNT_Y;
 use crate::tokens::theme_picker::KNOB_HEIGHT;
 use crate::tokens::theme_picker::KNOB_LEFT;
 use crate::tokens::theme_picker::KNOB_RIGHT;
+use crate::tokens::theme_picker::KNOB_WIDTH;
+use crate::tokens::theme_picker::REMOVE_X;
+use crate::tokens::theme_picker::SLIDER_Y;
+use crate::tokens::theme_picker::SWATCH;
+use crate::tokens::theme_picker::SWATCH_PITCH;
+use crate::tokens::theme_picker::SWATCH_X;
+use crate::tokens::theme_picker::SWATCH_Y;
+pub use crate::tokens::theme_picker::SWATCHES;
+use crate::tokens::theme_picker::TRACK_FILL;
+use crate::tokens::theme_picker::TRACK_HEIGHT;
+use crate::tokens::theme_picker::TRACK_LEFT;
+use crate::tokens::theme_picker::TRACK_RIGHT;
+use crate::tokens::theme_picker::WAVE_AMPLITUDE;
+use crate::tokens::theme_picker::WAVE_LEFT;
+use crate::tokens::theme_picker::WAVE_OFF;
+use crate::tokens::theme_picker::WAVE_ON;
+use crate::tokens::theme_picker::WAVE_PERIODS;
+use crate::tokens::theme_picker::WAVE_RIGHT;
+use crate::tokens::theme_picker::WAVE_STROKE;
 /// The grain's dial: 24 dots round a disc, those the knob has swept bright.
 const DIAL: (f32, f32) = (298.5, 452.);
 const DIAL_DOTS: usize = 24;
-use crate::tokens::theme_picker::DIAL_RING;
-use crate::tokens::theme_picker::DIAL_DOT;
-use crate::tokens::theme_picker::DIAL_SWEPT;
 use crate::tokens::theme_picker::DIAL_DIM;
 use crate::tokens::theme_picker::DIAL_DISC;
 use crate::tokens::theme_picker::DIAL_DISC_FILL;
 use crate::tokens::theme_picker::DIAL_DISC_RIM;
+use crate::tokens::theme_picker::DIAL_DOT;
+use crate::tokens::theme_picker::DIAL_RING;
+use crate::tokens::theme_picker::DIAL_SWEPT;
 const DIAL_KNOB: (f32, f32) = (7., 15.);
+use crate::tokens::shell::{KEYED, KEYED_RING};
+use crate::tokens::text;
 use crate::tokens::theme_picker::DIAL_REACH;
-use crate::tokens::theme_picker::MAIN_HANDLE;
-use crate::tokens::theme_picker::MAIN_RING;
 use crate::tokens::theme_picker::HANDLE;
 use crate::tokens::theme_picker::HANDLE_RING;
-use crate::tokens::text;
+use crate::tokens::theme_picker::MAIN_HANDLE;
+use crate::tokens::theme_picker::MAIN_RING;
+/// How far the ring stands off a round swatch or the wave's knob (ours).
+const RING_GAP: f32 = 1.;
+/// How far left or right moves the wave's knob (ours: twenty steps end to end).
+const KEY_STEP: f32 = 0.05;
 /// Pressed, a handle grows by this in 60 ms, and shrinks back as long on release.
 const PRESSED: f32 = 48. / 44.;
 const PRESS: f32 = 0.06;
@@ -161,6 +175,9 @@ struct Editing {
     glide: Option<(Place, Place, Instant)>,
     /// − or + while it's pressed.
     pressed: Option<Target>,
+    /// What the keyboard is on, ringed, once tab has put it somewhere: an appearance button, − or
+    /// +, a swatch or the wave.
+    keyed: Option<Target>,
     /// Whether a frame of it has been drawn on screen since it opened.
     drawn: bool,
     /// How many colour handles the last frame drew at rest, and what it drew held: a handle, the
@@ -197,7 +214,15 @@ pub fn open_at(
     show: bool,
     cx: &mut App,
 ) -> Option<WindowHandle<ThemePicker>> {
-    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some("ThemePicker"))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("ThemePicker")),
+        KeyBinding::new("tab", NextStop, Some("ThemePicker")),
+        KeyBinding::new("shift-tab", PreviousStop, Some("ThemePicker")),
+        KeyBinding::new("left", KeyLeft, Some("ThemePicker")),
+        KeyBinding::new("right", KeyRight, Some("ThemePicker")),
+        KeyBinding::new("space", KeyPress, Some("ThemePicker")),
+        KeyBinding::new("enter", KeyPress, Some("ThemePicker")),
+    ]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // The preview's has none, so it hasn't the window buttons the host's takes off.
@@ -217,9 +242,16 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        let swatches =
-            SWATCHES.iter().map(|&color| Swatch::of_theme(Some(&Theme::of_color(color)))).collect();
-        cx.new(|cx| ThemePicker { host, focus: cx.focus_handle(), editing: None, swatches })
+        let swatches = SWATCHES
+            .iter()
+            .map(|&color| Swatch::of_theme(Some(&Theme::of_color(color))))
+            .collect();
+        cx.new(|cx| ThemePicker {
+            host,
+            focus: cx.focus_handle(),
+            editing: None,
+            swatches,
+        })
     });
     match window {
         Ok(window) => {
@@ -251,7 +283,9 @@ pub fn corners(arrow_y: f32) -> [(f32, f32, f32); 7] {
 /// browser window `height` tall: its top left, and the arrow's tip down it. The card centres on
 /// the arrow, as Arc's does, unless that takes it past the browser window's top or bottom.
 pub fn placed(anchor: Point<f32>, height: f32) -> (f32, f32, f32) {
-    let top = (anchor.y - HEIGHT / 2.).min(height - MARGIN - HEIGHT).max(MARGIN);
+    let top = (anchor.y - HEIGHT / 2.)
+        .min(height - MARGIN - HEIGHT)
+        .max(MARGIN);
     // The tip keeps clear of the card's rounded corners.
     let reach = RADIUS + ARROW + ARROW_FOOT_RADIUS;
     let arrow_y = (anchor.y - top).clamp(reach, HEIGHT - reach);
@@ -289,6 +323,7 @@ pub fn show(
                 press: None,
                 glide: None,
                 pressed: None,
+                keyed: None,
                 drawn: false,
                 drawn_handles: None,
                 // The picker is a dark sheet over a dark or a light window, as the icon picker is.
@@ -312,7 +347,11 @@ pub fn dismissed(cx: &mut App) {
 /// it, where `dismissed` hears of a close the host has made.
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) {
-        window.update(cx, |picker, window, cx| picker.dismiss(&Dismiss, window, cx)).ok();
+        window
+            .update(cx, |picker, window, cx| {
+                picker.dismiss(&Dismiss, window, cx)
+            })
+            .ok();
     }
 }
 
@@ -324,7 +363,11 @@ pub fn is_open(cx: &App) -> bool {
 /// The Space the picker shows for, if it shows.
 pub fn open_for(cx: &App) -> Option<u64> {
     let picker = cx.try_global::<ThemePickerWindow>()?.0.read(cx).ok()?;
-    picker.editing.as_ref().filter(|editing| editing.open).map(|editing| editing.space)
+    picker
+        .editing
+        .as_ref()
+        .filter(|editing| editing.open)
+        .map(|editing| editing.space)
 }
 
 /// The picker, for the window it opens over to watch whether it still shows.
@@ -335,7 +378,10 @@ pub fn entity(cx: &App) -> Option<Entity<ThemePicker>> {
 /// What a press at `x`, `y` from the card's top left lands on, with `theme` in the field.
 pub fn target(x: f32, y: f32, theme: Option<&Theme>) -> Option<Target> {
     let near = |cx: f32, cy: f32, reach: f32| (x - cx).abs() <= reach && (y - cy).abs() <= reach;
-    if let Some(index) = APPEARANCE_X.iter().position(|&ax| near(ax, APPEARANCE_Y, 15.75)) {
+    if let Some(index) = APPEARANCE_X
+        .iter()
+        .position(|&ax| near(ax, APPEARANCE_Y, 15.75))
+    {
         return Some(Target::Appearance(Appearance::ALL[index]));
     }
     if near(REMOVE_X, COUNT_Y, COUNT_TARGET / 2.) {
@@ -407,6 +453,36 @@ fn at_stop(drag: Drag, theme: &Theme) -> bool {
     }
 }
 
+/// The stops tab goes round, top to bottom, each a row that left and right go along: the
+/// appearance buttons, − and +, the swatches and the wave. − and + and the wave wait for a colour,
+/// as their clicks do.
+fn key_stops(theme: Option<&Theme>) -> Vec<Vec<Target>> {
+    let appearances = Appearance::ALL
+        .iter()
+        .map(|&appearance| Target::Appearance(appearance));
+    let swatches = (0..SWATCHES.len()).map(Target::Swatch).collect();
+    match theme {
+        Some(_) => vec![
+            appearances.collect(),
+            vec![Target::Remove, Target::Add],
+            swatches,
+            vec![Target::Intensity],
+        ],
+        None => vec![appearances.collect(), swatches],
+    }
+}
+
+/// Where tab lands in `stop`: the appearance chosen, − or + whichever answers, else the first.
+fn key_entry(stop: &[Target], chosen: Appearance, theme: Option<&Theme>) -> Target {
+    let answers = |target: &&Target| match (target, theme) {
+        (Target::Appearance(appearance), _) => *appearance == chosen,
+        (Target::Remove, Some(theme)) => theme.count > 1,
+        (Target::Add, Some(theme)) => theme.count < MAX_COLORS,
+        _ => true,
+    };
+    *stop.iter().find(answers).unwrap_or(&stop[0])
+}
+
 /// The grain for the pointer at `x`, `y` in the card: how far round the dial from its top,
 /// clockwise. A turn past the top stops there rather than going round, from `before`.
 fn grain_at(x: f32, y: f32, before: f32) -> f32 {
@@ -444,7 +520,11 @@ impl ThemePicker {
         if let Some(theme) = editing.theme {
             if done {
                 // check.sh reads this line.
-                log!("browser: theme picker set {} {}", editing.space, theme.to_text());
+                log!(
+                    "browser: theme picker set {} {}",
+                    editing.space,
+                    theme.to_text()
+                );
             }
             (editing.changed.clone())(theme, done, cx);
         }
@@ -452,50 +532,43 @@ impl ThemePicker {
     }
 
     fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(event.position.x) - ARROW, f32::from(event.position.y));
+        let (x, y) = (
+            f32::from(event.position.x) - ARROW,
+            f32::from(event.position.y),
+        );
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
             return;
         };
+        // The ring is the keyboard's, and goes as the mouse takes over.
+        editing.keyed = None;
         let Some(target) = target(x, y, editing.theme.as_ref()) else {
+            cx.notify();
             return;
         };
-        let now = Instant::now();
+        let now = crate::motion::start(cx);
         match (target, editing.theme) {
-            (Target::Appearance(appearance), theme) => {
-                editing.appearance = appearance;
-                editing.theme = theme.map(|theme| Theme { appearance, ..theme });
-                self.changed(true, cx);
-            }
-            (Target::Remove, Some(theme)) if theme.count > 1 => {
-                editing.glide = glide(&theme, theme.count - 1, now);
-                editing.theme = Some(theme.with_count(theme.count - 1));
-                editing.pressed = Some(target);
-                self.changed(true, cx);
-            }
-            (Target::Add, Some(theme)) if theme.count < MAX_COLORS => {
-                editing.glide = glide(&theme, theme.count + 1, now);
-                editing.theme = Some(theme.with_count(theme.count + 1));
-                editing.pressed = Some(target);
-                self.changed(true, cx);
-            }
-            (Target::Swatch(index), theme) => {
-                let picked = Theme::of_color(SWATCHES[index]);
-                editing.theme = Some(match theme {
-                    Some(theme) => {
-                        let (x, y, saturation) = (picked.x, picked.y, picked.saturation);
-                        Theme { x, y, saturation, third: None, ..theme }
-                    }
-                    None => Theme { appearance: editing.appearance, ..picked },
-                });
-                self.changed(true, cx);
+            (Target::Appearance(_) | Target::Remove | Target::Add | Target::Swatch(_), _) => {
+                let counted = matches!(target, Target::Remove | Target::Add);
+                if self.pick(target, cx)
+                    && counted
+                    && let Some(editing) = &mut self.editing
+                {
+                    editing.pressed = Some(target);
+                }
             }
             (Target::Intensity, Some(theme)) => {
-                editing.theme = Some(Theme { intensity: intensity_at(x), ..theme });
+                editing.theme = Some(Theme {
+                    intensity: intensity_at(x),
+                    ..theme
+                });
                 editing.drag = Some(Drag::Intensity);
                 self.changed(false, cx);
             }
             (Target::Grain, Some(theme)) => {
-                editing.theme = Some(Theme { grain: grain_at(x, y, theme.grain), ..theme });
+                editing.theme = Some(Theme {
+                    grain: grain_at(x, y, theme.grain),
+                    ..theme
+                });
                 editing.drag = Some(Drag::Grain);
                 self.changed(false, cx);
             }
@@ -510,12 +583,132 @@ impl ThemePicker {
             (Target::Field, None) => {
                 let (fx, fy) = field_point(x, y);
                 let appearance = editing.appearance;
-                editing.theme = Some(Theme { appearance, ..Theme::at(fx, fy) });
+                editing.theme = Some(Theme {
+                    appearance,
+                    ..Theme::at(fx, fy)
+                });
                 editing.drag = Some(Drag::Handle(0, 0., 0.));
                 editing.press = Some((0, now, true));
                 self.changed(false, cx);
             }
             _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Presses an appearance button, − or + or a swatch, by click or key, and says whether it
+    /// answered: − and + don't at their ends or without a colour.
+    fn pick(&mut self, target: Target, cx: &mut Context<Self>) -> bool {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return false;
+        };
+        let now = Instant::now();
+        match (target, editing.theme) {
+            (Target::Appearance(appearance), theme) => {
+                editing.appearance = appearance;
+                editing.theme = theme.map(|theme| Theme {
+                    appearance,
+                    ..theme
+                });
+            }
+            (Target::Remove, Some(theme)) if theme.count > 1 => {
+                editing.glide = glide(&theme, theme.count - 1, now);
+                editing.theme = Some(theme.with_count(theme.count - 1));
+            }
+            (Target::Add, Some(theme)) if theme.count < MAX_COLORS => {
+                editing.glide = glide(&theme, theme.count + 1, now);
+                editing.theme = Some(theme.with_count(theme.count + 1));
+            }
+            (Target::Swatch(index), theme) => {
+                let picked = Theme::of_color(SWATCHES[index]);
+                editing.theme = Some(match theme {
+                    Some(theme) => {
+                        let (x, y, saturation) = (picked.x, picked.y, picked.saturation);
+                        Theme {
+                            x,
+                            y,
+                            saturation,
+                            third: None,
+                            ..theme
+                        }
+                    }
+                    None => Theme {
+                        appearance: editing.appearance,
+                        ..picked
+                    },
+                });
+            }
+            _ => return false,
+        }
+        self.changed(true, cx);
+        true
+    }
+
+    /// Tab, or shift-tab back: the ring goes to the next stop round, or the first.
+    fn key_stop(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return;
+        };
+        let stops = key_stops(editing.theme.as_ref());
+        let at = editing
+            .keyed
+            .and_then(|keyed| stops.iter().position(|stop| stop.contains(&keyed)));
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => stops.len() - 1,
+            (Some(at), true) => (at + 1) % stops.len(),
+            (Some(at), false) => (at + stops.len() - 1) % stops.len(),
+        };
+        let chosen = editing
+            .theme
+            .map_or(editing.appearance, |theme| theme.appearance);
+        let keyed = key_entry(&stops[next], chosen, editing.theme.as_ref());
+        editing.keyed = Some(keyed);
+        cx.notify();
+    }
+
+    /// Left or right: along the row the ring is in, stopping at its ends, or the wave's knob a
+    /// step down or up, kept as each press would be.
+    fn key_along(&mut self, right: bool, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return;
+        };
+        let Some(keyed) = editing.keyed else {
+            return;
+        };
+        if keyed == Target::Intensity {
+            let Some(theme) = editing.theme else {
+                return;
+            };
+            let step = if right { KEY_STEP } else { -KEY_STEP };
+            // Onto the steps, so a knob a drag left between them lands on one.
+            let intensity = ((theme.intensity + step) / KEY_STEP).round() * KEY_STEP;
+            let intensity = intensity.clamp(0., 1.);
+            if intensity != theme.intensity {
+                editing.theme = Some(Theme { intensity, ..theme });
+                self.changed(true, cx);
+            }
+            return;
+        }
+        let stops = key_stops(editing.theme.as_ref());
+        let Some(stop) = stops.iter().find(|stop| stop.contains(&keyed)) else {
+            return;
+        };
+        let at = stop.iter().position(|target| *target == keyed).unwrap_or(0);
+        let next = if right {
+            (at + 1).min(stop.len() - 1)
+        } else {
+            at.saturating_sub(1)
+        };
+        editing.keyed = Some(stop[next]);
+        cx.notify();
+    }
+
+    /// Space or return: presses what's ringed.
+    fn key_press(&mut self, cx: &mut Context<Self>) {
+        let open = self.editing.as_ref().filter(|editing| editing.open);
+        if let Some(keyed) = open.and_then(|editing| editing.keyed) {
+            self.pick(keyed, cx);
         }
     }
 
@@ -532,8 +725,14 @@ impl ThemePicker {
                 let (fx, fy) = field_point(x, y);
                 theme.moved(index, fx - grab_x, fy - grab_y)
             }
-            Drag::Intensity => Theme { intensity: intensity_at(x), ..theme },
-            Drag::Grain => Theme { grain: grain_at(x, y, theme.grain), ..theme },
+            Drag::Intensity => Theme {
+                intensity: intensity_at(x),
+                ..theme
+            },
+            Drag::Grain => Theme {
+                grain: grain_at(x, y, theme.grain),
+                ..theme
+            },
         };
         if moved != theme {
             // A bump as it gets to a stop, not while it's held there (the owner's call).
@@ -557,7 +756,7 @@ impl ThemePicker {
             return;
         };
         if let Drag::Handle(index, ..) = drag {
-            editing.press = Some((index, Instant::now(), false));
+            editing.press = Some((index, crate::motion::start(cx), false));
         }
         self.changed(true, cx);
     }
@@ -584,7 +783,10 @@ impl Editing {
                 let t = cubic_bezier(0.25, 0.1, 0.25, 1., t);
                 // The short way round.
                 let turn = (to.turn - from.turn + 540.).rem_euclid(360.) - 180.;
-                let place = Place { turn: from.turn + turn * t, lift: from.lift + (to.lift - from.lift) * t };
+                let place = Place {
+                    turn: from.turn + turn * t,
+                    lift: from.lift + (to.lift - from.lift) * t,
+                };
                 theme::placed(theme.x, theme.y, place)
             }
             _ => theme.handle(index),
@@ -608,7 +810,9 @@ impl Editing {
     /// held listens for the drag's moves, so check.sh waits for these lines before it presses and
     /// before it drags.
     fn log_handles(&mut self) {
-        let gliding = self.glide.is_some_and(|(.., start)| start.elapsed().as_secs_f32() < GLIDE);
+        let gliding = self
+            .glide
+            .is_some_and(|(.., start)| start.elapsed().as_secs_f32() < GLIDE);
         let held = self.drag.map(|drag| match drag {
             Drag::Handle(index, ..) => Drag::Handle(index, 0., 0.),
             knob => knob,
@@ -627,7 +831,9 @@ impl Editing {
                 Some(Drag::Intensity) => {
                     log!("browser: theme picker handles {count} drawn, intensity held")
                 }
-                Some(Drag::Grain) => log!("browser: theme picker handles {count} drawn, grain held"),
+                Some(Drag::Grain) => {
+                    log!("browser: theme picker handles {count} drawn, grain held")
+                }
                 None => log!("browser: theme picker handles {count} drawn"),
             }
         }
@@ -635,8 +841,12 @@ impl Editing {
 
     /// Whether a handle's growth or the second's glide is still under way.
     fn moving(&self) -> bool {
-        let press = self.press.is_some_and(|(.., start, _)| start.elapsed().as_secs_f32() < PRESS);
-        let glide = self.glide.is_some_and(|(.., start)| start.elapsed().as_secs_f32() < GLIDE);
+        let press = self
+            .press
+            .is_some_and(|(.., start, _)| start.elapsed().as_secs_f32() < PRESS);
+        let glide = self
+            .glide
+            .is_some_and(|(.., start)| start.elapsed().as_secs_f32() < GLIDE);
         press || glide
     }
 }
@@ -658,7 +868,9 @@ fn count_color(palette: &Palette, enabled: bool, pressed: bool) -> Hsla {
 /// Whether the field's point `x`, `y` is under − or +'s target.
 fn under_count(x: f32, y: f32) -> bool {
     let y = y - (COUNT_Y - FIELD_INSET);
-    [REMOVE_X, ADD_X].iter().any(|&at| (x - (at - FIELD_INSET)).hypot(y) <= COUNT_TARGET / 2.)
+    [REMOVE_X, ADD_X]
+        .iter()
+        .any(|&at| (x - (at - FIELD_INSET)).hypot(y) <= COUNT_TARGET / 2.)
 }
 
 /// The field's dot grid, drawn once at 2×, with none under − and + so they sit on the plain field.
@@ -680,12 +892,16 @@ fn dots_image() -> Arc<RenderImage> {
                     let y = (y * 2.).round() as usize - 1;
                     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                         let at = ((y + dy) * side + x + dx) * 4;
-                        data[at..at + 4].copy_from_slice(&[255, 255, 255, (DOT_ALPHA * 255.).round() as u8]);
+                        data[at..at + 4].copy_from_slice(&[
+                            255,
+                            255,
+                            255,
+                            (DOT_ALPHA * 255.).round() as u8,
+                        ]);
                     }
                 }
             }
-            let image =
-                RgbaImage::from_raw(side as u32, side as u32, data).expect("sized to fit");
+            let image = RgbaImage::from_raw(side as u32, side as u32, data).expect("sized to fit");
             Arc::new(RenderImage::new(vec![Frame::new(image)]))
         })
         .clone()
@@ -730,7 +946,10 @@ impl Focusable for ThemePicker {
 
 impl Render for ThemePicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().key_context(KEY_CONTEXT).size_full().font_family(crate::face::UI);
+        let root = div()
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .font_family(crate::face::UI);
         // The pointer's moves anywhere in the window, while something is dragged, and its release
         // always: a press and its release can both come before the next frame, which would
         // otherwise be drawn without a listener for the release.
@@ -746,7 +965,9 @@ impl Render for ThemePicker {
                     let moved = entity.clone();
                     window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                         if phase == DispatchPhase::Capture {
-                            moved.update(cx, |picker, cx| picker.drag(event.position, cx)).ok();
+                            moved
+                                .update(cx, |picker, cx| picker.drag(event.position, cx))
+                                .ok();
                         }
                     });
                 }
@@ -768,6 +989,11 @@ impl Render for ThemePicker {
             .key_context("ThemePicker")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(|picker, _: &NextStop, _, cx| picker.key_stop(true, cx)))
+            .on_action(cx.listener(|picker, _: &PreviousStop, _, cx| picker.key_stop(false, cx)))
+            .on_action(cx.listener(|picker, _: &KeyLeft, _, cx| picker.key_along(false, cx)))
+            .on_action(cx.listener(|picker, _: &KeyRight, _, cx| picker.key_along(true, cx)))
+            .on_action(cx.listener(|picker, _: &KeyPress, _, cx| picker.key_press(cx)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|picker, event: &MouseDownEvent, _, cx| picker.press(event, cx)),
@@ -796,7 +1022,60 @@ impl Render for ThemePicker {
         let editing = &*editing;
         let theme = editing.theme;
         let palette = editing.palette;
+        let keyed = editing.keyed;
         let card_x = |x: f32| px(ARROW + x);
+        // The keyboard's ring, as Focus Sidebar's: inside a button's plate, or `RING_GAP` round a
+        // swatch or the wave's knob, `width` by `height` about `x`, `y` in the card.
+        let ring = |x: f32, y: f32, width: f32, height: f32, radius: f32| {
+            div()
+                .absolute()
+                .left(card_x(x - width / 2.))
+                .top(px(y - height / 2.))
+                .w(px(width))
+                .h(px(height))
+                .rounded(px(radius))
+                .border(px(KEYED_RING))
+                .border_color(palette.plate(KEYED))
+        };
+        let round_ring = |x: f32, y: f32, width: f32, height: f32| {
+            let reach = 2. * (RING_GAP + KEYED_RING);
+            let (width, height) = (width + reach, height + reach);
+            ring(x, y, width, height, width.min(height) / 2.)
+        };
+        let keyed_ring = keyed.map(|keyed| match keyed {
+            Target::Appearance(appearance) => {
+                let index = Appearance::ALL
+                    .iter()
+                    .position(|&each| each == appearance)
+                    .unwrap_or(0);
+                let plate = APPEARANCE_PLATE;
+                ring(
+                    APPEARANCE_X[index],
+                    APPEARANCE_Y,
+                    plate,
+                    plate,
+                    APPEARANCE_RADIUS,
+                )
+            }
+            Target::Remove | Target::Add => {
+                let x = if keyed == Target::Remove {
+                    REMOVE_X
+                } else {
+                    ADD_X
+                };
+                ring(x, COUNT_Y, COUNT_TARGET, COUNT_TARGET, APPEARANCE_RADIUS)
+            }
+            Target::Swatch(index) => round_ring(
+                SWATCH_X + SWATCH_PITCH * index as f32,
+                SWATCH_Y,
+                SWATCH,
+                SWATCH,
+            ),
+            _ => {
+                let intensity = theme.map_or(DEFAULT_INTENSITY, |theme| theme.intensity);
+                round_ring(knob_x(intensity), SLIDER_Y, KNOB_WIDTH, KNOB_HEIGHT)
+            }
+        });
         let arrow_y = editing.arrow_y;
         let card_fill = palette::current(cx).card_drawn();
         let card = canvas(
@@ -815,7 +1094,9 @@ impl Render for ThemePicker {
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let dots = dots_image();
-                window.paint_image(bounds, bounds, px(FIELD_RADIUS).into(), dots, 0, false).ok();
+                window
+                    .paint_image(bounds, bounds, px(FIELD_RADIUS).into(), dots, 0, false)
+                    .ok();
             },
         )
         .absolute()
@@ -857,7 +1138,7 @@ impl Render for ThemePicker {
                     let (hx, hy) = editing.handle(index, &theme);
                     let color = (theme.third.filter(|_| index == 2))
                         .unwrap_or_else(|| theme::color_at(hx, hy, theme.saturation));
-                    let size = handle_size(index) * editing.growth(index);
+                    let size = handle_size(index) * crate::motion::scale(editing.growth(index), cx);
                     let ring = if index == 0 { MAIN_RING } else { HANDLE_RING };
                     let (mx, my) = (FIELD / 2. * (1. + hx), FIELD / 2. * (1. + hy));
                     field = field.child(
@@ -876,29 +1157,34 @@ impl Render for ThemePicker {
         }
 
         let chosen = theme.map_or(editing.appearance, |theme| theme.appearance);
-        let appearances = Appearance::ALL.iter().zip(APPEARANCE_X).map(|(&appearance, x)| {
-            let glyph = match appearance {
-                Appearance::Automatic => "icons/sparkles.svg",
-                Appearance::Light => "icons/sun.svg",
-                Appearance::Dark => "icons/moon-star.svg",
-            };
-            div()
-                .absolute()
-                .left(card_x(x - APPEARANCE_PLATE / 2.))
-                .top(px(APPEARANCE_Y - APPEARANCE_PLATE / 2.))
-                .size(px(APPEARANCE_PLATE))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(APPEARANCE_RADIUS))
-                .when(appearance == chosen, |plate| plate.bg(palette.plate(APPEARANCE_CHOSEN)))
-                .child(
-                    svg()
-                        .path(glyph)
-                        .size(px(APPEARANCE_GLYPH))
-                        .text_color(palette.on_overlay_glyph(APPEARANCE_COLOR)),
-                )
-        });
+        let appearances = Appearance::ALL
+            .iter()
+            .zip(APPEARANCE_X)
+            .map(|(&appearance, x)| {
+                let glyph = match appearance {
+                    Appearance::Automatic => "icons/sparkles.svg",
+                    Appearance::Light => "icons/sun.svg",
+                    Appearance::Dark => "icons/moon-star.svg",
+                };
+                div()
+                    .absolute()
+                    .left(card_x(x - APPEARANCE_PLATE / 2.))
+                    .top(px(APPEARANCE_Y - APPEARANCE_PLATE / 2.))
+                    .size(px(APPEARANCE_PLATE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(APPEARANCE_RADIUS))
+                    .when(appearance == chosen, |plate| {
+                        plate.bg(palette.plate(APPEARANCE_CHOSEN))
+                    })
+                    .child(
+                        svg()
+                            .path(glyph)
+                            .size(px(APPEARANCE_GLYPH))
+                            .text_color(palette.on_overlay_glyph(APPEARANCE_COLOR)),
+                    )
+            });
 
         let count = theme.map_or(0, |theme| theme.count);
         let count_button = |target: Target, x: f32, glyph: &'static str, enabled: bool| {
@@ -939,10 +1225,15 @@ impl Render for ThemePicker {
                     at(TRACK_LEFT, SLIDER_Y - TRACK_HEIGHT / 2.),
                     size(px(TRACK_RIGHT - TRACK_LEFT), px(TRACK_HEIGHT)),
                 );
-                let track = fill(track, palette.plate(TRACK_FILL)).corner_radii(px(TRACK_HEIGHT / 2.));
+                let track =
+                    fill(track, palette.plate(TRACK_FILL)).corner_radii(px(TRACK_HEIGHT / 2.));
                 window.paint_quad(track);
                 let intensity = theme.map_or(DEFAULT_INTENSITY, |theme| theme.intensity);
-                let split = if theme.is_some() { knob_x(intensity) } else { WAVE_LEFT };
+                let split = if theme.is_some() {
+                    knob_x(intensity)
+                } else {
+                    WAVE_LEFT
+                };
                 let amplitude = WAVE_AMPLITUDE * intensity;
                 let wave_y = |x: f32| {
                     let phase = (x - WAVE_LEFT) / (WAVE_RIGHT - WAVE_LEFT) * WAVE_PERIODS * TAU;
@@ -1002,12 +1293,13 @@ impl Render for ThemePicker {
                         window.paint_path(path, palette.ink);
                     }
                     let knob = Bounds::new(
-                        at(knob_x(intensity) - KNOB_WIDTH / 2., SLIDER_Y - KNOB_HEIGHT / 2.),
+                        at(
+                            knob_x(intensity) - KNOB_WIDTH / 2.,
+                            SLIDER_Y - KNOB_HEIGHT / 2.,
+                        ),
                         size(px(KNOB_WIDTH), px(KNOB_HEIGHT)),
                     );
-                    window.paint_quad(
-                        fill(knob, palette.ink).corner_radii(px(KNOB_WIDTH / 2.)),
-                    );
+                    window.paint_quad(fill(knob, palette.ink).corner_radii(px(KNOB_WIDTH / 2.)));
                 }
             },
         )
@@ -1052,7 +1344,8 @@ impl Render for ThemePicker {
                 .child(add)
                 .children(swatches)
                 .child(controls)
-                .children(dial_grain),
+                .children(dial_grain)
+                .children(keyed_ring),
         )
     }
 }

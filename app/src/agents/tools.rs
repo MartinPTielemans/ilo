@@ -14,9 +14,11 @@ pub const INSTRUCTIONS: &str = concat!(
      their focus. You can only see and use the tabs in your Space, never the user's, and never \
      passwords, cookies or autofill.\n\n\
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
-     the outline each action answers with. A ref stays the element's while its page does. Choose \
-     in a select or a dropdown with select, by the option's text. Use read_page for a long page's \
-     text and screenshot when the layout matters.\n\n\
+     the page's outline. A new page answers with its outline whole; an action on the same page \
+     answers with what changed in it since the last outline you had, and snapshot gives it whole \
+     again. A ref stays the element's while its page does. Choose in a select or a dropdown with \
+     select, by the option's text. Use read_page for a long page's text \
+     and screenshot when the layout matters.\n\n\
      Payments, orders, sending messages and banks' sites ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
@@ -150,6 +152,11 @@ fn shared() -> Value {
         "type": "string",
         "description": "The element's ref, from the latest outline, like e12."
     });
+    let outline = json!({
+        "type": "string",
+        "enum": ["changes", "full", "none"],
+        "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
+    });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
     json!([
         {
@@ -173,7 +180,7 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space. It goes to the archive, where the user can still find it.",
+            "description": "Close a tab in your Space.",
             "inputSchema": { "type": "object", "properties": { "tab": tab } },
             "annotations": {
                 "readOnlyHint": false,
@@ -198,8 +205,14 @@ fn shared() -> Value {
         {
             "name": "snapshot",
             "title": "Snapshot",
-            "description": "The page's outline, from its accessibility tree. Elements you can act on have refs like [e12].",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "The page's outline, whole, from its accessibility tree. Elements you can act on have refs like [e12]. With a ref, only that element's part, such as a form without the page's menus.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": { "type": "string", "description": "An element's ref, to outline only it and what's in it." },
+                    "tab": tab,
+                },
+            },
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
@@ -212,10 +225,10 @@ fn shared() -> Value {
         {
             "name": "click",
             "title": "Click",
-            "description": "Click an element by its ref. Answers with the page's outline.",
+            "description": "Click an element by its ref. Answers with what changed in the page's outline.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "ref": element, "tab": tab },
+                "properties": { "ref": element, "outline": outline, "tab": tab },
                 "required": ["ref"],
             },
             "annotations": acts,
@@ -223,13 +236,14 @@ fn shared() -> Value {
         {
             "name": "type",
             "title": "Type",
-            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with the page's outline.",
+            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "ref": element,
                     "text": { "type": "string" },
                     "submit": { "type": "boolean" },
+                    "outline": outline,
                     "tab": tab,
                 },
                 "required": ["ref", "text"],
@@ -254,10 +268,14 @@ fn shared() -> Value {
         {
             "name": "press_key",
             "title": "Press key",
-            "description": "Press a key in a tab, in the element that has the keyboard. Answers with the page's outline.",
+            "description": "Press a key in a tab, in the element that has the keyboard. Answers with what changed in the page's outline.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "key": { "type": "string", "enum": page::KEYS }, "tab": tab },
+                "properties": {
+                    "key": { "type": "string", "enum": page::KEYS },
+                    "outline": outline,
+                    "tab": tab,
+                },
                 "required": ["key"],
             },
             "annotations": acts,
@@ -265,12 +283,13 @@ fn shared() -> Value {
         {
             "name": "scroll",
             "title": "Scroll",
-            "description": "Scroll a page down or up most of its height, or to bring an element into view by its ref. Answers with the page's outline.",
+            "description": "Scroll a page down or up most of its height, or to bring an element into view by its ref. Answers with what changed in the page's outline.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "direction": { "type": "string", "enum": ["down", "up"] },
                     "ref": element,
+                    "outline": outline,
                     "tab": tab,
                 },
             },
@@ -286,7 +305,7 @@ fn shared() -> Value {
         {
             "name": "run_steps",
             "title": "Run steps",
-            "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did and the last one's outline.",
+            "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -311,6 +330,7 @@ fn shared() -> Value {
                         },
                         "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
                     },
+                    "outline": outline,
                     "tab": tab,
                 },
                 "required": ["steps"],
@@ -349,8 +369,16 @@ fn shared() -> Value {
 }
 
 /// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 8] =
-    ["navigate", "snapshot", "click", "type", "select", "press_key", "scroll", "wait"];
+pub const STEPS: [&str; 8] = [
+    "navigate",
+    "snapshot",
+    "click",
+    "type",
+    "select",
+    "press_key",
+    "scroll",
+    "wait",
+];
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.
@@ -447,11 +475,31 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
     // Each step's verb in its three tenses, and what it acts on.
     let (now, done, failed, on) = match did.tool.as_str() {
         "open_tab" | "navigate" => ("Opening", "Opened", "Couldn't open", site("a page")),
-        "back" => ("Going back on", "Went back on", "Couldn't go back on", site("the page")),
-        "forward" => ("Going forward on", "Went forward on", "Couldn't go forward on", site("the page")),
+        "back" => (
+            "Going back on",
+            "Went back on",
+            "Couldn't go back on",
+            site("the page"),
+        ),
+        "forward" => (
+            "Going forward on",
+            "Went forward on",
+            "Couldn't go forward on",
+            site("the page"),
+        ),
         "read_page" | "snapshot" => ("Reading", "Read", "Couldn't read", site("the page")),
-        "screenshot" => ("Looking at", "Looked at", "Couldn't look at", site("the page")),
-        "click" => ("Clicking", "Clicked", "Couldn't click", target("on the page")),
+        "screenshot" => (
+            "Looking at",
+            "Looked at",
+            "Couldn't look at",
+            site("the page"),
+        ),
+        "click" => (
+            "Clicking",
+            "Clicked",
+            "Couldn't click",
+            target("on the page"),
+        ),
         "type" => {
             let into = target("a field");
             return match (tense, did.text.is_empty()) {
@@ -482,12 +530,27 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
         "wait" => match did.target.starts_with('“') {
-            true => ("Waiting for", "Waited for", "Didn't see", target("the page")),
+            true => (
+                "Waiting for",
+                "Waited for",
+                "Didn't see",
+                target("the page"),
+            ),
             false => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
-        "list_tabs" => ("Looking over", "Looked over", "Couldn't look over", "its tabs".to_string()),
+        "list_tabs" => (
+            "Looking over",
+            "Looked over",
+            "Couldn't look over",
+            "its tabs".to_string(),
+        ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
-        "hand_off" => ("Handing you", "Handed you", "Couldn't hand you", site("a tab")),
+        "hand_off" => (
+            "Handing you",
+            "Handed you",
+            "Couldn't hand you",
+            site("a tab"),
+        ),
         "ask_for_tab" => {
             let tab = site("a tab");
             return match tense {
@@ -514,12 +577,17 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
 /// A turn's same step on `pages` tabs, as one line: "Opened 10 pages", "Clicked “Closed” on 10
 /// pages".
 pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
-    let on = |what: &str| Did { site: format!("{pages} {what}"), ..did.clone() };
+    let on = |what: &str| Did {
+        site: format!("{pages} {what}"),
+        ..did.clone()
+    };
     match did.tool.as_str() {
         "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot" => {
             step_title(&on("pages"), tense)
         }
-        "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => step_title(&on("pages"), tense),
+        "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
+            step_title(&on("pages"), tense)
+        }
         "close_tab" | "hand_off" | "ask_for_tab" => step_title(&on("tabs"), tense),
         _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
@@ -549,10 +617,15 @@ pub fn reason(error: &str) -> String {
     let error = error.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|word| error.contains(word));
     // An HTTP error's status, as "HTTP 504" or "status 504" says it.
-    let words: Vec<&str> = error.split(|char: char| !char.is_ascii_alphanumeric()).collect();
+    let words: Vec<&str> = error
+        .split(|char: char| !char.is_ascii_alphanumeric())
+        .collect();
     let status = words.windows(2).find_map(|pair| {
         let [before, code] = pair else { return None };
-        let status = code.len() == 3 && code.parse::<u16>().is_ok_and(|code| (400..600).contains(&code));
+        let status = code.len() == 3
+            && code
+                .parse::<u16>()
+                .is_ok_and(|code| (400..600).contains(&code));
         (matches!(*before, "http" | "status" | "error") && status).then_some(*code)
     });
     let reason = if has(&["stopped you", "turned agents off", "connection closed"]) {
@@ -582,7 +655,12 @@ pub fn reason(error: &str) -> String {
         code
     } else if has(&["didn't show"]) {
         "didn't show"
-    } else if has(&["user's already", "user has", "user doesn't have", "took it over"]) {
+    } else if has(&[
+        "user's already",
+        "user has",
+        "user doesn't have",
+        "took it over",
+    ]) {
         "it's yours"
     } else {
         ""
@@ -613,6 +691,7 @@ pub fn describe(action: &str) -> &'static str {
         "handed back" => "You handed the tab back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
+        "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
         "passkey" => "Handed you a tab for your passkey",

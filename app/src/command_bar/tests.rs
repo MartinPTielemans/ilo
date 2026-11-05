@@ -33,6 +33,13 @@ struct Recorder {
     page: Option<(SharedString, SharedString)>,
     /// The bar shows over a private window.
     private: bool,
+    /// The tooltips asked for and ended, apart from the rest, and where each hangs from.
+    tips: RefCell<Vec<String>>,
+    anchors: RefCell<Vec<Anchor>>,
+    /// What Settings' search reads of its rows, once the browser has built it, and how many
+    /// times the bar read it.
+    settings: RefCell<Option<Rc<Vec<settings_search::Entry>>>>,
+    settings_read: std::cell::Cell<usize>,
 }
 
 impl Recorder {
@@ -57,7 +64,11 @@ impl Host for Recorder {
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {
-        Some(if text.contains('.') { format!("https://{text}/") } else { search(text) })
+        Some(if text.contains('.') {
+            format!("https://{text}/")
+        } else {
+            search(text)
+        })
     }
 
     fn search_url(&self, site: Option<&str>, text: &str) -> Option<String> {
@@ -114,8 +125,12 @@ impl Host for Recorder {
             true => format!("centred {top} above the middle"),
             false => format!("at {left} {top}"),
         };
-        self.shown.borrow_mut().push(format!("{place}, {width} wide, radius {radius}"));
-        self.levels.borrow_mut().push((level, self.heights.borrow().last().copied()));
+        self.shown
+            .borrow_mut()
+            .push(format!("{place}, {width} wide, radius {radius}"));
+        self.levels
+            .borrow_mut()
+            .push((level, self.heights.borrow().last().copied()));
     }
 
     fn set_height(&self, height: f32) {
@@ -153,6 +168,15 @@ impl Host for Recorder {
         self.private
     }
 
+    fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
+        self.settings_read.set(self.settings_read.get() + 1);
+        self.settings.borrow().clone()
+    }
+
+    fn show_setting(&self, section: Section, name: SharedString, _: &mut App) {
+        self.record(format!("show setting {} › {name}", section.name()));
+    }
+
     fn asking(&self, shown: bool, _: &mut App) {
         self.record(format!("asking {shown}"));
     }
@@ -175,6 +199,16 @@ impl Host for Recorder {
     fn set_up_agents(&self, _: &mut App) {
         self.record("set up agents".into());
     }
+
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, _: &mut App) {
+        let Some((tip, anchor)) = tip else {
+            return self.tips.borrow_mut().push("no tooltip".into());
+        };
+        self.tips
+            .borrow_mut()
+            .push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
+        self.anchors.borrow_mut().push(anchor);
+    }
 }
 
 /// The agents the host offers: each ready, at its limit if it has a reset time. Claude runs on
@@ -184,12 +218,19 @@ fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
         .map(|&(id, resets)| TaskAgent {
             id: id.to_string().into(),
             name: id.to_string().into(),
-            glyph: if id == "claude" { "icons/terminal.svg" } else { "icons/square-terminal.svg" },
+            glyph: if id == "claude" {
+                "icons/terminal.svg"
+            } else {
+                "icons/square-terminal.svg"
+            },
             model: (id == "claude").then(|| "Haiku".into()),
             resets: resets.map(|at| at.to_string().into()),
         })
         .collect();
-    Some(TaskAgents { agents, known: true })
+    Some(TaskAgents {
+        agents,
+        known: true,
+    })
 }
 
 /// The bar, opened for a new tab.
@@ -206,12 +247,23 @@ impl Bar {
 
     /// The bar, opened for a new tab, finding the browser's commands.
     fn with_commands(cx: &mut TestAppContext) -> Self {
-        Bar::open(cx, Vec::new(), Recorder { commands: true, ..Recorder::default() })
+        Bar::open(
+            cx,
+            Vec::new(),
+            Recorder {
+                commands: true,
+                ..Recorder::default()
+            },
+        )
     }
 
     /// The bar, opened for a new tab, finding the browser's commands but `idle`.
     fn with_commands_but(cx: &mut TestAppContext, idle: &[shell::Command]) -> Self {
-        let host = Recorder { commands: true, idle: idle.to_vec(), ..Recorder::default() };
+        let host = Recorder {
+            commands: true,
+            idle: idle.to_vec(),
+            ..Recorder::default()
+        };
         Bar::open(cx, Vec::new(), host)
     }
 
@@ -221,7 +273,7 @@ impl Bar {
     }
 
     fn open(cx: &mut TestAppContext, tabs: Vec<shell::BarTab>, host: Recorder) -> Self {
-        Bar::opened(cx, host, |cx| show(None, tabs, None, cx))
+        Bar::opened(cx, host, |cx| show(None, Vec::new(), tabs, None, cx))
     }
 
     /// The bar, opened for Search Tabs on `tabs`.
@@ -232,7 +284,9 @@ impl Bar {
     fn opened(cx: &mut TestAppContext, host: Recorder, show: impl FnOnce(&mut App)) -> Self {
         let host = Rc::new(host);
         cx.update(text_input::bind_keys);
-        let window = cx.update(|cx| open(host.clone(), cx)).expect("no window for the bar");
+        let window = cx
+            .update(|cx| open(host.clone(), cx))
+            .expect("no window for the bar");
         cx.update(show);
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
@@ -270,7 +324,9 @@ impl Bar {
     }
 
     fn composing(&mut self) -> bool {
-        self.window.read_with(&self.cx.cx, |bar, cx| bar.input.read(cx).composing()).unwrap()
+        self.window
+            .read_with(&self.cx.cx, |bar, cx| bar.input.read(cx).composing())
+            .unwrap()
     }
 
     /// The core's suggestions for `text`.
@@ -287,6 +343,7 @@ impl Bar {
                     .map(|row| match (&row.command, &row.shortcut) {
                         (Some(_), Some(key)) => format!("{} {key}", row.text),
                         (Some(_), None) => row.text.to_string(),
+                        (None, _) if row.setting.is_some() => row.text.to_string(),
                         (None, _) => row.url.clone(),
                     })
                     .collect()
@@ -308,14 +365,20 @@ impl Bar {
     fn rows(&mut self) -> Vec<(String, u64)> {
         self.window
             .read_with(&self.cx.cx, |bar, _| {
-                bar.rows.iter().map(|row| (row.url.clone(), row.tab)).collect()
+                bar.rows
+                    .iter()
+                    .map(|row| (row.url.clone(), row.tab))
+                    .collect()
             })
             .unwrap()
     }
 
     /// The bar's window becoming the key one, as the host makes it when it shows the bar.
     fn activate(&mut self) {
-        (self.window.update(&mut self.cx.cx, |_, window, _| window.activate_window())).unwrap();
+        (self
+            .window
+            .update(&mut self.cx.cx, |_, window, _| window.activate_window()))
+        .unwrap();
         self.cx.run_until_parked();
     }
 
@@ -332,6 +395,11 @@ impl Bar {
         self.host.calls.take()
     }
 
+    /// The tooltips asked for and ended since the last time.
+    fn tips(&self) -> Vec<String> {
+        self.host.tips.take()
+    }
+
     /// Where the host was asked to show the bar since the last time.
     fn shown(&self) -> Vec<String> {
         self.host.shown.take()
@@ -340,7 +408,9 @@ impl Bar {
     /// Opens the bar again on tab 1's `url`, over `field` if it's the URL field's box.
     fn edit(&mut self, url: &str, field: Option<Bounds<Pixels>>) {
         let editing = Some((1, SharedString::from(url.to_string())));
-        self.cx.cx.update(|cx| show(editing, Vec::new(), field, cx));
+        self.cx
+            .cx
+            .update(|cx| show(editing, Vec::new(), Vec::new(), field, cx));
         self.cx.run_until_parked();
     }
 
@@ -364,12 +434,19 @@ impl Bar {
     }
 
     fn over_field(&mut self) -> bool {
-        self.window.read_with(&self.cx.cx, |bar, _| bar.over_field).unwrap()
+        self.window
+            .read_with(&self.cx.cx, |bar, _| bar.over_field)
+            .unwrap()
     }
 
     /// The height the bar last asked its window to be.
     fn asked_height(&self) -> f32 {
-        *self.host.heights.borrow().last().expect("the bar asked for no height")
+        *self
+            .host
+            .heights
+            .borrow()
+            .last()
+            .expect("the bar asked for no height")
     }
 
     /// How tall the bar's panel over the field reads in a window the height it last asked for, as
@@ -388,7 +465,12 @@ impl Bar {
 
     /// The level the bar last showed at, and the height it had asked for by then.
     fn last_show(&self) -> (Level, Option<f32>) {
-        *self.host.levels.borrow().last().expect("the bar didn't show")
+        *self
+            .host
+            .levels
+            .borrow()
+            .last()
+            .expect("the bar didn't show")
     }
 
     /// A right-click in the input: the items of the menu it shows, " (disabled)" after those
@@ -408,38 +490,57 @@ impl Bar {
             })))
         });
         let at = point(px(200.), px(HEIGHT / 2.));
-        self.cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
-        self.cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        self.cx
+            .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        self.cx
+            .simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
         self.cx.run_until_parked();
-        shown.take().expect("a right-click in the input showed no menu")
+        shown
+            .take()
+            .expect("a right-click in the input showed no menu")
     }
 
     /// Chooses `title` in the menu a right-click showed.
     fn choose(&mut self, (items, chosen): (Vec<String>, Chosen), title: &str) {
-        let index = items.iter().position(|item| item == title).expect("no such item");
-        self.cx.update(|window, cx| chosen(crate::menu::Closed::Chose(index), window, cx));
+        let index = items
+            .iter()
+            .position(|item| item == title)
+            .expect("no such item");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(index), window, cx));
         self.cx.run_until_parked();
     }
 
     fn copy_text(&mut self, text: &str) {
-        self.cx.cx.write_to_clipboard(ClipboardItem::new_string(text.into()));
+        self.cx
+            .cx
+            .write_to_clipboard(ClipboardItem::new_string(text.into()));
     }
 
     /// Moves the pointer onto row `index`, with the window at its height for five rows, as the
     /// host makes it.
     fn point_at(&mut self, index: usize) {
-        self.cx.simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+        self.cx
+            .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
         let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-        self.cx.simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
+        self.cx
+            .simulate_mouse_move(point(px(200.), px(y)), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
     /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
-        let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
-        let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(remove_button(index), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
+    /// The pointer comes onto row `index`, then onto the remove button it shows at its end.
+    fn point_at_remove(&mut self, index: usize) {
+        self.point_at(index);
+        self.cx
+            .simulate_mouse_move(remove_button(index), None, Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -452,6 +553,13 @@ impl Bar {
             })
             .unwrap()
     }
+}
+
+/// The middle of the remove button at the end of row `index`, in the bar's window.
+fn remove_button(index: usize) -> gpui::Point<gpui::Pixels> {
+    let x = WIDTH - LIST_X - PLATE_INSET - ROW_END - 3. - ICON_BOX / 2.;
+    let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
+    point(px(x), px(y))
 }
 
 /// A row for a page from the profile's history, which ⇧⌦ can take out.
@@ -470,19 +578,28 @@ fn page(url: &str) -> Suggestion {
 /// The first row for what's typed, as the core makes it: the page `completion` completes the text
 /// to.
 fn completing(url: &str, completion: &str) -> Suggestion {
-    Suggestion { completion: completion.into(), ..page(url) }
+    Suggestion {
+        completion: completion.into(),
+        ..page(url)
+    }
 }
 
 /// The search row for `text`.
 fn searching(text: &str) -> Suggestion {
-    Suggestion { removable: false, ..page(&search(text)) }
+    Suggestion {
+        removable: false,
+        ..page(&search(text))
+    }
 }
 
 #[gpui::test]
 fn return_goes_where_the_completion_goes(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("example.c");
-    let rows = vec![completing("https://example.com/", "om"), searching("example.c")];
+    let rows = vec![
+        completing("https://example.com/", "om"),
+        searching("example.c"),
+    ];
     bar.suggest("example.c", rows);
     assert_eq!(bar.input(), ("example.com".into(), 9..11));
     bar.keys("enter");
@@ -495,7 +612,10 @@ fn return_goes_where_the_completion_goes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn keys_held_from_the_page_go_in_as_typed(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
-    let shift = Modifiers { shift: true, ..Modifiers::none() };
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::none()
+    };
     let held = [
         ("G", shift),
         ("o", Modifiers::none()),
@@ -506,11 +626,15 @@ fn keys_held_from_the_page_go_in_as_typed(cx: &mut TestAppContext) {
     ];
     for (key, modifiers) in held {
         let keystroke = shell::web_keystroke(key, modifiers);
-        bar.cx.update(|window, cx| window.dispatch_keystroke(keystroke, cx));
+        bar.cx
+            .update(|window, cx| window.dispatch_keystroke(keystroke, cx));
     }
     bar.cx.run_until_parked();
     assert_eq!(bar.input().0, "Go !");
-    assert_eq!(shell::web_keystroke("a", Modifiers::control()).key_char, None);
+    assert_eq!(
+        shell::web_keystroke("a", Modifiers::control()).key_char,
+        None
+    );
 }
 
 #[gpui::test]
@@ -555,7 +679,10 @@ fn a_typed_host_and_port_completes_only_as_the_core_says(cx: &mut TestAppContext
     assert_eq!(bar.input(), ("127.0.0.1:58351/back.html".into(), 14..25));
     bar.type_text("1");
     assert_eq!(bar.input(), ("127.0.0.1:58351/back.html".into(), 15..25));
-    bar.suggest("127.0.0.1:58351", vec![page("http://127.0.0.1:58351/"), page(back)]);
+    bar.suggest(
+        "127.0.0.1:58351",
+        vec![page("http://127.0.0.1:58351/"), page(back)],
+    );
     assert_eq!(bar.input(), ("127.0.0.1:58351".into(), 15..15));
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open http://127.0.0.1:58351/", "hide"]);
@@ -577,14 +704,23 @@ fn older_suggestions_are_dropped(cx: &mut TestAppContext) {
     bar.suggest("ex", vec![completing("https://example.com/", "ample.com")]);
     assert_eq!(bar.input(), ("exa".into(), 3..3));
     bar.keys("enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("exa")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("exa")), "hide".into()]
+    );
 }
 
 #[gpui::test]
 fn arrows_wrap_at_the_ends(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    let rows = || vec![searching("ex"), page("https://a.test/"), page("https://b.test/")];
+    let rows = || {
+        vec![
+            searching("ex"),
+            page("https://a.test/"),
+            page("https://b.test/"),
+        ]
+    };
     bar.suggest("ex", rows());
     bar.keys("up enter");
     assert_eq!(bar.calls(), ["open https://b.test/", "hide"]);
@@ -593,14 +729,26 @@ fn arrows_wrap_at_the_ends(cx: &mut TestAppContext) {
     bar.type_text("ex");
     bar.suggest("ex", rows());
     bar.keys("down down ctrl-n enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("ex")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("ex")), "hide".into()]
+    );
 }
 
 #[gpui::test]
 fn return_on_a_tab_switches_to_it(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), Suggestion { tab: 7, ..page("https://a.test/") }]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            Suggestion {
+                tab: 7,
+                ..page("https://a.test/")
+            },
+        ],
+    );
     bar.keys("down enter");
     assert_eq!(bar.calls(), ["select 7", "hide"]);
 }
@@ -628,7 +776,10 @@ fn shift_cmd_return_searches_for_what_was_typed(cx: &mut TestAppContext) {
     bar.type_text("exa");
     bar.suggest("exa", vec![completing("https://example.com/", "mple.com")]);
     bar.keys("shift-cmd-enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("exa")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("exa")), "hide".into()]
+    );
 }
 
 #[gpui::test]
@@ -643,14 +794,20 @@ fn ctrl_return_puts_www_and_com_around_a_word(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("two words");
     bar.keys("ctrl-enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("two words")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("two words")), "hide".into()]
+    );
 }
 
 #[gpui::test]
 fn shift_return_opens_where_return_goes_in_a_new_window(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("exa");
-    let rows = vec![completing("https://example.com/", "mple.com"), searching("exa")];
+    let rows = vec![
+        completing("https://example.com/", "mple.com"),
+        searching("exa"),
+    ];
     bar.suggest("exa", rows);
     bar.keys("shift-enter");
     assert_eq!(bar.calls(), ["hide", "window https://example.com/"]);
@@ -664,7 +821,16 @@ fn shift_return_opens_where_return_goes_in_a_new_window(cx: &mut TestAppContext)
     // A tab's row opens its page there, as ⌘↩ opens it behind.
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), Suggestion { tab: 7, ..page("https://a.test/") }]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            Suggestion {
+                tab: 7,
+                ..page("https://a.test/")
+            },
+        ],
+    );
     bar.keys("down shift-enter");
     assert_eq!(bar.calls(), ["hide", "window https://a.test/"]);
 }
@@ -681,7 +847,13 @@ fn ctrl_shift_return_opens_www_and_com_around_a_word_in_a_new_window(cx: &mut Te
     let mut bar = Bar::new(cx);
     bar.type_text("two words");
     bar.keys("ctrl-shift-enter");
-    assert_eq!(bar.calls(), ["hide".to_string(), format!("window {}", search("two words"))]);
+    assert_eq!(
+        bar.calls(),
+        [
+            "hide".to_string(),
+            format!("window {}", search("two words"))
+        ]
+    );
 }
 
 #[gpui::test]
@@ -702,7 +874,16 @@ fn a_tab_another_window_shows_brings_that_window_forward(cx: &mut TestAppContext
     let mut bar = Bar::new(cx);
     bar.host.elsewhere.borrow_mut().insert(7, 3);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), Suggestion { tab: 7, ..page("https://a.test/") }]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            Suggestion {
+                tab: 7,
+                ..page("https://a.test/")
+            },
+        ],
+    );
     bar.keys("down enter");
     assert_eq!(bar.calls(), ["hide", "activate 3 with 7"]);
 }
@@ -711,7 +892,14 @@ fn a_tab_another_window_shows_brings_that_window_forward(cx: &mut TestAppContext
 fn shift_delete_takes_a_page_out_of_history(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), page("https://a.test/"), page("https://b.test/")]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            page("https://a.test/"),
+            page("https://b.test/"),
+        ],
+    );
     // The search isn't from history.
     bar.keys("shift-delete");
     assert_eq!(bar.calls(), Vec::<String>::new());
@@ -730,8 +918,14 @@ fn shift_delete_takes_a_page_out_of_history(cx: &mut TestAppContext) {
 fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    let typed_before = Suggestion { removable: true, ..searching("example") };
-    let site = Suggestion { removable: false, ..page("https://example.com/") };
+    let typed_before = Suggestion {
+        removable: true,
+        ..searching("example")
+    };
+    let site = Suggestion {
+        removable: false,
+        ..page("https://example.com/")
+    };
     let rows = vec![searching("ex"), page("https://a.test/"), typed_before, site];
     bar.suggest("ex", rows);
     bar.click_remove(1);
@@ -747,7 +941,70 @@ fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext
     bar.type_text("ex");
     bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
     bar.click_remove(0);
-    assert_eq!(bar.calls(), [format!("open {}", search("ex")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("ex")), "hide".into()]
+    );
+}
+
+/// A history row's remove button names itself and its key in a tooltip, Arc's ⌥⌘⌫ on the Mac and
+/// ⇧⌦ off it, which hangs from the button in the bar's window and stays inside it. The tooltip goes
+/// as the pointer leaves the button, as another row takes the row's place, and as it's clicked.
+#[gpui::test]
+fn the_remove_button_names_itself_and_its_key(cx: &mut TestAppContext) {
+    let keys = if shell::OFF_THE_MAC {
+        "Shift Del"
+    } else {
+        "⌥ ⌘ ⌫"
+    };
+    let named = format!("tooltip Remove from History {keys}");
+    let rows = || {
+        vec![
+            searching("ex"),
+            page("https://a.test/"),
+            page("https://b.test/"),
+        ]
+    };
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.suggest("ex", rows());
+    bar.point_at_remove(1);
+    assert_eq!(bar.tips(), [named.clone()]);
+    let anchor = bar.host.anchors.take().pop().expect("no tooltip asked for");
+    let button = remove_button(1);
+    let (middle, row) = (f32::from(button.x), f32::from(button.y));
+    assert!(
+        (anchor.x - middle).abs() < 1.,
+        "it hangs from {}, not the button's middle",
+        anchor.x
+    );
+    let (top, bottom) = (row - ICON_BOX / 2., row + ICON_BOX / 2.);
+    assert!((anchor.top - top).abs() < 1. && (anchor.bottom - bottom).abs() < 1.);
+    assert_eq!(
+        anchor.window,
+        (WIDTH, height(ROWS_SHOWN)),
+        "it isn't kept inside the bar"
+    );
+
+    // Off the button onto its row, the tooltip goes.
+    bar.point_at(1);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // More suggestions for what's typed keep it, and another page in the row's place ends it.
+    bar.point_at_remove(1);
+    bar.suggest("ex", rows());
+    assert_eq!(bar.tips(), [named.clone()]);
+    bar.suggest("ex", vec![searching("ex"), page("https://c.test/")]);
+    assert_eq!(bar.tips(), ["no tooltip"]);
+
+    // A click on the button ends it before the page goes.
+    bar.suggest("ex", rows());
+    bar.point_at_remove(2);
+    assert_eq!(bar.tips(), [named]);
+    bar.cx.simulate_click(remove_button(2), Modifiers::none());
+    bar.cx.run_until_parked();
+    assert_eq!(bar.tips(), ["no tooltip"]);
+    assert_eq!(bar.calls(), ["remove https://b.test/"]);
 }
 
 #[gpui::test]
@@ -763,14 +1020,21 @@ fn a_sum_comes_after_the_first_row_and_return_on_it_copies_its_result(cx: &mut T
 /// The first row for an engine's keyword typed, which hints its site search.
 fn hinting(keyword: &str) -> Suggestion {
     let url = format!("https://{keyword}/");
-    Suggestion { keyword: keyword.into(), site: "Duck".into(), ..page(&url) }
+    Suggestion {
+        keyword: keyword.into(),
+        site: "Duck".into(),
+        ..page(&url)
+    }
 }
 
 #[gpui::test]
 fn tab_on_a_hinted_row_searches_its_site_until_backspace_leaves(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("duck.test");
-    bar.suggest("duck.test", vec![hinting("duck.test"), page("https://a.test/")]);
+    bar.suggest(
+        "duck.test",
+        vec![hinting("duck.test"), page("https://a.test/")],
+    );
     bar.keys("tab");
     assert_eq!(bar.input(), (String::new(), 0..0));
     // ⌫ in the middle of the words stays in the site search.
@@ -794,7 +1058,14 @@ fn tab_on_a_hinted_row_searches_its_site_until_backspace_leaves(cx: &mut TestApp
 fn tab_on_a_row_without_a_hint_selects_the_next(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), hinting("duck.test"), page("https://a.test/")]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            hinting("duck.test"),
+            page("https://a.test/"),
+        ],
+    );
     bar.keys("tab");
     // Now on the hinted row, Tab enters its site search.
     bar.keys("tab");
@@ -817,9 +1088,15 @@ fn a_space_after_the_hinted_keyword_searches_its_site(cx: &mut TestAppContext) {
     assert_eq!(bar.input(), (String::new(), 0..0));
     // The site's searches only, from the core, which names them by the keyword and the words.
     bar.type_text("cats");
-    bar.suggest("duck.test cats", vec![page("https://duck.test/?q=cats&ia=web")]);
+    bar.suggest(
+        "duck.test cats",
+        vec![page("https://duck.test/?q=cats&ia=web")],
+    );
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["open https://duck.test/?q=cats&ia=web", "hide"]);
+    assert_eq!(
+        bar.calls(),
+        ["open https://duck.test/?q=cats&ia=web", "hide"]
+    );
 
     // So does Japanese input's space.
     let mut bar = Bar::new(cx);
@@ -888,11 +1165,20 @@ fn esc_cancels_the_composition_before_it_closes_the_bar(cx: &mut TestAppContext)
 fn a_space_after_other_text_stays_in_it(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("duck");
-    bar.suggest("duck", vec![Suggestion { completion: ".test".into(), ..hinting("duck.test") }]);
+    bar.suggest(
+        "duck",
+        vec![Suggestion {
+            completion: ".test".into(),
+            ..hinting("duck.test")
+        }],
+    );
     bar.type_text(" ");
     assert_eq!(bar.input(), ("duck ".into(), 5..5));
     bar.keys("enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("duck")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("duck")), "hide".into()]
+    );
 }
 
 #[gpui::test]
@@ -919,7 +1205,10 @@ fn the_inputs_menu_pastes_and_goes_where_return_would(cx: &mut TestAppContext) {
     bar.copy_text("example.org");
     let menu = bar.right_click();
     bar.choose(menu, "Paste and Search");
-    assert_eq!(bar.calls(), [format!("open {}", search("example.org")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("example.org")), "hide".into()]
+    );
 
     // Nothing to paste, nowhere to go.
     let mut bar = Bar::new(cx);
@@ -946,13 +1235,19 @@ fn a_pasted_javascript_url_loses_its_scheme(cx: &mut TestAppContext) {
     bar.copy_text("javascript:alert(1)\n");
     let menu = bar.right_click();
     bar.choose(menu, "Paste and Go");
-    assert_eq!(bar.calls(), [format!("open {}", search("alert(1)")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("alert(1)")), "hide".into()]
+    );
 }
 
 #[test]
 fn only_a_leading_javascript_scheme_goes() {
     assert_eq!(without_javascript("\u{1}javascript:\njavascript:x"), "x");
-    assert_eq!(without_javascript(" example.org/javascript:x"), " example.org/javascript:x");
+    assert_eq!(
+        without_javascript(" example.org/javascript:x"),
+        " example.org/javascript:x"
+    );
     assert_eq!(without_javascript("javascript"), "javascript");
     assert_eq!(without_javascript("javascript:"), "");
 }
@@ -1004,7 +1299,10 @@ fn the_rows_that_go_to_a_search_are_marked_for_their_icon(cx: &mut TestAppContex
     let kinds = bar
         .window
         .read_with(&bar.cx.cx, |bar, _| {
-            bar.rows.iter().map(|row| matches!(row.kind(), Kind::Search)).collect::<Vec<_>>()
+            bar.rows
+                .iter()
+                .map(|row| matches!(row.kind(), Kind::Search))
+                .collect::<Vec<_>>()
         })
         .unwrap();
     assert_eq!(kinds, [false, true]);
@@ -1012,14 +1310,24 @@ fn the_rows_that_go_to_a_search_are_marked_for_their_icon(cx: &mut TestAppContex
 
 /// One of the Space's open tabs.
 fn tab(tab: u64, url: &str) -> shell::BarTab {
-    shell::BarTab { tab, title: url.to_string().into(), url: url.to_string().into(), favicon: None }
+    shell::BarTab {
+        tab,
+        title: url.to_string().into(),
+        url: url.to_string().into(),
+        favicon: None,
+        renamed: false,
+        switched: 0.0,
+    }
 }
 
 #[gpui::test]
 fn before_anything_is_typed_it_lists_the_spaces_tabs(cx: &mut TestAppContext) {
     let tabs = vec![tab(4, "https://a.test/"), tab(2, "https://b.test/")];
     let mut bar = Bar::with_tabs(cx, tabs);
-    let listed = vec![("https://a.test/".to_string(), 4), ("https://b.test/".to_string(), 2)];
+    let listed = vec![
+        ("https://a.test/".to_string(), 4),
+        ("https://b.test/".to_string(), 2),
+    ];
     assert_eq!(bar.rows(), listed);
     // The core's answer for the empty text keeps them.
     bar.suggest("", Vec::new());
@@ -1050,7 +1358,10 @@ fn return_with_nothing_typed_and_no_tabs_does_nothing(cx: &mut TestAppContext) {
 
 /// An open tab with a title of its own.
 fn titled(id: u64, title: &str, url: &str) -> shell::BarTab {
-    shell::BarTab { title: title.to_string().into(), ..tab(id, url) }
+    shell::BarTab {
+        title: title.to_string().into(),
+        ..tab(id, url)
+    }
 }
 
 const CONVEX: &str = "https://dashboard.convex.dev/";
@@ -1089,15 +1400,27 @@ fn search_tabs_lists_the_tabs_named_and_return_switches(cx: &mut TestAppContext)
         titled(9, "Convex docs", "https://docs.convex.dev/"),
     ];
     let mut bar = Bar::search_tabs(cx, tabs);
-    assert_eq!(bar.shown(), ["centred 169 above the middle, 765 wide, radius 20"]);
-    let ids = |bar: &mut Bar| bar.rows().into_iter().map(|(_, tab)| tab).collect::<Vec<_>>();
+    assert_eq!(
+        bar.shown(),
+        ["centred 169 above the middle, 765 wide, radius 20"]
+    );
+    let ids = |bar: &mut Bar| {
+        bar.rows()
+            .into_iter()
+            .map(|(_, tab)| tab)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(ids(&mut bar), [4, 2, 9]);
     bar.type_text("conv");
     assert_eq!(ids(&mut bar), [4, 9]);
     bar.type_text("ex d");
     assert_eq!(ids(&mut bar), [9]);
     bar.keys(&["backspace"; 8].join(" "));
-    assert_eq!(ids(&mut bar), [4, 2, 9], "with nothing typed it lists them all again");
+    assert_eq!(
+        ids(&mut bar),
+        [4, 2, 9],
+        "with nothing typed it lists them all again"
+    );
     bar.type_text("mail");
     bar.keys("enter");
     assert_eq!(bar.calls(), ["select 2", "hide"]);
@@ -1121,7 +1444,9 @@ fn search_tabs_goes_only_to_its_tabs(cx: &mut TestAppContext) {
 /// It lists as many tabs as the bar has rows, and what's typed finds those after them.
 #[gpui::test]
 fn search_tabs_finds_tabs_past_the_rows_listed(cx: &mut TestAppContext) {
-    let mut tabs: Vec<_> = (1..=20).map(|id| tab(id, &format!("https://site{id}.test/"))).collect();
+    let mut tabs: Vec<_> = (1..=20)
+        .map(|id| tab(id, &format!("https://site{id}.test/")))
+        .collect();
     tabs.push(titled(30, "Last of all", "https://last.test/"));
     let mut bar = Bar::search_tabs(cx, tabs);
     assert_eq!(bar.rows().len(), shell::BAR_ROWS);
@@ -1133,8 +1458,14 @@ fn search_tabs_finds_tabs_past_the_rows_listed(cx: &mut TestAppContext) {
 fn a_tab_the_core_lists_moves_up_rather_than_twice(cx: &mut TestAppContext) {
     let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", CONVEX)]);
     bar.type_text("conv");
-    let open = Suggestion { tab: 4, ..page(CONVEX) };
-    bar.suggest("conv", vec![searching("conv"), page("https://conv.test/"), open]);
+    let open = Suggestion {
+        tab: 4,
+        ..page(CONVEX)
+    };
+    bar.suggest(
+        "conv",
+        vec![searching("conv"), page("https://conv.test/"), open],
+    );
     let rows = bar.rows();
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0], (CONVEX.to_string(), 4));
@@ -1147,14 +1478,20 @@ fn a_single_letter_does_not_jump_to_a_tab(cx: &mut TestAppContext) {
     bar.suggest("c", vec![searching("c")]);
     assert_eq!(bar.rows(), [(search("c"), 0)]);
     bar.keys("enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("c")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("c")), "hide".into()]
+    );
 }
 
 #[gpui::test]
 fn typing_that_reads_as_a_url_keeps_chromes_first_row(cx: &mut TestAppContext) {
     let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", CONVEX)]);
     bar.type_text("convex.dev");
-    bar.suggest("convex.dev", vec![page("https://convex.dev/"), searching("convex.dev")]);
+    bar.suggest(
+        "convex.dev",
+        vec![page("https://convex.dev/"), searching("convex.dev")],
+    );
     assert_eq!(bar.rows()[0], ("https://convex.dev/".to_string(), 0));
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open https://convex.dev/", "hide"]);
@@ -1174,13 +1511,22 @@ fn a_hinted_site_search_or_a_completion_to_another_page_keeps_chromes_first_row(
     let tabs = vec![titled(4, "Convex", CONVEX)];
     let mut bar = Bar::with_tabs(cx, tabs.clone());
     bar.type_text("conv");
-    let hint = Suggestion { keyword: "conv.test".into(), ..searching("conv") };
+    let hint = Suggestion {
+        keyword: "conv.test".into(),
+        ..searching("conv")
+    };
     bar.suggest("conv", vec![hint, page("https://conv.test/")]);
     assert_eq!(bar.rows()[0], (search("conv"), 0));
 
     let mut bar = Bar::with_tabs(cx, tabs);
     bar.type_text("conv");
-    bar.suggest("conv", vec![completing("https://convoy.test/", "oy.test"), searching("conv")]);
+    bar.suggest(
+        "conv",
+        vec![
+            completing("https://convoy.test/", "oy.test"),
+            searching("conv"),
+        ],
+    );
     assert_eq!(bar.rows()[0], ("https://convoy.test/".to_string(), 0));
     assert_eq!(bar.input(), ("convoy.test".into(), 4..11));
 }
@@ -1189,9 +1535,15 @@ fn a_hinted_site_search_or_a_completion_to_another_page_keeps_chromes_first_row(
 fn a_completion_to_an_open_tabs_page_is_that_tabs_row(cx: &mut TestAppContext) {
     let mut bar = Bar::with_tabs(cx, vec![titled(4, "Home", "https://convex.dev/")]);
     bar.type_text("conv");
-    let rows = vec![completing("https://convex.dev/", "ex.dev"), searching("conv")];
+    let rows = vec![
+        completing("https://convex.dev/", "ex.dev"),
+        searching("conv"),
+    ];
     bar.suggest("conv", rows);
-    assert_eq!(bar.rows(), [("https://convex.dev/".to_string(), 4), (search("conv"), 0)]);
+    assert_eq!(
+        bar.rows(),
+        [("https://convex.dev/".to_string(), 4), (search("conv"), 0)]
+    );
     assert_eq!(bar.input(), ("convex.dev".into(), 4..10));
     bar.keys("enter");
     assert_eq!(bar.calls(), ["select 4", "hide"]);
@@ -1204,18 +1556,185 @@ fn of_two_matching_tabs_the_one_shown_last_is_first(cx: &mut TestAppContext) {
     let tabs = vec![titled(2, "Convex docs", docs), titled(4, "Convex", CONVEX)];
     let mut bar = Bar::with_tabs(cx, tabs);
     bar.type_text("conv");
-    // The core lists the other as its own row, which stays under the first.
-    let other = Suggestion { tab: 4, ..page(CONVEX) };
+    // The other rises too, right under the search row, in place of the core's own row for it.
+    let other = Suggestion {
+        tab: 4,
+        ..page(CONVEX)
+    };
     bar.suggest("conv", vec![searching("conv"), other]);
-    assert_eq!(bar.rows(), [(docs.to_string(), 2), (search("conv"), 0), (CONVEX.to_string(), 4)]);
+    assert_eq!(
+        bar.rows(),
+        [
+            (docs.to_string(), 2),
+            (search("conv"), 0),
+            (CONVEX.to_string(), 4)
+        ]
+    );
     bar.keys("enter");
     assert_eq!(bar.calls(), ["select 2", "hide"]);
     let mut bar = Bar::with_tabs(cx, vec![titled(2, "Convex docs", docs)]);
     bar.type_text("conv");
-    let other = Suggestion { tab: 4, ..page(CONVEX) };
+    let other = Suggestion {
+        tab: 4,
+        ..page(CONVEX)
+    };
     bar.suggest("conv", vec![searching("conv"), other]);
     bar.keys("down down enter");
     assert_eq!(bar.calls(), ["select 4", "hide"]);
+}
+
+/// An open tab the user renamed, as Arc's custom title.
+fn renamed(id: u64, name: &str, url: &str) -> shell::BarTab {
+    shell::BarTab {
+        renamed: true,
+        ..titled(id, name, url)
+    }
+}
+
+/// Every tab the typing names rises, up to three: the first above the search row, the others right
+/// after it, before the profile's pages. A renamed tab whose own name the typing starts goes
+/// first, then the most recently shown, and a renamed one named only by a later word doesn't.
+#[gpui::test]
+fn the_tabs_named_rise_a_renamed_one_starting_with_the_typing_first(cx: &mut TestAppContext) {
+    let tabs = vec![
+        titled(2, "Convex docs", "https://docs.convex.dev/"),
+        renamed(3, "My convoy", "https://convoy.test/"),
+        titled(4, "Projects | Convex", CONVEX),
+        renamed(5, "Conv board", "https://board.test/"),
+        titled(6, "Convert units", "https://units.test/"),
+    ];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![searching("conv"), page("https://conv.test/")]);
+    let rows = bar.rows();
+    let ids: Vec<u64> = rows.iter().map(|(_, tab)| *tab).collect();
+    assert_eq!(ids, [5, 0, 2, 3, 0], "{rows:?}");
+    assert_eq!(rows[4].0, "https://conv.test/");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 5", "hide"]);
+}
+
+/// Among the tabs the typing names, those the user switched to more rise first, after a renamed
+/// one its own name starts, and the most recently shown leads among equals (#1396).
+#[gpui::test]
+fn the_tabs_named_rise_by_how_often_they_were_switched_to(cx: &mut TestAppContext) {
+    let switched = |tab: shell::BarTab, switched| shell::BarTab { switched, ..tab };
+    let tabs = vec![
+        titled(2, "Convex docs", "https://docs.convex.dev/"),
+        switched(titled(4, "Projects | Convex", CONVEX), 3.0),
+        renamed(5, "Conv board", "https://board.test/"),
+        switched(titled(6, "Convert units", "https://units.test/"), 0.5),
+    ];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![searching("conv")]);
+    let ids: Vec<u64> = bar.rows().iter().map(|(_, tab)| *tab).collect();
+    assert_eq!(ids, [5, 0, 4, 6]);
+}
+
+/// An address typed whose page an open tab shows keeps its row first, where ↩ goes, and the
+/// tab's row comes second, as Arc's bar lists them.
+#[gpui::test]
+fn a_typed_address_an_open_tab_shows_keeps_its_row_with_the_tab_second(cx: &mut TestAppContext) {
+    let home = "https://convex.dev/";
+    let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", home)]);
+    bar.type_text("convex.dev");
+    let listed = Suggestion {
+        tab: 4,
+        ..page(home)
+    };
+    bar.suggest(
+        "convex.dev",
+        vec![page(home), searching("convex.dev"), listed],
+    );
+    let search = search("convex.dev");
+    assert_eq!(
+        bar.rows(),
+        [(home.to_string(), 0), (home.to_string(), 4), (search, 0)]
+    );
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
+}
+
+/// A page from history with an earlier row's title, or an open tab's, on a web app that gives
+/// many pages one title, is left out, as Arc's bar keeps one; elsewhere both stay.
+#[gpui::test]
+fn rows_alike_on_a_one_title_web_app_list_once(cx: &mut TestAppContext) {
+    let titled_page = |url: &str, title: &str| Suggestion {
+        text: title.to_string().into(),
+        ..page(url)
+    };
+    let figma = "https://www.figma.com/design/c";
+    let mut bar = Bar::with_tabs(cx, vec![titled(7, "Untitled", figma)]);
+    bar.type_text("pull");
+    bar.suggest(
+        "pull",
+        vec![
+            searching("pull"),
+            Suggestion {
+                tab: 7,
+                ..titled_page(figma, "Untitled")
+            },
+            titled_page("https://github.com/a/b/pulls", "Pull requests"),
+            titled_page("https://github.com/c/d/pulls", "Pull requests"),
+            titled_page("https://gist.github.com/e", "Pull requests"),
+            titled_page("https://gitlab.test/f/pulls", "Pull requests"),
+            titled_page("https://gitlab.test/g/pulls", "Pull requests"),
+            titled_page("https://www.figma.com/design/h", "Untitled"),
+        ],
+    );
+    let urls: Vec<String> = bar.rows().into_iter().map(|(url, _)| url).collect();
+    assert_eq!(
+        urls,
+        [
+            search("pull"),
+            figma.to_string(),
+            "https://github.com/a/b/pulls".to_string(),
+            "https://gitlab.test/f/pulls".to_string(),
+            "https://gitlab.test/g/pulls".to_string(),
+        ]
+    );
+}
+
+/// Rows for the pages shown go last, as Arc's bar deranks the page it's on, but for the first,
+/// where ↩ goes, and another tab's, which switches to it.
+#[gpui::test]
+fn rows_for_the_page_shown_go_last(cx: &mut TestAppContext) {
+    let shown = "https://notes.test/today";
+    let open = |cx: &mut TestAppContext| {
+        Bar::opened(cx, Recorder::default(), |cx| {
+            show(None, vec![shown.into()], Vec::new(), None, cx)
+        })
+    };
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    let other_tab = Suggestion {
+        tab: 8,
+        ..page(shown)
+    };
+    let rows = vec![
+        searching("notes"),
+        page(shown),
+        other_tab,
+        page("https://notes.test/"),
+    ];
+    bar.suggest("notes", rows);
+    let notes = "https://notes.test/".to_string();
+    let expected = [
+        (search("notes"), 0),
+        (shown.to_string(), 8),
+        (notes, 0),
+        (shown.into(), 0),
+    ];
+    assert_eq!(bar.rows(), expected);
+
+    let mut bar = open(cx);
+    bar.type_text("notes");
+    bar.suggest(
+        "notes",
+        vec![completing(shown, ".test/today"), searching("notes")],
+    );
+    assert_eq!(bar.rows()[0], (shown.to_string(), 0));
 }
 
 #[gpui::test]
@@ -1225,14 +1744,24 @@ fn the_tab_shown_is_never_offered(cx: &mut TestAppContext) {
     let docs = titled(2, "Convex docs", "https://docs.convex.dev/");
     let tabs = vec![titled(4, "Convex", CONVEX), docs];
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx.cx.update(|cx| show(editing, tabs, None, cx));
+    bar.cx
+        .cx
+        .update(|cx| show(editing, Vec::new(), tabs, None, cx));
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);
     assert_eq!(bar.rows()[0], ("https://docs.convex.dev/".to_string(), 2));
 
     let editing = Some((4, SharedString::from(CONVEX)));
-    bar.cx.cx.update(|cx| show(editing, vec![titled(4, "Convex", CONVEX)], None, cx));
+    bar.cx.cx.update(|cx| {
+        show(
+            editing,
+            Vec::new(),
+            vec![titled(4, "Convex", CONVEX)],
+            None,
+            cx,
+        )
+    });
     bar.cx.run_until_parked();
     bar.type_text("conv");
     bar.suggest("conv", vec![searching("conv")]);
@@ -1252,20 +1781,38 @@ fn a_tab_is_named_by_the_starts_of_its_titles_words_and_its_sites_labels() {
     // A page that isn't on the web has no site to name.
     assert!(!names_tab(&titled(2, "Home", "data:text/html,hi"), "dat"));
     // A host with one label is named whole.
-    assert!(names_tab(&titled(3, "Home", "http://localhost:3000/"), "local"));
+    assert!(names_tab(
+        &titled(3, "Home", "http://localhost:3000/"),
+        "local"
+    ));
 }
 
 #[test]
 fn a_page_only_in_history_has_a_clock_and_an_open_tab_or_a_site_its_favicon() {
-    assert_eq!(page("https://a.test/").icon(), Icon::Glyph("icons/clock.svg"));
-    let open = Suggestion { tab: 3, ..page("https://a.test/") };
+    assert_eq!(
+        page("https://a.test/").icon(),
+        Icon::Glyph("icons/clock.svg")
+    );
+    let open = Suggestion {
+        tab: 3,
+        ..page("https://a.test/")
+    };
     assert_eq!(open.icon(), Icon::Favicon);
     // A well-known site isn't in the profile's history.
-    let site = Suggestion { removable: false, ..page("https://wikipedia.org/") };
+    let site = Suggestion {
+        removable: false,
+        ..page("https://wikipedia.org/")
+    };
     assert_eq!(site.icon(), Icon::Favicon);
-    let typed = Suggestion { search: true, ..searching("a") };
+    let typed = Suggestion {
+        search: true,
+        ..searching("a")
+    };
     assert_eq!(typed.icon(), Icon::Glyph("icons/search.svg"));
-    let sum = Suggestion { result: Some("2".into()), ..Suggestion::default() };
+    let sum = Suggestion {
+        result: Some("2".into()),
+        ..Suggestion::default()
+    };
     assert_eq!(sum.icon(), Icon::None);
 }
 
@@ -1274,31 +1821,80 @@ fn a_command_has_its_own_glyph_where_lucide_names_it_and_each_is_built_in() {
     use gpui::AssetSource;
     use shell::Command;
     let glyph = |command| {
-        Suggestion { command: Some(command), ..Suggestion::default() }.icon()
+        Suggestion {
+            command: Some(command),
+            ..Suggestion::default()
+        }
+        .icon()
     };
-    assert_eq!(glyph(Command::Clear), Icon::Glyph("icons/brush-cleaning.svg"));
-    assert_eq!(glyph(Command::ClearArchive), Icon::Glyph("icons/archive.svg"));
-    assert_eq!(glyph(Command::CollapseFolders), Icon::Glyph("icons/fold-vertical.svg"));
+    assert_eq!(
+        glyph(Command::Clear),
+        Icon::Glyph("icons/brush-cleaning.svg")
+    );
+    assert_eq!(
+        glyph(Command::ClearArchive),
+        Icon::Glyph("icons/archive.svg")
+    );
+    assert_eq!(
+        glyph(Command::CollapseFolders),
+        Icon::Glyph("icons/fold-vertical.svg")
+    );
     assert_eq!(glyph(Command::SeparateSplit), Icon::Glyph(COMMAND_GLYPH));
     let commands = [
-        Command::Clear, Command::ClearCacheAndRefresh, Command::ClearCookiesAndRefresh,
-        Command::ClearArchive, Command::CollapseFolders, Command::NewFolder, Command::TogglePin,
-        Command::ToggleMute, Command::CloseTab, Command::ReopenClosedTab, Command::CopyUrl,
-        Command::Find, Command::Back, Command::Forward, Command::Reload, Command::Stop,
-        Command::ZoomIn, Command::ZoomOut, Command::FlipSplit, Command::ToggleSidebar,
-        Command::SavePage, Command::Print, Command::ViewSource, Command::InspectElements,
-        Command::JavaScriptConsole, Command::ManageExtensions, Command::RenameSpace,
-        Command::NextTab, Command::PreviousTab, Command::ViewLibrary, Command::ViewDownloads,
-        Command::ViewHistory, Command::Settings, Command::KeyboardShortcuts, Command::About,
-        Command::Import, Command::NewSpace, Command::SiteSearchSettings, Command::ClearBrowsingData,
-        Command::HelpCenter, Command::WhatsNew, Command::ReportProblem, Command::CopyBuildInfo,
-        Command::PrivacyPolicy, Command::RestoreEarlierSidebar,
+        Command::Clear,
+        Command::ClearCacheAndRefresh,
+        Command::ClearCookiesAndRefresh,
+        Command::ClearArchive,
+        Command::CollapseFolders,
+        Command::NewFolder,
+        Command::TogglePin,
+        Command::ToggleMute,
+        Command::CloseTab,
+        Command::ReopenClosedTab,
+        Command::CopyUrl,
+        Command::Find,
+        Command::Back,
+        Command::Forward,
+        Command::Reload,
+        Command::Stop,
+        Command::ZoomIn,
+        Command::ZoomOut,
+        Command::FlipSplit,
+        Command::ToggleSidebar,
+        Command::SavePage,
+        Command::Print,
+        Command::ViewSource,
+        Command::InspectElements,
+        Command::JavaScriptConsole,
+        Command::ManageExtensions,
+        Command::RenameSpace,
+        Command::NextTab,
+        Command::PreviousTab,
+        Command::ViewLibrary,
+        Command::ViewDownloads,
+        Command::ViewHistory,
+        Command::Settings,
+        Command::KeyboardShortcuts,
+        Command::About,
+        Command::Import,
+        Command::NewSpace,
+        Command::SiteSearchSettings,
+        Command::ClearBrowsingData,
+        Command::HelpCenter,
+        Command::WhatsNew,
+        Command::ReportProblem,
+        Command::CopyBuildInfo,
+        Command::PrivacyPolicy,
+        Command::RestoreEarlierSidebar,
     ];
     for command in commands {
         let Icon::Glyph(path) = glyph(command) else {
             panic!("{command:?} has no glyph");
         };
-        assert!(shell::Assets.load(path).unwrap().is_some(), "{path} isn't built in");
+        assert!(
+            shell::Assets.load(path).unwrap().is_some(),
+            "{path} isn't built in"
+        );
     }
 }
 
@@ -1308,7 +1904,11 @@ fn a_command_has_its_own_glyph_where_lucide_names_it_and_each_is_built_in() {
 fn the_row_under_the_pointer_has_a_plate_as_the_keys_move_the_selection(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    let rows = vec![searching("ex"), page("https://a.test/"), page("https://b.test/")];
+    let rows = vec![
+        searching("ex"),
+        page("https://a.test/"),
+        page("https://b.test/"),
+    ];
     bar.suggest("ex", rows);
     bar.point_at(2);
     assert_eq!(bar.plates(), (0, Some(2)));
@@ -1323,14 +1923,24 @@ fn the_row_under_the_pointer_has_a_plate_as_the_keys_move_the_selection(cx: &mut
     assert_eq!(bar.plates(), (0, Some(2)));
     // ↩ takes the selection, not the row under the pointer.
     bar.keys("enter");
-    assert_eq!(bar.calls(), [format!("open {}", search("ex")), "hide".into()]);
+    assert_eq!(
+        bar.calls(),
+        [format!("open {}", search("ex")), "hide".into()]
+    );
 }
 
 #[gpui::test]
 fn the_pointer_moving_takes_the_plate_with_it(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.type_text("ex");
-    bar.suggest("ex", vec![searching("ex"), page("https://a.test/"), page("https://b.test/")]);
+    bar.suggest(
+        "ex",
+        vec![
+            searching("ex"),
+            page("https://a.test/"),
+            page("https://b.test/"),
+        ],
+    );
     bar.point_at(1);
     assert_eq!(bar.plates(), (0, Some(1)));
     bar.point_at(2);
@@ -1342,14 +1952,20 @@ fn the_pointer_moving_takes_the_plate_with_it(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_click_on_the_url_field_opens_the_bar_over_it_and_cmd_l_centred(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
-    assert_eq!(bar.shown(), ["centred 169 above the middle, 765 wide, radius 20"]);
+    assert_eq!(
+        bar.shown(),
+        ["centred 169 above the middle, 765 wide, radius 20"]
+    );
     let field = Bounds::new(point(px(8.), px(46.)), size(px(244.), px(36.)));
     bar.edit("https://example.com/", Some(field));
     assert_eq!(bar.shown(), ["at 8 44, 350 wide, radius 20"]);
     assert!(bar.over_field());
     assert_eq!(bar.input(), ("https://example.com/".into(), 0..20));
     bar.edit("https://example.com/", None);
-    assert_eq!(bar.shown(), ["centred 169 above the middle, 765 wide, radius 20"]);
+    assert_eq!(
+        bar.shown(),
+        ["centred 169 above the middle, 765 wide, radius 20"]
+    );
     assert!(!bar.over_field());
 }
 
@@ -1358,19 +1974,32 @@ fn a_click_on_the_url_field_opens_the_bar_over_it_and_cmd_l_centred(cx: &mut Tes
 /// (#1306).
 #[gpui::test]
 fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppContext) {
-    let tabs = vec![titled(4, "Projects", CONVEX), titled(2, "Inbox", "https://mail.test/")];
+    let tabs = vec![
+        titled(4, "Projects", CONVEX),
+        titled(2, "Inbox", "https://mail.test/"),
+    ];
     let mut bar = Bar::with_tabs(cx, tabs);
-    assert_eq!(bar.asked_height(), height(2), "centred, with the Space's tabs");
+    assert_eq!(
+        bar.asked_height(),
+        height(2),
+        "centred, with the Space's tabs"
+    );
     let field = Bounds::new(point(px(8.), px(46.)), size(px(244.), px(36.)));
     let url = "https://example.com/";
     bar.edit(url, Some(field));
-    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "the input row, before it shows");
+    assert_eq!(
+        bar.last_show(),
+        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        "the input row, before it shows"
+    );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
     bar.type_text("ex");
     bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
     assert_eq!(bar.drawn_over_field(), bar.asked_height());
     assert_eq!(bar.asked_height(), field_height(2));
-    let many: Vec<_> = (0..7).map(|at| page(&format!("https://{at}.test/"))).collect();
+    let many: Vec<_> = (0..7)
+        .map(|at| page(&format!("https://{at}.test/")))
+        .collect();
     bar.type_text("x");
     bar.suggest("exx", many);
     assert_eq!(bar.drawn_over_field(), bar.asked_height());
@@ -1380,14 +2009,27 @@ fn over_the_field_the_window_is_as_tall_as_what_the_bar_draws(cx: &mut TestAppCo
     assert_eq!(bar.asked_height(), FIELD_INPUT, "no rows left");
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
     bar.type_text("z");
-    bar.suggest("exxqz", (0..7).map(|at| page(&format!("https://{at}.test/"))).collect());
+    bar.suggest(
+        "exxqz",
+        (0..7)
+            .map(|at| page(&format!("https://{at}.test/")))
+            .collect(),
+    );
     bar.keys("escape");
     bar.edit(url, Some(field));
-    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "after the taller panel");
+    assert_eq!(
+        bar.last_show(),
+        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        "after the taller panel"
+    );
     bar.edit(url, None);
     assert_eq!(bar.last_show(), (Level::Modal, Some(height(0))));
     bar.edit(url, Some(field));
-    assert_eq!(bar.last_show(), (FIELD_LEVEL, Some(FIELD_INPUT)), "after the centred one");
+    assert_eq!(
+        bar.last_show(),
+        (FIELD_LEVEL, Some(FIELD_INPUT)),
+        "after the centred one"
+    );
     assert_eq!(bar.drawn_over_field(), FIELD_INPUT);
 }
 
@@ -1400,9 +2042,17 @@ fn over_the_field_the_shadow_ends_within_a_row_below_the_panel(cx: &mut TestAppC
     let field = Bounds::new(point(px(8.), px(46.)), size(px(244.), px(36.)));
     bar.edit("https://example.com/", Some(field));
     let (level, _) = bar.last_show();
-    assert!(level.reach().below < FIELD_INPUT, "{level:?} reaches {:?}", level.reach());
+    assert!(
+        level.reach().below < FIELD_INPUT,
+        "{level:?} reaches {:?}",
+        level.reach()
+    );
     bar.edit("https://example.com/", None);
-    assert_eq!(bar.last_show().0, Level::Modal, "the centred bar keeps its modal shadow");
+    assert_eq!(
+        bar.last_show().0,
+        Level::Modal,
+        "the centred bar keeps its modal shadow"
+    );
 }
 
 /// ⌘T or ⌘L closes the bar, whichever opened it, as Arc's do, and the browser's other shortcuts go
@@ -1436,15 +2086,24 @@ fn the_bar_is_closed_as_it_asks_to_go(cx: &mut TestAppContext) {
     bar.keys("escape");
     assert_eq!(bar.calls(), ["dismiss"]);
     assert!(!bar.is_open());
-    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
+    assert!(
+        !bar.follow(Vec::new()),
+        "a Space shown since opens no new tab"
+    );
 
     let mut bar = Bar::new(cx);
-    assert!(bar.follow(Vec::new()), "the open bar opens a new tab in the Space shown");
+    assert!(
+        bar.follow(Vec::new()),
+        "the open bar opens a new tab in the Space shown"
+    );
     bar.calls();
     bar.run(shell::Command::NewTab);
     assert_eq!(bar.calls(), ["dismiss"]);
     assert!(!bar.is_open());
-    assert!(!bar.follow(Vec::new()), "a Space shown since opens no new tab");
+    assert!(
+        !bar.follow(Vec::new()),
+        "a Space shown since opens no new tab"
+    );
 }
 
 /// ↩ on the URL ⌘L opened the bar on loads the page again, as Arc's does; typed over, it goes
@@ -1496,7 +2155,10 @@ fn one_letter_lists_quit_after_the_suggestions(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
     type_and_suggest(&mut bar, "q", suggestions("q", &["quora.com"]));
     let quit = concat!("Quit ", env!("APP_NAME"), " ⌘Q");
-    assert_eq!(bar.listed(), [search("q"), "https://quora.com/".into(), quit.into()]);
+    assert_eq!(
+        bar.listed(),
+        [search("q"), "https://quora.com/".into(), quit.into()]
+    );
 }
 
 /// Arc's "copy": the best command above the search row, and the others a name or a hidden word
@@ -1562,7 +2224,10 @@ fn a_word_of_the_name_puts_the_best_first_and_the_rest_after(cx: &mut TestAppCon
     assert_eq!(bar.listed(), expected);
     bar.keys("cmd-a");
     type_and_suggest(&mut bar, "library", suggestions("library", &[]));
-    assert_eq!(bar.listed(), ["Open Library… ⇧⌘L".to_string(), search("library")]);
+    assert_eq!(
+        bar.listed(),
+        ["Open Library… ⇧⌘L".to_string(), search("library")]
+    );
 }
 
 /// Tab in an empty field lists only the commands, as Arc's bar does: all that do something now,
@@ -1601,7 +2266,11 @@ fn tab_in_an_empty_field_lists_only_the_commands(cx: &mut TestAppContext) {
         assert_eq!(bar.input().0, "sp", "{leave}");
         assert!(bar.calls().is_empty(), "{leave}");
         bar.suggest("sp", suggestions("sp", &["spotify.com"]));
-        assert_eq!(bar.listed()[..2], [search("sp"), "https://spotify.com/".into()], "{leave}");
+        assert_eq!(
+            bar.listed()[..2],
+            [search("sp"), "https://spotify.com/".into()],
+            "{leave}"
+        );
     }
 }
 
@@ -1644,7 +2313,13 @@ fn another_space_shown_lists_its_tabs_and_asks_again(cx: &mut TestAppContext) {
     assert!(bar.follow(vec![tab(9, "https://b.test/")]));
     assert_eq!(bar.rows(), [("https://b.test/".to_string(), 9)]);
     bar.type_text("exa");
-    bar.suggest("exa", vec![completing("https://example.com/", "mple.com"), searching("exa")]);
+    bar.suggest(
+        "exa",
+        vec![
+            completing("https://example.com/", "mple.com"),
+            searching("exa"),
+        ],
+    );
     bar.host.asked.take();
     assert!(bar.follow(Vec::new()));
     assert_eq!(bar.input(), ("exa".into(), 3..3));
@@ -1694,7 +2369,13 @@ fn the_other_bars_follow_another_space_as_they_can(cx: &mut TestAppContext) {
 
     let mut bar = Bar::search_tabs(cx, vec![tab(4, "https://a.test/")]);
     assert!(!bar.follow(vec![tab(9, "https://b.test/"), tab(8, "https://c.test/")]));
-    assert_eq!(bar.rows(), [("https://b.test/".to_string(), 9), ("https://c.test/".into(), 8)]);
+    assert_eq!(
+        bar.rows(),
+        [
+            ("https://b.test/".to_string(), 9),
+            ("https://c.test/".into(), 8)
+        ]
+    );
 
     let mut bar = Bar::new(cx);
     let pane = Bounds::new(point(px(400.), px(10.)), size(px(400.), px(600.)));
@@ -1740,8 +2421,11 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
 fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
     type_and_suggest(&mut bar, "duplicate", suggestions("duplicate", &[]));
-    let expected =
-        ["Duplicate Current Tab".to_string(), search("duplicate"), "New Window ⌘N".into()];
+    let expected = [
+        "Duplicate Current Tab".to_string(),
+        search("duplicate"),
+        "New Window ⌘N".into(),
+    ];
     assert_eq!(bar.listed(), expected);
     bar.keys("cmd-a");
     type_and_suggest(&mut bar, "hide", suggestions("hide", &[]));
@@ -1762,8 +2446,15 @@ fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
     for typed in ["close", "clos"] {
         type_and_suggest(&mut bar, typed, suggestions(typed, &[]));
         let listed = bar.listed();
-        assert_eq!(listed[..2], ["Archive Tab ⌘W".to_string(), search(typed)], "{typed}");
-        assert!(listed[2..].contains(&"Close Window ⇧⌘W".to_string()), "{typed}: {listed:?}");
+        assert_eq!(
+            listed[..2],
+            ["Archive Tab ⌘W".to_string(), search(typed)],
+            "{typed}"
+        );
+        assert!(
+            listed[2..].contains(&"Close Window ⇧⌘W".to_string()),
+            "{typed}: {listed:?}"
+        );
         bar.keys("cmd-a");
     }
     type_and_suggest(&mut bar, "close", suggestions("close", &[]));
@@ -1772,7 +2463,10 @@ fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
 
     let mut bar = Bar::with_commands_but(cx, &[shell::Command::CloseSplitPane]);
     type_and_suggest(&mut bar, "close w", suggestions("close w", &[]));
-    assert_eq!(bar.listed(), ["Close Window ⇧⌘W".to_string(), search("close w")]);
+    assert_eq!(
+        bar.listed(),
+        ["Close Window ⇧⌘W".to_string(), search("close w")]
+    );
 }
 
 /// Arc's "tab", where a site completes what's typed: the site first, then the core's rows, then
@@ -1781,17 +2475,34 @@ fn close_archives_the_tab_until_the_window_is_named(cx: &mut TestAppContext) {
 fn a_site_completing_puts_every_command_after_the_suggestions(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
     bar.type_text("tab");
-    let hosts = ["tabs.test", "tablet.test", "table.test", "tableau.test", "tabel.test"];
-    let mut rows = vec![completing("https://tabelog.com/", "elog.com"), searching("tab")];
-    rows.extend(hosts.iter().chain(&["a.test", "b.test", "c.test"]).map(|host| {
-        page(&format!("https://{host}/"))
-    }));
+    let hosts = [
+        "tabs.test",
+        "tablet.test",
+        "table.test",
+        "tableau.test",
+        "tabel.test",
+    ];
+    let mut rows = vec![
+        completing("https://tabelog.com/", "elog.com"),
+        searching("tab"),
+    ];
+    rows.extend(
+        hosts
+            .iter()
+            .chain(&["a.test", "b.test", "c.test"])
+            .map(|host| page(&format!("https://{host}/"))),
+    );
     bar.suggest("tab", rows);
     let listed = bar.listed();
     assert_eq!(listed.len(), shell::BAR_ROWS);
     assert_eq!(listed[0], "https://tabelog.com/");
-    let commands =
-        ["Pin Tab ⌘D", "Next Tab ⌥⌘↓", "Search Tabs… ⇧⌘A", "Archive Tab ⌘W", "Clear Today ⇧⌘K"];
+    let commands = [
+        "Pin Tab ⌘D",
+        "Next Tab ⌥⌘↓",
+        "Search Tabs… ⇧⌘A",
+        "Archive Tab ⌘W",
+        "Clear Today ⇧⌘K",
+    ];
     assert_eq!(listed[10..], commands);
 }
 
@@ -1799,8 +2510,13 @@ fn a_site_completing_puts_every_command_after_the_suggestions(cx: &mut TestAppCo
 #[gpui::test]
 fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
-    bar.cx.simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
-    type_and_suggest(&mut bar, "c", suggestions("c", &["c1.test", "c2.test", "c3.test"]));
+    bar.cx
+        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN))));
+    type_and_suggest(
+        &mut bar,
+        "c",
+        suggestions("c", &["c1.test", "c2.test", "c3.test"]),
+    );
     assert_eq!(bar.listed().len(), shell::BAR_ROWS);
     // The rows' bounds as laid out, before the list's scroll moves them.
     let in_view = |bar: &mut Bar, index: usize| {
@@ -1818,7 +2534,8 @@ fn the_list_scrolls_to_keep_the_selection_in_view(cx: &mut TestAppContext) {
     }
     assert_eq!(bar.plates().0, 8);
     // A frame, for the list to scroll.
-    bar.cx.simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN) + 1.)));
+    bar.cx
+        .simulate_resize(size(px(WIDTH), px(height(ROWS_SHOWN) + 1.)));
     bar.cx.run_until_parked();
     assert!(in_view(&mut bar, 8));
     assert!(!in_view(&mut bar, 0));
@@ -1834,11 +2551,29 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
     bar.cx.simulate_a11y_activation();
     bar.type_text("do");
     let docs = page("https://docs.test/");
-    let docs = Suggestion { text: "Docs".into(), detail: "docs.test".into(), tab: 7, ..docs };
-    bar.suggest("do", vec![Suggestion { text: "do".into(), ..searching("do") }, docs]);
+    let docs = Suggestion {
+        text: "Docs".into(),
+        detail: "docs.test".into(),
+        tab: 7,
+        ..docs
+    };
+    bar.suggest(
+        "do",
+        vec![
+            Suggestion {
+                text: "do".into(),
+                ..searching("do")
+            },
+            docs,
+        ],
+    );
     let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
     let nodes = |role: Role| -> Vec<_> {
-        tree.nodes.iter().filter(|(_, node)| node.role() == role).cloned().collect()
+        tree.nodes
+            .iter()
+            .filter(|(_, node)| node.role() == role)
+            .cloned()
+            .collect()
     };
 
     let field = &nodes(Role::TextInput)[0];
@@ -1852,15 +2587,28 @@ fn voiceover_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppContext)
         .collect();
     assert_eq!(
         options,
-        [("do".into(), Some(true)), ("Docs, docs.test, Switch to Tab".into(), Some(false))]
+        [
+            ("do".into(), Some(true)),
+            ("Docs, docs.test, Switch to Tab".into(), Some(false))
+        ]
     );
     let status = &nodes(Role::Status)[0].1;
-    assert_eq!((status.live(), status.value()), (Some(Live::Polite), Some("do, 1 of 2")));
+    assert_eq!(
+        (status.live(), status.value()),
+        (Some(Live::Polite), Some("do, 1 of 2"))
+    );
 
     bar.keys("down");
     let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
-    let status = tree.nodes.iter().find(|(_, node)| node.role() == Role::Status).unwrap();
-    assert_eq!(status.1.value(), Some("Docs, docs.test, Switch to Tab, 2 of 2"));
+    let status = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::Status)
+        .unwrap();
+    assert_eq!(
+        status.1.value(),
+        Some("Docs, docs.test, Switch to Tab, 2 of 2")
+    );
 }
 
 /// ilo's menu's window, which shows nothing in a test.
@@ -1876,7 +2624,8 @@ impl crate::menu::Host for MenuWindow {
 #[gpui::test]
 fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
     use crate::menu;
-    cx.update(|cx| menu::open(Rc::new(MenuWindow), cx)).expect("no window for the menu");
+    cx.update(|cx| menu::open(Rc::new(MenuWindow), cx))
+        .expect("no window for the menu");
     cx.update(|cx| {
         cx.set_global(menu::field_menu(Rc::new(|_, request, cx| {
             let area = gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(2000.), px(2000.)));
@@ -1887,8 +2636,10 @@ fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
     bar.type_text("something else");
     let right_click = |bar: &mut Bar| {
         let at = point(px(200.), px(HEIGHT / 2.));
-        bar.cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
-        bar.cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        bar.cx
+            .simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        bar.cx
+            .simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
         bar.cx.run_until_parked();
     };
     let choose = |bar: &mut Bar, title: &str| {
@@ -1916,7 +2667,9 @@ fn the_inputs_menu_is_ilos_and_pastes_and_goes(cx: &mut TestAppContext) {
 #[gpui::test]
 fn shift_f10_opens_the_fields_menu_on_its_first_item(cx: &mut TestAppContext) {
     use crate::menu;
-    let window = cx.update(|cx| menu::open(Rc::new(MenuWindow), cx)).expect("no window for the menu");
+    let window = cx
+        .update(|cx| menu::open(Rc::new(MenuWindow), cx))
+        .expect("no window for the menu");
     let mut in_menu = VisualTestContext::from_window(window.into(), cx);
     in_menu.simulate_a11y_activation();
     cx.update(|cx| {
@@ -1931,11 +2684,21 @@ fn shift_f10_opens_the_fields_menu_on_its_first_item(cx: &mut TestAppContext) {
     bar.keys("shift-f10");
     in_menu.run_until_parked();
     let tree = in_menu.a11y_tree().expect("GPUI built a tree");
-    let focused = tree.nodes.iter().find(|(id, _)| *id == tree.focus).map(|(_, node)| node);
-    assert_eq!(focused.and_then(|node| node.label()), Some("Paste"), "Cut and Copy are dimmed");
+    let focused = tree
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == tree.focus)
+        .map(|(_, node)| node);
+    assert_eq!(
+        focused.and_then(|node| node.label()),
+        Some("Paste"),
+        "Cut and Copy are dimmed"
+    );
     in_menu.simulate_keystrokes("enter");
     bar.cx.run_until_parked();
-    let text = bar.window.update(&mut bar.cx.cx, |bar, _, cx| bar.input.read(cx).text().to_owned());
+    let text = bar.window.update(&mut bar.cx.cx, |bar, _, cx| {
+        bar.input.read(cx).text().to_owned()
+    });
     assert_eq!(text.unwrap(), "docs.test");
 }
 
@@ -1950,15 +2713,24 @@ fn a_typed_new_address_opens_its_new_document_in_a_new_tab(cx: &mut TestAppConte
     assert_eq!(bar.listed(), [search("meet")]);
     bar.type_text(".");
     bar.suggest("meet.", vec![page("https://meet./"), searching("meet.")]);
-    assert_eq!(bar.listed(), ["https://meet.new/", "https://meet./", &search("meet.")]);
-    let named = bar.window.read_with(&bar.cx.cx, |bar, _| bar.rows[0].text.clone()).unwrap();
+    assert_eq!(
+        bar.listed(),
+        ["https://meet.new/", "https://meet./", &search("meet.")]
+    );
+    let named = bar
+        .window
+        .read_with(&bar.cx.cx, |bar, _| bar.rows[0].text.clone())
+        .unwrap();
     assert_eq!(named, "New Google Meet");
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open https://meet.new/", "hide"]);
 
     bar.edit("https://example.com/", None);
     bar.type_text("docs.new");
-    bar.suggest("docs.new", vec![page("https://docs.new/"), searching("docs.new")]);
+    bar.suggest(
+        "docs.new",
+        vec![page("https://docs.new/"), searching("docs.new")],
+    );
     assert_eq!(bar.listed(), ["https://docs.new/", &search("docs.new")]);
     bar.keys("enter");
     assert_eq!(bar.calls(), ["open https://docs.new/", "hide"]);
@@ -1973,10 +2745,16 @@ fn cmd_and_option_backspace_ask_again_and_leave_a_site_search(cx: &mut TestAppCo
     bar.host.asked.take();
     bar.keys("alt-backspace");
     assert_eq!(bar.input(), ("cats and ".into(), 9..9));
-    assert_eq!(bar.host.asked.take().last().map(|(text, _)| text.as_str()), Some("cats and "));
+    assert_eq!(
+        bar.host.asked.take().last().map(|(text, _)| text.as_str()),
+        Some("cats and ")
+    );
     bar.keys("left left left left cmd-backspace");
     assert_eq!(bar.input(), ("and ".into(), 0..0));
-    assert_eq!(bar.host.asked.take().last().map(|(text, _)| text.as_str()), Some("and "));
+    assert_eq!(
+        bar.host.asked.take().last().map(|(text, _)| text.as_str()),
+        Some("and ")
+    );
 
     for key in ["cmd-backspace", "alt-backspace"] {
         let mut bar = Bar::new(cx);
@@ -2022,7 +2800,9 @@ fn the_bar_keeps_the_focus_in_its_field(cx: &mut TestAppContext) {
     let mut bar = Bar::new(cx);
     bar.activate();
     let blur = |bar: &mut Bar| {
-        (bar.window.update(&mut bar.cx.cx, |_, window, cx| window.blur(cx))).unwrap();
+        (bar.window
+            .update(&mut bar.cx.cx, |_, window, cx| window.blur(cx)))
+        .unwrap();
         bar.cx.run_until_parked();
     };
     blur(&mut bar);
@@ -2048,7 +2828,11 @@ impl Bar {
         page: Option<(&str, &str)>,
     ) -> Self {
         let page = page.map(|(url, title)| (url.to_string().into(), title.to_string().into()));
-        let host = Recorder { agents: RefCell::new(agents(listed)), page, ..Recorder::default() };
+        let host = Recorder {
+            agents: RefCell::new(agents(listed)),
+            page,
+            ..Recorder::default()
+        };
         Bar::open(cx, Vec::new(), host)
     }
 
@@ -2089,14 +2873,20 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     assert_eq!(bar.chip_and_hint(), (None, false, true), "⇥ isn't offered");
     let asked = bar.host.asked.borrow().len();
     bar.keys("tab");
-    assert_eq!(bar.chip_and_hint(), (Some("Lisbon guide".into()), true, false));
+    assert_eq!(
+        bar.chip_and_hint(),
+        (Some("Lisbon guide".into()), true, false)
+    );
     assert_eq!(bar.agent_rows(), ["claude · Haiku", "codex"]);
     let icons = bar.window.read_with(&bar.cx.cx, |bar, _| {
         bar.rows.iter().map(Suggestion::icon).collect::<Vec<_>>()
     });
     assert_eq!(
         icons.unwrap(),
-        [Icon::Glyph("icons/terminal.svg"), Icon::Glyph("icons/square-terminal.svg")],
+        [
+            Icon::Glyph("icons/terminal.svg"),
+            Icon::Glyph("icons/square-terminal.svg")
+        ],
         "each agent has its CLI's glyph"
     );
     assert_eq!(bar.calls(), ["asking true"]);
@@ -2127,7 +2917,10 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     assert_eq!(bar.chip_and_hint(), (None, false, true));
     assert_eq!(bar.calls(), ["asking false"]);
     assert_eq!(bar.input().0, "book it");
-    assert!(bar.is_open(), "Esc closed the bar rather than leaving the ask");
+    assert!(
+        bar.is_open(),
+        "Esc closed the bar rather than leaving the ask"
+    );
 
     bar.keys("tab");
     bar.keys("shift-tab");
@@ -2136,7 +2929,11 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
 
     bar.keys("tab");
     bar.keys("home backspace");
-    assert_eq!(bar.chip_and_hint(), (None, true, false), "⌫ didn't take the chip off first");
+    assert_eq!(
+        bar.chip_and_hint(),
+        (None, true, false),
+        "⌫ didn't take the chip off first"
+    );
     bar.keys("backspace");
     assert_eq!(bar.chip_and_hint().1, false);
     assert_eq!(bar.input().0, "book it");
@@ -2171,7 +2968,10 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
 
     let mut bar = Bar::new(cx);
     bar.type_text("summarise this");
-    bar.suggest("summarise this", vec![searching("summarise this"), page("https://a.test/")]);
+    bar.suggest(
+        "summarise this",
+        vec![searching("summarise this"), page("https://a.test/")],
+    );
     bar.keys("tab");
     assert_eq!(bar.chip_and_hint(), (None, false, false));
     assert_eq!(bar.plates().0, 1);
@@ -2191,17 +2991,36 @@ fn a_private_window_offers_no_task(cx: &mut TestAppContext) {
     let mut bar = Bar::open(cx, Vec::new(), host);
     let asked = "when does the rijksmuseum open";
     bar.type_text(asked);
-    bar.suggest(asked, vec![searching(asked), page("https://www.rijksmuseum.nl/en/visit")]);
-    assert_eq!(bar.chip_and_hint(), (None, false, false), "Ask ⇥ is offered");
+    bar.suggest(
+        asked,
+        vec![
+            searching(asked),
+            page("https://www.rijksmuseum.nl/en/visit"),
+        ],
+    );
+    assert_eq!(
+        bar.chip_and_hint(),
+        (None, false, false),
+        "Ask ⇥ is offered"
+    );
     bar.keys("tab");
     bar.cx.cx.update(task_agents_changed);
     bar.cx.run_until_parked();
-    assert_eq!(bar.chip_and_hint(), (None, false, false), "⇥ asked an agent");
-    let tasks = bar.window.read_with(&bar.cx.cx, |bar, _| bar.rows.iter().any(|row| row.task.is_some()));
+    assert_eq!(
+        bar.chip_and_hint(),
+        (None, false, false),
+        "⇥ asked an agent"
+    );
+    let tasks = bar.window.read_with(&bar.cx.cx, |bar, _| {
+        bar.rows.iter().any(|row| row.task.is_some())
+    });
     assert!(!tasks.unwrap(), "a row is a task's");
     assert_eq!(bar.plates().0, 1);
     bar.keys("enter");
-    assert_eq!(bar.calls(), ["open https://www.rijksmuseum.nl/en/visit", "hide"]);
+    assert_eq!(
+        bar.calls(),
+        ["open https://www.rijksmuseum.nl/en/visit", "hide"]
+    );
 }
 
 /// While the browser hasn't learned which agents are ready, the ask lists none, then lists them
@@ -2212,7 +3031,11 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     *bar.host.agents.borrow_mut() = Some(TaskAgents::default());
     bar.edit("", None);
     bar.type_text("book a table");
-    assert_eq!(bar.chip_and_hint(), (None, false, true), "Ask ⇥ isn't offered while unknown");
+    assert_eq!(
+        bar.chip_and_hint(),
+        (None, false, true),
+        "Ask ⇥ isn't offered while unknown"
+    );
     bar.keys("tab");
     assert!(bar.agent_rows().is_empty());
     *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
@@ -2221,4 +3044,94 @@ fn the_ask_lists_the_agents_as_the_browser_learns(cx: &mut TestAppContext) {
     assert_eq!(bar.agent_rows(), ["codex"]);
     bar.keys("enter");
     assert!(bar.calls().contains(&"task codex book a table".to_string()));
+}
+
+/// Settings' rows as its search reads them: Peek and the Mini Player in Features, and Shortcuts'
+/// row for a command, which the bar lists itself.
+fn settings_rows() -> Vec<settings_search::Entry> {
+    let row = |section, name: &str| settings_search::Entry {
+        section,
+        under: None,
+        name: name.to_string().into(),
+        line: Some("Links open in a preview.".into()),
+        keys: None,
+    };
+    vec![
+        row(Section::Features, "Peek"),
+        row(Section::Features, "Mini Player"),
+        row(Section::Shortcuts, "Peek Link"),
+    ]
+}
+
+/// "peek" lists Peek — Settings under the first row, found as Settings' search finds it, and ↩
+/// on it opens Settings at its row without anything of the switch's changing; Shortcuts' row
+/// stays out, and fewer than three letters list none. Its other name finds it too.
+#[gpui::test]
+fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
+    let host = Recorder {
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("pe");
+    bar.suggest("pe", vec![searching("pe")]);
+    assert_eq!(bar.listed(), [search("pe")]);
+    bar.type_text("ek");
+    bar.suggest("peek", vec![searching("peek"), page("https://peek.test/")]);
+    assert_eq!(
+        bar.listed(),
+        [
+            search("peek"),
+            "Peek — Settings".into(),
+            "https://peek.test/".into()
+        ]
+    );
+    bar.keys("down enter");
+    let calls = bar.calls();
+    assert_eq!(
+        bar.host.settings_read.get(),
+        1,
+        "the index was read more than once a time the bar opened"
+    );
+    assert!(
+        calls.contains(&"show setting Features › Peek".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.starts_with("open") || call.starts_with("navigate"))
+    );
+    assert!(!bar.is_open());
+
+    let host = Recorder {
+        settings: RefCell::new(Some(Rc::new(settings_rows()))),
+        ..Recorder::default()
+    };
+    let mut bar = Bar::open(cx, Vec::new(), host);
+    bar.type_text("picture in");
+    bar.suggest("picture in", vec![searching("picture in")]);
+    assert_eq!(
+        bar.listed(),
+        [search("picture in"), "Mini Player — Settings".into()]
+    );
+}
+
+/// Until the browser has built Settings' index the bar lists no settings, without waiting for it,
+/// and asks again as the next suggestions come; once it's ready they show.
+#[gpui::test]
+fn settings_rows_wait_for_nothing(cx: &mut TestAppContext) {
+    let mut bar = Bar::open(cx, Vec::new(), Recorder::default());
+    bar.type_text("peek");
+    bar.suggest("peek", vec![searching("peek")]);
+    assert_eq!(bar.listed(), [search("peek")]);
+    bar.host.settings.replace(Some(Rc::new(settings_rows())));
+    bar.type_text(" ");
+    bar.suggest("peek ", vec![searching("peek ")]);
+    assert_eq!(bar.listed(), [search("peek "), "Peek — Settings".into()]);
+    assert_eq!(
+        bar.host.settings_read.get(),
+        2,
+        "the bar didn't ask again, or asked once it had it"
+    );
 }

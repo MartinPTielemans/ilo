@@ -26,39 +26,49 @@ pub const GRACE: Duration = Duration::from_millis(500);
 /// It shows in a frame and fades out over 0.27 s, ease-out (Arc).
 pub const FADE_IN: Duration = Duration::ZERO;
 pub const FADE_OUT: Duration = Duration::from_millis(270);
-pub use crate::tokens::tooltip::GAP;
-pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
-pub use crate::tokens::tooltip::EDGE_INSET;
 pub use crate::tokens::tooltip::BESIDE;
+pub use crate::tokens::tooltip::EDGE_INSET;
+pub use crate::tokens::tooltip::GAP;
 use crate::tokens::tooltip::HEIGHT;
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
+pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
+use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
+use crate::tokens::tooltip::CHIP;
+use crate::tokens::tooltip::CHIP_AFTER_TEXT;
+use crate::tokens::tooltip::CHIP_BODY;
+use crate::tokens::tooltip::CHIP_GAP;
+use crate::tokens::tooltip::CHIP_LIP;
+use crate::tokens::tooltip::CHIP_LIP_FILL;
+use crate::tokens::tooltip::CHIP_PADDING;
+use crate::tokens::tooltip::CHIP_RADIUS;
+use crate::tokens::tooltip::CHIP_TEXT_SIZE;
+use crate::tokens::tooltip::END;
 use crate::tokens::tooltip::NEAR_RADIUS;
 use crate::tokens::tooltip::RIM;
-use crate::elevation::{Level, WINDOW_MARGIN};
-use crate::tokens::tooltip::TEXT_X;
-use crate::tokens::tooltip::END;
 use crate::tokens::tooltip::TEXT_SIZE;
-use crate::tokens::tooltip::CHIP;
-use crate::tokens::tooltip::CHIP_BODY;
-use crate::tokens::tooltip::CHIP_LIP;
-use crate::tokens::tooltip::CHIP_RADIUS;
-use crate::tokens::tooltip::CHIP_PADDING;
-use crate::tokens::tooltip::CHIP_AFTER_TEXT;
-use crate::tokens::tooltip::CHIP_GAP;
-use crate::tokens::tooltip::CHIP_TEXT_SIZE;
-use crate::tokens::tooltip::CHIP_LIP_FILL;
-use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
+use crate::tokens::tooltip::TEXT_X;
+
+/// What a tooltip shows over, which holds what it names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Over {
+    /// A browser window, by its id.
+    Window(u64),
+    /// One of the host's overlays over the browser window in front, such as the command bar, by
+    /// its number. The overlay is a window of its own over the page, and the tooltip goes over it.
+    Overlay(i32),
+}
 
 /// What the tooltip asks of its window.
 pub trait Host {
-    /// Shows the tooltip's window with its top left at (`left`, `top`) in browser window `window`,
-    /// the one the pointer is in, or moves it there if it shows. The UI has kept it inside the
+    /// Shows the tooltip's window with its top left at (`left`, `top`) in the window it's `over`,
+    /// the one the pointer is in, or moves it there if it shows. The UI has kept it inside that
     /// window.
-    fn show(&self, window: u64, left: f32, top: f32);
+    fn show(&self, over: Over, left: f32, top: f32);
     /// Hides it.
     fn hide(&self);
 }
@@ -73,7 +83,10 @@ pub struct Tip {
 impl Tip {
     /// A name alone.
     pub fn named(text: SharedString) -> Self {
-        Tip { text, keys: Vec::new() }
+        Tip {
+            text,
+            keys: Vec::new(),
+        }
     }
 }
 
@@ -120,13 +133,21 @@ impl Anchor {
     /// row's left.
     pub fn titled(frame: Bounds<Pixels>, title: f32, window: Size<Pixels>) -> Self {
         let x = f32::from(frame.origin.x) + title;
-        Anchor { x, align: Align::Text, ..Self::under(frame, window) }
+        Anchor {
+            x,
+            align: Align::Text,
+            ..Self::under(frame, window)
+        }
     }
 
     /// Right of a button whose plate's frame is `frame`.
     pub fn beside(frame: Bounds<Pixels>, window: Size<Pixels>) -> Self {
         let x = f32::from(frame.right());
-        Anchor { x, align: Align::Beside, ..Self::under(frame, window) }
+        Anchor {
+            x,
+            align: Align::Beside,
+            ..Self::under(frame, window)
+        }
     }
 }
 
@@ -149,7 +170,9 @@ pub fn place(anchor: Anchor, (width, height): (f32, f32)) -> (f32, f32) {
         Align::Beside => anchor.x + BESIDE,
     };
     // Past the edges it keeps EDGE_INSET from them, the left one first if it can't be both.
-    let left = left.min(anchor.window.0 - width - EDGE_INSET).max(EDGE_INSET);
+    let left = left
+        .min(anchor.window.0 - width - EDGE_INSET)
+        .max(EDGE_INSET);
     let middle = (anchor.top + anchor.bottom) / 2.;
     let top = match anchor.align {
         Align::Beside => middle - height / 2.,
@@ -219,7 +242,12 @@ pub fn layout(text: f32, chips: &[f32]) -> Layout {
             chip
         })
         .collect();
-    Layout { width: TEXT_X + text + keys + END, text, truncated, chips }
+    Layout {
+        width: TEXT_X + text + keys + END,
+        text,
+        truncated,
+        chips,
+    }
 }
 
 /// How wide `text` is in `size` pt of the system's font at `weight`.
@@ -231,13 +259,20 @@ pub(crate) fn text_width(
 ) -> f32 {
     let run = TextRun {
         len: text.len(),
-        font: gpui::Font { weight, ..font(crate::face::UI) },
+        font: gpui::Font {
+            weight,
+            ..font(crate::face::UI)
+        },
         color: rgb(PAPER).into(),
         background_color: None,
         underline: None,
         strikethrough: None,
     };
-    f32::from(system.shape_line(text.clone(), px(size), &[run], None).width)
+    f32::from(
+        system
+            .shape_line(text.clone(), px(size), &[run], None)
+            .width,
+    )
 }
 
 /// How `tip` lays out: its text, then a chip for each key, as wide as its glyph and its padding
@@ -274,8 +309,8 @@ pub struct Tooltip {
     went: Option<Instant>,
 }
 
-/// A tooltip waiting to show: the browser window, what it says and what it hangs from.
-type Waiting = (u64, Tip, Anchor);
+/// A tooltip waiting to show: the window it shows over, what it says and what it hangs from.
+type Waiting = (Over, Tip, Anchor);
 
 struct TooltipWindow(WindowHandle<Tooltip>);
 
@@ -287,7 +322,10 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
-            size(px(WINDOW_WIDTH + 2. * WINDOW_MARGIN), px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN)),
+            size(
+                px(WINDOW_WIDTH + 2. * WINDOW_MARGIN),
+                px(WINDOW_HEIGHT + 2. * WINDOW_MARGIN),
+            ),
         ))),
         titlebar: Some(TitlebarOptions {
             title: None,
@@ -307,7 +345,14 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
     };
     let window = cx.open_window(options, |window, cx| {
         let system = window.text_system().clone();
-        cx.new(|_| Tooltip { host, system, shown: None, drawn: None, wait: None, went: None })
+        cx.new(|_| Tooltip {
+            host,
+            system,
+            shown: None,
+            drawn: None,
+            wait: None,
+            went: None,
+        })
     });
     match window {
         Ok(window) => {
@@ -327,19 +372,26 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
 /// or at once if another showed less than GRACE ago, as the system's does when the pointer moves
 /// from one tile to the next.
 pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
+    hover_over(Over::Window(window), tip, anchor, cx);
+}
+
+/// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
+pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };
     tooltip
         .update(cx, |tooltip, _, cx| {
             let now = cx.background_executor().now();
-            let soon = tooltip.went.is_some_and(|went| now.duration_since(went) < GRACE);
+            let soon = tooltip
+                .went
+                .is_some_and(|went| now.duration_since(went) < GRACE);
             if tooltip.shown.is_some() || soon {
                 tooltip.wait = None;
-                tooltip.show(window, tip, anchor, cx);
+                tooltip.show(over, tip, anchor, cx);
                 return;
             }
-            tooltip.wait_for((window, tip, anchor), cx);
+            tooltip.wait_for((over, tip, anchor), cx);
         })
         .ok();
 }
@@ -375,20 +427,20 @@ pub fn dismiss(cx: &mut App) {
 impl Tooltip {
     /// Shows `waiting` after DELAY, on a new timer that drops any before it.
     fn wait_for(&mut self, waiting: Waiting, cx: &mut Context<Self>) {
-        let (window, tip, anchor) = waiting.clone();
+        let (over, tip, anchor) = waiting.clone();
         let timer = cx.spawn(async move |tooltip, cx| {
             cx.background_executor().timer(DELAY).await;
             tooltip
                 .update(cx, |tooltip, cx| {
                     tooltip.wait = None;
-                    tooltip.show(window, tip, anchor, cx)
+                    tooltip.show(over, tip, anchor, cx)
                 })
                 .ok();
         });
         self.wait = Some((timer, waiting));
     }
 
-    fn show(&mut self, window: u64, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
+    fn show(&mut self, over: Over, tip: Tip, anchor: Anchor, cx: &mut Context<Self>) {
         let layout = measure(&tip, &self.system);
         let (left, top) = place(anchor, (layout.width, HEIGHT));
         // check.sh reads this line, to see the tooltip hangs from what it names.
@@ -400,7 +452,7 @@ impl Tooltip {
         self.shown = Some(tip.clone());
         let near = near(anchor, layout.width, HEIGHT);
         self.drawn = Some((tip, layout, near));
-        self.host.show(window, left, top);
+        self.host.show(over, left, top);
         cx.notify();
     }
 
@@ -428,7 +480,10 @@ fn label(tip: &Tip) -> String {
 impl Render for Tooltip {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         // The plate is inset by the margin, which its shadow draws in.
-        let root = div().size_full().p(px(WINDOW_MARGIN)).font_family(crate::face::UI);
+        let root = div()
+            .size_full()
+            .p(px(WINDOW_MARGIN))
+            .font_family(crate::face::UI);
         let Some((tip, layout, near)) = self.drawn.clone() else {
             return root;
         };
@@ -447,26 +502,33 @@ impl Render for Tooltip {
             .when(layout.truncated, |text| text.w(px(layout.text)).truncate())
             .child(tip.text);
         let chip_top = (HEIGHT - CHIP_BODY) / 2.;
-        let chips = tip.keys.into_iter().zip(layout.chips).flat_map(|(key, (left, width))| {
-            let chip = |top: f32, fill: Rgba| {
-                div()
-                    .absolute()
-                    .left(px(left))
-                    .top(px(top))
-                    .w(px(width))
-                    .h(px(CHIP_BODY))
-                    .rounded(px(CHIP_RADIUS))
-                    .bg(fill)
-            };
-            // The lip is the chip's shape again, lower, under it.
-            let body = (chip(chip_top, rgb(PAPER)).flex().items_center().justify_center())
+        let chips = tip
+            .keys
+            .into_iter()
+            .zip(layout.chips)
+            .flat_map(|(key, (left, width))| {
+                let chip = |top: f32, fill: Rgba| {
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .top(px(top))
+                        .w(px(width))
+                        .h(px(CHIP_BODY))
+                        .rounded(px(CHIP_RADIUS))
+                        .bg(fill)
+                };
+                // The lip is the chip's shape again, lower, under it.
+                let body = (chip(chip_top, rgb(PAPER))
+                    .flex()
+                    .items_center()
+                    .justify_center())
                 .text_size(px(CHIP_TEXT_SIZE))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(INK))
                 .child(key);
-            let lip = over(rgb(OVERLAY_DARK), rgb(PAPER), CHIP_LIP_FILL);
-            [chip(chip_top + CHIP_LIP, lip), body]
-        });
+                let lip = over(rgb(OVERLAY_DARK), rgb(PAPER), CHIP_LIP_FILL);
+                [chip(chip_top + CHIP_LIP, lip), body]
+            });
         // Round at half the height but for the corner toward what it names.
         let shape = |shape: Div| {
             let shape = shape.rounded(px(RADIUS));

@@ -75,8 +75,14 @@ fn pinned(path: &Path) -> Vec<String> {
     let Ok(preferences) = serde_json::from_str::<Value>(&text) else {
         return Vec::new();
     };
-    let ids = preferences.pointer("/extensions/pinned_extensions").and_then(Value::as_array);
-    ids.into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+    let ids = preferences
+        .pointer("/extensions/pinned_extensions")
+        .and_then(Value::as_array);
+    ids.into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 /// The name of the Web Store extension in `folder`, from its newest version's manifest, in its
@@ -91,22 +97,27 @@ fn name(folder: &Path) -> Option<String> {
     versions.sort();
     let version = versions.pop()?;
     let manifest: Value =
-        serde_json::from_str(&std::fs::read_to_string(version.join("manifest.json")).ok()?)
-            .ok()?;
+        serde_json::from_str(&std::fs::read_to_string(version.join("manifest.json")).ok()?).ok()?;
     let text = |key: &str| manifest.get(key).and_then(Value::as_str);
     let from_store = text("update_url") == Some(WEB_STORE_UPDATES);
     if !from_store || manifest.get("theme").is_some() || manifest.get("app").is_some() {
         return None;
     }
     let name = text("name")?.trim();
-    let Some(key) = name.strip_prefix("__MSG_").and_then(|key| key.strip_suffix("__")) else {
+    let Some(key) = name
+        .strip_prefix("__MSG_")
+        .and_then(|key| key.strip_suffix("__"))
+    else {
         return Some(name.to_string());
     };
     // A name the manifest leaves to its messages, which Chrome looks up ignoring case.
     let locale = text("default_locale").unwrap_or("en");
     let messages = version.join("_locales").join(locale).join("messages.json");
     let messages: Value = serde_json::from_str(&std::fs::read_to_string(messages).ok()?).ok()?;
-    let message = messages.as_object()?.iter().find(|(each, _)| each.eq_ignore_ascii_case(key));
+    let message = messages
+        .as_object()?
+        .iter()
+        .find(|(each, _)| each.eq_ignore_ascii_case(key));
     let name = message?.1.get("message").and_then(Value::as_str)?.trim();
     (!name.is_empty()).then(|| name.to_string())
 }
@@ -128,7 +139,10 @@ thread_local! {
 
 /// Lists `extensions` from `from`, in place of what an import listed before.
 pub fn list(from: &str, extensions: Vec<Extension>) {
-    LISTED.set(Listed { from: from.into(), extensions });
+    LISTED.set(Listed {
+        from: from.into(),
+        extensions,
+    });
 }
 
 pub fn listed() -> Listed {
@@ -138,7 +152,8 @@ pub fn listed() -> Listed {
 /// Takes the extension `id` off the list, as the user adds it, and returns it. One that was
 /// pinned is pinned once it's in (to_pin).
 pub fn take(id: &str) -> Option<Extension> {
-    let at = LISTED.with_borrow(|listed| listed.extensions.iter().position(|each| each.id == id))?;
+    let at =
+        LISTED.with_borrow(|listed| listed.extensions.iter().position(|each| each.id == id))?;
     let extension = LISTED.with_borrow_mut(|listed| listed.extensions.remove(at));
     if extension.pinned {
         TO_PIN.with_borrow_mut(|to_pin| to_pin.push(extension.id.clone()));
@@ -149,7 +164,10 @@ pub fn take(id: &str) -> Option<Extension> {
 /// Of a profile's extensions `now`, each with whether it's pinned, those that weren't among `had`,
 /// were pinned in the other browser and aren't pinned here yet: each comes once, to pin.
 pub fn to_pin<'a>(had: &[&str], now: impl IntoIterator<Item = (&'a str, bool)>) -> Vec<String> {
-    let added: Vec<(&str, bool)> = now.into_iter().filter(|(id, _)| !had.contains(id)).collect();
+    let added: Vec<(&str, bool)> = now
+        .into_iter()
+        .filter(|(id, _)| !had.contains(id))
+        .collect();
     TO_PIN.with_borrow_mut(|to_pin| {
         let mut pin = Vec::new();
         to_pin.retain(|id| match added.iter().find(|(each, _)| each == id) {

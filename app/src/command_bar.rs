@@ -12,15 +12,16 @@ use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, Focusable, FontWeight, Global, HoverListenerMode,
     Hsla, Image, KeyBinding, Pixels, ScrollHandle, SharedString, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, div,
-    img, point, prelude::*, px, size, svg,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
+    div, img, point, prelude::*, px, size, svg,
 };
-use gpui::{Role, accesskit::Live};
+use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
+    tooltip::{Anchor, Tip},
 };
 
 mod calculator;
@@ -28,59 +29,74 @@ mod calculator;
 actions!(
     command_bar,
     [
-        Go, GoBeside, GoBehind, GoDotCom, GoWindow, GoDotComWindow, Search, Dismiss, Next,
-        Previous, First, Last, Remove, EnterSite, LeaveSite
+        Go,
+        GoBeside,
+        GoBehind,
+        GoDotCom,
+        GoWindow,
+        GoDotComWindow,
+        Search,
+        Dismiss,
+        Next,
+        Previous,
+        First,
+        Last,
+        Remove,
+        EnterSite,
+        LeaveSite
     ]
 );
 
-pub use crate::tokens::command_bar::WIDTH;
+use crate::settings_column::Section;
+use crate::settings_search;
 use crate::tokens::command_bar::HEIGHT;
 use crate::tokens::command_bar::LINE;
 use crate::tokens::command_bar::LINE_INSET;
-use crate::tokens::command_bar::LIST_TOP;
 use crate::tokens::command_bar::LIST_END;
+use crate::tokens::command_bar::LIST_TOP;
 /// The rows are 6 in from the panel's sides, 50 tall, and the bar shows five before it scrolls.
 use crate::tokens::command_bar::LIST_X;
 use crate::tokens::command_bar::ROW_HEIGHT;
+pub use crate::tokens::command_bar::WIDTH;
 const ROWS_SHOWN: usize = 5;
-use crate::tokens::command_bar::PLATE_INSET;
-use crate::tokens::command_bar::PLATE_RADIUS;
-use crate::tokens::command_bar::ROW_END;
+pub use crate::tokens::command_bar::ABOVE_MIDDLE;
+use crate::tokens::command_bar::FIELD_ABOVE;
+pub use crate::tokens::command_bar::FIELD_RADIUS;
+pub use crate::tokens::command_bar::FIELD_WIDTH;
+use crate::tokens::command_bar::HINT_END;
 use crate::tokens::command_bar::ICON_BOX;
 use crate::tokens::command_bar::ICON_BOX_X;
 use crate::tokens::command_bar::ICON_SIZE;
-use crate::tokens::command_bar::TITLE_X;
 use crate::tokens::command_bar::INPUT_ICON;
-use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_ICON_X;
+use crate::tokens::command_bar::INPUT_TEXT;
 use crate::tokens::command_bar::INPUT_TEXT_X;
-use crate::tokens::command_bar::HINT_END;
-use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP};
+use crate::tokens::command_bar::PLATE_INSET;
+use crate::tokens::command_bar::PLATE_RADIUS;
 pub use crate::tokens::command_bar::RADIUS;
-pub use crate::tokens::command_bar::ABOVE_MIDDLE;
-pub use crate::tokens::command_bar::FIELD_WIDTH;
-use crate::tokens::command_bar::FIELD_ABOVE;
-pub use crate::tokens::command_bar::FIELD_RADIUS;
+use crate::tokens::command_bar::ROW_END;
+use crate::tokens::command_bar::TITLE_X;
+use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
 /// There it hangs from the field as the Site Controls do. The modal shadow, 24 down at a 64 blur,
 /// fell mostly below a panel only 50 tall, a grey bar under it over a light page (#1306).
 const FIELD_LEVEL: Level = Level::Popover;
-use crate::tokens::command_bar::FIELD_INPUT_TEXT;
-use crate::tokens::command_bar::BESIDE_END;
 use crate::elevation::Level;
-use crate::tokens::command_bar::LINE_COLOR;
-use crate::tokens::command_bar::TITLE;
+use crate::tokens::command_bar::ARROW;
+use crate::tokens::command_bar::ARROW_TILE;
+use crate::tokens::command_bar::BESIDE_END;
+use crate::tokens::command_bar::CHIP;
+use crate::tokens::command_bar::CHIP_RADIUS;
 use crate::tokens::command_bar::DIM;
+use crate::tokens::command_bar::FIELD_INPUT_TEXT;
 use crate::tokens::command_bar::HOVERED;
+use crate::tokens::command_bar::LINE_COLOR;
 use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
-use crate::tokens::command_bar::ARROW;
 use crate::tokens::command_bar::SELECTED_DIM;
-use crate::tokens::command_bar::CHIP;
-use crate::tokens::command_bar::ARROW_TILE;
-use crate::tokens::command_bar::CHIP_RADIUS;
+use crate::tokens::command_bar::TITLE;
 use crate::tokens::text;
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
 /// What its input says for Search Tabs (ours, after the command's name).
@@ -88,6 +104,30 @@ const TABS_PLACEHOLDER: &str = "Search Tabs…";
 /// What its input says, and its chip, while it lists only commands (ours).
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
+
+/// What a history row's remove button is called, to an assistive app and in its tooltip: it takes
+/// the page or search out of the profile's history, not only out of the list.
+const REMOVE_NAME: &str = "Remove from History";
+
+/// The keys the remove button's tooltip names: Arc's ⌥⌘⌫ on the Mac, where most keyboards have no
+/// ⌦ for Chrome's ⇧⌦, and ⇧⌦ off it, its only key there.
+fn remove_keys() -> Vec<SharedString> {
+    let keystroke = if shell::OFF_THE_MAC {
+        "shift-delete"
+    } else {
+        "alt-cmd-backspace"
+    };
+    shell::keystroke_keys(keystroke)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// The key on a hint's chip at the input's end: ↩ and ⇥ on the Mac, and off it Enter and Tab, the
+/// words the menus use, as the UI's font there has no keyboard symbols (#772).
+fn hint_key(key: &str, off_the_mac: bool) -> String {
+    shell::key_name(key, off_the_mac)
+}
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -119,6 +159,9 @@ pub struct Suggestion {
     /// While the bar asks an agent (Agent task): the agent the row runs the task on, or the row
     /// that sets agents up.
     pub task: Option<TaskRow>,
+    /// A setting's row, which opens Settings at it: its section and its name, as Settings' search
+    /// finds it.
+    pub setting: Option<(Section, SharedString)>,
 }
 
 /// A row of ⌘T's ask (Agent task).
@@ -140,7 +183,10 @@ impl TaskRow {
     /// What the row says at its end: when its limit resets, or else its model.
     fn end(&self) -> Option<SharedString> {
         match self {
-            TaskRow::Agent { resets: Some(resets), .. } => Some(format!("Limit resets {resets}").into()),
+            TaskRow::Agent {
+                resets: Some(resets),
+                ..
+            } => Some(format!("Limit resets {resets}").into()),
             TaskRow::Agent { model, .. } => model.clone(),
             TaskRow::SetUp => None,
         }
@@ -167,6 +213,9 @@ pub struct TaskAgents {
     pub agents: Vec<TaskAgent>,
     pub known: bool,
 }
+
+/// The most settings the bar lists for what's typed, after the commands that start with it.
+const SETTINGS_SHOWN: usize = 3;
 
 /// What the row that sets agents up says.
 const SET_UP: &str = "Set up Claude or Codex";
@@ -204,10 +253,24 @@ const COMMAND_GLYPH: &str = "icons/command.svg";
 impl Suggestion {
     /// Whether it's an agent at its plan's limit, which runs no task until the limit resets.
     fn at_limit(&self) -> bool {
-        matches!(&self.task, Some(TaskRow::Agent { resets: Some(_), .. }))
+        matches!(
+            &self.task,
+            Some(TaskRow::Agent {
+                resets: Some(_),
+                ..
+            })
+        )
+    }
+
+    /// A command's, a sum's or a setting's row, rather than a page's or a search's.
+    fn named(&self) -> bool {
+        self.command.is_some() || self.result.is_some() || self.setting.is_some()
     }
 
     fn kind(&self) -> Kind {
+        if self.setting.is_some() {
+            return Kind::Command;
+        }
         match (&self.command, &self.result, self.search) {
             (Some(_), _, _) => Kind::Command,
             (_, Some(_), _) => Kind::Sum,
@@ -224,6 +287,9 @@ impl Suggestion {
             Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
             Some(TaskRow::SetUp) => return Icon::Glyph("icons/settings.svg"),
             None => {}
+        }
+        if let Some((section, _)) = &self.setting {
+            return Icon::Glyph(section.glyph());
         }
         match self.kind() {
             Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
@@ -251,8 +317,12 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::TogglePin | Command::PinToSpace(_) => "icons/pin.svg",
         Command::OpenFolder(_) => "icons/folder-open.svg",
         Command::SelectSpace(_) => "icons/layers.svg",
-        Command::MoveToSpace(_) => "icons/arrow-right.svg",
-        Command::ToggleMute => "icons/volume-2.svg",
+        Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
+        Command::ToggleMute | Command::MuteAll(false) => "icons/volume-2.svg",
+        Command::MuteAll(true) => "icons/volume-x.svg",
+        Command::ToggleFullScreen => "icons/maximize.svg",
+        Command::Exit => "icons/x.svg",
+        Command::ChangeProfile(_) => "icons/user.svg",
         Command::ReopenClosedTab => "icons/undo-2.svg",
         Command::CopyUrl | Command::CopyMarkdownLink => "icons/link.svg",
         Command::PasteUrlAsTab => "icons/clipboard.svg",
@@ -265,6 +335,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::Forward => "icons/arrow-right.svg",
         Command::Reload | Command::ForceReload => "icons/rotate-cw.svg",
         Command::Stop => "icons/x.svg",
+        Command::StayOnTop => "icons/pin.svg",
         Command::ZoomIn => "icons/zoom-in.svg",
         Command::ZoomOut => "icons/zoom-out.svg",
         Command::FlipSplit => "icons/arrow-left-right.svg",
@@ -307,7 +378,12 @@ fn command_glyph(command: shell::Command) -> &'static str {
 
 impl From<shell::BarTab> for Suggestion {
     fn from(tab: shell::BarTab) -> Self {
-        Suggestion { url: tab.url.to_string(), text: tab.title, tab: tab.tab, ..Default::default() }
+        Suggestion {
+            url: tab.url.to_string(),
+            text: tab.title,
+            tab: tab.tab,
+            ..Default::default()
+        }
     }
 }
 
@@ -383,6 +459,15 @@ pub trait Host {
     /// Whether the bar shows over a private window, which offers no tasks, as agents get no path
     /// into private windows.
     fn over_private(&self) -> bool;
+    /// What Settings' search reads of its rows, which the bar finds settings by, as last built,
+    /// which the browser does off the bar's frames: None until it's ready, when the bar lists no
+    /// settings rather than wait. It only reads, as the bar opens and is typed in.
+    fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
+        None
+    }
+    /// Opens Settings at the row named `name` in `section`, scrolled to it and flashed once, as a
+    /// click on a found section's name does. Agents have no path to it: it's the bar's alone.
+    fn show_setting(&self, _: Section, _: SharedString, _: &mut App) {}
     /// The ask shows, or no longer does: Today opens an empty slot at its top for the card, or
     /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
     /// the background, which `task_agents_changed` reports.
@@ -402,6 +487,9 @@ pub trait Host {
     );
     /// Opens Settings › Agents, where agents are set up.
     fn set_up_agents(&self, cx: &mut App);
+    /// Shows `tip` hanging from a button at its anchor in the bar's window, over the bar, after the
+    /// tooltip's delay, or ends the tooltip.
+    fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -459,6 +547,10 @@ pub struct CommandBar {
     /// While it lists only commands, as after Tab in an empty field or "/ " typed (Arc), what
     /// leaving puts back before what's typed: nothing after Tab, "/ " after "/ ".
     commands: Option<&'static str>,
+    /// What Settings' search reads of its rows, read once since the bar opened, once it's ready.
+    settings_index: Option<Rc<Vec<settings_search::Entry>>>,
+    /// When the bar was asked to open, until its first frame on screen logs how long it took.
+    opened_at: Option<Instant>,
     /// The agents ⇥ asks, as last learned, read as the bar opens and as they change.
     task_agents: Option<TaskAgents>,
     /// While ⇥ makes what's typed a task (Agent task).
@@ -467,7 +559,13 @@ pub struct CommandBar {
     favicons: HashMap<String, Option<Arc<Image>>>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
+    /// The pages shown as it opened, whose rows go last, as Arc's bar deranks the current page.
+    shown: Vec<SharedString>,
     scroll: ScrollHandle,
+    /// The row whose remove button the bar asked a tooltip for, until the pointer leaves it, and
+    /// where that button last drew in the bar's window, which the tooltip hangs from.
+    tipped: Option<usize>,
+    remove_frame: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether it shows: until it hides or asks the host to go, which on Windows reports it gone
     /// only a message later, or the host reports the user left it. The host closes the window at a
     /// click outside it, before the click reaches the shell, so this stays set until that report.
@@ -582,11 +680,16 @@ pub fn open_at(
                 page: String::new(),
                 site: None,
                 commands: None,
+                settings_index: None,
+                opened_at: None,
                 task_agents: None,
                 ask: None,
                 favicons: HashMap::new(),
                 tabs: Vec::new(),
+                shown: Vec::new(),
                 scroll: ScrollHandle::new(),
+                tipped: None,
+                remove_frame: Rc::default(),
                 open: Cell::new(false),
             }
         })
@@ -607,28 +710,45 @@ pub fn open_at(
 /// URL, selected. It suggests nothing for the URL until the text is edited, as Chrome's address
 /// bar, and lists `tabs` again once the text is empty. It shows at once: over `field`, the URL
 /// field's box in the window, when a click on the field opened it, else centred, as Arc's is for
-/// ⌘T and ⌘L.
+/// ⌘T and ⌘L. Rows for the pages `shown` go last.
 pub fn show(
     editing: Option<(u64, SharedString)>,
+    shown: Vec<SharedString>,
     tabs: Vec<shell::BarTab>,
     field: Option<Bounds<Pixels>>,
     cx: &mut App,
 ) {
-    let target = editing.as_ref().map_or(Target::NewTab, |&(tab, _)| Target::Tab(tab));
+    let target = editing
+        .as_ref()
+        .map_or(Target::NewTab, |&(tab, _)| Target::Tab(tab));
     let text = editing.map(|(_, url)| url).unwrap_or_default();
     // check.sh reads these lines.
-    let ids: Vec<String> =
-        tabs.iter().take(shell::BAR_TABS_SHOWN).map(|tab| tab.tab.to_string()).collect();
+    let ids: Vec<String> = tabs
+        .iter()
+        .take(shell::BAR_TABS_SHOWN)
+        .map(|tab| tab.tab.to_string())
+        .collect();
     log!("browser: command bar tabs {}", ids.join(" "));
-    let place = if field.is_some() { "over the URL field" } else { "centred" };
+    let place = if field.is_some() {
+        "over the URL field"
+    } else {
+        "centred"
+    };
     log!("browser: command bar opens {place}");
-    let Some(host) = reset(target, text, tabs, field.is_some(), cx) else {
+    let Some(host) = reset(target, text, shown, tabs, field.is_some(), cx) else {
         return;
     };
     match field {
         Some(field) => {
             let top = f32::from(field.top()) - FIELD_ABOVE;
-            host.show(false, field.left().into(), top, FIELD_WIDTH, FIELD_RADIUS, FIELD_LEVEL);
+            host.show(
+                false,
+                field.left().into(),
+                top,
+                FIELD_WIDTH,
+                FIELD_RADIUS,
+                FIELD_LEVEL,
+            );
         }
         None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
     }
@@ -638,10 +758,20 @@ pub fn show(
 /// lists rows, and then those that what's typed names.
 pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
     // check.sh reads these lines.
-    let ids: Vec<String> =
-        tabs.iter().take(shell::BAR_ROWS).map(|tab| tab.tab.to_string()).collect();
+    let ids: Vec<String> = tabs
+        .iter()
+        .take(shell::BAR_ROWS)
+        .map(|tab| tab.tab.to_string())
+        .collect();
     log!("browser: command bar searches tabs {}", ids.join(" "));
-    if let Some(host) = reset(Target::Tabs, SharedString::default(), tabs, false, cx) {
+    if let Some(host) = reset(
+        Target::Tabs,
+        SharedString::default(),
+        Vec::new(),
+        tabs,
+        false,
+        cx,
+    ) {
         host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal);
     }
 }
@@ -651,9 +781,18 @@ pub fn show_tabs(tabs: Vec<shell::BarTab>, cx: &mut App) {
 /// needs to be, and as far down the pane as it opens down the window for a new tab.
 pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mut App) {
     let text = SharedString::default();
-    if let Some(host) = reset(Target::Beside(with), text, Vec::new(), false, cx) {
+    if let Some(host) = reset(
+        Target::Beside(with),
+        text,
+        Vec::new(),
+        Vec::new(),
+        false,
+        cx,
+    ) {
         let left = pane.center().x - px(WIDTH / 2.);
-        let left = left.min(card.right() - px(BESIDE_END + WIDTH)).max(card.left());
+        let left = left
+            .min(card.right() - px(BESIDE_END + WIDTH))
+            .max(card.left());
         // The card is as far in from the window's bottom as from its top.
         let window = f32::from(card.top() + card.bottom());
         let top = centered_top(window) + f32::from(pane.top() - card.top());
@@ -661,11 +800,12 @@ pub fn show_split(with: u64, pane: Bounds<Pixels>, card: Bounds<Pixels>, cx: &mu
     }
 }
 
-/// Puts the bar to `target` with `text` in its input, and `tabs` to list while it's empty, over
-/// the URL field if `over_field`. Returns its host, or none if there's no bar.
+/// Puts the bar to `target` with `text` in its input, the pages `shown`, and `tabs` to list while
+/// it's empty, over the URL field if `over_field`. Returns its host, or none if there's no bar.
 fn reset(
     target: Target,
     text: SharedString,
+    shown: Vec<SharedString>,
     tabs: Vec<shell::BarTab>,
     over_field: bool,
     cx: &mut App,
@@ -675,13 +815,16 @@ fn reset(
         .update(cx, |bar, window, cx| {
             bar.target = target;
             bar.over_field = over_field;
-            // The pointer has been elsewhere since the bar last showed.
+            // The pointer has been elsewhere since the bar last showed, and the host ended the
+            // tooltip over it as it hid.
             bar.hovered = None;
+            bar.tipped = None;
             // Favicons change over time, and a long session shouldn't keep every one it saw. The
             // tabs' are the ones their rows show.
             bar.favicons.clear();
             bar.keep_favicons(&tabs);
             bar.tabs = tabs;
+            bar.shown = shown;
             bar.open.set(true);
             bar.page = text.to_string();
             if !text.is_empty() {
@@ -690,6 +833,8 @@ fn reset(
             }
             bar.site_left(cx);
             bar.commands = None;
+            bar.settings_index = None;
+            bar.opened_at = Some(Instant::now());
             bar.end_ask(cx);
             // What the browser last learned, read in memory: nothing about tasks runs as it opens.
             bar.task_agents = bar.learned_agents(cx);
@@ -697,7 +842,9 @@ fn reset(
                 Target::Tabs => TABS_PLACEHOLDER,
                 _ => PLACEHOLDER_TEXT,
             };
-            bar.input.update(cx, |input, cx| input.set_placeholder(placeholder.into(), cx));
+            bar.input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder.into(), cx)
+            });
             bar.asked = text.to_string();
             // Its answer, for nothing typed, is timed from here, not from the last ask (#1072).
             bar.asked_at = Instant::now();
@@ -705,9 +852,14 @@ fn reset(
             bar.completion.clear();
             bar.before = (text.len(), 0);
             // The tabs show at once, in the frame the bar opens with.
-            let rows = if text.is_empty() { bar.tab_rows() } else { Vec::new() };
+            let rows = if text.is_empty() {
+                bar.tab_rows()
+            } else {
+                Vec::new()
+            };
             bar.set_rows(String::new(), rows, window, cx);
-            bar.input.update(cx, |input, cx| input.reset(text, window, cx));
+            bar.input
+                .update(cx, |input, cx| input.reset(text, window, cx));
             bar.keep_focus(window, cx);
             // The last query's suggestions are of no use now.
             bar.host.suggest(None, "", false);
@@ -740,10 +892,16 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             }
             // check.sh reads this line.
             log!("browser: command bar follows the Space");
-            let tabs = if matches!(bar.target, Target::Tabs) { open_tabs } else { tabs };
+            let tabs = if matches!(bar.target, Target::Tabs) {
+                open_tabs
+            } else {
+                tabs
+            };
             bar.favicons.clear();
             bar.keep_favicons(&tabs);
             bar.tabs = tabs;
+            // The pages shown were the Space before's.
+            bar.shown.clear();
             // The site search's engine is the profile's, which this one may not have.
             bar.leave_site(window, cx);
             // An ask goes on in the Space shown, whose Today opens its slot.
@@ -763,17 +921,24 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
             if bar.commands.is_some() {
                 // Which commands do something now is the shell's to say, once out of its update.
                 cx.defer(move |cx| {
-                    bar_window.update(cx, |bar, window, cx| bar.list_commands(text, window, cx)).ok();
+                    bar_window
+                        .update(cx, |bar, window, cx| bar.list_commands(text, window, cx))
+                        .ok();
                 });
             } else if matches!(bar.target, Target::Tabs) {
                 bar.name_tabs(text, window, cx);
             } else {
                 // A completion from the profile before goes with its rows.
                 let typed = bar.typed(cx);
-                let text = if bar.completion.is_empty() { text } else { typed };
+                let text = if bar.completion.is_empty() {
+                    text
+                } else {
+                    typed
+                };
                 let caret = text.len();
                 let shown = text.clone().into();
-                bar.input.update(cx, |input, cx| input.set_text(shown, caret, window, cx));
+                bar.input
+                    .update(cx, |input, cx| input.set_text(shown, caret, window, cx));
                 bar.ask_for(text, window, cx);
             }
             cx.notify();
@@ -870,6 +1035,7 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
     };
     window
         .update(cx, |bar, window, cx| {
+            let started = Instant::now();
             // Older text's come after the bar has asked about newer, and Search Tabs asks for none.
             // The commands-only list asks for none either, nor does an ask.
             if text != bar.request()
@@ -906,10 +1072,20 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 None if text.is_empty() => bar.tab_rows(),
                 None => {
                     let mut rows = rows;
-                    let open = bar.take_open_tab(&text, &mut rows);
+                    if bar.settings_index.is_none() {
+                        bar.settings_index = bar.host.settings_index(cx);
+                    }
+                    let (open, risen) = bar.take_open_tabs(&text, &mut rows);
                     let mut rows = with_calculation(&text, bar.with_commands(&text, rows, cx));
+                    // The other tabs go right after the core's first row, before its others.
+                    let after = rows
+                        .iter()
+                        .position(|row| row.command.is_none() && row.setting.is_none());
+                    let after = after.map_or(rows.len(), |at| at + 1);
+                    rows.splice(after..after, risen);
                     rows.splice(0..0, open);
-                    with_new_document(&text, rows)
+                    let rows = with_new_document(&text, without_repeated_titles(rows));
+                    with_shown_last(rows, &bar.shown)
                 }
             };
             rows.truncate(shell::BAR_ROWS);
@@ -917,11 +1093,18 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
             // for their words does.
             let site = bar.site.as_ref().map(|site| site.keyword.as_str());
             for row in &mut rows {
-                row.search = row.command.is_none()
-                    && row.result.is_none()
-                    && bar.host.search_url(site, &row.text).is_some_and(|url| url == row.url);
+                row.search = !row.named()
+                    && bar
+                        .host
+                        .search_url(site, &row.text)
+                        .is_some_and(|url| url == row.url);
             }
             bar.set_rows(bar.asked.clone(), rows, window, cx);
+            // The performance gate reads this line: what the rows cost the frame they come in.
+            log!(
+                "browser: command bar rows for \"{text}\" in {:.1} ms",
+                started.elapsed().as_secs_f64() * 1000.
+            );
         })
         .ok();
 }
@@ -938,21 +1121,100 @@ fn pasted(cx: &App) -> Option<String> {
 fn names_tab(tab: &shell::BarTab, typed: &str) -> bool {
     let title = tab.title.to_lowercase();
     let word_start = |&(at, c): &(usize, char)| {
-        c.is_alphanumeric() && !title[..at].chars().next_back().is_some_and(char::is_alphanumeric)
+        c.is_alphanumeric()
+            && !title[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
     };
     if (title.char_indices().filter(word_start)).any(|(at, _)| title[at..].starts_with(typed)) {
         return true;
     }
-    // Only a web page has a site: a data: page's scheme isn't its name.
-    let Some((_, rest)) = tab.url.split_once("://") else {
+    let Some(host) = site_host(&tab.url) else {
         return false;
     };
+    let labels: Vec<&str> = host.split('.').collect();
+    let named = &labels[..labels.len().saturating_sub(1).max(1)];
+    named
+        .iter()
+        .flat_map(|label| label.split('-'))
+        .any(|word| word.starts_with(typed))
+}
+
+/// The host of `url`, lowercase and without a leading www. None but for a web page: a data:
+/// page's scheme isn't its site.
+fn site_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
     let host = host.split(':').next().unwrap_or_default().to_lowercase();
-    let labels: Vec<&str> = host.strip_prefix("www.").unwrap_or(&host).split('.').collect();
-    let named = &labels[..labels.len().saturating_sub(1).max(1)];
-    named.iter().flat_map(|label| label.split('-')).any(|word| word.starts_with(typed))
+    Some(
+        host.strip_prefix("www.")
+            .map(str::to_string)
+            .unwrap_or(host),
+    )
+}
+
+/// The most open tabs that go above the core's rows for what's typed, the first among them, so
+/// some of the profile's pages still show among the five rows (ours).
+const TABS_RISEN: usize = 3;
+
+/// Web apps that give many pages one title, so their history would fill the list with rows that
+/// read alike. Arc's bar keeps one row per title on its list for them, which names these
+/// (`dedupByTitleAndHostList`); the rest of its list isn't known, and notion.com is ours.
+const ONE_TITLE_SITES: [&str; 5] = [
+    "figma.com",
+    "notion.so",
+    "notion.com",
+    "github.com",
+    "zoom.us",
+];
+
+/// `rows` without the page rows, but the first, where ↩ goes, whose title an open tab's row or
+/// an earlier row has on the same site of ONE_TITLE_SITES. An open tab's row always stays.
+fn without_repeated_titles(rows: Vec<Suggestion>) -> Vec<Suggestion> {
+    let one_title = |row: &Suggestion| {
+        let host = site_host(&row.url)?;
+        let site = ONE_TITLE_SITES.iter().find(|site| {
+            host == **site
+                || host
+                    .strip_suffix(**site)
+                    .is_some_and(|sub| sub.ends_with('.'))
+        })?;
+        Some((*site, row.text.clone()))
+    };
+    let page = |row: &Suggestion| !row.named();
+    let mut seen: Vec<_> = rows
+        .iter()
+        .filter(|row| row.tab != 0 && page(row))
+        .filter_map(one_title)
+        .collect();
+    let mut kept = Vec::with_capacity(rows.len());
+    for (at, row) in rows.into_iter().enumerate() {
+        match one_title(&row).filter(|_| row.tab == 0 && page(&row)) {
+            Some(title) if at > 0 && seen.contains(&title) => {}
+            Some(title) => {
+                seen.push(title);
+                kept.push(row);
+            }
+            None => kept.push(row),
+        }
+    }
+    kept
+}
+
+/// `rows` with those for the pages `shown`, but the first, where ↩ goes, last, as Arc's bar
+/// deranks the current page: going there would load it again. Another tab's row keeps its place,
+/// since it switches rather than loads.
+fn with_shown_last(rows: Vec<Suggestion>, shown: &[SharedString]) -> Vec<Suggestion> {
+    let mut at = 0;
+    let (mut rows, last): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| {
+        at += 1;
+        let page = !row.named() && row.tab == 0;
+        at == 1 || !page || !shown.iter().any(|shown| **shown == row.url)
+    });
+    rows.extend(last);
+    rows
 }
 
 /// Puts the row for the .new address `text` names, if it does, in place of the rows going there:
@@ -1026,7 +1288,8 @@ impl CommandBar {
         let typing = !deleted && !input.pasted() && selection == (text.len()..text.len());
         let complete = typing && self.site.is_none();
         // "/ " typed lists only the commands, as Arc's bar does.
-        let slashed = typing && self.asked == "/" && text.strip_suffix([' ', '\u{3000}']) == Some("/");
+        let slashed =
+            typing && self.asked == "/" && text.strip_suffix([' ', '\u{3000}']) == Some("/");
         if slashed && self.site.is_none() && self.lists_commands() {
             return self.enter_commands("/ ", window, cx);
         }
@@ -1052,7 +1315,9 @@ impl CommandBar {
             .get(text.len()..)
             .filter(|_| complete)
             .filter(|_| {
-                shown.get(..text.len()).is_some_and(|typed| typed.eq_ignore_ascii_case(&text))
+                shown
+                    .get(..text.len())
+                    .is_some_and(|typed| typed.eq_ignore_ascii_case(&text))
             })
             .unwrap_or_default()
             .to_string();
@@ -1079,7 +1344,10 @@ impl CommandBar {
             .collect();
         // check.sh reads this line.
         let ids: Vec<String> = rows.iter().map(|row| row.tab.to_string()).collect();
-        log!("browser: command bar finds tabs \"{typed}\": {}", ids.join(" "));
+        log!(
+            "browser: command bar finds tabs \"{typed}\": {}",
+            ids.join(" ")
+        );
         self.asked = text.clone();
         self.set_rows(text, rows, window, cx);
     }
@@ -1088,7 +1356,8 @@ impl CommandBar {
     fn keep_favicons(&mut self, tabs: &[shell::BarTab]) {
         for tab in tabs {
             if let Some(favicon) = &tab.favicon {
-                self.favicons.insert(tab.url.to_string(), Some(favicon.clone()));
+                self.favicons
+                    .insert(tab.url.to_string(), Some(favicon.clone()));
             }
         }
     }
@@ -1102,23 +1371,36 @@ impl CommandBar {
     /// Arc's bar does after Tab right after ⌘T.
     fn enter_commands(&mut self, by: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         // check.sh reads this line.
-        log!("browser: command bar lists commands by {}", if by.is_empty() { "tab" } else { "slash" });
+        log!(
+            "browser: command bar lists commands by {}",
+            if by.is_empty() { "tab" } else { "slash" }
+        );
         self.commands = Some(by);
         self.completion.clear();
         let placeholder = COMMANDS_PLACEHOLDER.into();
-        self.input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
-        self.input.update(cx, |input, cx| input.set_text(SharedString::default(), 0, window, cx));
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_text(SharedString::default(), 0, window, cx)
+        });
         self.list_commands(String::new(), window, cx);
     }
 
     /// Lists the commands that match `text`, or with nothing typed every one that does something
     /// now.
     fn list_commands(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        let rows: Vec<Suggestion> =
-            self.host.commands(&text, cx).into_iter().map(Suggestion::from).collect();
+        let rows: Vec<Suggestion> = self
+            .host
+            .commands(&text, cx)
+            .into_iter()
+            .map(Suggestion::from)
+            .collect();
         // check.sh reads this line.
         let names: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
-        log!("browser: command bar commands only \"{text}\": {}", names.join(", "));
+        log!(
+            "browser: command bar commands only \"{text}\": {}",
+            names.join(", ")
+        );
         self.asked = text.clone();
         self.set_rows(text, rows, window, cx);
     }
@@ -1132,9 +1414,13 @@ impl CommandBar {
         };
         // check.sh reads this line.
         log!("browser: command bar leaves commands");
-        self.input.update(cx, |input, cx| input.set_placeholder(PLACEHOLDER_TEXT.into(), cx));
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx)
+        });
         let text = format!("{by}{}", self.input.read(cx).text());
-        self.input.update(cx, |input, cx| input.set_text(text.clone().into(), by.len(), window, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_text(text.clone().into(), by.len(), window, cx)
+        });
         self.ask_for(text, window, cx);
         true
     }
@@ -1146,7 +1432,11 @@ impl CommandBar {
         self.asked_at = Instant::now();
         self.complete = false;
         self.completion.clear();
-        let rows = if self.asked.is_empty() { self.tab_rows() } else { Vec::new() };
+        let rows = if self.asked.is_empty() {
+            self.tab_rows()
+        } else {
+            Vec::new()
+        };
         self.set_rows(String::new(), rows, window, cx);
         if !self.asked.is_empty() {
             let site = self.site.as_ref().map(|site| site.keyword.as_str());
@@ -1178,11 +1468,18 @@ impl CommandBar {
         let by = if tabbed { "tab" } else { "space" };
         log!("browser: command bar site search {keyword} by {by}");
         let placeholder = format!("Search {name}").into();
-        self.input.update(cx, |input, cx| input.set_placeholder(placeholder, cx));
-        self.site = Some(Site { keyword, name, tabbed });
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        self.site = Some(Site {
+            keyword,
+            name,
+            tabbed,
+        });
         self.completion.clear();
         let caret = query.len();
-        self.input.update(cx, |input, cx| input.set_text(query.into(), caret, window, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_text(query.into(), caret, window, cx)
+        });
         cx.notify();
     }
 
@@ -1197,7 +1494,9 @@ impl CommandBar {
         let space = if site.tabbed { "" } else { " " };
         let prefix = format!("{}{space}", site.keyword);
         let text = format!("{prefix}{}", self.input.read(cx).text());
-        self.input.update(cx, |input, cx| input.set_text(text.into(), prefix.len(), window, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_text(text.into(), prefix.len(), window, cx)
+        });
         cx.notify();
         true
     }
@@ -1205,7 +1504,9 @@ impl CommandBar {
     /// Takes the bar out of its site search, if it's in one, and returns it.
     fn site_left(&mut self, cx: &mut Context<Self>) -> Option<Site> {
         let site = self.site.take()?;
-        self.input.update(cx, |input, cx| input.set_placeholder(PLACEHOLDER_TEXT.into(), cx));
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx)
+        });
         Some(site)
     }
 
@@ -1218,11 +1519,14 @@ impl CommandBar {
         if empty && self.site.is_none() && self.commands.is_none() && self.lists_commands() {
             return self.enter_commands("", window, cx);
         }
-        let hint = self.chosen().filter(|row| !row.keyword.is_empty() && self.site.is_none());
+        let hint = self
+            .chosen()
+            .filter(|row| !row.keyword.is_empty() && self.site.is_none());
         if let Some((keyword, name)) = hint.map(|row| (row.keyword.clone(), row.site.clone())) {
             let typed = self.typed(cx);
-            let query =
-                typed.split_once(char::is_whitespace).map_or("", |(_, rest)| rest.trim_start());
+            let query = typed
+                .split_once(char::is_whitespace)
+                .map_or("", |(_, rest)| rest.trim_start());
             return self.enter_site(keyword, name, query.to_string(), true, window, cx);
         }
         if self.may_ask(cx) {
@@ -1260,7 +1564,9 @@ impl CommandBar {
             cx.notify();
             return cx.stop_propagation();
         }
-        if self.leave_site(window, cx) || self.leave_commands(window, cx) || self.leave_ask(window, cx)
+        if self.leave_site(window, cx)
+            || self.leave_commands(window, cx)
+            || self.leave_ask(window, cx)
         {
             cx.stop_propagation();
         }
@@ -1269,7 +1575,9 @@ impl CommandBar {
     /// The agents ⇥ asks, as the browser last learned, or None, as while tasks are off, over a
     /// private window, so nothing of tasks shows there.
     fn learned_agents(&self, cx: &App) -> Option<TaskAgents> {
-        (!self.host.over_private()).then(|| self.host.task_agents(cx)).flatten()
+        (!self.host.over_private())
+            .then(|| self.host.task_agents(cx))
+            .flatten()
     }
 
     /// Whether ⇥ makes what's typed a task: tasks are on, and the bar opens a page, outside a site
@@ -1286,9 +1594,10 @@ impl CommandBar {
     /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
     /// hasn't learned yet. With none ready, ⇥ offers to set one up, and nothing else of tasks shows.
     fn offers_ask(&self, cx: &App) -> bool {
-        let ready = self.task_agents.as_ref().is_some_and(|agents| {
-            !agents.known || !agents.agents.is_empty()
-        });
+        let ready = self
+            .task_agents
+            .as_ref()
+            .is_some_and(|agents| !agents.known || !agents.agents.is_empty());
         ready && self.may_ask(cx)
     }
 
@@ -1309,7 +1618,9 @@ impl CommandBar {
         self.completion.clear();
         self.asked = typed.clone();
         let caret = typed.len();
-        self.input.update(cx, |input, cx| input.set_text(typed.into(), caret, window, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_text(typed.into(), caret, window, cx)
+        });
         self.host.asking(true, cx);
         self.list_agents(window, cx);
     }
@@ -1376,7 +1687,9 @@ impl CommandBar {
         let page = ask.page.clone();
         let asked = self.input.read(cx).text().trim().to_string();
         match self.rows.get(index).and_then(|row| row.task.clone()) {
-            Some(TaskRow::Agent { id, resets: None, .. }) if !asked.is_empty() => {
+            Some(TaskRow::Agent {
+                id, resets: None, ..
+            }) if !asked.is_empty() => {
                 // check.sh reads this line.
                 log!("browser: command bar runs a task on {id}");
                 // The host folds the bar into the slot its card fills, so the slot doesn't close
@@ -1408,12 +1721,7 @@ impl CommandBar {
     }
 
     /// Shows `completion` after what was typed, selected, or no completion.
-    fn show_completion(
-        &mut self,
-        completion: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn show_completion(&mut self, completion: String, window: &mut Window, cx: &mut Context<Self>) {
         if completion == self.completion {
             return;
         }
@@ -1421,11 +1729,14 @@ impl CommandBar {
         // check.sh reads this line.
         log!(
             "browser: command bar completes \"{}\" with \"{}\"",
-            self.asked, self.completion
+            self.asked,
+            self.completion
         );
         let text = format!("{}{}", self.asked, self.completion);
         let typed = self.asked.len();
-        self.input.update(cx, |input, cx| input.complete(text.into(), typed, window, cx));
+        self.input.update(cx, |input, cx| {
+            input.complete(text.into(), typed, window, cx)
+        });
     }
 
     /// Completes what was typed to the first row while it's selected, unless the user has moved
@@ -1433,7 +1744,11 @@ impl CommandBar {
     fn update_completion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.input.read(cx);
         let (typed, end) = (self.asked.len(), self.asked.len() + self.completion.len());
-        let selection = if self.completion.is_empty() { end..end } else { typed..end };
+        let selection = if self.completion.is_empty() {
+            end..end
+        } else {
+            typed..end
+        };
         if input.composing()
             || input.text() != format!("{}{}", self.asked, self.completion)
             || input.selection() != selection
@@ -1445,10 +1760,46 @@ impl CommandBar {
             _ if !self.complete => String::new(),
             // Rows for older text keep the completion shown, which came from their first.
             0 if self.suggested != self.asked => self.completion.clone(),
-            0 => self.rows.first().map(|row| row.completion.clone()).unwrap_or_default(),
+            0 => self
+                .rows
+                .first()
+                .map(|row| row.completion.clone())
+                .unwrap_or_default(),
             _ => String::new(),
         };
         self.show_completion(completion, window, cx);
+    }
+
+    /// The settings `text` names, as "Peek — Settings", from three letters, as Settings' search
+    /// finds them by their names, other names and keys, at most SETTINGS_SHOWN. Shortcuts' rows
+    /// stay out, as the bar lists each command itself with its keys.
+    fn setting_rows(&self, text: &str) -> Vec<Suggestion> {
+        let Some(index) = &self.settings_index else {
+            return Vec::new();
+        };
+        if text.trim().chars().count() < 3 {
+            return Vec::new();
+        }
+        let rows: Vec<Suggestion> = settings_search::named(text, index)
+            .into_iter()
+            .map(|at| &index[at])
+            .filter(|entry| entry.section != Section::Shortcuts)
+            .take(SETTINGS_SHOWN)
+            .map(|entry| Suggestion {
+                text: format!("{} — Settings", entry.name).into(),
+                setting: Some((entry.section, entry.name.clone())),
+                ..Suggestion::default()
+            })
+            .collect();
+        if !rows.is_empty() {
+            // check.sh reads this line.
+            let names: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
+            log!(
+                "browser: command bar settings \"{text}\": {}",
+                names.join(", ")
+            );
+        }
+        rows
     }
 
     /// Puts the commands found for `text` among the core's `rows`, as Arc's bar does: from three
@@ -1461,12 +1812,19 @@ impl CommandBar {
             return rows;
         }
         let commands = self.host.commands(text, cx);
-        if commands.is_empty() {
+        let settings = self.setting_rows(text);
+        if commands.is_empty() && settings.is_empty() {
             return rows;
         }
         // check.sh reads these lines.
-        let names: Vec<&str> = commands.iter().map(|command| command.name.as_ref()).collect();
-        log!("browser: command bar commands \"{text}\": {}", names.join(", "));
+        let names: Vec<&str> = commands
+            .iter()
+            .map(|command| command.name.as_ref())
+            .collect();
+        log!(
+            "browser: command bar commands \"{text}\": {}",
+            names.join(", ")
+        );
         let completes = rows.first().is_some_and(|row| !row.completion.is_empty());
         let strong = !completes && text.trim().chars().count() >= 3;
         let mut commands = commands.into_iter().peekable();
@@ -1479,25 +1837,43 @@ impl CommandBar {
         while let Some(command) = commands.next_if(early) {
             merged.push(command.into());
         }
+        merged.extend(settings);
         merged.extend(rows);
         merged.extend(commands.map(Suggestion::from));
         merged
     }
 
-    /// Takes out of `rows` the open tab that goes first, for its row to go above the rest with
-    /// Switch to Tab, as Arc's bar is first of all a tab switcher (ours: its ranking isn't
-    /// recorded). It's the most recently shown whose title or site has a word that two letters or
-    /// more typed start. Chrome's first row stays when the typing reads as a URL or the row hints a
-    /// site search, and a first row completing to an open tab's page becomes that tab's row.
-    fn take_open_tab(&self, text: &str, rows: &mut Vec<Suggestion>) -> Option<Suggestion> {
+    /// Takes out of `rows` the open tabs that go above the rest with Switch to Tab, as Arc's bar is
+    /// first of all a tab switcher: the one for the top, and those for right after the core's
+    /// first row. They're those whose title or site has a word that two letters or more typed
+    /// start, at most TABS_RISEN: a renamed tab whose own name what's typed starts first, as Arc
+    /// boosts a custom title's start, then the most recently shown (ours: Arc's weights aren't
+    /// recoverable). Chrome's first row stays when the typing reads as a URL or the row hints a
+    /// site search, and a first row completing to an open tab's page becomes that tab's row. An
+    /// address typed that's an open tab's page keeps its row first, where ↩ goes, and the tab's
+    /// comes second, as Arc's does.
+    fn take_open_tabs(
+        &self,
+        text: &str,
+        rows: &mut Vec<Suggestion>,
+    ) -> (Option<Suggestion>, Vec<Suggestion>) {
         let first = rows.first();
         if first.is_some_and(|row| !row.keyword.is_empty()) {
-            return None;
+            return (None, Vec::new());
         }
-        if let Some(first) = first.filter(|row| !row.completion.is_empty()) {
+        let typed = text.trim().to_lowercase();
+        let address = typed.contains(['.', ':', '/']);
+        if let Some(first) = first.filter(|row| !row.completion.is_empty() || address) {
             let at_page = |tab: &&shell::BarTab| *tab.url == *first.url && !self.is_shown(tab.tab);
-            let open = self.tabs.iter().find(at_page)?;
+            let Some(open) = self.tabs.iter().find(at_page) else {
+                return (None, Vec::new());
+            };
             let id = open.tab;
+            if first.completion.is_empty() {
+                log!("browser: command bar puts tab {id} second");
+                rows.retain(|row| row.tab != id);
+                return (None, vec![open.clone().into()]);
+            }
             // check.sh reads this line.
             log!("browser: command bar puts tab {id} first");
             rows[0].tab = id;
@@ -1506,20 +1882,35 @@ impl CommandBar {
                 at += 1;
                 at == 1 || row.tab != id
             });
-            return None;
+            return (None, Vec::new());
         }
-        let typed = text.trim().to_lowercase();
-        if typed.chars().count() < 2 || typed.contains(['.', ':', '/']) {
-            return None;
+        if address || typed.chars().count() < 2 {
+            return (None, Vec::new());
         }
         let named = |tab: &&shell::BarTab| !self.is_shown(tab.tab) && names_tab(tab, &typed);
-        let tab = self.tabs.iter().find(named)?;
-        // check.sh reads this line.
-        log!("browser: command bar puts tab {} first", tab.tab);
-        Some(match rows.iter().position(|row| row.tab == tab.tab) {
-            Some(at) => rows.remove(at),
-            None => tab.clone().into(),
-        })
+        let mut named: Vec<&shell::BarTab> = self.tabs.iter().filter(named).collect();
+        // A renamed tab whose name what's typed starts, then the tabs switched to more, as Arc's
+        // rank (#1396). Stable, so the most recently shown stays first among equals. A score is
+        // never negative, so its bits order as it does.
+        named.sort_by_cached_key(|tab| {
+            let prefix = tab.renamed && tab.title.to_lowercase().starts_with(&typed);
+            (!prefix, std::cmp::Reverse(tab.switched.to_bits()))
+        });
+        named.truncate(TABS_RISEN);
+        // Each in place of the core's row for it, where the core listed one.
+        let mut risen =
+            named
+                .into_iter()
+                .map(|tab| match rows.iter().position(|row| row.tab == tab.tab) {
+                    Some(at) => rows.remove(at),
+                    None => tab.clone().into(),
+                });
+        let first = risen.next();
+        if let Some(first) = &first {
+            // check.sh reads this line.
+            log!("browser: command bar puts tab {} first", first.tab);
+        }
+        (first, risen.collect())
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -1534,20 +1925,38 @@ impl CommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The tooltip names the remove button of a page or search, which goes if another row takes
+        // its place; the same page's comes again with more suggestions.
+        let tipped = |rows: &[Suggestion]| {
+            let row = rows.get(self.tipped?).filter(|row| row.removable)?;
+            Some(row.url.clone())
+        };
+        if self.tipped.is_some() && tipped(&self.rows) != tipped(&rows) {
+            self.end_tip(cx);
+        }
         // The page selected stays selected as more suggestions come for what was asked, and when
         // it's taken out, the row that takes its place is, as in Chrome.
-        let selected = self.rows.get(self.selected).filter(|_| text == self.suggested);
+        let selected = self
+            .rows
+            .get(self.selected)
+            .filter(|_| text == self.suggested);
         self.selected = match selected {
             Some(old) => rows
                 .iter()
-                .position(|row| row.url == old.url && row.command == old.command)
+                .position(|row| {
+                    row.url == old.url && row.command == old.command && row.setting == old.setting
+                })
                 .unwrap_or(self.selected.min(rows.len().saturating_sub(1))),
             None => 0,
         };
         self.rows = rows;
         self.suggested = text;
         let rows = self.rows.len();
-        self.host.set_height(if self.over_field { field_height(rows) } else { height(rows) });
+        self.host.set_height(if self.over_field {
+            field_height(rows)
+        } else {
+            height(rows)
+        });
         self.scroll.scroll_to_item(self.selected);
         for row in self.rows.iter().filter(|row| row.icon() == Icon::Favicon) {
             if !self.favicons.contains_key(&row.url) {
@@ -1573,7 +1982,11 @@ impl CommandBar {
         let input = self.input.read(cx);
         let completing = !self.completion.is_empty()
             && input.selection() == (self.asked.len()..input.text().len());
-        let typed = if completing { self.asked.as_str() } else { input.text() };
+        let typed = if completing {
+            self.asked.as_str()
+        } else {
+            input.text()
+        };
         typed.trim().to_string()
     }
 
@@ -1654,8 +2067,7 @@ impl CommandBar {
     /// Whether ↩'s row is a command or a sum, or the bar is over a new pane, for Search Tabs or in
     /// an ask, where the keys that open a page elsewhere take what ↩ takes.
     fn takes_in_place(&self) -> bool {
-        let command =
-            self.chosen().is_some_and(|row| row.command.is_some() || row.result.is_some());
+        let command = self.chosen().is_some_and(Suggestion::named);
         command || self.ask.is_some() || matches!(self.target, Target::Beside(_) | Target::Tabs)
     }
 
@@ -1695,7 +2107,8 @@ impl CommandBar {
         let word = !typed.is_empty() && typed.chars().all(|c| c.is_alphanumeric() || c == '-');
         let word = word && self.site.is_none() && self.commands.is_none() && self.ask.is_none();
         let word = word && !matches!(self.target, Target::Tabs);
-        word.then(|| self.host.typed_url(&format!("www.{typed}.com"))).flatten()
+        word.then(|| self.host.typed_url(&format!("www.{typed}.com")))
+            .flatten()
     }
 
     /// ⌃↩: goes to www.<word>.com for a word typed, as Chrome does, and else where ↩ goes, as in a
@@ -1728,14 +2141,19 @@ impl CommandBar {
         }
         let typed = self.typed(cx);
         let site = self.site.as_ref().map(|site| site.keyword.as_str());
-        if let Some(url) = self.host.search_url(site, &typed).filter(|_| !typed.is_empty()) {
+        if let Some(url) = self
+            .host
+            .search_url(site, &typed)
+            .filter(|_| !typed.is_empty())
+        {
             self.go_to(&url, cx);
         }
     }
 
     /// ⇧⌦, as Chrome's, or ⌥⌘⌫, as Arc's: takes the selected row out of the profile's history.
-    fn remove(&mut self, _: &Remove, _: &mut Window, _: &mut Context<Self>) {
+    fn remove(&mut self, _: &Remove, _: &mut Window, cx: &mut Context<Self>) {
         if self.chosen().is_some() {
+            self.end_tip(cx);
             self.remove_row(self.selected);
         }
     }
@@ -1762,7 +2180,9 @@ impl CommandBar {
         };
         div()
             .id(("remove", index))
-            .when(self.a11y, |button| button.role(Role::Button).aria_label("Remove Suggestion"))
+            .when(self.a11y, |button| {
+                button.role(Role::Button).aria_label(REMOVE_NAME)
+            })
             .size(px(ICON_BOX))
             .flex_none()
             .ml(px(7.))
@@ -1772,14 +2192,57 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .bg(tile)
-            .child(svg().path("icons/trash.svg").size(px(14.)).text_color(color))
+            .child(
+                svg()
+                    .path("icons/trash.svg")
+                    .size(px(14.))
+                    .text_color(color),
+            )
             // The click is the trash's, not the row's under it.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |bar, _, _, cx| {
                 cx.stop_propagation();
+                bar.end_tip(cx);
                 bar.remove_row(index);
             }))
+            // Where it drew, which its tooltip hangs from.
+            .child({
+                let frame = self.remove_frame.clone();
+                canvas(|_, _, _| {}, move |bounds, _, _, _| frame.set(Some(bounds)))
+                    .absolute()
+                    .size_full()
+            })
+            // Its tooltip waits for the pointer to rest, as a tile's does.
+            .on_mouse_move(|_, _, cx| crate::tooltip::moved(cx))
+            .on_hover(cx.listener(move |bar, hovered, window, cx| {
+                bar.hover_remove(index, *hovered, window.viewport_size(), cx);
+            }))
             .into_any_element()
+    }
+
+    /// The pointer has come onto or left row `index`'s remove button, whose tooltip names it and its
+    /// key. It hangs under the button, inside the bar, or above it when the bar has no room below.
+    fn hover_remove(&mut self, index: usize, hovered: bool, window: Size<Pixels>, cx: &mut App) {
+        match self.remove_frame.get().filter(|_| hovered) {
+            Some(frame) => {
+                self.tipped = Some(index);
+                let tip = Tip {
+                    text: REMOVE_NAME.into(),
+                    keys: remove_keys(),
+                };
+                self.host
+                    .tooltip(Some((tip, Anchor::under(frame, window))), cx);
+            }
+            None if self.tipped == Some(index) => self.end_tip(cx),
+            None => {}
+        }
+    }
+
+    /// Ends the tooltip of the remove button it asked for one for, if any.
+    fn end_tip(&mut self, cx: &mut App) {
+        if self.tipped.take().is_some() {
+            self.host.tooltip(None, cx);
+        }
     }
 
     /// ⌥↩: goes where ↩ would, in a new tab in a split view with the tab shown, or the tab the
@@ -1828,9 +2291,20 @@ impl CommandBar {
             self.host.copy(result, cx);
             return;
         }
+        if let Some((section, name)) = row.setting.clone() {
+            // check.sh reads this line.
+            log!(
+                "browser: command bar shows setting {} › {name}",
+                section.name()
+            );
+            self.close();
+            self.host.show_setting(section, name, cx);
+            return;
+        }
         // check.sh reads these lines.
         if let Some(command) = row.command {
             log!("browser: command bar runs {}", row.text);
+            shell::picked_in_bar(&row.text, command, cx);
             use shell::Command::{AddSplit, EditUrl, NewTab, SearchTabs};
             if !matches!(command, NewTab | SearchTabs | EditUrl | AddSplit) {
                 self.close();
@@ -1881,7 +2355,11 @@ impl CommandBar {
     fn select_next(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let count = self.rows.len();
         if count > 0 {
-            self.select((self.selected + if forward { 1 } else { count - 1 }) % count, window, cx);
+            self.select(
+                (self.selected + if forward { 1 } else { count - 1 }) % count,
+                window,
+                cx,
+            );
         }
     }
 
@@ -1894,8 +2372,12 @@ impl CommandBar {
         self.scroll.scroll_to_item(index);
         // check.sh reads this line.
         let row = &self.rows[self.selected];
-        let named = row.command.is_some() || row.result.is_some();
-        let name = if named { row.text.as_ref() } else { row.url.as_str() };
+        let named = row.named();
+        let name = if named {
+            row.text.as_ref()
+        } else {
+            row.url.as_str()
+        };
         log!("browser: command bar selected {name}");
         self.update_completion(window, cx);
         cx.notify();
@@ -1907,6 +2389,13 @@ impl CommandBar {
             self.hovered = Some(index);
         } else if self.hovered == Some(index) {
             self.hovered = None;
+        }
+        // The remove button goes with the pointer's row, and its tooltip with it.
+        if self
+            .tipped
+            .is_some_and(|tipped| self.hovered != Some(tipped))
+        {
+            self.end_tip(cx);
         }
         cx.notify();
     }
@@ -1937,7 +2426,11 @@ impl CommandBar {
     fn keep_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let field = self.input.focus_handle(cx);
         if self.open.get() && !field.is_focused(window) {
-            let from = if window.focused(cx).is_some() { "another view" } else { "nothing" };
+            let from = if window.focused(cx).is_some() {
+                "another view"
+            } else {
+                "nothing"
+            };
             log!("browser: command bar's field takes the focus back from {from}");
             window.focus(&field, cx);
         }
@@ -1997,14 +2490,23 @@ impl CommandBar {
             Target::Tabs => shell::BAR_ROWS,
             _ => shell::BAR_TABS_SHOWN,
         };
-        self.tabs.iter().take(shown).cloned().map(Suggestion::from).collect()
+        self.tabs
+            .iter()
+            .take(shown)
+            .cloned()
+            .map(Suggestion::from)
+            .collect()
     }
 
     /// The input's icon: the search glyph, or once something is typed, the selected row's, as
     /// Arc's becomes its favicon. On a page's URL it's the page's favicon until it's edited.
     fn input_icon(&self, cx: &App) -> AnyElement {
         let color = palette::current(cx).ink.into();
-        let size = if self.over_field { ICON_SIZE } else { INPUT_ICON };
+        let size = if self.over_field {
+            ICON_SIZE
+        } else {
+            INPUT_ICON
+        };
         if !self.page.is_empty() && self.asked == self.page {
             return self.favicon(&self.page, size, color);
         }
@@ -2020,10 +2522,13 @@ impl CommandBar {
     /// in an ask, the page that goes with it.
     fn mode_name(&self) -> Option<SharedString> {
         if let Some(ask) = &self.ask {
-            return ask.page.as_ref().map(|(url, title)| match title.is_empty() {
-                true => SharedString::from(crate::agents::site(url)),
-                false => title.clone(),
-            });
+            return ask
+                .page
+                .as_ref()
+                .map(|(url, title)| match title.is_empty() {
+                    true => SharedString::from(crate::agents::site(url)),
+                    false => title.clone(),
+                });
         }
         match (&self.site, self.commands) {
             (Some(site), _) => Some(site.name.clone()),
@@ -2035,11 +2540,15 @@ impl CommandBar {
     /// "Search <site>" and the Tab key, at the input's end, while the row ↩ takes hints a site
     /// search; "Ask" and ⇥ where ⇥ would make what's typed a task; "Run" and ↩ in the ask.
     fn site_hint(&self, cx: &App) -> Option<impl IntoElement + use<>> {
-        let site = self.chosen().filter(|row| self.site.is_none() && !row.keyword.is_empty());
+        let site = self
+            .chosen()
+            .filter(|row| self.site.is_none() && !row.keyword.is_empty());
         let (said, key) = match site {
-            Some(row) => (format!("Search {}", row.site), "Tab"),
-            None if self.ask.is_some() => ("Run".to_string(), "↩"),
-            None if self.offers_ask(cx) => ("Ask".to_string(), "⇥"),
+            Some(row) => (format!("Search {}", row.site), "Tab".to_string()),
+            None if self.ask.is_some() => {
+                ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
+            }
+            None if self.offers_ask(cx) => ("Ask".to_string(), hint_key("tab", shell::OFF_THE_MAC)),
             None => return None,
         };
         let palette = palette::current(cx);
@@ -2086,7 +2595,12 @@ impl CommandBar {
     /// while the field keeps the keyboard, as Chrome's address bar does.
     fn announced(&self) -> Option<String> {
         let row = self.rows.get(self.selected)?;
-        Some(format!("{}, {} of {}", self.spoken(row), self.selected + 1, self.rows.len()))
+        Some(format!(
+            "{}, {} of {}",
+            self.spoken(row),
+            self.selected + 1,
+            self.rows.len()
+        ))
     }
 
     fn row(&self, index: usize, row: &Suggestion, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2192,23 +2706,34 @@ impl CommandBar {
                     .items_center()
                     .justify_center()
                     .rounded(px(CHIP_RADIUS))
-                    .bg(if selected { label } else { palette.plate(ARROW_TILE) })
+                    .bg(if selected {
+                        label
+                    } else {
+                        palette.plate(ARROW_TILE)
+                    })
                     .child(
                         svg()
                             .path("icons/arrow-right.svg")
                             .size(px(14.))
-                            .text_color(if selected { accent } else { palette.on_overlay(ARROW) }),
+                            .text_color(if selected {
+                                accent
+                            } else {
+                                palette.on_overlay(ARROW)
+                            }),
                     );
                 let tint = if selected { label } else { dim };
                 let label = div().flex_none().mr(px(7.)).text_color(tint);
-                line.child(div().flex_1()).child(label.child(action)).child(arrow)
+                line.child(div().flex_1())
+                    .child(label.child(action))
+                    .child(arrow)
             })
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
             })
             // An agent's row ends with its model, or when its limit resets if it's at it.
             .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {
-                line.child(div().flex_1()).child(div().flex_none().text_color(dim).child(said))
+                line.child(div().flex_1())
+                    .child(div().flex_none().text_color(dim).child(said))
             })
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
@@ -2227,20 +2752,39 @@ impl CommandBar {
             .absolute()
             .size_0()
             .role(Role::Status)
-            .when_some(self.announced(), |announcer, said| announcer.aria_value(said))
+            .when_some(self.announced(), |announcer, said| {
+                announcer.aria_value(said)
+            })
             .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
     }
 }
 
 /// The glyph at `path`, `size` square, in `color`.
 fn glyph(path: &'static str, size: f32, color: Hsla) -> AnyElement {
-    svg().path(path).size(px(size)).flex_none().text_color(color).into_any_element()
+    svg()
+        .path(path)
+        .size(px(size))
+        .flex_none()
+        .text_color(color)
+        .into_any_element()
 }
 
 impl Render for CommandBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // check.sh reads these lines.
-        log!("browser: command bar drew \"{}\"", self.input.read(cx).text());
+        log!(
+            "browser: command bar drew \"{}\"",
+            self.input.read(cx).text()
+        );
+        if window.is_visible()
+            && let Some(opened) = self.opened_at.take()
+        {
+            // The performance gate reads this line: from ⌘T to the bar's first frame on screen.
+            log!(
+                "browser: command bar first frame in {:.1} ms",
+                opened.elapsed().as_secs_f64() * 1000.
+            );
+        }
         let remove = self.hovered.and_then(|index| {
             let row = self.rows.get(index).filter(|row| row.removable)?;
             Some((index, row.url.clone()))
@@ -2287,119 +2831,135 @@ impl Render for CommandBar {
         let palette = palette::current(cx);
         // The placeholder and the accent follow the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
-            input.set_colors(palette.on_overlay(PLACEHOLDER), palette.accent.into(), palette.selection());
+            input.set_colors(
+                palette.on_overlay(PLACEHOLDER),
+                palette.accent.into(),
+                palette.selection(),
+            );
             input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });
         // The browser's shortcuts work here too, below the bar's own keys.
-        div().key_context(shell::KEY_CONTEXT).size_full().font_family(crate::face::UI).child(
-            div()
-                .key_context("CommandBar")
-                .on_action(cx.listener(Self::go))
-                .on_action(cx.listener(Self::go_beside))
-                .on_action(cx.listener(Self::go_behind))
-                .on_action(cx.listener(Self::go_dot_com))
-                .on_action(cx.listener(Self::go_window))
-                .on_action(cx.listener(Self::go_dot_com_window))
-                .on_action(cx.listener(Self::search))
-                .on_action(cx.listener(Self::paste_and_go))
-                .on_action(cx.listener(Self::paste_and_search))
-                .on_action(cx.listener(Self::remove))
-                .on_action(cx.listener(Self::dismiss))
-                .on_action(cx.listener(Self::shortcut))
-                .on_action(cx.listener(Self::enter_site_or_next))
-                .on_action(cx.listener(Self::leave_site_or_previous))
-                .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
-                    bar.leave_at_start(window, cx)
-                }))
-                .capture_action(cx.listener(|bar, _: &text_input::DeleteToStart, window, cx| {
-                    bar.leave_at_start(window, cx)
-                }))
-                .capture_action(cx.listener(|bar, _: &text_input::DeleteWordBack, window, cx| {
-                    bar.leave_at_start(window, cx)
-                }))
-                .on_action(
-                    cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)),
-                )
-                .on_action(
-                    cx.listener(|bar, _: &Previous, window, cx| bar.select_next(false, window, cx)),
-                )
-                .on_action(cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)))
-                .on_action(cx.listener(|bar, _: &Last, window, cx| {
-                    bar.select(bar.rows.len().saturating_sub(1), window, cx)
-                }))
-                .relative()
-                .size_full()
-                .overflow_hidden()
-                .rounded(px(radius))
-                .bg(palette.overlay)
-                .text_color(palette.ink)
-                // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
-                .font_weight(FontWeight::MEDIUM)
-                .text_size(px(text::BODY))
-                .child(
-                    div()
-                        .h(px(input_height))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .pl(px(icon_x))
-                        .pr(px(HINT_END))
-                        .gap(px(text_x - icon_x - icon))
-                        .text_size(px(text_size))
-                        .line_height(px(23.))
-                        .child(self.input_icon(cx))
-                        .when_some(self.mode_name(), |line, name| {
-                            let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
-                            let favicon = page.map(|(url, _)| {
-                                self.favicon(url, CHIP_FAVICON, palette.ink.into())
-                            });
-                            line.child(
-                                div()
-                                    .flex_none()
-                                    .max_w(px(CHIP_MAX))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(5.))
-                                    .px(px(6.))
-                                    .py(px(2.))
-                                    .rounded(px(CHIP_RADIUS))
-                                    .bg(palette.plate(CHIP))
-                                    .text_size(px(text::BODY))
-                                    .children(favicon)
-                                    .child(div().min_w_0().truncate().child(name)),
-                            )
-                        })
-                        .child(div().flex_1().min_w_0().child(self.input.clone()))
-                        .children(self.site_hint(cx)),
-                )
-                .when(!rows.is_empty() && !self.over_field, |bar| {
-                    bar.child(
-                        div().h(px(hairline)).mx(px(LINE_INSET)).flex_none().bg(palette.faint(LINE_COLOR)),
+        div()
+            .key_context(shell::KEY_CONTEXT)
+            .size_full()
+            .font_family(crate::face::UI)
+            .child(
+                div()
+                    .key_context("CommandBar")
+                    .on_action(cx.listener(Self::go))
+                    .on_action(cx.listener(Self::go_beside))
+                    .on_action(cx.listener(Self::go_behind))
+                    .on_action(cx.listener(Self::go_dot_com))
+                    .on_action(cx.listener(Self::go_window))
+                    .on_action(cx.listener(Self::go_dot_com_window))
+                    .on_action(cx.listener(Self::search))
+                    .on_action(cx.listener(Self::paste_and_go))
+                    .on_action(cx.listener(Self::paste_and_search))
+                    .on_action(cx.listener(Self::remove))
+                    .on_action(cx.listener(Self::dismiss))
+                    .on_action(cx.listener(Self::shortcut))
+                    .on_action(cx.listener(Self::enter_site_or_next))
+                    .on_action(cx.listener(Self::leave_site_or_previous))
+                    .capture_action(cx.listener(|bar, _: &text_input::Backspace, window, cx| {
+                        bar.leave_at_start(window, cx)
+                    }))
+                    .capture_action(cx.listener(
+                        |bar, _: &text_input::DeleteToStart, window, cx| {
+                            bar.leave_at_start(window, cx)
+                        },
+                    ))
+                    .capture_action(cx.listener(
+                        |bar, _: &text_input::DeleteWordBack, window, cx| {
+                            bar.leave_at_start(window, cx)
+                        },
+                    ))
+                    .on_action(
+                        cx.listener(|bar, _: &Next, window, cx| bar.select_next(true, window, cx)),
                     )
-                })
-                .when(!rows.is_empty(), |bar| {
-                    bar.child(
+                    .on_action(cx.listener(|bar, _: &Previous, window, cx| {
+                        bar.select_next(false, window, cx)
+                    }))
+                    .on_action(cx.listener(|bar, _: &First, window, cx| bar.select(0, window, cx)))
+                    .on_action(cx.listener(|bar, _: &Last, window, cx| {
+                        bar.select(bar.rows.len().saturating_sub(1), window, cx)
+                    }))
+                    .relative()
+                    .size_full()
+                    .overflow_hidden()
+                    .rounded(px(radius))
+                    .bg(palette.overlay)
+                    .text_color(palette.ink)
+                    // Arc's text is medium, by its strokes at 2× (Arc 1.170.0 cap).
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(px(text::BODY))
+                    .child(
                         div()
-                            .id("suggestions")
-                            .when(self.a11y, |list| {
-                                list.role(Role::ListBox).aria_label("Suggestions")
-                            })
-                            .mt(px(list_top))
-                            .mx(px(LIST_X))
-                            .h(px(shown * ROW_HEIGHT))
+                            .h(px(input_height))
                             .flex_none()
                             .flex()
-                            .flex_col()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll)
-                            .children(rows),
+                            .items_center()
+                            .pl(px(icon_x))
+                            .pr(px(HINT_END))
+                            .gap(px(text_x - icon_x - icon))
+                            .text_size(px(text_size))
+                            .line_height(px(23.))
+                            .child(self.input_icon(cx))
+                            .when_some(self.mode_name(), |line, name| {
+                                let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
+                                let favicon = page.map(|(url, _)| {
+                                    self.favicon(url, CHIP_FAVICON, palette.ink.into())
+                                });
+                                line.child(
+                                    div()
+                                        .flex_none()
+                                        .max_w(px(CHIP_MAX))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(5.))
+                                        .px(px(6.))
+                                        .py(px(2.))
+                                        .rounded(px(CHIP_RADIUS))
+                                        .bg(palette.plate(CHIP))
+                                        .text_size(px(text::BODY))
+                                        .children(favicon)
+                                        .child(div().min_w_0().truncate().child(name)),
+                                )
+                            })
+                            .child(div().flex_1().min_w_0().child(self.input.clone()))
+                            .children(self.site_hint(cx)),
                     )
-                })
-                .children(self.a11y.then(|| self.announcer()))
-                // The modal level's rim in the palette's ink; its outline and shadow are the
-                // host's, round the window.
-                .child(edge(0., 1., Level::Modal.rim_in(&palette))),
-        )
+                    .when(!rows.is_empty() && !self.over_field, |bar| {
+                        bar.child(
+                            div()
+                                .h(px(hairline))
+                                .mx(px(LINE_INSET))
+                                .flex_none()
+                                .bg(palette.faint(LINE_COLOR)),
+                        )
+                    })
+                    .when(!rows.is_empty(), |bar| {
+                        bar.child(
+                            div()
+                                .id("suggestions")
+                                .when(self.a11y, |list| {
+                                    list.role(Role::ListBox).aria_label("Suggestions")
+                                })
+                                .mt(px(list_top))
+                                .mx(px(LIST_X))
+                                .h(px(shown * ROW_HEIGHT))
+                                .flex_none()
+                                .flex()
+                                .flex_col()
+                                .overflow_y_scroll()
+                                .track_scroll(&self.scroll)
+                                .children(rows),
+                        )
+                    })
+                    .children(self.a11y.then(|| self.announcer()))
+                    // The modal level's rim in the palette's ink; its outline and shadow are the
+                    // host's, round the window.
+                    .child(edge(0., 1., Level::Modal.rim_in(&palette))),
+            )
     }
 }
 

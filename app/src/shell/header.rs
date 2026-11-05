@@ -7,20 +7,22 @@ use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
 
 use gpui::{
-    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent, MouseUpEvent,
-    NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point, prelude::*, px,
-    size, svg,
+    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
+    MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
+    prelude::*, px, size, svg,
 };
 
 use super::{
+    Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
+    NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
+    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
+    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
+    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
-    Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
-    NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, NAV_TRAIL,
-    PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED,
-    TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TEXT_X, URL_FIELD_TOP,
-    commands::BAR_COMMANDS, drag::held_depth, fade_at, host,
+    commands::BAR_COMMANDS,
+    drag::held_depth,
+    fade_at, host,
     scaled::scaled_from_middle,
     swap::{CHECK, LINK},
     user_keys,
@@ -45,10 +47,14 @@ use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::text;
 
 impl Shell {
-    /// The tab whose page the header is about: a task's page watched in place, else the tab
-    /// selected. The URL field shows its address, and its buttons act on it.
+    /// The tab whose page the header is about, the one in the page area: a task's page watched in
+    /// place, none while a task's conversation is there, else the tab selected. The URL field
+    /// shows its address, and its buttons act on it.
     pub(super) fn field_tab(&self) -> u64 {
-        self.task_page_live().unwrap_or(self.selected)
+        match self.task_area {
+            Some(_) => self.task_page_live().unwrap_or(0),
+            None => self.selected,
+        }
     }
 
     /// A header button at `x`, with the glyph `icon`, that runs `command`. One that can't dims, as
@@ -61,11 +67,21 @@ impl Shell {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
+        let color = self.nav_glyph(enabled);
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match matches!(command, Command::Reload | Command::Stop) {
-            true => self.swaps.glyph(Swapped::Reload(self.field_tab()), icon, NAV_GLYPH, color),
-            false => svg().path(icon).size(px(NAV_GLYPH)).text_color(color).into_any_element(),
+            true => self.swaps.glyph(
+                Swapped::Reload(self.field_tab()),
+                icon,
+                NAV_GLYPH,
+                color,
+                cx,
+            ),
+            false => svg()
+                .path(icon)
+                .size(px(NAV_GLYPH))
+                .text_color(color)
+                .into_any_element(),
         };
         let button = div()
             .id(command.name())
@@ -80,11 +96,13 @@ impl Shell {
             .block_mouse_except_scroll();
         let name = self.button_name(command).unwrap_or(command.name());
         let button = button.when(self.a11y, |button| {
-            button.button_named(name).a11y_synthetic_children(move |builder| {
-                if !enabled {
-                    builder.parent_node().set_disabled();
-                }
-            })
+            button
+                .button_named(name)
+                .a11y_synthetic_children(move |builder| {
+                    if !enabled {
+                        builder.parent_node().set_disabled();
+                    }
+                })
         });
         // Back and forward list the tab's history that way, held or right-clicked (history.rs).
         let lists = matches!(command, Command::Back | Command::Forward);
@@ -107,11 +125,13 @@ impl Shell {
             })
             // Back, forward and reload shrink a little while they're held.
             .when(enabled && command != Command::ToggleSidebar, |button| {
-                let release =
-                    |shell: &mut Shell, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Shell>| {
-                        shell.release_nav();
-                        shell.let_go_nav(cx)
-                    };
+                let release = |shell: &mut Shell,
+                               _: &MouseUpEvent,
+                               _: &mut Window,
+                               cx: &mut Context<Shell>| {
+                    shell.release_nav();
+                    shell.let_go_nav(cx)
+                };
                 button
                     .on_mouse_down(
                         MouseButton::Left,
@@ -138,7 +158,13 @@ impl Shell {
     /// The pointer pressed the header button at `x`, which runs `command`.
     fn hold_nav(&mut self, x: f32, command: Command, cx: &mut Context<Self>) {
         let pressed = Instant::now();
-        self.held_nav = Some(HeldNav { x, command, pressed, let_go: None, drawn_in: false });
+        self.held_nav = Some(HeldNav {
+            x,
+            command,
+            pressed,
+            let_go: None,
+            drawn_in: false,
+        });
         cx.notify();
     }
 
@@ -166,7 +192,10 @@ impl Shell {
             return;
         };
         let name = held.command.name();
-        match (held.let_go, held_depth(held.pressed, held.let_go, Instant::now())) {
+        match (
+            held.let_go,
+            held_depth(held.pressed, held.let_go, Instant::now()),
+        ) {
             (Some(_), 0.) => {
                 // check.sh waits for these lines.
                 log!("browser: nav {name} at rest drawn");
@@ -231,12 +260,22 @@ impl Shell {
             .flatten()
             .zip(frame)
             .map(|(name, frame)| {
-                let keys = user_keys(cx).chips(command).into_iter().map(Into::into).collect();
+                let keys = user_keys(cx)
+                    .chips(command)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
                 let anchor = match side {
                     TipSide::Under => Anchor::under(frame, self.viewport),
                     TipSide::Beside => Anchor::beside(frame, self.viewport),
                 };
-                (Tip { text: name.into(), keys }, anchor)
+                (
+                    Tip {
+                        text: name.into(),
+                        keys,
+                    },
+                    anchor,
+                )
             });
         self.hover_tip(tip, cx);
     }
@@ -256,14 +295,43 @@ impl Shell {
         }
     }
 
+    /// The window became the one the user is in, or stopped being, as the host says: its header's
+    /// glyphs take the disabled alpha while it isn't, as Arc's do.
+    pub fn set_window_main(&mut self, main: bool, cx: &mut Context<Self>) {
+        if self.window_main != main {
+            self.window_main = main;
+            cx.notify();
+        }
+    }
+
+    /// A header button's glyph colour: the disabled alpha while it's disabled, raised to the glyph
+    /// floor, and the same alpha as it is, under the floor, while the window isn't the user's.
+    pub(super) fn nav_glyph(&self, enabled: bool) -> Hsla {
+        match (self.window_main, enabled) {
+            (false, _) => self.palette.faint(NAV_INACTIVE),
+            (true, true) => self.palette.glyph(NAV),
+            (true, false) => self.palette.glyph(NAV_DISABLED),
+        }
+    }
+
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many
     /// as fit.
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let dimmed = !self.window_main;
+        if self.nav_dimmed_drawn.replace(Some(dimmed)) != Some(dimmed) {
+            // check.sh reads this line.
+            log!("browser: nav glyphs dimmed {dimmed}");
+        }
         let page = self.page(self.field_tab());
         let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
-            false => (reload_x, reload_glyph(false), Command::Reload, self.field_tab() != 0),
+            false => (
+                reload_x,
+                reload_glyph(false),
+                Command::Reload,
+                self.field_tab() != 0,
+            ),
         };
         if self.reload_drawn.replace(Some(reload.2)) != Some(reload.2) {
             // check.sh reads this line: a press hits the button the window drew last, which
@@ -272,46 +340,56 @@ impl Shell {
         }
         if self.back_drawn.replace(Some(page.can_go_back)) != Some(page.can_go_back) {
             // check.sh reads this line too, before a click on back.
-            log!("browser: nav back drawn {}", if page.can_go_back { "on" } else { "dimmed" });
+            log!(
+                "browser: nav back drawn {}",
+                if page.can_go_back { "on" } else { "dimmed" }
+            );
         }
         let buttons = [
-            (sidebar, "icons/nav-sidebar.svg", Command::ToggleSidebar, true),
+            (
+                sidebar,
+                "icons/nav-sidebar.svg",
+                Command::ToggleSidebar,
+                true,
+            ),
             (back, "icons/nav-back.svg", Command::Back, page.can_go_back),
-            (forward, "icons/nav-forward.svg", Command::Forward, page.can_go_forward),
+            (
+                forward,
+                "icons/nav-forward.svg",
+                Command::Forward,
+                page.can_go_forward,
+            ),
             reload,
         ];
         buttons
             .into_iter()
             .filter_map(|(x, icon, command, enabled)| Some((x?, icon, command, enabled)))
             .map(|(x, icon, command, enabled)| {
-                self.nav_button(x, icon, command, enabled, cx).into_any_element()
+                self.nav_button(x, icon, command, enabled, cx)
+                    .into_any_element()
             })
             .collect()
     }
 
-    /// A mouse's back and forward buttons anywhere over the UI show the previous and next Space,
-    /// as Arc's do (the owner's call); over a page, the page takes them itself and goes back and
-    /// forward. The window hears them, as the sidebar keeps its presses from what's under it.
+    /// A mouse's back and forward buttons anywhere over the UI walk the row a swipe pages, the
+    /// Library, the Spaces and a new Space, a step a press (the owner's call, #1852); over a page,
+    /// the page takes them itself and goes back and forward. The window hears them, as the
+    /// sidebar keeps its presses from what's under it.
     pub(super) fn navigate_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
         canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                    let MouseButton::Navigate(direction) = event.button else { return };
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                    let MouseButton::Navigate(direction) = event.button else {
+                        return;
+                    };
                     if phase != DispatchPhase::Bubble {
                         return;
                     }
-                    let command = match direction {
-                        NavigationDirection::Back => Command::PreviousSpace,
-                        NavigationDirection::Forward => Command::NextSpace,
-                    };
+                    let back = direction == NavigationDirection::Back;
                     shell
-                        .update(cx, |shell, cx| {
-                            if shell.offers(command) {
-                                shell.run(command, "mouse", cx);
-                            }
-                        })
+                        .update(cx, |shell, cx| shell.navigate(back, window, cx))
                         .ok();
                 });
             },
@@ -360,7 +438,8 @@ impl Shell {
             None => Place::Corner(point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
-        self.browser.site_controls(self.field_tab(), place, self.viewport, extensions, cx);
+        self.browser
+            .site_controls(self.field_tab(), place, self.viewport, extensions, cx);
     }
 
     /// A button at the URL field's end, `end` in from it, shown while the pointer is over the
@@ -380,9 +459,14 @@ impl Shell {
     }
 
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
-    /// command bar's placeholder, there from the frame the card's mark is.
+    /// command bar's placeholder, there from the frame the card's mark is, or at once with a
+    /// task's conversation, which shows at once.
     pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
-        self.url_words(self.field_tab(), url, self.empty_opacity(Instant::now()))
+        let shown = match self.task_area {
+            Some(_) => 1.,
+            None => self.empty_opacity(Instant::now()),
+        };
+        self.url_words(self.field_tab(), url, shown)
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
@@ -430,15 +514,22 @@ impl Shell {
                 })
                 .child(self.swaps.glyph(
                     Swapped::CopyUrl,
-                    if self.url_copied.is_some() { CHECK } else { LINK },
+                    if self.url_copied.is_some() {
+                        CHECK
+                    } else {
+                        LINK
+                    },
                     URL_BUTTON_GLYPH,
                     self.palette.glyph(NAV).into(),
+                    cx,
                 ))
         });
         let site_controls = tools.then(|| {
             self.field_tool("site-controls", end)
                 .when(self.a11y, |button| {
-                    button.button_named("Site Controls").pressed_by_mouse_down(true, false)
+                    button
+                        .button_named("Site Controls")
+                        .pressed_by_mouse_down(true, false)
                 })
                 .when(live, |button| {
                     button
@@ -486,7 +577,9 @@ impl Shell {
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
         // site's logins. On the press, as Site Controls' button opens them.
-        let key = (self.field_tab() != 0).then(|| self.keys.get(&self.field_tab()).copied()).flatten();
+        let key = (self.field_tab() != 0)
+            .then(|| self.keys.get(&self.field_tab()).copied())
+            .flatten();
         let key = key.map(|key| {
             div()
                 .id("key")
@@ -503,7 +596,12 @@ impl Shell {
                 )
                 .relative()
                 .child(self.key_glyph())
-                .child(div().absolute().inset_0().child(key_frame(self.button_frames.clone())))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(key_frame(self.button_frames.clone())),
+                )
         });
         let text_end = match tools {
             true if devtools.is_some() => end + 2. * TOOL_PITCH + URL_BUTTON_SIZE,
@@ -514,9 +612,11 @@ impl Shell {
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
         let field = div().id("url-field").when(self.a11y, |field| {
-            field.button_named(words.clone()).a11y_synthetic_children(|builder| {
-                builder.parent_node().set_role_description("address")
-            })
+            field
+                .button_named(words.clone())
+                .a11y_synthetic_children(|builder| {
+                    builder.parent_node().set_role_description("address")
+                })
         });
         field
             .absolute()
@@ -541,7 +641,13 @@ impl Shell {
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.plate(TILE_HOVERED)))
             .text_size(px(text::BODY))
-            .child(div().min_w(px(0.)).truncate().text_color(color).child(words))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .truncate()
+                    .text_color(color)
+                    .child(words),
+            )
             .children(engine)
             .children(key)
             .children(devtools)
@@ -560,7 +666,8 @@ impl Shell {
         if actions > 0. && x >= width - URL_BUTTON_INSET - actions {
             return AtRest::Action;
         }
-        let tools = self.tools_shown() && self.tools_live() && !self.url(self.field_tab()).is_empty();
+        let tools =
+            self.tools_shown() && self.tools_live() && !self.url(self.field_tab()).is_empty();
         let button = |end: f32| (width - end - URL_BUTTON_SIZE..width - end).contains(&x);
         let developer = self.page(self.field_tab()).developer_mode;
         match tools {
@@ -598,7 +705,10 @@ impl Shell {
     fn key_glyph(&self) -> gpui::Svg {
         let mut quiet = self.palette.text(SECONDARY);
         quiet.a *= 0.6;
-        svg().path("icons/key-round.svg").size(px(KEY_GLYPH)).text_color(quiet)
+        svg()
+            .path("icons/key-round.svg")
+            .size(px(KEY_GLYPH))
+            .text_color(quiet)
     }
 
     /// A tab showing its page in Safari's engine says so after the host, quietly (ours): the Site
@@ -607,7 +717,12 @@ impl Shell {
         (tab != 0 && self.page(tab).system_engine).then(|| {
             let mut quiet = self.palette.text(SECONDARY);
             quiet.a *= 0.6;
-            svg().path("icons/compass.svg").flex_none().ml(px(5.)).size(px(12.)).text_color(quiet)
+            svg()
+                .path("icons/compass.svg")
+                .flex_none()
+                .ml(px(5.))
+                .size(px(12.))
+                .text_color(quiet)
         })
     }
 
@@ -654,10 +769,19 @@ impl Shell {
             .rounded(px(PLATE_RADIUS))
             .bg(self.palette.plate(URL_FIELD))
             .text_size(px(text::BODY))
-            .child(div().min_w(px(0.)).truncate().text_color(color).child(words))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .truncate()
+                    .text_color(color)
+                    .child(words),
+            )
             .children(self.engine_mark(tab))
             .children(self.keys.contains_key(&tab).then(|| {
-                let reach = div().flex_none().ml(px(KEY_GAP - KEY_REACH)).p(px(KEY_REACH));
+                let reach = div()
+                    .flex_none()
+                    .ml(px(KEY_GAP - KEY_REACH))
+                    .p(px(KEY_REACH));
                 reach.child(self.key_glyph())
             }))
             .when(tools, |field| {
@@ -719,7 +843,10 @@ impl Shell {
         if shown != self.drawn_tools {
             self.drawn_tools = shown;
             // check.sh waits for these lines, so a capture after one shows that state.
-            log!("browser: sidebar tools {}", if shown { "shown" } else { "hidden" });
+            log!(
+                "browser: sidebar tools {}",
+                if shown { "shown" } else { "hidden" }
+            );
         }
     }
 }
@@ -731,7 +858,11 @@ fn key_frame(frames: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>) -> impl
         move |bounds, _, _| {
             if frames.borrow_mut().insert("key", bounds) != Some(bounds) {
                 let at = bounds.center();
-                log!("browser: key drawn at {:.0} {:.0}", f32::from(at.x), f32::from(at.y));
+                log!(
+                    "browser: key drawn at {:.0} {:.0}",
+                    f32::from(at.x),
+                    f32::from(at.y)
+                );
             }
         },
         |_, _, _, _| {},
@@ -745,7 +876,11 @@ const DEVTOOLS_GLYPH: &str = "icons/code.svg";
 
 /// The header's reload, which is stop while the page loads.
 pub(super) fn reload_glyph(loading: bool) -> &'static str {
-    if loading { "icons/nav-stop.svg" } else { "icons/nav-reload.svg" }
+    if loading {
+        "icons/nav-stop.svg"
+    } else {
+        "icons/nav-reload.svg"
+    }
 }
 
 /// Where the header's buttons' plates start in a sidebar `width` wide: the sidebar button, then
@@ -755,10 +890,16 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 /// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
 /// NAV_AFTER_SIDEBAR.
 pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
-    let sidebar = if full_screen { FULL_SCREEN_SIDEBAR_BUTTON_X } else { SIDEBAR_BUTTON_X };
+    let sidebar = if full_screen {
+        FULL_SCREEN_SIDEBAR_BUTTON_X
+    } else {
+        SIDEBAR_BUTTON_X
+    };
     let first = sidebar + NAV_SIZE + NAV_AFTER_SIDEBAR;
     let last = width - NAV_TRAIL - NAV_SIZE;
-    let count = (0..=3).rev().find(|&count| last - (count as f32 - 1.) * NAV_PITCH >= first);
+    let count = (0..=3)
+        .rev()
+        .find(|&count| last - (count as f32 - 1.) * NAV_PITCH >= first);
     let mut places = [Some(sidebar), None, None, None];
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {

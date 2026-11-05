@@ -15,18 +15,18 @@ use crate::site_controls;
 
 use super::{
     MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell,
-    ShellHandle, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X,
-    URL_FIELD_TOP, UserKeys, user_keys, written_as,
+    URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP, UserKeys,
+    user_keys, written_as,
 };
 
-use crate::tokens::shell::extensions::HOST_ROOM;
-use crate::tokens::shell::extensions::ACTION_ICON;
 use crate::tokens::shell::extensions::ACTION_DIMMED;
+use crate::tokens::shell::extensions::ACTION_ICON;
 use crate::tokens::shell::extensions::BADGE_COLOR;
 use crate::tokens::shell::extensions::BADGE_HEIGHT;
-use crate::tokens::shell::extensions::BADGE_TEXT;
 use crate::tokens::shell::extensions::BADGE_RADIUS;
+use crate::tokens::shell::extensions::BADGE_TEXT;
 use crate::tokens::shell::extensions::BADGE_TEXT_COLOR;
+use crate::tokens::shell::extensions::HOST_ROOM;
 
 /// An extension of a profile's, one Chrome's extensions page lists.
 #[derive(Clone, PartialEq, Debug)]
@@ -108,11 +108,13 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
-        let ran = shell.update(cx, |shell, cx| shell.run_extension_key(&keystroke, "ui", cx));
+        let ran = shell.update(cx, |shell, cx| {
+            shell.run_extension_key(&keystroke, "ui", cx)
+        });
         if ran.unwrap_or(false) {
             cx.stop_propagation();
         }
@@ -122,16 +124,20 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
-            shell.update(cx, |shell, cx| shell.run_extension(&run.0, cx)).ok();
+        if let Some(shell) = super::commands::key_shell(cx) {
+            shell
+                .update(cx, |shell, cx| shell.run_extension(&run.0, cx))
+                .ok();
         }
     });
     cx.on_action(|pin: &PinExtension, cx| {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx.try_global::<ShellHandle>().map(|handle| handle.0.clone()) {
-            shell.update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx)).ok();
+        if let Some(shell) = super::commands::key_shell(cx) {
+            shell
+                .update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx))
+                .ok();
         }
     });
 }
@@ -145,25 +151,37 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         // check.sh reads these lines.
-        let ids: Vec<&str> = extensions.iter().map(|extension| extension.id.as_ref()).collect();
+        let ids: Vec<&str> = extensions
+            .iter()
+            .map(|extension| extension.id.as_ref())
+            .collect();
         log!("browser: extensions {profile} {}", ids.join(" "));
         let pinned = extensions.iter().filter(|extension| extension.pinned);
         let pinned: Vec<&str> = pinned.map(|extension| extension.id.as_ref()).collect();
         log!("browser: pinned extensions {profile} {}", pinned.join(" "));
-        for extension in extensions.iter().filter(|extension| !extension.commands.is_empty()) {
+        for extension in extensions
+            .iter()
+            .filter(|extension| !extension.commands.is_empty())
+        {
             let keys: Vec<String> = (extension.commands.iter())
                 .map(|command| {
                     let suggested = if command.suggested { " suggested" } else { "" };
                     format!("{}={}{suggested}", command.name, command.keystroke)
                 })
                 .collect();
-            log!("browser: extension keys {} {}", extension.id, keys.join(", "));
+            log!(
+                "browser: extension keys {} {}",
+                extension.id,
+                keys.join(", ")
+            );
         }
         // One the user added from an import's list that the other browser pinned is pinned as it
         // comes in, by whichever window hears of it first.
         if let Some(had) = self.extensions.get(&profile) {
             let had: Vec<&str> = had.iter().map(|extension| extension.id.as_ref()).collect();
-            let now = extensions.iter().map(|each| (each.id.as_ref(), each.pinned));
+            let now = extensions
+                .iter()
+                .map(|each| (each.id.as_ref(), each.pinned));
             for id in crate::import::extensions::to_pin(&had, now) {
                 log!("browser: extension {id} pinned as it was in the browser imported from");
                 self.browser.set_extension_pinned(profile, &id, true, cx);
@@ -189,7 +207,8 @@ impl Shell {
         log!("browser: extension actions {}", shown.join(" "));
         // The panel takes them only while it shows for the tab.
         let grid = self.site_controls_extensions();
-        self.browser.site_controls_extensions(self.selected, grid, cx);
+        self.browser
+            .site_controls_extensions(self.selected, grid, cx);
         cx.notify();
     }
 
@@ -220,11 +239,14 @@ impl Shell {
             return;
         }
         let (shown, overflow) = self.shown_actions();
-        let button = (self.extension_actions.iter().position(|action| action.id == id))
-            .map(|index| index.min(shown))
-            .filter(|&place| place < shown || overflow)
-            .filter(|_| self.url_field_bounds().is_some())
-            .map(|place| self.action_bounds(place));
+        let button = (self
+            .extension_actions
+            .iter()
+            .position(|action| action.id == id))
+        .map(|index| index.min(shown))
+        .filter(|&place| place < shown || overflow)
+        .filter(|_| self.url_field_bounds().is_some())
+        .map(|place| self.action_bounds(place));
         let anchor = button.or(self.url_field_bounds()).unwrap_or_else(|| {
             let corner = point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET));
             Bounds::new(corner, Default::default())
@@ -248,7 +270,10 @@ impl Shell {
             f32::from(size.width),
             f32::from(size.height)
         );
-        log!("browser: run extension {id} {}", if ran { "ran" } else { "refused" });
+        log!(
+            "browser: run extension {id} {}",
+            if ran { "ran" } else { "refused" }
+        );
     }
 
     /// Runs the keyboard command that `keystroke` is in the shown Space's profile, if there's one,
@@ -287,9 +312,14 @@ impl Shell {
             return;
         };
         let extensions = self.extensions.get(&profile).into_iter().flatten();
-        let pinned = extensions.filter(|extension| extension.id == id).any(|each| each.pinned);
+        let pinned = extensions
+            .filter(|extension| extension.id == id)
+            .any(|each| each.pinned);
         // check.sh waits for this line.
-        log!("browser: {} extension {id}", if pinned { "unpin" } else { "pin" });
+        log!(
+            "browser: {} extension {id}",
+            if pinned { "unpin" } else { "pin" }
+        );
         self.browser.set_extension_pinned(profile, id, !pinned, cx);
     }
 
@@ -299,8 +329,11 @@ impl Shell {
         let Some(profile) = self.shown_space().map(|space| space.profile) else {
             return;
         };
-        let pinned: Vec<SharedString> =
-            self.extension_actions.iter().map(|action| action.id.clone()).collect();
+        let pinned: Vec<SharedString> = self
+            .extension_actions
+            .iter()
+            .map(|action| action.id.clone())
+            .collect();
         // check.sh waits for this line.
         log!("browser: move extension {id} to top");
         if !pinned.iter().any(|each| each == id) {
@@ -399,7 +432,9 @@ impl Shell {
                     .id(SharedString::from(format!("action-{}", action.id)))
                     .absolute()
                     .top(px(URL_BUTTON_INSET))
-                    .right(px(URL_BUTTON_INSET + (places - 1 - index) as f32 * URL_BUTTON_SIZE))
+                    .right(px(
+                        URL_BUTTON_INSET + (places - 1 - index) as f32 * URL_BUTTON_SIZE
+                    ))
                     .size(px(URL_BUTTON_SIZE))
                     .flex()
                     .items_center()
@@ -547,15 +582,28 @@ impl Shell {
     /// at the next launch if the dialog was busy or the browser went first.
     pub fn tell_crashed_extension(&mut self, profile: u64, cx: &mut Context<Self>) {
         let extensions = self.extensions.get(&profile).map_or(&[][..], Vec::as_slice);
-        let Some(extension) = extensions.iter().find(|extension| extension.crashed).cloned() else {
+        let Some(extension) = extensions
+            .iter()
+            .find(|extension| extension.crashed)
+            .cloned()
+        else {
             return;
         };
-        let Extension { id, name, removable, .. } = extension;
+        let Extension {
+            id,
+            name,
+            removable,
+            ..
+        } = extension;
         let shell = cx.weak_entity();
         let also = removable.then(|| {
             let (id, name) = (id.clone(), name.clone());
             let remove: Box<dyn FnOnce(&mut App)> = Box::new(move |cx| {
-                shell.update(cx, |shell, cx| shell.remove_extension(profile, id, name, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| {
+                        shell.remove_extension(profile, id, name, cx)
+                    })
+                    .ok();
             });
             (SharedString::from("Remove…"), remove)
         });
@@ -581,7 +629,10 @@ impl Shell {
             Box::new(move |_, cx| {
                 let on = browser.turn_on_extension(profile, &turn_on, cx);
                 // check.sh waits for this line.
-                log!("browser: turn on extension {turn_on} {}", if on { "on" } else { "refused" });
+                log!(
+                    "browser: turn on extension {turn_on} {}",
+                    if on { "on" } else { "refused" }
+                );
             }),
             cx,
         );
@@ -606,11 +657,14 @@ fn command_for<'a>(
         return None;
     }
     let ours = keys.command_for(keystroke, false).is_some();
-    extensions.iter().filter(|extension| extension.runs(private)).find_map(|extension| {
-        (extension.commands.iter())
-            .find(|command| command.keystroke == keystroke && !(ours && command.suggested))
-            .map(|command| (extension, command))
-    })
+    extensions
+        .iter()
+        .filter(|extension| extension.runs(private))
+        .find_map(|extension| {
+            (extension.commands.iter())
+                .find(|command| command.keystroke == keystroke && !(ours && command.suggested))
+                .map(|command| (extension, command))
+        })
 }
 
 /// `keystroke` as the browser's shortcuts write it, with the modifiers in their order, and off the
@@ -641,10 +695,15 @@ fn grid(
     extensions: &[Extension],
 ) -> Vec<site_controls::Extension> {
     let turned_on = |id: &SharedString| {
-        extensions.iter().find(|extension| extension.id == *id).is_none_or(|each| each.enabled)
+        extensions
+            .iter()
+            .find(|extension| extension.id == *id)
+            .is_none_or(|each| each.enabled)
     };
     let tile = |action: &ExtensionAction| {
-        let extension = extensions.iter().find(|extension| extension.id == action.id);
+        let extension = extensions
+            .iter()
+            .find(|extension| extension.id == action.id);
         site_controls::Extension {
             id: action.id.clone(),
             title: action.title.clone(),
@@ -708,14 +767,22 @@ mod tests {
     fn a_crashed_extension_is_told_of_once_and_turns_on_again(cx: &mut TestAppContext) {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
-        let crashed = Extension { crashed: true, ..extension("wallet", false, &[]) };
+        let crashed = Extension {
+            crashed: true,
+            ..extension("wallet", false, &[])
+        };
         host.dialog_busy.set(true);
         shell.update(cx, |shell, cx| {
             shell.set_extensions(3, vec![extension("notes", true, &[]), crashed.clone()], cx);
             shell.tell_crashed_extension(3, cx);
         });
         assert!(host.told.borrow().is_empty());
-        assert!(!host.take().iter().any(|call| call.starts_with("crash told")));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|call| call.starts_with("crash told"))
+        );
 
         host.dialog_busy.set(false);
         shell.update(cx, |shell, cx| shell.tell_crashed_extension(3, cx));
@@ -730,7 +797,10 @@ mod tests {
 
         // Told, the core reports it no longer crashed, and nothing asks again.
         shell.update(cx, |shell, cx| {
-            let told = Extension { crashed: false, ..crashed };
+            let told = Extension {
+                crashed: false,
+                ..crashed
+            };
             shell.set_extensions(3, vec![told], cx);
             shell.tell_crashed_extension(3, cx);
         });
@@ -744,13 +814,32 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         let menu = |id: &'static str, cx: &mut TestAppContext| {
-            shell.update(cx, |shell, cx| shell.action_menu(id.into(), point(px(0.), px(0.)), cx));
+            shell.update(cx, |shell, cx| {
+                shell.action_menu(id.into(), point(px(0.), px(0.)), cx)
+            });
             let items = host.menus.borrow().last().cloned().unwrap_or_default();
-            items.into_iter().map(|(title, _)| title.to_string()).collect::<Vec<_>>()
+            items
+                .into_iter()
+                .map(|(title, _)| title.to_string())
+                .collect::<Vec<_>>()
         };
         shell.update(cx, |shell, cx| {
-            shell.set_spaces(vec![(1, "Space 1".into(), None, 0, "".into(), "".into(), "".into())], cx);
-            let blocker = Extension { removable: false, ..extension("ublock", true, &[]) };
+            shell.set_spaces(
+                vec![(
+                    1,
+                    "Space 1".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
+                    "".into(),
+                )],
+                cx,
+            );
+            let blocker = Extension {
+                removable: false,
+                ..extension("ublock", true, &[])
+            };
             shell.set_extensions(0, vec![extension("notes", true, &[]), blocker], cx);
             shell.set_space(1, cx);
         });
@@ -764,8 +853,16 @@ mod tests {
     fn extension_keys_give_way_to_the_browsers_as_in_chrome() {
         let extensions = [
             extension("off", false, &[("hello", "shift-cmd-y", false)]),
-            extension("a", true, &[("hello", "shift-cmd-y", true), ("tab", "cmd-t", false)]),
-            extension("b", true, &[("library", "shift-cmd-l", true), ("side", "cmd-s", false)]),
+            extension(
+                "a",
+                true,
+                &[("hello", "shift-cmd-y", true), ("tab", "cmd-t", false)],
+            ),
+            extension(
+                "b",
+                true,
+                &[("library", "shift-cmd-l", true), ("side", "cmd-s", false)],
+            ),
         ];
         let run = |keystroke| {
             command_for(keystroke, &extensions, false, &UserKeys::default())
@@ -783,7 +880,10 @@ mod tests {
     #[gpui::test]
     fn a_private_window_runs_only_extensions_allowed_in_incognito(cx: &mut TestAppContext) {
         let allowed = extension("allowed", true, &[("go", "shift-cmd-y", true)]);
-        let allowed = Extension { incognito: true, ..allowed };
+        let allowed = Extension {
+            incognito: true,
+            ..allowed
+        };
         let other = extension("other", true, &[("side", "shift-cmd-u", true)]);
         let extensions = vec![other, allowed];
         let run = |keystroke, private| {
@@ -799,7 +899,35 @@ mod tests {
         let listed = shell.update(cx, |shell, cx| {
             shell.set_extensions(7, extensions.clone(), cx);
             let bar = shell.menu_bar(cx);
-            bar.extensions.iter().map(|extension| extension.id.to_string()).collect::<Vec<_>>()
+            bar.extensions
+                .iter()
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(listed, ["allowed"]);
+    }
+
+    /// A private window opened after the core reported the extensions lists those allowed in
+    /// Incognito from the window it opened from, as it hears them only once they change.
+    #[gpui::test]
+    fn a_private_window_lists_the_allowed_extensions_its_opener_heard(cx: &mut TestAppContext) {
+        let allowed = Extension {
+            incognito: true,
+            ..extension("allowed", true, &[])
+        };
+        let extensions = vec![extension("other", true, &[]), allowed];
+        let host = Rc::new(Recorder::default());
+        let from = cx.new(|cx| Shell::new(host.clone(), cx));
+        from.update(cx, |shell, cx| shell.set_extensions(7, extensions, cx));
+        let private = cx.new(|cx| {
+            let mut shell = Shell::private_window(host.clone(), 1, "Private".into(), 7, cx);
+            shell.hear_extensions_from(&from, cx);
+            shell
+        });
+        let listed = private.update(cx, |shell, cx| {
+            (shell.menu_bar(cx).extensions.iter())
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
         });
         assert_eq!(listed, ["allowed"]);
     }
@@ -824,7 +952,15 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 7, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                7,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
@@ -846,19 +982,32 @@ mod tests {
             shell.set_extension_actions(vec![action("zeta", true), action("beta", true)], cx);
             shell.run(Command::SiteControls, "ui", cx);
         });
-        let last = || host.site_controls_extensions.borrow().last().cloned().unwrap_or_default();
+        let last = || {
+            host.site_controls_extensions
+                .borrow()
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        };
         assert_eq!(host.site_controls.borrow().len(), 1);
         assert_eq!(last(), ["zeta", "beta"]);
         shell.update(cx, |shell, cx| {
-            let others = [action("delta", false), action("gamma", false), action("alpha", false)];
-            let actions = [action("zeta", true), action("beta", true)].into_iter().chain(others);
+            let others = [
+                action("delta", false),
+                action("gamma", false),
+                action("alpha", false),
+            ];
+            let actions = [action("zeta", true), action("beta", true)]
+                .into_iter()
+                .chain(others);
             shell.set_extension_actions(actions.collect(), cx);
         });
         assert_eq!(last(), ["zeta", "beta", "alpha", "delta"]);
-        let toolbar: Vec<String> = (shell.read_with(cx, |shell, _| shell.extension_actions.clone()))
-            .iter()
-            .map(|action| action.id.to_string())
-            .collect();
+        let toolbar: Vec<String> = (shell
+            .read_with(cx, |shell, _| shell.extension_actions.clone()))
+        .iter()
+        .map(|action| action.id.to_string())
+        .collect();
         assert_eq!(toolbar, ["zeta", "beta"]);
     }
 
@@ -869,7 +1018,15 @@ mod tests {
         let host = Rc::new(Recorder::default());
         let shell = cx.new(|cx| Shell::new(host.clone(), cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 7, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                7,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
             let extensions = ["alpha", "beta", "zeta"].map(|id| extension(id, true, &[]));
@@ -883,7 +1040,10 @@ mod tests {
             });
             host.take()
         };
-        assert_eq!(move_to_top("beta", cx), ["pin 7 zeta false", "pin 7 zeta true"]);
+        assert_eq!(
+            move_to_top("beta", cx),
+            ["pin 7 zeta false", "pin 7 zeta true"]
+        );
         assert_eq!(
             move_to_top("alpha", cx),
             [

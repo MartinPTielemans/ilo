@@ -37,7 +37,9 @@ impl Profiles {
 
     /// Names the profile what the field holds, unless it's empty, as Settings' `keep_name`.
     fn keep(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((field, _)) = self.renaming.take() else { return };
+        let Some((field, _)) = self.renaming.take() else {
+            return;
+        };
         let name = field.read(cx).text().trim().to_string();
         if !name.is_empty() {
             self.kept.push(name);
@@ -73,9 +75,9 @@ impl Render for Profiles {
                     .h(px(30.))
                     .w(px(200.))
                     .key_context("Naming")
-                    .on_action(cx.listener(|profiles, _: &KeepName, window, cx| {
-                        profiles.keep(window, cx)
-                    }))
+                    .on_action(
+                        cx.listener(|profiles, _: &KeepName, window, cx| profiles.keep(window, cx)),
+                    )
                     .on_action(cx.listener(|profiles, _: &CancelName, window, cx| {
                         profiles.cancel(window, cx)
                     }))
@@ -110,7 +112,12 @@ fn press(cx: &mut VisualTestContext, position: Point<Pixels>, button: MouseButto
         click_count: 1,
         first_mouse: false,
     });
-    cx.simulate_event(MouseUpEvent { position, button, modifiers, click_count: 1 });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        button,
+        modifiers,
+        click_count: 1,
+    });
     cx.run_until_parked();
 }
 
@@ -157,7 +164,10 @@ fn a_profile_name_is_kept_however_the_field_loses_the_keyboard(cx: &mut TestAppC
         rename(&profiles, cx);
         cx.simulate_keystrokes("backspace");
         leave(cx);
-        assert!(!renaming(&profiles, cx), "{way:?} left the empty field open");
+        assert!(
+            !renaming(&profiles, cx),
+            "{way:?} left the empty field open"
+        );
         assert!(kept(&profiles, cx).is_empty(), "{way:?} kept an empty name");
 
         rename(&profiles, cx);
@@ -165,7 +175,10 @@ fn a_profile_name_is_kept_however_the_field_loses_the_keyboard(cx: &mut TestAppC
         cx.simulate_keystrokes("escape");
         assert!(!renaming(&profiles, cx), "escape left the field open");
         leave(cx);
-        assert!(kept(&profiles, cx).is_empty(), "{way:?} kept a name escape cancelled");
+        assert!(
+            kept(&profiles, cx).is_empty(),
+            "{way:?} kept a name escape cancelled"
+        );
     }
 }
 
@@ -184,7 +197,9 @@ fn a_profile_name_is_kept_as_its_menu_closes_away_from_it(cx: &mut TestAppContex
     });
     let show_menu = |cx: &mut VisualTestContext| {
         press(cx, FIELD, MouseButton::Right);
-        shown.take().expect("a right-click in the field showed no menu")
+        shown
+            .take()
+            .expect("a right-click in the field showed no menu")
     };
     for (closed, ends) in [
         (Closed::PressedAt(FIELD), false),
@@ -197,7 +212,10 @@ fn a_profile_name_is_kept_as_its_menu_closes_away_from_it(cx: &mut TestAppContex
         cx.simulate_input("Work");
         let chosen = show_menu(cx);
         cx.deactivate_window();
-        assert!(renaming(&profiles, cx), "the menu taking the keyboard closed the field");
+        assert!(
+            renaming(&profiles, cx),
+            "the menu taking the keyboard closed the field"
+        );
         cx.update(|window, cx| chosen(closed, window, cx));
         cx.run_until_parked();
         assert_eq!(!renaming(&profiles, cx), ends, "{closed:?}");

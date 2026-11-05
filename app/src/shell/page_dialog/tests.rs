@@ -14,9 +14,19 @@ fn window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
-        shell.set_spaces(vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())], cx);
+        shell.set_spaces(
+            vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())],
+            cx,
+        );
         shell.set_space(1, cx);
-        shell.set_tabs(1, Vec::new(), vec![10, 20], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![10, 20],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
         shell.set_selected(10, cx);
     });
     cx.run_until_parked();
@@ -41,7 +51,10 @@ fn prompt(id: u64) -> PageDialog {
 
 /// What the shell asked about page dialogs since the last time.
 fn dialogs(host: &Recorder) -> Vec<String> {
-    host.take().into_iter().filter(|call| call.contains("dialog")).collect()
+    host.take()
+        .into_iter()
+        .filter(|call| call.contains("dialog"))
+        .collect()
 }
 
 fn ask(shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64, dialog: Option<PageDialog>) {
@@ -88,8 +101,12 @@ fn the_answer_reaches_the_core_once(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     ask(&shell, cx, 10, Some(prompt(1)));
     dialogs(&host);
-    let reply =
-        || PageReply { accept: true, text: "Ada".into(), password: "".into(), checked: false };
+    let reply = || PageReply {
+        accept: true,
+        text: "Ada".into(),
+        password: "".into(),
+        checked: false,
+    };
     shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 1, reply(), cx));
     cx.run_until_parked();
     // The dialog has left already, so there's nothing to take back.
@@ -105,14 +122,20 @@ fn the_answer_reaches_the_core_once(cx: &mut TestAppContext) {
 fn the_password_never_reaches_a_log(cx: &mut TestAppContext) {
     let (shell, cx, host) = window(cx);
     ask(&shell, cx, 10, Some(prompt(1)));
-    let reply =
-        PageReply { accept: true, text: "ada".into(), password: "hunter2".into(), checked: true };
+    let reply = PageReply {
+        accept: true,
+        text: "ada".into(),
+        password: "hunter2".into(),
+        checked: true,
+    };
     assert_eq!(format!("{reply:?}"), "accept, checked");
     shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 1, reply, cx));
     cx.run_until_parked();
     let calls = host.take();
     assert!(
-        calls.iter().all(|call| !call.contains("hunter2") && !call.contains("ada")),
+        calls
+            .iter()
+            .all(|call| !call.contains("hunter2") && !call.contains("ada")),
         "{calls:?}"
     );
     // The core still gets it.
@@ -126,7 +149,10 @@ fn a_tab_in_safaris_engine_keeps_chromiums_dialog_back(cx: &mut TestAppContext) 
     assert_eq!(dialogs(&host), ["page dialog 10 1"]);
     let engine = |shell: &Entity<Shell>, cx: &mut VisualTestContext, system_engine: bool| {
         shell.update(cx, |shell, cx| {
-            let page = Page { system_engine, ..shell.page(10) };
+            let page = Page {
+                system_engine,
+                ..shell.page(10)
+            };
             shell.set_page(10, page, cx);
         });
         cx.run_until_parked();
