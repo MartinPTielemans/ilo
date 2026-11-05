@@ -1361,11 +1361,18 @@ BC_EXPORT bool bc_window_restore(bc_id window);
 
 // The frames of the regular windows open when the browser last quit, or when its last window
 // closed, front to back, which is the order they were last active in: each as it was out of full
-// screen, in bc_window_open's terms, and empty (width 0) if it was saved before frames were kept.
+// screen and maximized (bc_saved_window_maximized), in bc_window_open's terms, and empty (width 0)
+// if it was saved before frames were kept.
 // None of a private window. Copies up to |count| into |frames| and returns how many there are.
 // Works from started. The first is the window bc_window_restore brings the Spaces back in; open it
 // there. The core saves them as the windows open, move, resize and close.
 BC_EXPORT size_t bc_saved_window_frames(bc_rect* frames, size_t count);
+
+// Whether saved window |index|, 0 or more, was maximized then, as Chromium's session keeps a
+// window's show state, its frame (bc_saved_window_frames) the one it un-maximizes to. Open it there
+// and maximize it, before its UI, so that starts at the maximized size. Never on the Mac, whose
+// zoom is a frame, the one bc_saved_window_frames gives. Works from started.
+BC_EXPORT bool bc_saved_window_maximized(size_t index);
 
 // Opens saved window |index|, 1 or more, at |bounds|, as bc_window_open does but behind the windows
 // open and not key, once bc_window_restore has brought the Spaces back in the first. It shows the

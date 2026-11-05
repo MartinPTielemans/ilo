@@ -1597,6 +1597,27 @@ fn full_screen(window: xproto::Window) -> Option<bool> {
     Some(property.value32()?.any(|atom| atom == full))
 }
 
+/// Whether the window manager has `window` maximized, both ways.
+fn maximized(window: xproto::Window) -> Option<bool> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let [state, vertical, horizontal] = [
+        "_NET_WM_STATE",
+        "_NET_WM_STATE_MAXIMIZED_VERT",
+        "_NET_WM_STATE_MAXIMIZED_HORZ",
+    ]
+    .map(atom);
+    let property = (connection.get_property(false, window, state?, xproto::AtomEnum::ATOM, 0, 64))
+        .ok()?
+        .reply()
+        .ok()?;
+    let atoms: Vec<_> = property
+        .value32()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    Some(atoms.contains(&vertical?) && atoms.contains(&horizontal?))
+}
+
 /// Logs "browser: window zoomed <0|1>" as the window manager maximizes `window` or restores it, as
 /// drive.mm logs AppKit's zoom. On a connection of the driver's own, whose thread waits on the X
 /// server's property changes, so it wakes only for one.
@@ -2385,6 +2406,40 @@ fn run_command(line: &str) -> Option<()> {
         // green button.
         "fullscreen" => {
             unsafe { bc::bc_window_toggle_full_screen(driven_id()?) };
+            Some(())
+        }
+        // As the window manager's maximize key: it maximizes the driven window, or restores it
+        // once maximized, through the root window, as a pager asks (EWMH's _NET_WM_STATE). Chromium
+        // hears of it after the window manager has done it, as of the user's (#1454).
+        "maximize" => {
+            let browser = driven()?;
+            let maximized = maximized(browser.window)?;
+            let x = server()?;
+            let (connection, root) = &*x;
+            let [state, vertical, horizontal] = [
+                "_NET_WM_STATE",
+                "_NET_WM_STATE_MAXIMIZED_VERT",
+                "_NET_WM_STATE_MAXIMIZED_HORZ",
+            ]
+            .map(atom);
+            // 0 takes the state off and 1 puts it on, and 1 says it's from an application.
+            let data = [u32::from(!maximized), vertical?, horizontal?, 1, 0];
+            let message = xproto::ClientMessageEvent::new(32, browser.window, state?, data);
+            let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            connection.send_event(false, *root, mask, message).ok()?;
+            connection.flush().ok()
+        }
+        // The driven window's state as the window manager has it and its frame now, as Windows'
+        // driver logs its placement: "browser: placement <maximized|normal> <x> <y> <width>
+        // <height>". The window manager keeps the frame a maximized window restores to itself.
+        "placement" => {
+            let browser = driven()?;
+            let state = match maximized(browser.window)? {
+                true => "maximized",
+                false => "normal",
+            };
+            let [x, y, width, height] = frame(browser.window)?;
+            log!("browser: placement {state} {x:.0} {y:.0} {width:.0} {height:.0}");
             Some(())
         }
         "resize" | "place" => {

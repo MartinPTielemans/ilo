@@ -154,8 +154,13 @@ bool SessionKept();
 double SavedSidebarWidth();
 
 // The frames of the regular windows open when the browser last quit, front to back, as they were
-// out of full screen. One saved before frames were kept is empty. Read with the Spaces.
+// out of full screen and maximized. One saved before frames were kept is empty. Read with the
+// Spaces.
 std::vector<gfx::Rect> SavedWindowFrames();
+
+// Whether saved window |index| (SavedWindowFrames) was maximized, its frame the one it un-maximizes
+// to. Never on the Mac.
+bool SavedWindowMaximized(size_t index);
 
 // Has |window| show what the saved window |index| showed, the first being RestoreSession's: its
 // Space, its sidebar's width, and full screen if it was the front one. Returns whether there's such a window

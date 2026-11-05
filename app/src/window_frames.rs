@@ -148,9 +148,34 @@ const MINIMUM: f64 = 100.;
 /// How far under its opener's top a page's pop-up opens, Chrome's cascade (kWindowTilePixels).
 const POPUP_DROP: f64 = 10.;
 
+/// The saved window a browser window opens as, at its frame, which comes back in the state it quit
+/// in: with no window it opens from (`first`), the launch's first, the front one, and `saved`, one
+/// behind it. None for a window that isn't `regular`: a private or Little ilo window, or one at a
+/// frame of its own.
+pub fn saved_at(first: bool, regular: bool, saved: Option<usize>) -> Option<usize> {
+    match (regular, saved) {
+        (false, _) => None,
+        (true, Some(index)) => Some(index),
+        (true, None) => first.then_some(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launch's first window is the front one saved, and those it opens behind it the others,
+    /// each by its index, so each comes back maximized if it quit so (#1454). A window opened from
+    /// another, a private or Little ilo window, or one at a frame of its own is none of them.
+    #[test]
+    fn each_window_a_launch_brings_back_is_the_one_saved_at_its_place() {
+        assert_eq!(saved_at(true, true, None), Some(0));
+        assert_eq!(saved_at(false, true, Some(1)), Some(1));
+        assert_eq!(saved_at(false, true, Some(3)), Some(3));
+        assert_eq!(saved_at(false, true, None), None);
+        assert_eq!(saved_at(true, false, None), None);
+        assert_eq!(saved_at(false, false, Some(1)), None);
+    }
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
         Frame {

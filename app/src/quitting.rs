@@ -162,9 +162,11 @@ pub(crate) fn forget_launch_pictures() {
     }
 }
 
-/// Keeps the frame of the browser window of `ui_view` for the next launch's first window to open
-/// at. Out of full screen only: the core keeps the frame a window in full screen comes back at.
-/// Maximized on Windows, the frame it un-maximizes to and "maximized" after it (launching).
+/// Keeps the frame of the browser window of `ui_view` for the next launch's launch window to show
+/// at, before the core has read the windows it saved. Out of full screen only: the core keeps the
+/// frame a window in full screen comes back at. Maximized on Windows, the frame it un-maximizes to
+/// and "maximized" after it (launching), for the launch window alone: the browser window opens
+/// maximized as the core saved it (bc_saved_window_maximized).
 pub(crate) fn save_launch_frame(ui_view: *mut c_void) {
     let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
     if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {

@@ -648,18 +648,15 @@ unsafe extern "C" fn agent_request_done(
     agents_core::update(move |agents, cx| agents.request_done(request, response, cx));
 }
 
-thread_local! {
-    /// The launch window is maximized, as the first browser window opens (open_window_as).
-    static LAUNCH_MAXIMIZED: Cell<bool> = const { Cell::new(false) };
-}
-
 unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
     };
     // Where the front window was, which the browser window opens at again, and whether it was
-    // maximized, which only Windows saves (save_launch_frame).
+    // maximized, which only Windows saves (save_launch_frame): the launch window shows before the
+    // core has read the windows it saved, whose state the browser window opens in
+    // (bc_saved_window_maximized).
     let saved = std::fs::read_to_string(launch_frame_path())
         .ok()
         .and_then(|text| {
@@ -702,7 +699,6 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             false,
         )
     });
-    LAUNCH_MAXIMIZED.set(maximized);
     unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height, maximized) };
     // check.sh reads this line.
     let state = if maximized { " maximized" } else { "" };

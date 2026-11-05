@@ -232,6 +232,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // The docked sidebar's width the UI last gave the window, kept with the Spaces, or 0 for none. A
   // window opens with the one the last launch saved.
   double sidebar_width() const { return sidebar_width_; }
+  // The frame the window had out of full screen and maximized, which it goes back to from them,
+  // and the session keeps. On X11 that of a window the window manager maximized too, which
+  // Chromium's restored bounds don't know (#1454).
+  gfx::Rect RestoredFrame() const;
   void SetSidebarWidth(double width);
   // Where the selected tab's page goes, in the window, and the radius of its corners. A split view
   // shares it out between its pages.
@@ -501,6 +505,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether the app is moving the page frame on its own (SetPageMoving).
   bool page_moving_ = false;
   double sidebar_width_;
+  // On Linux, the last frames the window had out of maximized and full screen, newest last
+  // (KeepNormalFrame), for RestoredFrame.
+  std::vector<gfx::Rect> normal_frames_;
   std::map<Profile*, Held> browsers_;
   // What each Clear closed, top to bottom, the last at the back, for UndoClear.
   std::vector<ClearedTabs> cleared_;

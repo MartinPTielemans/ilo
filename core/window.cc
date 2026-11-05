@@ -38,6 +38,7 @@
 #include "browser_core/suggest.h"
 #include "browser_core/sync.h"
 #include "browser_core/tab.h"
+#include "browser_core/window_frames.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/devtools/devtools_contents_resizing_strategy.h"
@@ -1392,6 +1393,10 @@ Window::Window(bc_id id, const gfx::Rect& bounds, void* ui_view, bool behind)
 #endif
   widget_->Init(std::move(params));
   widget_observation_.Observe(widget_.get());
+#if BUILDFLAG(IS_LINUX)
+  // Where it opens, for a window manager that maximizes it before it ever moves.
+  KeepNormalFrame(normal_frames_, widget_->GetWindowBoundsInScreen());
+#endif
   platform::AddWindowViews(widget_.get(), ui_view);
   if (behind) {
     widget_->ShowInactive();
@@ -2905,6 +2910,22 @@ void Window::LeaveFullScreen() {
   }
 }
 
+gfx::Rect Window::RestoredFrame() const {
+  if (!widget_) {
+    return gfx::Rect();
+  }
+  const gfx::Rect restored = widget_->GetRestoredBounds();
+#if BUILDFLAG(IS_LINUX)
+  // Chromium knows the frame only when it asked for the maximize itself; for the window manager's,
+  // the bounds it gives are the maximized frame.
+  if (widget_->IsMaximized() && !widget_->IsFullscreen() &&
+      restored == widget_->GetWindowBoundsInScreen()) {
+    return FrameBeforeMaximized(normal_frames_, restored);
+  }
+#endif
+  return restored;
+}
+
 bool Window::FullScreenForPage() const {
   for (const auto& [profile, held] : browsers_) {
     ExclusiveAccessManager* manager = ExclusiveAccessManager::From(held.browser);
@@ -2917,6 +2938,11 @@ bool Window::FullScreenForPage() const {
 }
 
 void Window::OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& new_bounds) {
+#if BUILDFLAG(IS_LINUX)
+  if (!widget->IsMaximized() && !widget->IsFullscreen() && !widget->IsMinimized()) {
+    KeepNormalFrame(normal_frames_, widget->GetWindowBoundsInScreen());
+  }
+#endif
   // The session keeps each regular window's frame, saved a while after it moves, so a crash
   // keeps it too.
   if (!own_space_) {

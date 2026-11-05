@@ -414,6 +414,10 @@ size_t bc_saved_window_frames(bc_rect* frames, size_t count) {
   return saved.size();
 }
 
+bool bc_saved_window_maximized(size_t index) {
+  return browser_core::SavedWindowMaximized(index);
+}
+
 bc_id bc_window_open_saved(size_t index, bc_rect bounds, void* ui_view) {
   if (index == 0 || index >= browser_core::SavedWindowFrames().size()) {
     return 0;

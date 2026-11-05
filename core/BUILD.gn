@@ -170,6 +170,19 @@ source_set("agent_download_hold") {
   ]
 }
 
+# The frame a window the window manager maximized un-maximizes to, apart so browser_core_unittests
+# tests the rule alone.
+source_set("window_frames") {
+  sources = [
+    "window_frames.cc",
+    "window_frames.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -319,6 +332,7 @@ source_set("browser_core") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":window_frames",
     "//base",
     "//base:i18n",
     "//chrome/app:command_ids",
@@ -587,6 +601,7 @@ test("browser_core_unittests") {
     "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "window_frames_unittest.cc",
   ]
   deps = [
     ":archive_rule",
@@ -598,6 +613,7 @@ test("browser_core_unittests") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":window_frames",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
