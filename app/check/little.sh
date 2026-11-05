@@ -332,8 +332,8 @@ if [ "$(uname)" = Darwin ] || windows; then
 fi
 
 # The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs
-# the browser with --new-little-window, as it starts, and that command opens a Little ilo window for
-# the Space shown. The driver can't open Explorer's jump list, so the run reads the task ilo wrote
+# the browser with --new-little-window, as its first window opens, and that command opens a Little
+# ilo window for the Space shown. The driver can't open Explorer's jump list, so the run reads the task ilo wrote
 # and runs its command, as Windows runs it. A launch the browser hands on reaches the core, so that
 # part needs an engine built with core/main_delegate.cc as it is here.
 if windows; then
