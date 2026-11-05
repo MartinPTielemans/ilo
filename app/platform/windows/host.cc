@@ -1396,9 +1396,23 @@ ITfThreadMgr* ThreadManager() {
   return manager;
 }
 
-// The document the bridge gives GPUI's windows, as TSF's focus was on it while one of them had the
-// keyboard, which no call hands over otherwise.
+// The documents the bridge gives GPUI's windows, one each, as TSF's focus was on them while one of
+// them had the keyboard, which no call hands over otherwise: the command bar's, and else the last
+// GPUI window's.
+ITfDocumentMgr* g_bar_document = nullptr;
 ITfDocumentMgr* g_gpui_document = nullptr;
+
+// Keeps |document| in |kept|.
+void Keep(ITfDocumentMgr*& kept, ITfDocumentMgr* document) {
+  if (kept == document) {
+    return;
+  }
+  if (kept) {
+    kept->Release();
+  }
+  document->AddRef();
+  kept = document;
+}
 
 // Whether |window| is one of GPUI's, as the bar is.
 bool IsGpuiWindow(HWND window) {
@@ -1421,22 +1435,25 @@ class FocusSink : public ITfThreadMgrEventSink {
   STDMETHODIMP_(ULONG) Release() override { return 1; }
   STDMETHODIMP OnInitDocumentMgr(ITfDocumentMgr*) override { return S_OK; }
   STDMETHODIMP OnUninitDocumentMgr(ITfDocumentMgr* document) override {
-    if (document == g_gpui_document) {
-      g_gpui_document->Release();
-      g_gpui_document = nullptr;
+    for (ITfDocumentMgr** kept : {&g_bar_document, &g_gpui_document}) {
+      if (*kept == document) {
+        (*kept)->Release();
+        *kept = nullptr;
+      }
     }
     return S_OK;
   }
   STDMETHODIMP OnSetFocus(ITfDocumentMgr* focused, ITfDocumentMgr*) override {
-    if (focused && focused != g_gpui_document && IsGpuiWindow(GetFocus())) {
-      if (g_gpui_document) {
-        g_gpui_document->Release();
-      }
-      focused->AddRef();
-      g_gpui_document = focused;
-      // check.sh reads none of this: it says the hold has a document for the bar.
-      fprintf(stderr, "browser: TSF's document for GPUI's windows found\n");
+    HWND focus = GetFocus();
+    if (!focused || !IsGpuiWindow(focus)) {
+      return S_OK;
     }
+    if (focus == g_overlays[0].hwnd && focused != g_bar_document) {
+      Keep(g_bar_document, focused);
+      // check.sh reads none of this: it says the hold has a document for the bar.
+      fprintf(stderr, "browser: TSF's document for the command bar found\n");
+    }
+    Keep(g_gpui_document, focused);
     return S_OK;
   }
   STDMETHODIMP OnPushContext(ITfContext*) override { return S_OK; }
@@ -1505,8 +1522,12 @@ void ComposeInBar() {
       none->Release();
     }
   }
-  ITfDocumentMgr* document = g_gpui_document ? g_gpui_document : associated;
-  const char* found = g_gpui_document ? "GPUI's" : associated ? "the bar's associated" : "none";
+  ITfDocumentMgr* document =
+      g_bar_document ? g_bar_document : g_gpui_document ? g_gpui_document : associated;
+  const char* found = g_bar_document    ? "the bar's"
+                      : g_gpui_document ? "a GPUI window's"
+                      : associated      ? "the bar's associated"
+                                        : "no";
   if (document && document != composing.document) {
     manager->SetFocus(document);
     if (context) {
@@ -1575,6 +1596,17 @@ void ReleaseKeys(HWND from) {
   const bool to_bar = g_keys_for || from;
   HWND to = g_keys_for ? g_keys_for : (from ? from : GetFocus());
   g_keys_for = nullptr;
+  if (!g_held_keys.empty() && g_bar_composition) {
+    std::string keys;
+    for (const MSG& held : g_held_keys) {
+      char each[32];
+      const bool up = held.message == WM_KEYUP || held.message == WM_SYSKEYUP;
+      snprintf(each, sizeof(each), " %s%02x", up ? "^" : "", static_cast<unsigned>(held.wParam));
+      keys += each;
+    }
+    // check.sh reads none of this: the key events held while the IME composed for the bar.
+    fprintf(stderr, "browser: held while composing:%s\n", keys.c_str());
+  }
   EndBarComposition(to, to_bar);
   if (!g_held_keys.empty()) {
     // check.sh reads this line, which names the window that took them as the Mac's does.
