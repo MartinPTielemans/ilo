@@ -322,7 +322,7 @@ impl Shell {
     }
 
     /// Where the Space's pages start: under the tiles.
-    fn list_top(&self) -> f32 {
+    pub(super) fn list_top(&self) -> f32 {
         self.list_top_with(self.tile_tabs().len())
     }
 
