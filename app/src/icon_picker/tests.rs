@@ -6,7 +6,11 @@ use std::{
     rc::Rc,
 };
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Modifiers, TestAppContext, VisualTestContext,
+    accesskit::{Node, NodeId, Role},
+    point, px,
+};
 
 use super::*;
 
@@ -66,7 +70,9 @@ impl Picker {
         let recents = Recents::parse(recents);
         // The app binds the field's keys once for every window.
         cx.update(text_input::bind_keys);
-        let window = cx.update(|cx| open(host.clone(), recents, cx)).expect("no window");
+        let window = cx
+            .update(|cx| open(host.clone(), recents, cx))
+            .expect("no window");
         let recorded = host.clone();
         let picked: Picked = Rc::new(move |icon, _| recorded.record(format!("picked {icon:?}")));
         let icon = SharedString::from(icon.to_string());
@@ -78,12 +84,16 @@ impl Picker {
     }
 
     fn tab(&mut self) -> Option<Tab> {
-        let picking = self.window.read_with(&self.cx.cx, |picker, _| picker.picking()).unwrap();
+        let picking = self
+            .window
+            .read_with(&self.cx.cx, |picker, _| picker.picking())
+            .unwrap();
         picking.map(|(_, tab)| tab)
     }
 
     fn click(&mut self, x: f32, y: f32) {
-        self.cx.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.cx
+            .simulate_click(point(px(x), px(y)), Modifiers::none());
         self.cx.run_until_parked();
     }
 
@@ -112,8 +122,18 @@ impl Picker {
         self.window
             .read_with(&self.cx.cx, |picker, _| {
                 let picking = picker.picking.as_ref().expect("not showing");
-                let items = picking.grid.items.iter().map(|emoji| emoji.as_str()).collect();
-                (items, picking.selected.map(|item| picking.grid.items[item].as_str()))
+                let items = picking
+                    .grid
+                    .items
+                    .iter()
+                    .map(|emoji| emoji.as_str())
+                    .collect();
+                (
+                    items,
+                    picking
+                        .selected
+                        .map(|item| picking.grid.items[item].as_str()),
+                )
             })
             .unwrap()
     }
@@ -179,7 +199,10 @@ fn a_space_with_no_icon_is_offered_no_trash(cx: &mut TestAppContext) {
     let y = ARROW + SEGMENTS_TOP + SEGMENTS_HEIGHT / 2.;
     // Where the trash would be after the two.
     let left = (WIDTH - (2. * SEGMENT_WIDTH + TRASH_GAP + SEGMENTS_HEIGHT)) / 2.;
-    picker.click(left + 2. * SEGMENT_WIDTH + TRASH_GAP + SEGMENTS_HEIGHT / 2., y);
+    picker.click(
+        left + 2. * SEGMENT_WIDTH + TRASH_GAP + SEGMENTS_HEIGHT / 2.,
+        y,
+    );
     assert_eq!(picker.calls(), Vec::<String>::new());
     assert_eq!(picker.tab(), Some(Tab::Icon));
     // Emoji's right end, centred alone, is past where it ends beside the trash.
@@ -227,7 +250,10 @@ fn the_list_leaves_out_what_the_system_cant_draw_and_asks_once(cx: &mut TestAppC
     assert_eq!(picker.host.1.get(), 0);
     // The Emoji segment is the first of the two, centred under the arrow with the trash.
     let left = (WIDTH - (2. * SEGMENT_WIDTH + TRASH_GAP + SEGMENTS_HEIGHT)) / 2.;
-    picker.click(left + SEGMENT_WIDTH / 2., ARROW + SEGMENTS_TOP + SEGMENTS_HEIGHT / 2.);
+    picker.click(
+        left + SEGMENT_WIDTH / 2.,
+        ARROW + SEGMENTS_TOP + SEGMENTS_HEIGHT / 2.,
+    );
     let (items, _) = picker.listed();
     assert!(items.contains(&"🦊") && !items.contains(&"🫠"));
     let asked = picker.host.1.get();
@@ -255,12 +281,18 @@ fn a_tab_is_offered_the_emoji_tab_only() {
 fn a_tabs_picker_opens_on_the_emoji_tab_and_picks_an_emoji(cx: &mut TestAppContext) {
     // A tab with no icon, or a character no glyph is, still opens on the grid.
     let mut picker = Picker::for_tab("", cx);
-    let showing = picker.window.read_with(&picker.cx.cx, |p, _| p.picking()).unwrap();
+    let showing = picker
+        .window
+        .read_with(&picker.cx.cx, |p, _| p.picking())
+        .unwrap();
     assert_eq!(showing, Some((Subject::Tab(7), Tab::Emoji)));
     assert_eq!(picker.listed().1, None);
     picker.type_in_search("fox");
     picker.keys("enter");
-    assert_eq!(picker.calls(), ["recents \"🦊\\n\"", "hide", "picked \"🦊\""]);
+    assert_eq!(
+        picker.calls(),
+        ["recents \"🦊\\n\"", "hide", "picked \"🦊\""]
+    );
 
     // The tab's emoji is on the plate, and the trash gives the favicon back.
     let mut picker = Picker::for_tab("🌱", cx);
@@ -298,7 +330,10 @@ fn a_click_on_an_emoji_gives_the_space_that_emoji_and_closes(cx: &mut TestAppCon
     let mut picker = Picker::new("🌱", cx);
     picker.type_in_search("fox");
     picker.click_emoji(0, 0);
-    assert_eq!(picker.calls(), ["recents \"🦊\\n\"", "hide", "picked \"🦊\""]);
+    assert_eq!(
+        picker.calls(),
+        ["recents \"🦊\\n\"", "hide", "picked \"🦊\""]
+    );
     assert_eq!(picker.tab(), None);
 }
 
@@ -327,7 +362,11 @@ fn arrows_move_the_plate_and_return_picks(cx: &mut TestAppContext) {
     let picked = items[start + 1];
     assert_eq!(
         picker.calls(),
-        [format!("recents {:?}", format!("{picked}\n")), "hide".into(), format!("picked {picked:?}")]
+        [
+            format!("recents {:?}", format!("{picked}\n")),
+            "hide".into(),
+            format!("picked {picked:?}")
+        ]
     );
 }
 
@@ -346,7 +385,9 @@ fn left_and_right_move_the_caret_once_something_is_typed(cx: &mut TestAppContext
     // The caret moved left twice, so a letter typed lands after "fa".
     picker.keys("left");
     picker.type_in_search("s");
-    let text = picker.window.read_with(&picker.cx.cx, |p, cx| p.search.read(cx).text().to_string());
+    let text = picker
+        .window
+        .read_with(&picker.cx.cx, |p, cx| p.search.read(cx).text().to_string());
     assert_eq!(text.unwrap(), "fasce");
 }
 
@@ -374,17 +415,29 @@ fn the_last_pick_is_first_in_the_list_and_kept(cx: &mut TestAppContext) {
     assert_eq!(items[..3], ["🦊", "🌱", "🐙"]);
     // The Space's emoji is on the plate where the recents have it.
     assert_eq!(plate, Some("🌱"));
-    assert_eq!(picker.window.read_with(&picker.cx.cx, |p, _| p.picking.as_ref().unwrap().selected).unwrap(), Some(1));
+    assert_eq!(
+        picker
+            .window
+            .read_with(&picker.cx.cx, |p, _| p.picking.as_ref().unwrap().selected)
+            .unwrap(),
+        Some(1)
+    );
 }
 
 #[test]
 fn icons_come_in_from_the_right_and_emoji_from_the_left() {
     let near = |(old, new): (f32, f32), (x, y): (f32, f32)| {
-        assert!((old - x).abs() < 1e-3 && (new - y).abs() < 1e-3, "{old} {new}, not {x} {y}");
+        assert!(
+            (old - x).abs() < 1e-3 && (new - y).abs() < 1e-3,
+            "{old} {new}, not {x} {y}"
+        );
     };
     near(slid(Tab::Emoji, Tab::Icon, 0.), (0., WIDTH));
     let (old, new) = slid(Tab::Emoji, Tab::Icon, 0.5);
-    assert!(old < 0. && new > 0. && (new - old - WIDTH).abs() < 1e-3, "{old} {new}");
+    assert!(
+        old < 0. && new > 0. && (new - old - WIDTH).abs() < 1e-3,
+        "{old} {new}"
+    );
     near(slid(Tab::Emoji, Tab::Icon, 1.), (-WIDTH, 0.));
     near(slid(Tab::Icon, Tab::Emoji, 0.), (0., -WIDTH));
     near(slid(Tab::Icon, Tab::Emoji, 1.), (WIDTH, 0.));
@@ -396,4 +449,69 @@ fn a_folders_icon_is_an_emoji_as_a_tabs_is(cx: &mut TestAppContext) {
     assert_eq!(Subject::Folder(3).to_string(), "folder 3");
     let mut picker = Picker::of(Subject::Folder(7), "", "", cx);
     assert_eq!(picker.tab(), Some(Tab::Emoji));
+}
+
+/// The node an assistive app reads with `role` and `label`.
+fn has(picker: &mut Picker, role: Role, label: &str) -> (NodeId, Node) {
+    let tree = picker.cx.a11y_tree().expect("GPUI built a tree");
+    let found = tree
+        .nodes
+        .into_iter()
+        .find(|(_, node)| node.role() == role && node.label() == Some(label));
+    found.unwrap_or_else(|| panic!("no {role:?} called {label}"))
+}
+
+/// VoiceOver reads the picker as what it picks for (#1381): Emoji | Icon as tabs with the shown
+/// one selected, the trash as Remove Icon, and the glyphs as a list of options by name, the
+/// Space's selected. Its press on a glyph picks it.
+#[gpui::test]
+fn voiceover_reads_the_icon_tab(cx: &mut TestAppContext) {
+    use gpui::accesskit::Action;
+    let mut picker = Picker::new("glyph:star", cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    has(&mut picker, Role::Dialog, "Space Icon");
+    has(&mut picker, Role::TabList, "Kind of Icon");
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Emoji").1.is_selected(),
+        Some(false)
+    );
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Icon").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::Button, "Remove Icon");
+    has(&mut picker, Role::ListBox, "Icons");
+    assert_eq!(
+        has(&mut picker, Role::ListBoxOption, "star")
+            .1
+            .is_selected(),
+        Some(true)
+    );
+    let (moon, node) = has(&mut picker, Role::ListBoxOption, "moon");
+    assert_eq!(node.is_selected(), Some(false));
+    picker.cx.simulate_a11y_action(moon, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.calls(), ["hide", "picked \"glyph:moon\""]);
+}
+
+/// On the Emoji tab VoiceOver lists the emoji as the system names them, the one ↩ picks
+/// selected, and the tone button says the tone. A tab's picker reads as that.
+#[gpui::test]
+fn voiceover_reads_the_emoji_tab(cx: &mut TestAppContext) {
+    let mut picker = Picker::for_tab("🦊", cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    has(&mut picker, Role::Dialog, "Tab Icon");
+    assert_eq!(
+        has(&mut picker, Role::Tab, "Emoji").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::ListBox, "Emoji");
+    assert_eq!(picker.listed().1, Some("🦊"));
+    assert_eq!(
+        has(&mut picker, Role::ListBoxOption, "🦊").1.is_selected(),
+        Some(true)
+    );
+    has(&mut picker, Role::Button, "Skin Tone, Default");
 }

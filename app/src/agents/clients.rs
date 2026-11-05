@@ -5,6 +5,7 @@
 //! MCP client gets the bridge's command and its token to paste.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use serde_json::{Value, json};
@@ -164,14 +165,8 @@ const NO_CLAUDE: &str = "Claude Code's claude command isn't installed.";
 fn claude() -> Result<impl Fn(&[&str]) -> Result<(), String>, String> {
     let (program, path) = find_claude().ok_or(NO_CLAUDE)?;
     Ok(move |arguments: &[&str]| {
-        let mut command = Command::new(&program);
+        let mut command = crate::child::command(&program);
         command.env("PATH", &path).args(arguments);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // A console program the windowed browser starts would get a console window of its own.
-            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        }
         let output = command.output().map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => NO_CLAUDE.into(),
             _ => error.to_string(),
@@ -183,15 +178,26 @@ fn claude() -> Result<impl Fn(&[&str]) -> Result<(), String>, String> {
     })
 }
 
-/// `claude` where a terminal opened now would find it, or where an installer put it (#1420),
-/// and that terminal's PATH, where npm's claude.cmd finds node. Rust runs a .cmd through cmd.exe
-/// with each argument quoted for it, the JSON's quotes doubled, which node reads back whole.
+/// `claude` where a terminal opened now would find it, or where an installer put it (#1420).
+/// Rust runs a .cmd through cmd.exe with each argument quoted for it, the JSON's quotes doubled,
+/// which node reads back whole.
 #[cfg(windows)]
 fn find_claude() -> Option<(PathBuf, String)> {
+    windows_find("claude")
+}
+
+/// `name`, as `claude` or `codex`, where a terminal opened now would find it, or where an
+/// installer put it, and that terminal's PATH, where an npm .cmd shim finds node. Connect and the
+/// task agents both look for their CLI so (#1676).
+#[cfg(windows)]
+pub fn windows_find(name: &str) -> Option<(PathBuf, String)> {
     let var = |name: &str| std::env::var(name).ok();
     let path = windows_path(&var, registry_path(false), registry_path(true));
     let folders = windows_folders(&var, &path);
-    Some((windows_claude(&folders, var("PATHEXT"))?, path.join(";")))
+    Some((
+        windows_program(name, &folders, var("PATHEXT"))?,
+        path.join(";"),
+    ))
 }
 
 /// `claude` where a terminal the user opens would find it, or where an installer put it, which
@@ -204,7 +210,10 @@ fn find_claude() -> Option<(PathBuf, String)> {
     let npmrc = std::fs::read_to_string(home.join(".npmrc")).ok();
     let npm = npm_bin(&var, &home, npmrc.as_deref());
     let folders = unix_folders(&[var("PATH"), shell_path()], &home, npm, Path::new("/"));
-    let path = folders.iter().map(|folder| folder.to_string_lossy()).collect::<Vec<_>>();
+    let path = folders
+        .iter()
+        .map(|folder| folder.to_string_lossy())
+        .collect::<Vec<_>>();
     Some((unix_claude(&folders)?, path.join(":")))
 }
 
@@ -220,7 +229,9 @@ fn unix_folders(
     root: &Path,
 ) -> Vec<PathBuf> {
     let path = paths.iter().flatten().flat_map(|path| path.split(':'));
-    let path = path.map(PathBuf::from).filter(|folder| folder.is_absolute());
+    let path = path
+        .map(PathBuf::from)
+        .filter(|folder| folder.is_absolute());
     let installed = [
         Some(home.join(".local/bin")),
         npm,
@@ -242,22 +253,32 @@ fn unix_folders(
 fn unix_claude(folders: &[PathBuf]) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let runs = |program: &PathBuf| {
-        (program.metadata()).is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
+        (program.metadata())
+            .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
     };
-    folders.iter().map(|folder| folder.join("claude")).find(runs)
+    folders
+        .iter()
+        .map(|folder| folder.join("claude"))
+        .find(runs)
 }
 
 /// The folder npm installs global packages' commands in when the user moved its prefix, as npm's
 /// docs have them do to install without sudo: in npm_config_prefix, or `npmrc`, ~/.npmrc. npm's
 /// own prefix is node's folder, which the PATH that has node has too.
 #[cfg(not(windows))]
-fn npm_bin(var: &dyn Fn(&str) -> Option<String>, home: &Path, npmrc: Option<&str>) -> Option<PathBuf> {
+fn npm_bin(
+    var: &dyn Fn(&str) -> Option<String>,
+    home: &Path,
+    npmrc: Option<&str>,
+) -> Option<PathBuf> {
     let set = npmrc.unwrap_or_default().lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
         (key.trim() == "prefix").then(|| value.trim().trim_matches('"').to_string())
     });
-    let prefix = (var("npm_config_prefix").or_else(|| var("NPM_CONFIG_PREFIX")).or(set))
-        .filter(|prefix| !prefix.is_empty())?;
+    let prefix = (var("npm_config_prefix")
+        .or_else(|| var("NPM_CONFIG_PREFIX"))
+        .or(set))
+    .filter(|prefix| !prefix.is_empty())?;
     let home = home.to_string_lossy();
     let prefix = prefix.replace("${HOME}", &home);
     let prefix = match prefix.strip_prefix("~/") {
@@ -285,7 +306,7 @@ const SHELL_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(not(windows))]
 fn shell_path() -> Option<String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let mut command = Command::new(shell);
+    let mut command = crate::child::command(shell);
     command.args(["-i", "-l", "-c", PRINT_PATH]);
     printed_path(command, SHELL_WAIT)
 }
@@ -299,7 +320,10 @@ fn printed_path(mut command: Command, wait: std::time::Duration) -> Option<Strin
     use std::io::{BufRead, BufReader};
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     // setsid is async-signal-safe, as pre_exec asks: an interactive shell with the browser's
     // terminal would try to take it over, and stop until it could.
     unsafe {
@@ -346,8 +370,8 @@ fn windows_path(
         .collect()
 }
 
-/// Where Windows looks for `claude`: the folders on `path`, first to last, as a terminal does,
-/// then where Claude Code's own installer, winget and npm put it, which may not be on PATH.
+/// Where Windows looks for a CLI: the folders on `path`, first to last, as a terminal does, then
+/// where Claude Code's own installer, winget and npm put one, which may not be on PATH.
 #[cfg(any(windows, test))]
 fn windows_folders(var: &dyn Fn(&str) -> Option<String>, path: &[String]) -> Vec<PathBuf> {
     let installed: [(&str, &[&str]); 3] = [
@@ -362,17 +386,20 @@ fn windows_folders(var: &dyn Fn(&str) -> Option<String>, path: &[String]) -> Vec
     path.iter().map(PathBuf::from).chain(installed).collect()
 }
 
-/// The first `claude` in `folders`, trying in each the extensions in `pathext` that CreateProcess
-/// runs, in its order, as a terminal tries all of PATHEXT's.
+/// The first `name` in `folders`, trying in each the extensions in `pathext` that CreateProcess
+/// runs, in its order, as a terminal tries all of PATHEXT's. A .ps1 npm writes beside its .cmd
+/// isn't one.
 #[cfg(any(windows, test))]
-fn windows_claude(folders: &[PathBuf], pathext: Option<String>) -> Option<PathBuf> {
+fn windows_program(name: &str, folders: &[PathBuf], pathext: Option<String>) -> Option<PathBuf> {
     let pathext = pathext.unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
     let extensions: Vec<String> = (pathext.split(';'))
         .map(|extension| extension.trim().to_ascii_lowercase())
         .filter(|extension| [".com", ".exe", ".bat", ".cmd"].contains(&extension.as_str()))
         .collect();
     (folders.iter())
-        .flat_map(|folder| (extensions.iter()).map(move |extension| folder.join(format!("claude{extension}"))))
+        .flat_map(|folder| {
+            (extensions.iter()).map(move |extension| folder.join(format!("{name}{extension}")))
+        })
         .find(|program| program.is_file())
 }
 
@@ -415,7 +442,15 @@ fn registry_path(user: bool) -> Option<String> {
     let (folder, name) = (wide(folder), wide("Path"));
     let read = |data: *mut core::ffi::c_void, size: &mut u32| unsafe {
         let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
-        RegGetValueW(key, folder.as_ptr(), name.as_ptr(), flags, std::ptr::null_mut(), data, size)
+        RegGetValueW(
+            key,
+            folder.as_ptr(),
+            name.as_ptr(),
+            flags,
+            std::ptr::null_mut(),
+            data,
+            size,
+        )
     };
     let mut size = 0;
     (read(std::ptr::null_mut(), &mut size) == 0).then_some(())?;
@@ -462,7 +497,12 @@ pub fn codex_with(text: &str, entry: &Entry) -> String {
         "{}\ncommand = {}\nargs = [{}]\nenv = {{ {} = {} }}\n",
         codex_table(&entry.name),
         toml_string(&entry.command),
-        entry.args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "),
+        entry
+            .args
+            .iter()
+            .map(|arg| toml_string(arg))
+            .collect::<Vec<_>>()
+            .join(", "),
         toml_string(bridge::TOKEN),
         toml_string(&entry.token),
     );
@@ -597,10 +637,13 @@ mod tests {
     fn home_with(programs: &[&[&str]]) -> PathBuf {
         static HOMES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let number = HOMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let home = std::env::temp_dir().join(format!("claude-home-{}-{number}", std::process::id()));
+        let home =
+            std::env::temp_dir().join(format!("claude-home-{}-{number}", std::process::id()));
         _ = std::fs::remove_dir_all(&home);
         for program in programs {
-            let program = program.iter().fold(home.clone(), |path, part| path.join(part));
+            let program = program
+                .iter()
+                .fold(home.clone(), |path, part| path.join(part));
             std::fs::create_dir_all(program.parent().unwrap()).unwrap();
             std::fs::write(&program, "").unwrap();
             #[cfg(unix)]
@@ -614,21 +657,44 @@ mod tests {
     }
 
     const NATIVE: &[&str] = &[".local", "bin", "claude.exe"];
-    const WINGET: &[&str] = &["AppData", "Local", "Microsoft", "WinGet", "Links", "claude.exe"];
+    const WINGET: &[&str] = &[
+        "AppData",
+        "Local",
+        "Microsoft",
+        "WinGet",
+        "Links",
+        "claude.exe",
+    ];
     const NPM: &[&str] = &["AppData", "Roaming", "npm", "claude.cmd"];
 
     /// Where Connect on Windows finds `claude` in `home`, with `path` the browser's PATH and
     /// `user` the user's in the registry.
     fn found_in(home: &Path, path: &str, user: Option<&str>) -> Option<PathBuf> {
+        cli_in("claude", home, path, user)
+    }
+
+    /// Where the browser on Windows finds the CLI `name` in `home`, as `found_in` finds `claude`.
+    fn cli_in(name: &str, home: &Path, path: &str, user: Option<&str>) -> Option<PathBuf> {
         let var = |name: &str| match name {
             "USERPROFILE" => Some(home.to_string_lossy().into_owned()),
-            "LOCALAPPDATA" => Some(home.join("AppData").join("Local").to_string_lossy().into_owned()),
-            "APPDATA" => Some(home.join("AppData").join("Roaming").to_string_lossy().into_owned()),
+            "LOCALAPPDATA" => Some(
+                home.join("AppData")
+                    .join("Local")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            "APPDATA" => Some(
+                home.join("AppData")
+                    .join("Roaming")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             "PATH" => Some(path.into()),
             _ => None,
         };
         let path = windows_path(&var, None, user.map(String::from));
-        let found = windows_claude(&windows_folders(&var, &path), Some(".COM;.EXE;.BAT;.CMD;.VBS;.JS".into()));
+        let pathext = Some(".COM;.EXE;.BAT;.CMD;.VBS;.JS".into());
+        let found = windows_program(name, &windows_folders(&var, &path), pathext);
         found.map(|program| program.strip_prefix(home).unwrap().to_path_buf())
     }
 
@@ -651,21 +717,37 @@ mod tests {
         assert_eq!(found_in(&both, "", None), at(NATIVE));
         let folder = |parts: &[&str]| {
             let parts = &parts[..parts.len() - 1];
-            parts.iter().fold(both.clone(), |path, part| path.join(part)).to_string_lossy().into_owned()
+            parts
+                .iter()
+                .fold(both.clone(), |path, part| path.join(part))
+                .to_string_lossy()
+                .into_owned()
         };
         let (native, winget) = (folder(NATIVE), folder(WINGET));
-        assert_eq!(found_in(&both, &format!("{winget};{native}"), None), at(WINGET));
-        assert_eq!(found_in(&both, &format!("\"{native}\";{winget}"), None), at(NATIVE));
+        assert_eq!(
+            found_in(&both, &format!("{winget};{native}"), None),
+            at(WINGET)
+        );
+        assert_eq!(
+            found_in(&both, &format!("\"{native}\";{winget}"), None),
+            at(NATIVE)
+        );
         // The user's PATH as the registry keeps it, added to since the browser started.
         let separator = std::path::MAIN_SEPARATOR;
-        let user = format!("%NOT_SET%;%LOCALAPPDATA%{separator}Microsoft{separator}WinGet{separator}Links");
+        let user = format!(
+            "%NOT_SET%;%LOCALAPPDATA%{separator}Microsoft{separator}WinGet{separator}Links"
+        );
         assert_eq!(found_in(&both, "", Some(&user)), at(WINGET));
     }
 
     /// In one folder, PATHEXT's order picks, among what CreateProcess runs: a .js isn't one.
     #[test]
     fn windows_takes_pathexts_order_in_a_folder() {
-        let home = home_with(&[&["bin", "claude.js"], &["bin", "claude.cmd"], &["bin", "claude.exe"]]);
+        let home = home_with(&[
+            &["bin", "claude.js"],
+            &["bin", "claude.cmd"],
+            &["bin", "claude.exe"],
+        ]);
         let path = home.join("bin").to_string_lossy().into_owned();
         assert_eq!(found_in(&home, &path, None), at(&["bin", "claude.exe"]));
         std::fs::remove_file(home.join("bin").join("claude.exe")).unwrap();
@@ -674,14 +756,62 @@ mod tests {
         assert_eq!(found_in(&home, &path, None), None);
     }
 
+    /// The task agents find Codex on Windows as Connect finds Claude Code (#1676): npm's codex.cmd,
+    /// with its codex.ps1 beside it, which CreateProcess can't run, or a codex.exe, though the
+    /// browser's PATH doesn't have its folder. A folder on PATH that isn't there is passed over.
+    #[test]
+    fn windows_finds_codex_however_it_was_installed() {
+        const NPM_CODEX: &[&str] = &["AppData", "Roaming", "npm", "codex.cmd"];
+        const NPM_PS1: &[&str] = &["AppData", "Roaming", "npm", "codex.ps1"];
+        const WINGET_CODEX: &[&str] = &[
+            "AppData",
+            "Local",
+            "Microsoft",
+            "WinGet",
+            "Links",
+            "codex.exe",
+        ];
+        const TOOLS_CODEX: &[&str] = &["tools", "codex.exe"];
+        assert_eq!(cli_in("codex", &home_with(&[NPM_PS1]), "", None), None);
+        assert_eq!(
+            cli_in("codex", &home_with(&[NPM_CODEX, NPM_PS1]), "", None),
+            at(NPM_CODEX)
+        );
+        assert_eq!(
+            cli_in("codex", &home_with(&[WINGET_CODEX]), "", None),
+            at(WINGET_CODEX)
+        );
+        // Claude Code's own isn't taken for Codex.
+        assert_eq!(cli_in("codex", &home_with(&[NATIVE, NPM]), "", None), None);
+
+        let home = home_with(&[TOOLS_CODEX, NPM_CODEX]);
+        let tools = home.join("tools").to_string_lossy().into_owned();
+        let gone = home.join("gone").to_string_lossy().into_owned();
+        // Off the browser's PATH, npm's; on it, past a folder that isn't there, the first on PATH.
+        assert_eq!(cli_in("codex", &home, &gone, None), at(NPM_CODEX));
+        assert_eq!(
+            cli_in("codex", &home, &format!("{gone};{tools}"), None),
+            at(TOOLS_CODEX)
+        );
+        // Put on the user's PATH by an install since the browser started.
+        assert_eq!(cli_in("codex", &home, &gone, Some(&tools)), at(TOOLS_CODEX));
+    }
+
     /// The registry's PATH has its variables filled in, and one that isn't set is kept as it is.
     #[test]
     fn windows_expands_the_registrys_path() {
         let var = |name: &str| (name == "USERPROFILE").then(|| r"C:\Users\Me Too".to_string());
-        assert_eq!(expand(r"%USERPROFILE%\.local\bin", &var), r"C:\Users\Me Too\.local\bin");
+        assert_eq!(
+            expand(r"%USERPROFILE%\.local\bin", &var),
+            r"C:\Users\Me Too\.local\bin"
+        );
         assert_eq!(expand(r"%NOPE%\x;100%", &var), r"%NOPE%\x;100%");
         assert_eq!(
-            windows_path(&var, Some(r"C:\Windows;;".into()), Some(r#""%USERPROFILE%\bin""#.into())),
+            windows_path(
+                &var,
+                Some(r"C:\Windows;;".into()),
+                Some(r#""%USERPROFILE%\bin""#.into())
+            ),
             [r"C:\Windows", r"C:\Users\Me Too\bin"]
         );
     }
@@ -705,7 +835,12 @@ mod tests {
     fn unix_found_in(home: &Path, path: &str, shell: Option<&str>) -> Option<PathBuf> {
         let npmrc = std::fs::read_to_string(home.join(".npmrc")).ok();
         let npm = npm_bin(&|_| None, home, npmrc.as_deref());
-        let folders = unix_folders(&[Some(path.into()), shell.map(String::from)], home, npm, home);
+        let folders = unix_folders(
+            &[Some(path.into()), shell.map(String::from)],
+            home,
+            npm,
+            home,
+        );
         let found = unix_claude(&folders);
         found.map(|program| program.strip_prefix(home).unwrap().to_path_buf())
     }
@@ -718,10 +853,22 @@ mod tests {
     #[test]
     fn finds_claude_however_it_was_installed() {
         assert_eq!(unix_found_in(&home_with(&[]), "/usr/bin:/bin", None), None);
-        assert_eq!(unix_found_in(&home_with(&[LOCAL]), "/usr/bin:/bin", None), at(LOCAL));
-        assert_eq!(unix_found_in(&home_with(&[HOMEBREW]), "", None), at(HOMEBREW));
-        assert_eq!(unix_found_in(&home_with(&[USR_LOCAL]), "", None), at(USR_LOCAL));
-        assert_eq!(unix_found_in(&home_with(&[CLAUDE_LOCAL]), "", None), at(CLAUDE_LOCAL));
+        assert_eq!(
+            unix_found_in(&home_with(&[LOCAL]), "/usr/bin:/bin", None),
+            at(LOCAL)
+        );
+        assert_eq!(
+            unix_found_in(&home_with(&[HOMEBREW]), "", None),
+            at(HOMEBREW)
+        );
+        assert_eq!(
+            unix_found_in(&home_with(&[USR_LOCAL]), "", None),
+            at(USR_LOCAL)
+        );
+        assert_eq!(
+            unix_found_in(&home_with(&[CLAUDE_LOCAL]), "", None),
+            at(CLAUDE_LOCAL)
+        );
         // npm's folder, once ~/.npmrc moves npm's prefix there.
         let npm = home_with(&[NPM_PREFIX]);
         assert_eq!(unix_found_in(&npm, "", None), None);
@@ -731,14 +878,20 @@ mod tests {
         let tools = home_with(&[TOOLS]);
         let folder = tools.join("tools/bin");
         assert_eq!(unix_found_in(&tools, "/usr/bin", None), None);
-        assert_eq!(unix_found_in(&tools, "/usr/bin", folder.to_str()), at(TOOLS));
+        assert_eq!(
+            unix_found_in(&tools, "/usr/bin", folder.to_str()),
+            at(TOOLS)
+        );
 
         let two = home_with(&[TOOLS, LOCAL, HOMEBREW]);
         let (tools, local) = (two.join("tools/bin"), two.join(".local/bin"));
         let (tools, local) = (tools.to_str().unwrap(), local.to_str().unwrap());
         assert_eq!(unix_found_in(&two, "", None), at(LOCAL));
         assert_eq!(unix_found_in(&two, "", Some(tools)), at(TOOLS));
-        assert_eq!(unix_found_in(&two, "", Some(&format!("{local}:{tools}"))), at(LOCAL));
+        assert_eq!(
+            unix_found_in(&two, "", Some(&format!("{local}:{tools}"))),
+            at(LOCAL)
+        );
         assert_eq!(unix_found_in(&two, local, Some(tools)), at(LOCAL));
     }
 
@@ -750,9 +903,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let home = home_with(&[TOOLS, HOMEBREW]);
         let tools = home.join("tools/bin");
-        std::fs::set_permissions(tools.join("claude"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(tools.join("claude"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
         std::fs::create_dir_all(home.join(".local/bin/claude")).unwrap();
-        assert_eq!(unix_found_in(&home, tools.to_str().unwrap(), None), at(HOMEBREW));
+        assert_eq!(
+            unix_found_in(&home, tools.to_str().unwrap(), None),
+            at(HOMEBREW)
+        );
     }
 
     /// claude runs with the browser's PATH, the shell's and the installers' folders, each once,
@@ -784,17 +941,29 @@ mod tests {
         let unset = |_: &str| None;
         let bin = |path: &str| Some(PathBuf::from(path));
         assert_eq!(npm_bin(&unset, home, None), None);
-        assert_eq!(npm_bin(&unset, home, Some("registry=https://registry.npmjs.org/\n")), None);
+        assert_eq!(
+            npm_bin(&unset, home, Some("registry=https://registry.npmjs.org/\n")),
+            None
+        );
         let packages = Some("prefix=${HOME}/.npm-packages");
-        assert_eq!(npm_bin(&unset, home, packages), bin("/Users/me/.npm-packages/bin"));
-        assert_eq!(npm_bin(&unset, home, Some("prefix = \"/opt/npm\"")), bin("/opt/npm/bin"));
+        assert_eq!(
+            npm_bin(&unset, home, packages),
+            bin("/Users/me/.npm-packages/bin")
+        );
+        assert_eq!(
+            npm_bin(&unset, home, Some("prefix = \"/opt/npm\"")),
+            bin("/opt/npm/bin")
+        );
         let set = |name: &str| (name == "npm_config_prefix").then(|| "~/npm".to_string());
-        assert_eq!(npm_bin(&set, home, Some("prefix=/opt/npm")), bin("/Users/me/npm/bin"));
+        assert_eq!(
+            npm_bin(&set, home, Some("prefix=/opt/npm")),
+            bin("/Users/me/npm/bin")
+        );
     }
 
     #[cfg(not(windows))]
     fn sh(script: &str) -> Command {
-        let mut command = Command::new("/bin/sh");
+        let mut command = crate::child::command("/bin/sh");
         command.args(["-c", script]);
         command
     }
@@ -806,9 +975,15 @@ mod tests {
     fn reads_the_path_the_shell_prints() {
         let wait = std::time::Duration::from_secs(10);
         let rc = format!("echo Welcome; read answer; PATH=/tools/bin:/usr/bin; {PRINT_PATH}");
-        assert_eq!(printed_path(sh(&rc), wait).as_deref(), Some("/tools/bin:/usr/bin"));
+        assert_eq!(
+            printed_path(sh(&rc), wait).as_deref(),
+            Some("/tools/bin:/usr/bin")
+        );
         assert_eq!(printed_path(sh("echo Welcome"), wait), None);
-        assert_eq!(printed_path(Command::new("/no/such/shell"), wait), None);
+        assert_eq!(
+            printed_path(crate::child::command("/no/such/shell"), wait),
+            None
+        );
     }
 
     /// A shell still starting after the wait, as on an rc file that waits on the network, is given
@@ -818,7 +993,10 @@ mod tests {
     fn gives_up_on_a_shell_that_hangs() {
         let start = std::time::Instant::now();
         let hangs = sh(&format!("sleep 30; {PRINT_PATH}"));
-        assert_eq!(printed_path(hangs, std::time::Duration::from_millis(200)), None);
+        assert_eq!(
+            printed_path(hangs, std::time::Duration::from_millis(200)),
+            None
+        );
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 }

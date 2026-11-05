@@ -57,6 +57,7 @@ const SUBPOINTS: f64 = 100.;
 const RUN_COMMAND: u32 = 0;
 const GET_OUTPUTS: u32 = 3;
 const GET_TREE: u32 = 4;
+const GET_INPUTS: u32 = 100;
 
 struct Session {
     queue: EventQueue<State>,
@@ -97,8 +98,12 @@ thread_local! {
     /// The modifiers flags holds, and those the last key went with, as drive.rs keeps them.
     static FLAGS: Cell<u16> = const { Cell::new(0) };
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
+    /// Whether the key held since the last key's events has been held to a repeat (`repeat`).
+    static REPEATED: Cell<bool> = const { Cell::new(false) };
     /// The last press: when, where in sway's layout, and its button.
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
+    /// Where in sway's layout the pointer was last put.
+    static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -148,33 +153,43 @@ fn open() -> Result<Session, String> {
     let outputs = sway(GET_OUTPUTS, "").ok_or("no sway at SWAYSOCK")?;
     let outputs = outputs.as_array().ok_or("sway listed no outputs")?;
     let headless = |output: &Value| {
-        output["name"].as_str().is_some_and(|name| name.starts_with("HEADLESS-"))
+        output["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("HEADLESS-"))
     };
     if outputs.is_empty() || !outputs.iter().all(headless) {
         return Err("sway's outputs aren't all headless".into());
     }
-    let extent = outputs.iter().fold((0f64, 0f64), |(width, height), output| {
-        let rect = &output["rect"];
-        let right = number(&rect["x"]) + number(&rect["width"]);
-        let bottom = number(&rect["y"]) + number(&rect["height"]);
-        (width.max(right), height.max(bottom))
-    });
+    let extent = outputs
+        .iter()
+        .fold((0f64, 0f64), |(width, height), output| {
+            let rect = &output["rect"];
+            let right = number(&rect["x"]) + number(&rect["width"]);
+            let bottom = number(&rect["y"]) + number(&rect["height"]);
+            (width.max(right), height.max(bottom))
+        });
     let connection = Connection::connect_to_env().map_err(|e| e.to_string())?;
     let (globals, mut queue) =
         registry_queue_init::<State>(&connection).map_err(|e| e.to_string())?;
     let handle = queue.handle();
-    let seat: WlSeat = globals.bind(&handle, 1..=1, ()).map_err(|e| e.to_string())?;
-    let pointers: ZwlrVirtualPointerManagerV1 =
-        globals.bind(&handle, 1..=2, ()).map_err(|e| e.to_string())?;
-    let keyboards: ZwpVirtualKeyboardManagerV1 =
-        globals.bind(&handle, 1..=1, ()).map_err(|e| e.to_string())?;
+    let seat: WlSeat = globals
+        .bind(&handle, 1..=1, ())
+        .map_err(|e| e.to_string())?;
+    let pointers: ZwlrVirtualPointerManagerV1 = globals
+        .bind(&handle, 1..=2, ())
+        .map_err(|e| e.to_string())?;
+    let keyboards: ZwpVirtualKeyboardManagerV1 = globals
+        .bind(&handle, 1..=1, ())
+        .map_err(|e| e.to_string())?;
     let pointer = pointers.create_virtual_pointer(Some(&seat), &handle, ());
     let keyboard = keyboards.create_virtual_keyboard(&seat, &handle, ());
     let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
     let keymap = xkb::Keymap::new_from_names(&context, "evdev", "pc105", "us", "", None, 0)
         .ok_or("xkbcommon has no us keymap")?;
     // The compositor maps the keymap from a file, with its NUL.
-    let mut text = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1).into_bytes();
+    let mut text = keymap
+        .get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1)
+        .into_bytes();
     text.push(0);
     let path = std::env::temp_dir().join(format!("ilo-drive-keymap-{}", std::process::id()));
     let mut file = std::fs::File::options()
@@ -221,7 +236,9 @@ fn sway(kind: u32, payload: &str) -> Option<Value> {
 /// Has sway run `command`, such as "[con_id=4] focus".
 fn sway_command(command: &str) -> Option<()> {
     let answer = sway(RUN_COMMAND, command)?;
-    (answer.as_array()?.iter()).all(|each| each["success"].as_bool() == Some(true)).then_some(())
+    (answer.as_array()?.iter())
+        .all(|each| each["success"].as_bool() == Some(true))
+        .then_some(())
 }
 
 /// A window of the app's as sway has it, with its content's frame in the layout.
@@ -240,19 +257,19 @@ struct Node {
 }
 
 impl Node {
-    fn contains(&self, x: f64, y: f64) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-
     fn is_settings(&self) -> bool {
         self.app_id.is_empty()
     }
 }
 
-/// The app's windows, as sway's tree has them.
+/// The app's windows, as sway's tree has them. In the Flatpak the process's pid is its sandbox's,
+/// not the one sway knows, and the headless session (`open`) holds only the app the run started,
+/// so every window in it is the app's.
 fn ours() -> Vec<Node> {
     fn walk(node: &Value, out: &mut Vec<Node>) {
-        if node["pid"].as_u64() == Some(u64::from(std::process::id())) {
+        let pid = node["pid"].as_u64();
+        let own = u64::from(std::process::id());
+        if pid.is_some_and(|pid| pid == own || browser::flatpak::in_flatpak()) {
             let (rect, window) = (&node["rect"], &node["window_rect"]);
             out.push(Node {
                 id: node["id"].as_i64().unwrap_or(-1),
@@ -263,10 +280,15 @@ fn ours() -> Vec<Node> {
                 width: number(&window["width"]),
                 height: number(&window["height"]),
                 focused: node["focused"].as_bool() == Some(true),
-                full_screen: node["fullscreen_mode"].as_u64().is_some_and(|mode| mode != 0),
+                full_screen: node["fullscreen_mode"]
+                    .as_u64()
+                    .is_some_and(|mode| mode != 0),
             });
         }
-        for child in ["nodes", "floating_nodes"].iter().filter_map(|key| node[*key].as_array()) {
+        for child in ["nodes", "floating_nodes"]
+            .iter()
+            .filter_map(|key| node[*key].as_array())
+        {
             child.iter().for_each(|each| walk(each, out));
         }
     }
@@ -356,14 +378,20 @@ fn stacked() -> Vec<(bc::bc_id, Node)> {
 /// numbers them.
 fn name_of(id: bc::bc_id) -> String {
     let index = PAIRED.with_borrow(|paired| paired.iter().position(|&(each, _)| each == id));
-    index.map_or_else(|| "none".to_string(), |index| format!("window {}", index + 1))
+    index.map_or_else(
+        || "none".to_string(),
+        |index| format!("window {}", index + 1),
+    )
 }
 
 /// The browser window with sway's focus.
 fn focused_browser() -> Option<bc::bc_id> {
     let nodes = ours();
     let focused = nodes.iter().find(|node| node.focused)?;
-    browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id).map(|(id, _)| id)
+    browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
+        .map(|(id, _)| id)
 }
 
 /// The title of the window with sway's focus, as drive.rs's key_title: a dialog of Chromium's in a
@@ -371,7 +399,9 @@ fn focused_browser() -> Option<bc::bc_id> {
 pub(crate) fn key_title() -> Option<String> {
     let nodes = ours();
     let focused = nodes.iter().find(|node| node.focused)?;
-    if let Some((id, _)) = browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id)
+    if let Some((id, _)) = browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
         && unsafe { bc::bc_window_keyboard_in_child(id) }
     {
         return Some(drive::child_title(id));
@@ -387,7 +417,9 @@ fn frame(at: Option<(f64, f64)>, width: f64, height: f64) -> Option<()> {
     let handle =
         WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.handle))?;
     let cx = CX.with_borrow(Clone::clone)?;
-    let view = cx.update(|cx| handle.update(cx, |_, window, _| crate::ns_view(window))).ok()?;
+    let view = cx
+        .update(|cx| handle.update(cx, |_, window, _| crate::ns_view(window)))
+        .ok()?;
     let (x, y) = at.unwrap_or((node.x, node.y));
     let con = node.id;
     sway_command(&format!(
@@ -408,23 +440,90 @@ fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pix
     let (ui_view, bounds) = (overlays::placed(view))
         .or_else(|| panels::placed(view))
         .or_else(|| floats::placed(view))?;
-    let id = WINDOWS.with_borrow(|windows| {
-        windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id)
-    })?;
+    let id = WINDOWS
+        .with_borrow(|windows| windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id))?;
     Some((id, bounds))
 }
 
 /// Sway focuses Settings once it has mapped it, which as it first shows can come after the
 /// driver's next click, which then went to the browser window (#1180): the first click after a
-/// show waits for it. Only that one, as a browser window can take the focus while Settings shows.
-fn await_settings_focus() {
+/// show waits for it, and says it's the first. Only that one, as a browser window can take the
+/// focus while Settings shows.
+fn await_settings_focus() -> bool {
     if !settings_window::take_shown_anew() {
-        return;
+        return false;
     }
     let until = Instant::now() + Duration::from_secs(2);
     while focused_settings(&ours()).is_none() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(10));
     }
+    true
+}
+
+/// The first click in Settings after it shows, at (`x`, `y`) in its content and (`at_x`, `at_y`)
+/// in sway's layout. sway lists Settings centred as soon as it has mapped it, but it moves the
+/// window there only once the app has drawn again, and until then a press goes where it was: a
+/// click aimed by the list missed what it was aimed at (#1897). A hand clicks where it sees the
+/// window, so the press waits, with the loop running, until GPUI has the pointer there.
+fn settings_click(
+    (x, y): (f64, f64),
+    (at_x, at_y): (f64, f64),
+    which: u32,
+    double: bool,
+) -> Option<()> {
+    motion(at_x, at_y)?;
+    let since = Instant::now();
+    drive::go_on(Box::new(move |done| {
+        awaiting_pointer((x, y), (at_x, at_y), which, double, since, done)
+    }));
+    Some(())
+}
+
+/// Clicks once GPUI has the pointer at (`x`, `y`) in Settings, or 2 s after `since`, moving it
+/// there again each 10 ms meanwhile, as sway places a window under the pointer on its next move.
+fn awaiting_pointer(
+    (x, y): (f64, f64),
+    (at_x, at_y): (f64, f64),
+    which: u32,
+    double: bool,
+    since: Instant,
+    done: Box<dyn FnOnce()>,
+) {
+    let at = settings_pointer();
+    let there = at.is_some_and(|(px, py)| (px - x).abs() < 1. && (py - y).abs() < 1.);
+    if !there && since.elapsed() < Duration::from_secs(2) {
+        motion(at_x, at_y);
+        let retry = move || awaiting_pointer((x, y), (at_x, at_y), which, double, since, done);
+        drive::after(10, Box::new(retry));
+        return;
+    }
+    // check.sh's logs say how long sway took to put Settings where it lists it.
+    let ms = since.elapsed().as_millis();
+    match (there, at) {
+        (true, _) => log!("browser: drive's pointer at {x:.0},{y:.0} in Settings after {ms} ms"),
+        (false, Some((px, py))) => {
+            log!("browser: drive's pointer at {px:.0},{py:.0} in Settings, not {x:.0},{y:.0}")
+        }
+        (false, None) => log!("browser: drive's pointer isn't in Settings"),
+    }
+    if click(at_x, at_y, which, 0, false).is_some() && double {
+        click(at_x, at_y, BTN_LEFT, 0, true);
+    }
+    done();
+}
+
+/// Where GPUI last had the pointer in Settings' window, in its content.
+fn settings_pointer() -> Option<(f64, f64)> {
+    let view = settings_window::shown()?;
+    let cx = CX.with_borrow(Clone::clone)?;
+    let mut at = None;
+    cx.update(|cx| {
+        overlays::update_window(view, cx, |window, _| {
+            let position = window.mouse_position();
+            at = Some((f64::from(position.x), f64::from(position.y)));
+        })
+    });
+    at
 }
 
 /// The origin, in sway's layout, of the window with the keyboard, for clickkey: Settings with
@@ -446,7 +545,10 @@ fn key_origin() -> Option<(f64, f64)> {
     // As drive.rs's is the X focus's: a Little ilo window the driven one opened has the keys, and
     // its profile picker's click went to the driven window under it.
     let focused = nodes.iter().find(|node| node.focused).map(|node| node.id);
-    let node = match browsers(&nodes).into_iter().find(|(_, node)| Some(node.id) == focused) {
+    let node = match browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| Some(node.id) == focused)
+    {
         Some((_, node)) => node,
         None => driven()?.1,
     };
@@ -465,7 +567,10 @@ pub(crate) fn keyboard() -> (&'static str, &'static str, bool) {
     if gpui_linux::shown_keyboard_overlay().is_some() {
         return ("GPUIPanel", "GPUIView", true);
     }
-    let Some((id, _)) = browsers(&nodes).into_iter().find(|(_, node)| node.id == focused.id) else {
+    let Some((id, _)) = browsers(&nodes)
+        .into_iter()
+        .find(|(_, node)| node.id == focused.id)
+    else {
         return ("none", "none", true);
     };
     if unsafe { bc::bc_window_keyboard_in_child(id) } {
@@ -503,24 +608,52 @@ fn hold(state: u16) -> Option<()> {
 }
 
 /// What the keyboard holds between commands: what flags holds, and Control after a key with it,
-/// for the ⌃Tab walk, as drive.rs's X server holds it.
+/// for the ⌃Tab walk, as drive.rs's X server holds it, until a pointer event lets it go.
 fn held() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & CONTROL
 }
 
-/// The pointer to (`x`, `y`) in sway's layout, if that's in one of the app's windows.
+/// The pointer to (`x`, `y`) in sway's layout, unless that's in another app's window or off the
+/// screen. Just outside one of the app's, it's sway's to take, as a press at the border it resizes
+/// windows by (#1572).
 fn motion(x: f64, y: f64) -> Option<()> {
-    if !ours().iter().any(|node| node.contains(x, y)) {
-        log!("browser: drive won't put the pointer at {x:.0},{y:.0}, outside the app's windows");
+    if others_at(x, y) {
+        log!("browser: drive won't put the pointer at {x:.0},{y:.0}, in another app's window");
         return None;
     }
     with_session(|session, time| {
         let (width, height) = session.extent;
+        if !(0. ..width).contains(&x) || !(0. ..height).contains(&y) {
+            log!("browser: drive won't put the pointer at {x:.0},{y:.0}, off the screen");
+            return None;
+        }
         let at = |each: f64| (each * SUBPOINTS).round() as u32;
         let extent = |each: f64| (each * SUBPOINTS) as u32;
         (session.pointer).motion_absolute(time, at(x), at(y), extent(width), extent(height));
         session.pointer.frame();
-    })
+        POINTER.set(Some((x, y)));
+        Some(())
+    })?
+}
+
+/// Whether (`x`, `y`) in sway's layout is in a window of another app's.
+fn others_at(x: f64, y: f64) -> bool {
+    fn walk(node: &Value, x: f64, y: f64) -> bool {
+        let own = u64::from(std::process::id());
+        let other =
+            node["pid"].as_u64().is_some_and(|pid| pid != own) && !browser::flatpak::in_flatpak();
+        let rect = &node["rect"];
+        let (left, top) = (number(&rect["x"]), number(&rect["y"]));
+        let inside = (left..left + number(&rect["width"])).contains(&x)
+            && (top..top + number(&rect["height"])).contains(&y);
+        (other && inside)
+            || ["nodes", "floating_nodes"]
+                .iter()
+                .filter_map(|key| node[*key].as_array())
+                .flatten()
+                .any(|child| walk(child, x, y))
+    }
+    sway(GET_TREE, "").is_some_and(|tree| walk(&tree, x, y))
 }
 
 fn button(which: u32, press: bool) -> Option<()> {
@@ -551,9 +684,12 @@ fn first_press(x: f64, y: f64, which: u32, again: bool) {
 /// Has the pointer do `events` with the modifiers `state`, and those flags holds. Control held
 /// after a key for the ⌃Tab walk isn't one: drive.rs's X events each carry their own state, but
 /// Wayland gives a pointer's the keyboard's, so it goes up for them, ending the walk as a click
-/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221).
+/// would. With it, a wheel zoomed the page (#1219) and a drag pressed as a ⌃-click (#1221). It
+/// stays up after, as a hand's has: put back down, the next pointer event's lift made it a press
+/// of ⌃ alone, a key, which ended a hover card under the pointer before its click (#1223).
 fn with_modifiers(state: u16, events: impl FnOnce() -> Option<()>) -> Option<()> {
     hold(state | FLAGS.get())?;
+    KEY_FLAGS.set(KEY_FLAGS.get() & !CONTROL);
     let done = events();
     hold(held())?;
     done
@@ -584,8 +720,7 @@ fn keycode(keysym: u32) -> Option<(u32, bool)> {
             let key = xkb::Keycode::new(code);
             let levels = keymap.num_levels_for_key(key, 0).min(2);
             let level = (0..levels).find(|&level| {
-                (keymap.key_get_syms_by_level(key, 0, level).iter())
-                    .any(|sym| sym.raw() == keysym)
+                (keymap.key_get_syms_by_level(key, 0, level).iter()).any(|sym| sym.raw() == keysym)
             })?;
             Some((code.checked_sub(8)?, level == 1))
         })
@@ -595,6 +730,7 @@ fn keycode(keysym: u32) -> Option<(u32, bool)> {
 /// Sends `key`'s presses and releases, `kinds` true for a press, with the modifiers `state`.
 fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
     let (code, shift) = keycode(drive::keysym(key)?)?;
+    REPEATED.set(false);
     let state = state | FLAGS.get();
     KEY_FLAGS.set(state & (CONTROL | ALT | SHIFT));
     hold(state | if shift { SHIFT } else { 0 })?;
@@ -604,6 +740,34 @@ fn key_events(key: &str, state: u16, kinds: &[bool]) -> Option<()> {
         }
     })?;
     hold(held())
+}
+
+/// A held key's repeat. A Wayland client repeats a key itself, at the rate the compositor gives
+/// after its delay, so the key stays down until the client's next repeat, and is done then. A
+/// second press of a key that's down would reach the app as a press (#1571).
+fn repeat(key: &str) -> Option<()> {
+    drive::keysym(key)?;
+    let (delay, rate) = repeat_info();
+    let interval = 1000 / rate.max(1);
+    let wait = if REPEATED.replace(true) { 0 } else { delay } + interval + interval / 2;
+    drive::go_on(Box::new(move |done| drive::after(wait, done)));
+    Some(())
+}
+
+/// sway's keyboard repeat, as its delay and rate in ms and per second: its defaults unless a
+/// keyboard says.
+fn repeat_info() -> (u32, u32) {
+    let number = |value: &Value| value.as_u64().and_then(|n| u32::try_from(n).ok());
+    sway(GET_INPUTS, "")
+        .and_then(|inputs| {
+            inputs.as_array()?.iter().find_map(|input| {
+                Some((
+                    number(&input["repeat_delay"])?,
+                    number(&input["repeat_rate"])?,
+                ))
+            })
+        })
+        .unwrap_or((600, 25))
 }
 
 /// The surface where drive.rs's scripted input method composes, as the compositor's would:
@@ -635,7 +799,9 @@ fn insert(text: &str) -> Option<()> {
     // A page with the keys gets the text typed, as drive.rs's insert types it there: its field is
     // Chromium's, which no GPUI keystroke reaches.
     if keyboard().1 == "RenderWidgetHostViewCocoa" {
-        return text.chars().try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
+        return text
+            .chars()
+            .try_for_each(|c| key_events(&c.to_string(), 0, &[true, false]));
     }
     let nodes = ours();
     let view = match gpui_linux::shown_keyboard_overlay() {
@@ -654,9 +820,13 @@ fn insert(text: &str) -> Option<()> {
     };
     cx.update(|cx| {
         let handle = cx.windows().into_iter().find(|handle| {
-            handle.update(cx, |_, window, _| crate::ns_view(window)).is_ok_and(|each| each == view)
+            handle
+                .update(cx, |_, window, _| crate::ns_view(window))
+                .is_ok_and(|each| each == view)
         })?;
-        handle.update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx)).ok()
+        handle
+            .update(cx, |_, window, cx| window.dispatch_keystroke(typed, cx))
+            .ok()
     })
     .filter(|&typed| typed)
     .map(drop)
@@ -665,13 +835,19 @@ fn insert(text: &str) -> Option<()> {
 /// A turn of the wheel by `notches` along `axis` at (`x`, `y`) in sway's layout, down or right
 /// for a positive one.
 fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
-    motion(x, y)?;
+    // The notches alone where the pointer already is, as drive.rs turns them: a move before them
+    // stops a page's scroll short of the notches' points, as the window run's did (#1573).
+    if POINTER.get() != Some((x, y)) {
+        motion(x, y)?;
+    }
     with_modifiers(0, || {
         with_session(|session, time| {
             for _ in 0..notches.unsigned_abs() {
                 session.pointer.axis_source(wl_pointer::AxisSource::Wheel);
                 let notch = notches.signum();
-                session.pointer.axis_discrete(time, axis, 15. * f64::from(notch), notch);
+                session
+                    .pointer
+                    .axis_discrete(time, axis, 15. * f64::from(notch), notch);
                 session.pointer.frame();
             }
         })
@@ -691,22 +867,31 @@ fn swipe(x: f64, y: f64, by: (f64, f64), count: u32, rest: u32) -> Option<()> {
 /// The swipe's `left` scrolls, then its fingers lifting.
 fn swiping(by: (f64, f64), left: u32, rest: u32, done: Box<dyn FnOnce()>) {
     if left > 0 {
-        drive::after(8, Box::new(move || {
-            _ = fingers(by);
-            swiping(by, left - 1, rest, done);
-        }));
+        drive::after(
+            8,
+            Box::new(move || {
+                _ = fingers(by);
+                swiping(by, left - 1, rest, done);
+            }),
+        );
         return;
     }
-    drive::after(rest, Box::new(move || {
-        _ = with_session(|session, time| {
-            for axis in [wl_pointer::Axis::HorizontalScroll, wl_pointer::Axis::VerticalScroll] {
-                session.pointer.axis_stop(time, axis);
-                session.pointer.axis_source(wl_pointer::AxisSource::Finger);
-            }
-            session.pointer.frame();
-        });
-        done();
-    }));
+    drive::after(
+        rest,
+        Box::new(move || {
+            _ = with_session(|session, time| {
+                for axis in [
+                    wl_pointer::Axis::HorizontalScroll,
+                    wl_pointer::Axis::VerticalScroll,
+                ] {
+                    session.pointer.axis_stop(time, axis);
+                    session.pointer.axis_source(wl_pointer::AxisSource::Finger);
+                }
+                session.pointer.frame();
+            });
+            done();
+        }),
+    );
 }
 
 /// One scroll of two fingers, `dx` points right and `dy` down. GPUI scrolls a touchpad's axis
@@ -734,19 +919,29 @@ fn layout() -> Option<()> {
     let ring = drive::ring(id, height).unwrap_or_default();
     let size = format!("{width:.0}x{height:.0}");
     log!("browser: layout content {size}, GPUIView 0,0 {size}{pages}{ring}");
-    log!("browser: layout buttons {}", drive::buttons(id).unwrap_or_default());
+    log!(
+        "browser: layout buttons {}",
+        drive::buttons(id).unwrap_or_default()
+    );
     if let Some(dialog) = drive::dialog(id) {
         log!("browser: layout child {dialog}");
     }
     for (each, bounds) in drive::overlay_views().into_iter().filter_map(overlay_frame) {
         if each == id {
-            let [x, y, width, height] =
-                [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height]
-                    .map(f32::from);
+            let [x, y, width, height] = [
+                bounds.origin.x,
+                bounds.origin.y,
+                bounds.size.width,
+                bounds.size.height,
+            ]
+            .map(f32::from);
             log!("browser: layout child {x:.0},{y:.0} {width:.0}x{height:.0}");
         }
     }
-    log!("browser: layout keyboard {}", drive::keyboard_page(id, height));
+    log!(
+        "browser: layout keyboard {}",
+        drive::keyboard_page(id, height)
+    );
     log!("browser: layout full screen {}", node.full_screen as u8);
     Some(())
 }
@@ -760,8 +955,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
     Some(match action {
         "window" => (|| {
             let number: usize = words.next()?.parse().ok()?;
-            let (_, node) = browser(number.checked_sub(1)?)?;
-            DRIVEN.set(number - 1);
+            let index = number.checked_sub(1)?;
+            // The core says a window opened before sway has mapped it, and windows pair as sway
+            // lists them, so one not paired yet is waited for (#1579).
+            let Some((_, node)) = browser(index) else {
+                if PAIRED.with_borrow(|paired| paired.len() <= index) {
+                    drive::again();
+                }
+                return None;
+            };
+            DRIVEN.set(index);
             log!("browser: drive window {number}");
             // To the front with the keyboard, as a click on it does.
             sway_command(&format!("[con_id={}] focus", node.id))
@@ -782,7 +985,7 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
         })(),
         "clickkey" | "rightclickkey" | "doubleclickkey" => (|| {
             let (x, y) = drive::point(&mut words)?;
-            await_settings_focus();
+            let first = await_settings_focus();
             // Settings' close button is the compositor's off the Mac, in its title bar.
             if action == "clickkey"
                 && x.max(y) < drive::CLOSE_CORNER
@@ -791,8 +994,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 return sway_command(&format!("[con_id={}] kill", settings.id));
             }
             let (left, top) = key_origin()?;
+            let which = if action == "rightclickkey" {
+                BTN_RIGHT
+            } else {
+                BTN_LEFT
+            };
+            let double = action == "doubleclickkey";
+            if first && focused_settings(&ours()).is_some() {
+                return settings_click((x, y), (left + x, top + y), which, double);
+            }
             let (x, y) = (left + x, top + y);
-            let which = if action == "rightclickkey" { BTN_RIGHT } else { BTN_LEFT };
             click(x, y, which, 0, false)?;
             if action == "doubleclickkey" {
                 click(x, y, BTN_LEFT, 0, true)?;
@@ -829,16 +1040,24 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                     _ => Some(()),
                 }
             })
-        })(),
+        })(
+        ),
         "move" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
             motion(x, y)
         })(),
-        // A notch of the wheel for each event, down for content moving up.
+        // A page, Chromium's, scrolls a notch of the wheel an event, down for content moving up, as
+        // drive.rs's does. GPUI's windows scroll by the points asked, as the Mac's trackpad events
+        // do, with two fingers on the touchpad, where a notch moves three lines.
         "scroll" => (|| {
-            let (x, y) = in_driven_point(&mut words)?;
+            let (x, y) = drive::point(&mut words)?;
             let dy: f64 = words.next()?.parse().ok()?;
             let count: i32 = words.next()?.parse().ok()?;
+            let over_page = drive::over_page(driven()?.0, x, y);
+            let (x, y) = in_driven(x, y)?;
+            if !over_page {
+                return swipe(x, y, (0., -dy), count.max(1).unsigned_abs(), 0);
+            }
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
             wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
         })(),
@@ -887,7 +1106,13 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             }
             Some(())
         })(),
-        "keydown" => (|| key_events(words.next()?, 0, &[true]))(),
+        "keydown" => (|| {
+            let key = words.next()?;
+            match words.next() {
+                Some("repeat") => repeat(key),
+                _ => key_events(key, 0, &[true]),
+            }
+        })(),
         "keyup" => (|| key_events(words.next()?, 0, &[false]))(),
         "type" => rest.chars().try_for_each(|c| key(&c.to_string(), 0)),
         "insert" => insert(rest),
@@ -933,9 +1158,8 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 _ => return None,
             };
             let id = driven_id()?;
-            let surface = WINDOWS.with_borrow(|windows| {
-                windows.iter().find(|w| w.id == id).map(|w| w.ui_view)
-            })?;
+            let surface = WINDOWS
+                .with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.ui_view))?;
             crate::swiped(surface, x, y, back);
             Some(())
         })(),

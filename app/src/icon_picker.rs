@@ -9,11 +9,12 @@
 use std::{ops::Range, rc::Rc, time::Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global, Hsla,
-    KeyBinding, MouseButton, PathBuilder, Pixels, Point, Rgba, ScrollStrategy, SharedString,
-    Subscription, TitlebarOptions, UniformListScrollHandle, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, svg, uniform_list, Stateful,
+    AnyElement, App, Bounds, Context, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
+    Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, Point, Rgba, ScrollStrategy, SharedString,
+    Stateful, Subscription, TitlebarOptions, UniformListScrollHandle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::Role, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    uniform_list,
 };
 
 use crate::{
@@ -26,43 +27,43 @@ use crate::{
 
 mod emoji;
 
+pub use emoji::Recents;
 use emoji::{Drawable, Grid, Row};
 use emojis::SkinTone;
-pub use emoji::Recents;
 
 actions!(icon_picker, [Dismiss, Keep, Up, Down]);
 
-pub use crate::tokens::icon_picker::WIDTH;
-use crate::tokens::icon_picker::CARD;
 use crate::tokens::icon_picker::ARROW;
 use crate::tokens::icon_picker::ARROW_X;
+use crate::tokens::icon_picker::CARD;
+pub use crate::tokens::icon_picker::WIDTH;
 /// The arrow's tip in the window, which the picker grows in from as it opens.
 pub const ARROW_TIP: (f32, f32) = (ARROW_X, 0.);
-use crate::tokens::icon_picker::ARROW_TIP_RADIUS;
 use crate::tokens::icon_picker::ARROW_FOOT_RADIUS;
+use crate::tokens::icon_picker::ARROW_TIP_RADIUS;
 use crate::tokens::icon_picker::RADIUS;
 pub const HEIGHT: f32 = ARROW + CARD;
 use crate::tokens::icon_picker::BELOW_ICON;
-use crate::tokens::icon_picker::SEGMENTS_TOP;
+use crate::tokens::icon_picker::LABEL;
 use crate::tokens::icon_picker::SEGMENT_WIDTH;
+use crate::tokens::icon_picker::SEGMENTS_FILL;
 use crate::tokens::icon_picker::SEGMENTS_HEIGHT;
 use crate::tokens::icon_picker::SEGMENTS_RADIUS;
-use crate::tokens::icon_picker::SEGMENTS_FILL;
+use crate::tokens::icon_picker::SEGMENTS_TOP;
 use crate::tokens::icon_picker::TRASH_GAP;
 use crate::tokens::icon_picker::TRASH_GLYPH;
-use crate::tokens::icon_picker::LABEL;
 /// The glyphs, eight to a row on a 31 pt pitch, the first 12.25 in and 47.75 under the card's top.
 const COLUMNS: usize = 8;
-use crate::tokens::icon_picker::PITCH;
-use crate::tokens::icon_picker::GRID_X;
-use crate::tokens::icon_picker::GRID_TOP;
+use crate::tokens::icon_picker::CARET;
+use crate::tokens::icon_picker::CHOSEN;
 use crate::tokens::icon_picker::GLYPH_SIZE;
+use crate::tokens::icon_picker::GRID_TOP;
+use crate::tokens::icon_picker::GRID_X;
+use crate::tokens::icon_picker::HINT;
+use crate::tokens::icon_picker::HOVERED;
+use crate::tokens::icon_picker::PITCH;
 use crate::tokens::icon_picker::PLATE;
 use crate::tokens::icon_picker::PLATE_RADIUS;
-use crate::tokens::icon_picker::CHOSEN;
-use crate::tokens::icon_picker::HOVERED;
-use crate::tokens::icon_picker::HINT;
-use crate::tokens::icon_picker::CARET;
 use crate::tokens::text;
 /// Arc's switch between Emoji and Icon slides the content a card's width over 0.2 s, easing out
 /// (Arc 1.170 rec at 2×).
@@ -101,6 +102,15 @@ pub enum Subject {
 }
 
 impl Subject {
+    /// What an assistive app calls the picker.
+    fn picker_name(self) -> &'static str {
+        match self {
+            Subject::Space(_) => "Space Icon",
+            Subject::Tab(_) => "Tab Icon",
+            Subject::Folder(_) => "Folder Icon",
+        }
+    }
+
     /// The tabs it offers: a tab's custom icon takes the favicon's place, and a folder's the
     /// folder's, so each is a character the row draws, and the Icon tab's glyphs are a Space's.
     fn tabs(self) -> &'static [Tab] {
@@ -138,6 +148,8 @@ struct Picking {
     tones: bool,
     /// While the content slides from one tab's to the other's: the tab it slides from, and when.
     slide: Option<(Tab, Instant)>,
+    /// Whether it has drawn on screen since it was shown, before which a click finds nothing.
+    drawn: bool,
     _edit: Option<Subscription>,
 }
 
@@ -151,6 +163,8 @@ pub struct IconPicker {
     /// The emoji the system draws, asked of the host when the Emoji tab first shows, once a launch.
     drawable: Option<Drawable>,
     picking: Option<Picking>,
+    /// An assistive app asks for the tree, so the picker names what it draws.
+    a11y: bool,
 }
 
 struct IconPickerWindow(WindowHandle<IconPicker>);
@@ -215,6 +229,7 @@ pub fn open_at(
             recents,
             drawable: None,
             picking: None,
+            a11y: false,
         })
     });
     match window {
@@ -282,10 +297,13 @@ pub fn show(
                 selected: None,
                 tones: false,
                 slide: None,
+                drawn: false,
                 _edit: None,
             });
             picker.show_tab(tab, window, cx);
-            picker.host.show(over, anchor.x - ARROW_X, anchor.y + BELOW_ICON - ARROW);
+            picker
+                .host
+                .show(over, anchor.x - ARROW_X, anchor.y + BELOW_ICON - ARROW);
             cx.notify();
         })
         .ok();
@@ -301,7 +319,11 @@ pub fn entity(cx: &App) -> Option<Entity<IconPicker>> {
 /// it, where `dismissed` hears of a close the host has made.
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
-        window.update(cx, |picker, window, cx| picker.dismiss(&Dismiss, window, cx)).ok();
+        window
+            .update(cx, |picker, window, cx| {
+                picker.dismiss(&Dismiss, window, cx)
+            })
+            .ok();
     }
 }
 
@@ -356,7 +378,7 @@ impl IconPicker {
             return;
         };
         if picking.tab != tab {
-            picking.slide = Some((picking.tab, Instant::now()));
+            picking.slide = Some((picking.tab, crate::motion::start(cx)));
         }
         picking.tab = tab;
         picking.tones = false;
@@ -370,12 +392,15 @@ impl IconPicker {
         // this is the work of a pass over it, and only when this tab shows.
         picking.query.clear();
         let host = &self.host;
-        let drawable =
-            self.drawable.get_or_insert_with(|| Drawable::new(|emoji| host.draws(emoji)));
+        let drawable = self
+            .drawable
+            .get_or_insert_with(|| Drawable::new(|emoji| host.draws(emoji)));
         drawable.ask_tone(self.recents.tone(), |emoji| host.draws(emoji));
         picking.grid = Grid::new("", &self.recents, drawable);
         picking.selected = current(&picking.icon, &picking.grid);
-        self.search.update(cx, |field, cx| field.reset(SharedString::default(), window, cx));
+        self.search.update(cx, |field, cx| {
+            field.reset(SharedString::default(), window, cx)
+        });
         self.scroll_to_selected(ScrollStrategy::Center);
         if let Some(picking) = &mut self.picking {
             picking._edit = Some(cx.observe_in(&self.search, window, |picker, field, _, cx| {
@@ -436,7 +461,10 @@ impl IconPicker {
     /// Moves the plate `across` items or `down` rows, and into view. Whether there was a list to
     /// move in.
     fn go(&mut self, across: isize, down: isize, cx: &mut Context<Self>) -> bool {
-        let Some(picking) = self.picking.as_mut().filter(|picking| picking.tab == Tab::Emoji)
+        let Some(picking) = self
+            .picking
+            .as_mut()
+            .filter(|picking| picking.tab == Tab::Emoji)
         else {
             return false;
         };
@@ -490,6 +518,7 @@ impl IconPicker {
 
     /// The tone button at the search's right end, or the six tones along it once it's clicked.
     fn tone_button(&self, picking: &Picking, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let a11y = self.a11y;
         let plate = |id: (&'static str, usize), tone: SkinTone| {
             div()
                 .id(id)
@@ -508,6 +537,13 @@ impl IconPicker {
         let tones = picking.tones.then(|| {
             emoji::TONES.iter().enumerate().map(|(index, &tone)| {
                 plate(("icon-picker-tone", index), tone)
+                    .when(a11y, |plate| {
+                        let name = emoji::tone_name(tone);
+                        plate
+                            .role(Role::ListBoxOption)
+                            .aria_label(name)
+                            .aria_selected(tone == shown)
+                    })
                     .when(tone == shown, |plate| plate.bg(rgba(CHOSEN)))
                     .on_click(cx.listener(move |picker, _, window, cx| {
                         picker.pick_tone(tone, cx);
@@ -516,7 +552,15 @@ impl IconPicker {
             })
         });
         let button = (!picking.tones).then(|| {
-            plate(("icon-picker-tones", 0), shown).on_click(cx.listener(|picker, _, window, cx| {
+            let name = format!("Skin Tone, {}", emoji::tone_name(shown));
+            let plate = plate(("icon-picker-tones", 0), shown);
+            let plate = plate.when(a11y, |plate| {
+                plate
+                    .role(Role::Button)
+                    .aria_label(name)
+                    .aria_expanded(false)
+            });
+            plate.on_click(cx.listener(|picker, _, window, cx| {
                 if let Some(picking) = &mut picker.picking {
                     picking.tones = true;
                     cx.notify();
@@ -525,13 +569,23 @@ impl IconPicker {
                 window.focus(&picker.search.focus_handle(cx), cx);
             }))
         });
-        div().flex().flex_none().children(tones.into_iter().flatten()).children(button)
+        div()
+            .id("icon-picker-tone-list")
+            .when(a11y && picking.tones, |tones| {
+                tones.role(Role::ListBox).aria_label("Skin Tone")
+            })
+            .flex()
+            .flex_none()
+            .children(tones.into_iter().flatten())
+            .children(button)
     }
 
     /// Gives the Space the emoji at `item` in the list, and puts it first among the recents.
     fn pick_emoji(&mut self, item: usize, cx: &mut Context<Self>) {
-        let Some(emoji) =
-            self.picking.as_ref().and_then(|picking| picking.grid.items.get(item).copied())
+        let Some(emoji) = self
+            .picking
+            .as_ref()
+            .and_then(|picking| picking.grid.items.get(item).copied())
         else {
             return;
         };
@@ -565,21 +619,34 @@ impl IconPicker {
     /// ↩ on the Emoji tab picks the emoji on the plate. While an input method composes, it's the
     /// method's.
     fn keep(&mut self, _: &Keep, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(picking) = self.picking.as_ref().filter(|picking| picking.tab == Tab::Emoji)
+        let Some(picking) = self
+            .picking
+            .as_ref()
+            .filter(|picking| picking.tab == Tab::Emoji)
         else {
             return;
         };
-        if let Some(item) = picking.selected.filter(|_| !self.search.read(cx).composing()) {
+        if let Some(item) = picking
+            .selected
+            .filter(|_| !self.search.read(cx).composing())
+        {
             self.pick_emoji(item, cx);
         }
     }
 
     /// Emoji | Icon, and the trash button after it if there's an icon to remove.
     fn top(&self, picking: &Picking, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let a11y = self.a11y;
         let segment = |tab: Tab, label: &'static str| {
             let chosen = picking.tab == tab;
             div()
                 .id(label)
+                .when(a11y, |segment| {
+                    segment
+                        .role(Role::Tab)
+                        .aria_label(label)
+                        .aria_selected(chosen)
+                })
                 .w(px(SEGMENT_WIDTH))
                 .h_full()
                 .flex()
@@ -600,7 +667,11 @@ impl IconPicker {
                 })
                 .child(label)
                 .on_click(cx.listener(move |picker, _, window, cx| {
-                    if picker.picking.as_ref().is_some_and(|picking| picking.tab != tab) {
+                    if picker
+                        .picking
+                        .as_ref()
+                        .is_some_and(|picking| picking.tab != tab)
+                    {
                         // check.sh reads this line.
                         log!("browser: icon picker on {}", tab.name());
                         picker.show_tab(tab, window, cx);
@@ -610,6 +681,9 @@ impl IconPicker {
         let trash = has_icon(&picking.icon).then(|| {
             div()
                 .id("icon-picker-trash")
+                .when(a11y, |trash| {
+                    trash.role(Role::Button).aria_label("Remove Icon")
+                })
                 .size(px(SEGMENTS_HEIGHT))
                 .flex()
                 .items_center()
@@ -617,7 +691,12 @@ impl IconPicker {
                 .rounded(px(SEGMENTS_RADIUS))
                 .hover(|trash| trash.bg(Palette::on_dark(STATE_HOVERED)))
                 .active(|trash| trash.bg(Palette::on_dark(STATE_PRESSED)))
-                .child(svg().path("icons/trash.svg").size(px(TRASH_GLYPH)).text_color(rgb(LABEL)))
+                .child(
+                    svg()
+                        .path("icons/trash.svg")
+                        .size(px(TRASH_GLYPH))
+                        .text_color(rgb(LABEL)),
+                )
                 .on_click(cx.listener(|picker, _, _, cx| picker.pick("", cx)))
         });
         div()
@@ -631,16 +710,18 @@ impl IconPicker {
             .gap(px(TRASH_GAP))
             .child(
                 div()
+                    .id("icon-picker-tabs")
+                    .when(a11y, |tabs| {
+                        tabs.role(Role::TabList).aria_label("Kind of Icon")
+                    })
                     .h_full()
                     .flex()
                     .rounded(px(SEGMENTS_RADIUS))
                     .bg(rgba(SEGMENTS_FILL))
-                    .children(
-                        picking.subject.tabs().iter().map(|&tab| match tab {
-                            Tab::Emoji => segment(tab, "Emoji"),
-                            Tab::Icon => segment(tab, "Icon"),
-                        }),
-                    ),
+                    .children(picking.subject.tabs().iter().map(|&tab| match tab {
+                        Tab::Emoji => segment(tab, "Emoji"),
+                        Tab::Icon => segment(tab, "Icon"),
+                    })),
             )
             .children(trash)
     }
@@ -651,14 +732,23 @@ impl IconPicker {
             SpaceIcon::Glyph(index) => Some(index),
             _ => None,
         };
-        let cells = GLYPHS.iter().enumerate().map(|(index, &(_, path))| {
+        let a11y = self.a11y;
+        let cells = GLYPHS.iter().enumerate().map(|(index, &(name, path))| {
             let glyph = svg().path(path).size(px(GLYPH_SIZE)).text_color(rgb(LABEL));
-            cell(("glyph", index), chosen == Some(index), glyph)
-                .on_click(cx.listener(move |picker, _, _, cx| {
-                    picker.pick(&space_icon::glyph(index), cx)
-                }))
+            let chosen = chosen == Some(index);
+            cell(("glyph", index), chosen, glyph)
+                .when(a11y, |cell| {
+                    cell.role(Role::ListBoxOption)
+                        .aria_label(name)
+                        .aria_selected(chosen)
+                })
+                .on_click(
+                    cx.listener(move |picker, _, _, cx| picker.pick(&space_icon::glyph(index), cx)),
+                )
         });
         div()
+            .id("icon-picker-glyphs")
+            .when(a11y, |grid| grid.role(Role::ListBox).aria_label("Icons"))
             .absolute()
             .top(px(ARROW + GRID_TOP))
             .left(px(GRID_X))
@@ -714,6 +804,10 @@ impl IconPicker {
             )
             .child(
                 div()
+                    .id("icon-picker-emoji-list")
+                    .when(self.a11y, |list| {
+                        list.role(Role::ListBox).aria_label("Emoji")
+                    })
                     .absolute()
                     .top(px(emoji::LIST_TOP - emoji::SEARCH_TOP))
                     .left(px(GRID_X))
@@ -751,12 +845,19 @@ impl IconPicker {
                     .h(px(PITCH))
                     .flex()
                     .children(items.clone().map(|item| {
-                        let glyph = div()
-                            .text_size(px(emoji::EMOJI_SIZE))
-                            .child(picking.grid.items[item].as_str());
-                        cell(("emoji", item), picking.selected == Some(item), glyph).on_click(
-                            cx.listener(move |picker, _, _, cx| picker.pick_emoji(item, cx)),
-                        )
+                        let emoji = picking.grid.items[item].as_str();
+                        let glyph = div().text_size(px(emoji::EMOJI_SIZE)).child(emoji);
+                        let selected = picking.selected == Some(item);
+                        // The system says an emoji by its name, as its own picker does.
+                        cell(("emoji", item), selected, glyph)
+                            .when(self.a11y, |cell| {
+                                cell.role(Role::ListBoxOption)
+                                    .aria_label(emoji)
+                                    .aria_selected(selected)
+                            })
+                            .on_click(
+                                cx.listener(move |picker, _, _, cx| picker.pick_emoji(item, cx)),
+                            )
                     }))
                     .into_any_element(),
             })
@@ -766,22 +867,28 @@ impl IconPicker {
 
 /// A grid cell: `content` centred on a plate that's chosen, or lights under the pointer.
 fn cell(id: (&'static str, usize), chosen: bool, content: impl IntoElement) -> Stateful<Div> {
-    div().id(id).size(px(PITCH)).flex().items_center().justify_center().child(
-        div()
-            .id("plate")
-            .size(px(PLATE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(PLATE_RADIUS))
-            .when(chosen, |plate| plate.bg(rgba(CHOSEN)))
-            .when(!chosen, |plate| {
-                plate
-                    .hover(|plate| plate.bg(Palette::on_dark(STATE_HOVERED)))
-                    .active(|plate| plate.bg(Palette::on_dark(STATE_PRESSED)))
-            })
-            .child(content),
-    )
+    div()
+        .id(id)
+        .size(px(PITCH))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("plate")
+                .size(px(PLATE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(PLATE_RADIUS))
+                .when(chosen, |plate| plate.bg(rgba(CHOSEN)))
+                .when(!chosen, |plate| {
+                    plate
+                        .hover(|plate| plate.bg(Palette::on_dark(STATE_HOVERED)))
+                        .active(|plate| plate.bg(Palette::on_dark(STATE_PRESSED)))
+                })
+                .child(content),
+        )
 }
 
 /// The place in `grid` of the emoji `icon` is, if it is one.
@@ -867,7 +974,13 @@ pub(crate) fn outline(
             path.line_to(to(start));
         }
         if radius > 0. {
-            path.arc_to(point(px(radius), px(radius)), px(0.), false, convex, to(end));
+            path.arc_to(
+                point(px(radius), px(radius)),
+                px(0.),
+                false,
+                convex,
+                to(end),
+            );
         }
     }
     path.close();
@@ -901,6 +1014,7 @@ impl Focusable for IconPicker {
 
 impl Render for IconPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         let root = div()
             .key_context(KEY_CONTEXT)
             .size_full()
@@ -916,6 +1030,17 @@ impl Render for IconPicker {
             window.request_animation_frame();
             Some((from, progress))
         });
+        // AppKit puts the window on screen some frames after it's asked to, and only then does
+        // GPUI draw it, as the theme picker's.
+        if let Some(picking) = self.picking.as_mut().filter(|picking| !picking.drawn) {
+            if window.is_visible() {
+                picking.drawn = true;
+                // check.sh waits for this line.
+                log!("browser: icon picker drawn");
+            } else {
+                window.request_animation_frame();
+            }
+        }
         let Some(picking) = &self.picking else {
             return root;
         };
@@ -945,6 +1070,12 @@ impl Render for IconPicker {
         let top = self.top(picking, cx);
         root.child(
             div()
+                .id("icon-picker")
+                .when(self.a11y, |picker| {
+                    picker
+                        .role(Role::Dialog)
+                        .aria_label(picking.subject.picker_name())
+                })
                 .key_context("IconPicker")
                 .track_focus(&self.focus)
                 .on_action(cx.listener(Self::dismiss))
@@ -968,7 +1099,9 @@ impl Render for IconPicker {
 impl IconPicker {
     /// What it's picking for, and the tab it shows, while it shows.
     pub fn picking(&self) -> Option<(Subject, Tab)> {
-        self.picking.as_ref().map(|picking| (picking.subject, picking.tab))
+        self.picking
+            .as_ref()
+            .map(|picking| (picking.subject, picking.tab))
     }
 }
 

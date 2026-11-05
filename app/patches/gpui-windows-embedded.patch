@@ -1,3 +1,20 @@
+diff --git a/crates/gpui_windows/src/dialog.rs b/crates/gpui_windows/src/dialog.rs
+index 16866cfc35..659fa75c23 100644
+--- a/crates/gpui_windows/src/dialog.rs
++++ b/crates/gpui_windows/src/dialog.rs
+@@ -93,7 +93,11 @@ pub(crate) fn show_dialog<T: Send + 'static>(
+         sender.send(Err(anyhow!("dialog owner has closed"))).ok();
+         return receiver;
+     }
+-    let hwnd = owner.as_ref().map(|owner| SafeHwnd::from(owner.hwnd));
++    // An embedded window's top-level window owns the dialog, which Windows disables while it shows.
++    let hwnd = owner.as_ref().map(|owner| {
++        let root = unsafe { GetAncestor(owner.hwnd, GA_ROOT) };
++        SafeHwnd::from(if root.is_invalid() { owner.hwnd } else { root })
++    });
+     executor
+         .spawn(async move {
+             // Let Windows manage enabling and activating the owner. Overlapping
 diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
 index 4ad4cc77b3..44d7b2ce80 100644
 --- a/crates/gpui_windows/src/direct_manipulation.rs
@@ -49,8 +66,20 @@ index 4ad4cc77b3..44d7b2ce80 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 98a13f304c..367e44dfd4 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -409,7 +409,6 @@ impl DirectXRenderer {
+     /// goes through MetalRenderer; this is the Windows analogue). Draws into
+     /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
+     /// texture, maps it, and converts BGRA to RGBA.
+-    #[cfg(any(test, feature = "test-support"))]
+     pub(crate) fn render_to_image(
+         &mut self,
+         scene: &Scene,
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..04f77424a7 100644
+index 08f91bd626..e3544609fe 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -109,7 +109,7 @@ impl WindowsWindowInner {
@@ -261,7 +290,7 @@ index 08f91bd626..04f77424a7 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1823,3 +1950,42 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1950,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -304,15 +333,43 @@ index 08f91bd626..04f77424a7 100644
 +        .with_input_handler(|handler| handler.marked_text_range())
 +        .flatten()
 +}
++
++/// For an embedder's test driver, where there's no precision touchpad to stand in for, as no window
++/// message carries one's start and lift: two fingers at `x`, `y` in GPUI's window `hwnd`, in its
++/// client area's pixels, moving the content by `delta`, as the Direct Manipulation handler reports
++/// them. Returns whether the window had a view to hand them to.
++pub fn drive_fingers(
++    hwnd: *mut std::ffi::c_void,
++    x: f32,
++    y: f32,
++    delta: Point<Pixels>,
++    touch_phase: TouchPhase,
++) -> bool {
++    let Some(window) = window_from_hwnd(HWND(hwnd)) else {
++        return false;
++    };
++    let Some(mut func) = window.state.callbacks.input.take() else {
++        return false;
++    };
++    func(PlatformInput::Scroll(ScrollEvent {
++        position: logical_point(x, y, window.state.scale_factor.get()),
++        delta: ScrollDelta::Pixels(delta),
++        modifiers: current_modifiers(),
++        touch_phase,
++        source: ScrollSource::Pointer,
++    }));
++    window.state.callbacks.input.set(Some(func));
++    true
++}
 diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
-index e7a45a034d..63c4e0675b 100644
+index e7a45a034d..c7b8e5dc0c 100644
 --- a/crates/gpui_windows/src/gpui_windows.rs
 +++ b/crates/gpui_windows/src/gpui_windows.rs
 @@ -20,6 +20,10 @@ mod vsync;
  mod window;
  mod wrapper;
  
-+pub use events::{drive_commit, drive_compose, marked_range};
++pub use events::{drive_commit, drive_compose, drive_fingers, marked_range};
 +pub use platform::embed;
 +pub use window::open_next_window_in;
 +
@@ -439,10 +496,30 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..972fd91b7e 100644
+index 095e009e23..b1cd3624a5 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -587,6 +587,11 @@ impl Platform for WindowsPlatform {
+@@ -372,10 +372,17 @@ impl WindowsPlatform {
+         if active_window_hwnd.is_invalid() {
+             return None;
+         }
+-        self.raw_window_handles
+-            .read()
++        let windows = self.raw_window_handles.read();
++        windows
+             .iter()
+             .find(|hwnd| hwnd.as_raw() == active_window_hwnd)
++            // A window embedded in the host's active window, which then owns its dialogs: unowned,
++            // a dialog left the window usable under it and outlived it as the app quit.
++            .or_else(|| {
++                windows.iter().find(|hwnd| unsafe {
++                    IsChild(active_window_hwnd, hwnd.as_raw()).as_bool()
++                })
++            })
+             .map(|hwnd| hwnd.as_raw())
+     }
+ 
+@@ -587,6 +594,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -454,7 +531,7 @@ index 095e009e23..972fd91b7e 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1637,10 +1642,43 @@ fn file_save_dialog(
+@@ -1637,10 +1649,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -499,7 +576,7 @@ index 095e009e23..972fd91b7e 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2018,12 @@ mod tests {
+@@ -1980,3 +2025,12 @@ mod tests {
          );
      }
  }
@@ -513,7 +590,7 @@ index 095e009e23..972fd91b7e 100644
 +    EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
 +}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..60d02730d5 100644
+index c467101fc8..d5afb55ac8 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -662,3 +739,11 @@ index c467101fc8..60d02730d5 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+@@ -1041,7 +1098,6 @@ impl PlatformWindow for WindowsWindow {
+             .log_err();
+     }
+ 
+-    #[cfg(any(test, feature = "test-support"))]
+     fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+         self.state
+             .renderer

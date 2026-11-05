@@ -2,7 +2,8 @@
 # Fetches the app's dependencies into .deps/ (gitignored): Zed at a pinned revision, with our
 # GPUI patches applied, and links our engine, Chromium.app with the core in its framework: the one
 # engine/build.sh built, or else the prebuilt one engine/fetch.sh downloads. `setup.sh dev` links
-# the dev build's, and `setup.sh prebuilt` the prebuilt one even beside a local build.
+# the dev build's, `setup.sh prebuilt` the prebuilt one even beside a local build, and `setup.sh ui`
+# none, for the UI alone: the tests, the preview and the browser checked, not linked (app-mac.yml).
 set -e
 cd "$(dirname "$0")"
 ZED_REV=b36b283021c48f1712714b8a0e2ad6ffb578920b
@@ -50,7 +51,7 @@ vendor() {
   git -C ".deps/$1" init -q
   git -C ".deps/$1" config core.autocrlf false
   git -C ".deps/$1" add -A
-  git -C ".deps/$1" -c user.name=setup -c user.email=setup@localhost commit -qm upstream
+  git -C ".deps/$1" -c user.name=setup -c user.email=setup@localhost commit -s -qm upstream
   git -C ".deps/$1" apply "$PWD/patches/$4"
 }
 vendor accesskit_macos 0.26.3 ce02dc63b43f0c9296af9ac946312a2dc8814427d7a64d2d600971dac55b6076 \
@@ -86,10 +87,15 @@ case $(uname -s) in
         ;;
       dev) engine=$engines/.deps/src/out/Dev/Chromium.app ;;
       prebuilt) engine=$("$engines/fetch.sh") ;;
-      *) echo "usage: setup.sh [dev|prebuilt]" >&2 && exit 2 ;;
+      ui) ;;
+      *) echo "usage: setup.sh [dev|prebuilt|ui]" >&2 && exit 2 ;;
     esac
-    [ -d "$engine" ] || { echo "No engine at $engine. Build it with engine/build.sh ${1:-}." >&2; exit 1; }
-    ln -sfn "$engine" .deps/Chromium.app
+    if [ "${1:-}" = ui ]; then
+      rm -f .deps/Chromium.app
+    else
+      [ -d "$engine" ] || { echo "No engine at $engine. Build it with engine/build.sh ${1:-}." >&2; exit 1; }
+      ln -sfn "$engine" .deps/Chromium.app
+    fi
     ;;
   Linux)
     engines=$(cd .. && pwd)/engine

@@ -21,7 +21,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    ffi::c_void,
+    ffi::{c_int, c_void},
 };
 
 use gpui::{Bounds, Pixels, Point, point, px, size};
@@ -73,6 +73,8 @@ thread_local! {
     /// The tooltip's and the link target's margins, and what runs as the user leaves the tooltip's
     /// window.
     static TOOLTIP: RefCell<(f64, Option<extern "C" fn()>)> = const { RefCell::new((0., None)) };
+    /// The overlay holding what the tooltip names, which it shows over, and that overlay's view.
+    static TOOLTIP_OVERLAY: Cell<Option<(c_int, *mut c_void)>> = const { Cell::new(None) };
     static LINK_MARGIN: RefCell<f64> = const { RefCell::new(0.) };
     /// Where the link target tells the UI the pointer is, over the window it shows over.
     static LINK_POINTER: Cell<Option<extern "C" fn(f64, f64)>> = const { Cell::new(None) };
@@ -104,7 +106,10 @@ fn add(kind: Kind, view: *mut c_void) {
 /// under the pointer only on its plate while it has buttons, and the others not at all.
 pub(crate) fn shown() -> Vec<*mut c_void> {
     FLOATS.with_borrow(|floats| {
-        (floats.iter()).filter(|float| !float.over.is_null()).map(|float| float.view).collect()
+        (floats.iter())
+            .filter(|float| !float.over.is_null())
+            .map(|float| float.view)
+            .collect()
     })
 }
 
@@ -148,7 +153,10 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
             let (right, top, margin) = HUD.with_borrow(|hud| (hud.right, hud.top, hud.margin));
             // 8 points below the find bar while it shows, where the HUD would cover it.
             let top = crate::panels::below_find_bar(ui_view).map_or(top, |below| below - margin);
-            (width - page_right - right - f64::from(own.width), page_top + top)
+            (
+                width - page_right - right - f64::from(own.width),
+                page_top + top,
+            )
         }
         Kind::Tooltip => {
             let margin = TOOLTIP.with_borrow(|(margin, _)| *margin);
@@ -163,13 +171,19 @@ fn bounds(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
             (left - margin, top - margin)
         }
     };
-    Some(Bounds::new(point(px(x as f32), px(y as f32)), size(own.width, own.height)))
+    Some(Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(own.width, own.height),
+    ))
 }
 
 /// Shows the float `kind` over `ui_view`'s window, or moves it there, and says where for check.sh.
 fn show(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
     let (over, fading) = find(kind, |float| (float.over, float.fading))?;
-    if [over, fading].iter().any(|each| !each.is_null() && *each != ui_view) {
+    if [over, fading]
+        .iter()
+        .any(|each| !each.is_null() && *each != ui_view)
+    {
         hide(kind);
     }
     let bounds = bounds(kind, ui_view)?;
@@ -186,7 +200,11 @@ fn hide(kind: Kind) -> bool {
     let Some((view, over, fading)) = find(kind, |float| {
         float.changes += 1;
         let over = std::mem::replace(&mut float.over, std::ptr::null_mut());
-        (float.view, over, std::mem::replace(&mut float.fading, std::ptr::null_mut()))
+        (
+            float.view,
+            over,
+            std::mem::replace(&mut float.fading, std::ptr::null_mut()),
+        )
     }) else {
         return false;
     };
@@ -212,7 +230,12 @@ fn fade_in(kind: Kind, ui_view: *mut c_void, fade: f64, shown: &'static str) {
         false => 0.,
     };
     let fade = seconds(fade);
-    let opacity = Track { from, to: 1., seconds: fade, curve: EASE_OUT };
+    let opacity = Track {
+        from,
+        to: 1.,
+        seconds: fade,
+        curve: EASE_OUT,
+    };
     motion::start(view, Motion::fade(opacity));
     if show(kind, ui_view).is_none() {
         return;
@@ -251,7 +274,15 @@ fn fade_out(kind: Kind, fade: f64) {
         return;
     };
     let from = motion::opacity(view);
-    motion::start(view, Motion::fade(Track { from, to: 0., seconds: fade, curve: EASE_OUT }));
+    motion::start(
+        view,
+        Motion::fade(Track {
+            from,
+            to: 0.,
+            seconds: fade,
+            curve: EASE_OUT,
+        }),
+    );
     motion::after(fade, move || {
         if find(kind, |float| float.changes) == Some(change) {
             hide(kind);
@@ -299,10 +330,18 @@ pub(crate) fn place(ui_view: *mut c_void) {
 
 /// `ui_view`'s window is closing: what floats over it goes.
 pub(crate) fn forget_window(ui_view: *mut c_void) {
-    for kind in
-        [Kind::Hud, Kind::DropTargets, Kind::Toast, Kind::Tooltip, Kind::LinkTarget, Kind::Card]
-    {
-        if find(kind, |float| float.over == ui_view || float.fading == ui_view) == Some(true) {
+    for kind in [
+        Kind::Hud,
+        Kind::DropTargets,
+        Kind::Toast,
+        Kind::Tooltip,
+        Kind::LinkTarget,
+        Kind::Card,
+    ] {
+        if find(kind, |float| {
+            float.over == ui_view || float.fading == ui_view
+        }) == Some(true)
+        {
             hide(kind);
         }
     }
@@ -380,7 +419,9 @@ fn toast_outline(ui_view: *mut c_void, plate: Option<Bounds<Pixels>>) {
 
 /// The toast takes the pointer on its plate while it has buttons, and lets it through elsewhere.
 fn toast_pointer() {
-    let Some(view) = find(Kind::Toast, |float| float.view) else { return };
+    let Some(view) = find(Kind::Toast, |float| float.view) else {
+        return;
+    };
     let plate = TOAST.with_borrow(|toast| toast.plate.filter(|_| toast.takes));
     gpui_linux::set_overlay_pointer(view, Some(plate.as_slice()));
 }
@@ -439,16 +480,72 @@ pub extern "C" fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away:
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn host_show_tooltip(ui_view: *mut c_void, left: f64, top: f64, fade: f64) {
-    find(Kind::Tooltip, |float| (float.left, float.top) = (left, top));
-    // check.sh reads this line: where it is, to compare with where the UI asked.
+pub extern "C" fn host_show_tooltip(
+    ui_view: *mut c_void,
+    overlay: c_int,
+    left: f64,
+    top: f64,
+    fade: f64,
+) {
+    let owner = match overlay {
+        -1 => None,
+        overlay => match crate::overlays::shown_at(overlay) {
+            Some((view, bounds)) => Some((overlay, view, bounds)),
+            None => return,
+        },
+    };
+    let Some(view) = find(Kind::Tooltip, |float| float.view) else {
+        return;
+    };
+    // An overlay goes over a tooltip from the browser window, as a new overlay shows over those
+    // that show, but the one holding what it names goes directly under it.
+    let was = TOOLTIP_OVERLAY.replace(owner.map(|(overlay, view, _)| (overlay, view)));
+    if let Some((_, under)) = was.filter(|was| Some(was.0) != owner.map(|owner| owner.0)) {
+        gpui_linux::set_overlay_under(under, std::ptr::null_mut());
+    }
+    if let Some((_, under, _)) = owner {
+        gpui_linux::set_overlay_under(under, view);
+    }
+    let (x, y) = owner.map_or((0., 0.), |(_, _, bounds)| {
+        (f64::from(bounds.origin.x), f64::from(bounds.origin.y))
+    });
+    find(Kind::Tooltip, |float| {
+        (float.left, float.top) = (x + left, y + top)
+    });
+    // check.sh reads this line: where it is, in the window it shows over, to compare with where
+    // the UI asked.
     eprintln!("browser: tooltip window at {left} {top}");
-    fade_in(Kind::Tooltip, ui_view, fade, "browser: tooltip window shown");
+    fade_in(
+        Kind::Tooltip,
+        ui_view,
+        fade,
+        "browser: tooltip window shown",
+    );
+    // On X11 a window put over the browser window goes directly over it, under the overlays, so the
+    // overlay is put under the tooltip again, and its shadow under it.
+    if let Some((overlay, ..)) = owner {
+        crate::overlays::restack(overlay);
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_hide_tooltip(fade: f64) {
     fade_out(Kind::Tooltip, fade);
+}
+
+/// Overlay `overlay` is hiding: the tooltip over it, if it shows, goes at once.
+pub(crate) fn overlay_hiding(overlay: c_int) {
+    if let Some((owner, under)) = TOOLTIP_OVERLAY.get()
+        && owner == overlay
+    {
+        TOOLTIP_OVERLAY.set(None);
+        gpui_linux::set_overlay_under(under, std::ptr::null_mut());
+        if hide(Kind::Tooltip)
+            && let Some(away) = TOOLTIP.with_borrow(|(_, away)| *away)
+        {
+            away();
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -464,10 +561,17 @@ pub extern "C" fn host_add_link_target(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_show_link_target(ui_view: *mut c_void, left: f64, top: f64, fade: f64) {
-    find(Kind::LinkTarget, |float| (float.left, float.top) = (left, top));
+    find(Kind::LinkTarget, |float| {
+        (float.left, float.top) = (left, top)
+    });
     // check.sh reads this line: which side it's on, out of the pointer's way.
     eprintln!("browser: link target window at {left} {top}");
-    fade_in(Kind::LinkTarget, ui_view, fade, "browser: link target window shown");
+    fade_in(
+        Kind::LinkTarget,
+        ui_view,
+        fade,
+        "browser: link target window shown",
+    );
     // Only while it shows, so an idle browser is never woken by the pointer.
     gpui_linux::watch_pointer_over(ui_view, Some(link_pointer));
 }
@@ -479,7 +583,9 @@ fn link_pointer(at: Point<Pixels>) {
     };
     let (x, y) = (f64::from(f32::from(at.x)), f64::from(f32::from(at.y)));
     if let Some(cx) = crate::CX.with_borrow(Clone::clone) {
-        cx.foreground_executor().spawn(async move { pointer(x, y) }).detach();
+        cx.foreground_executor()
+            .spawn(async move { pointer(x, y) })
+            .detach();
     }
 }
 
@@ -517,7 +623,12 @@ pub extern "C" fn host_show_hover_card(
     if !gpui_linux::overlays_blend() {
         let radius = browser::tokens::hover_card::RADIUS;
         let (right, bottom) = (margin + width, margin + height);
-        let corners = [(margin, margin), (right, margin), (right, bottom), (margin, bottom)];
+        let corners = [
+            (margin, margin),
+            (right, margin),
+            (right, bottom),
+            (margin, bottom),
+        ];
         gpui_linux::set_overlay_outline(view, &corners.map(|(x, y)| (x, y, radius)));
     }
     if show(Kind::Card, ui_view).is_some() {

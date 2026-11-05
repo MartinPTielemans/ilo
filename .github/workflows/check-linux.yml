@@ -5,10 +5,10 @@
 # which the integrator does on main after each merge train (#871), on GitHub's hosted runners: never
 # a pull request, and never the self-hosted runner, which builds the engine. It never builds an engine: it takes the newest engine-linux release in this commit's
 # history (engine/fetch.sh), and a commit whose core/public/browser_core.h no published engine has
-# is skipped, as nothing can run it. Every run in app/check/ shows in X11's summary: passed,
-# failed, or skipped and why, with the lines a run that passed skipped; Wayland's lists those it
-# did. A failure on main opens an issue, which the next run that passes closes
-# (.github/scripts/main-check.sh).
+# fails, saying so, as nothing can run it, and is checked the night after one is. Every run in
+# app/check/ shows in X11's summary: passed, failed, or skipped and why, with the lines a run that
+# passed skipped; Wayland's lists those it did. A failure on main opens an issue, which the next run
+# that passes closes (.github/scripts/main-check.sh).
 name: Check on Linux
 
 on:
@@ -65,6 +65,10 @@ jobs:
     name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      # A re-run reads the run's earlier attempts (main-check.sh rerun).
+      actions: read
     outputs:
       found: ${{ steps.engine.outputs.found }}
     defaults:
@@ -77,8 +81,9 @@ jobs:
         load preview import adblock adblock-lists passkeys onboarding links relaunch split
         extensions capture popup pinned about windows dialogs trouble cards passwords updates
         restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
+        devices handback
       # The runs that pass on Wayland so far, in the headless sway session.
-      WAYLAND_RUNS: tabs private
+      WAYLAND_RUNS: tabs private updates
       # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
       # skipped even when named.
       LINUX_SKIPS: |
@@ -89,7 +94,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A re-run's pass would show over the failure of the attempt before it.
+      - if: ${{ github.run_attempt != '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ../.github/scripts/main-check.sh rerun
+
+      # A run with no engine checks nothing, so it fails rather than pass, and the night after takes
+      # it as not checked (main-check.sh seen), as the Mac's does (#1563).
       - id: engine
+        name: Engine
         run: |
           status=0
           ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
@@ -98,9 +112,10 @@ jobs:
           0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
           2)
             why=$(tail -1 "$RUNNER_TEMP/fetch.log")
-            echo "::notice::No Linux engine fits this commit, so nothing is built or checked. $why"
-            printf 'Skipped: no Linux engine fits this commit, so nothing is built or checked.\n\n%s\n' "$why" >> "$GITHUB_STEP_SUMMARY"
             echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::error::No Linux engine fits this commit: nothing was checked. $why"
+            printf 'Failed: no Linux engine fits this commit: nothing was checked.\n\n%s\n' "$why" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
             ;;
           *) exit "$status" ;;
           esac
@@ -112,7 +127,8 @@ jobs:
       # calls `convert`, and records it with ffmpeg (tools/window-record.sh). sway, grim and Xwayland
       # run the headless sessions (tools/headless.sh), and wl-clipboard's wl-paste reads their
       # clipboard (check/lib.sh's clipboard_holds). The access run reads the app's tree over
-      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core. check/ime.sh types through
+      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the mcp run's
+      # notification server is python3-gi's, on a bus of its own. check/ime.sh types through
       # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
       # allows them, and the sandbox stays on.
@@ -123,7 +139,7 @@ jobs:
           sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1 \
             libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland \
-            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard
+            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's

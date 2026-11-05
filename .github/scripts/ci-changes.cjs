@@ -9,6 +9,9 @@ const fs = require("node:fs");
 const JOBS = {
   core_linux: [/^core\//, /^engine\//, /^\.github\/workflows\/core-linux\.yml$/],
   app_linux: [/^app\//, /^core\/public\//, /^\.github\/workflows\/app-linux\.yml$/],
+  // The app's Rust, its patches and the core's header bindgen reads, but not check.sh's runs, which
+  // need the engine.
+  app_mac: [/^app\/(?!check\/)/, /^core\/public\//, /^\.github\/workflows\/app-mac\.yml$/],
   engine_windows: [
     /^core\//,
     /^engine\//,

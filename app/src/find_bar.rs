@@ -16,8 +16,11 @@ use browser::{
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
     Pixels, Point, SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, svg,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{Live, Role},
+    actions, canvas, div, point,
+    prelude::*,
+    px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, platform};
@@ -26,28 +29,28 @@ actions!(find_bar, [FindNext, FindPrevious, SelectAll, Close]);
 
 // Arc's bar (docs/ux-spec.md › Find in page): 300 × 32, radius 6, 10 in from the card's top right
 // corner, so twice the card's inset from the window's.
-use browser::tokens::find_bar::WIDTH;
 use browser::tokens::find_bar::HEIGHT;
 use browser::tokens::find_bar::RADIUS;
+use browser::tokens::find_bar::WIDTH;
 const RIGHT: f32 = shell::CARD_INSET * 2.;
 // Arc's fill, a navy unlike its window's colour (one Space captured).
 use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
-use browser::tokens::find_bar::INSET;
-use browser::tokens::find_bar::BUTTON;
 use browser::tokens::find_bar::ARROW_OVERLAP;
-use browser::tokens::find_bar::DIVIDER_GAP;
-use browser::tokens::find_bar::FIELD_GAP;
+use browser::tokens::find_bar::BUTTON;
+use browser::tokens::find_bar::COUNT;
 use browser::tokens::find_bar::COUNT_GAP;
+use browser::tokens::find_bar::DIVIDER;
+use browser::tokens::find_bar::DIVIDER_GAP;
+use browser::tokens::find_bar::DIVIDER_HEIGHT;
+use browser::tokens::find_bar::FIELD_GAP;
 use browser::tokens::find_bar::GLYPH;
 use browser::tokens::find_bar::GLYPH_COLOR;
 use browser::tokens::find_bar::GLYPH_DISABLED;
-use browser::tokens::find_bar::DIVIDER;
-use browser::tokens::find_bar::DIVIDER_HEIGHT;
-use browser::tokens::find_bar::TEXT;
-use browser::tokens::find_bar::COUNT;
+use browser::tokens::find_bar::INSET;
 use browser::tokens::find_bar::NOT_FOUND;
 use browser::tokens::find_bar::PLACEHOLDER;
+use browser::tokens::find_bar::TEXT;
 use browser::tokens::text;
 
 /// A tab's find in page, as the core reports it.
@@ -162,10 +165,8 @@ pub fn open(
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {
-        let input = cx.new(|cx| {
-            TextInput::new("Find in page", cx)
-                .placeholder_color(rgba(PLACEHOLDER))
-        });
+        let input =
+            cx.new(|cx| TextInput::new("Find in page", cx).placeholder_color(rgba(PLACEHOLDER)));
         window.focus(&input.focus_handle(cx), cx);
         cx.new(|cx| {
             cx.observe(&input, |bar: &mut FindBar, _, cx| bar.edited(cx))
@@ -207,7 +208,8 @@ pub fn window_closed(browser: bc::bc_id, cx: &mut App) {
 
 /// The bar over the browser window `browser`.
 fn window(browser: bc::bc_id, cx: &App) -> Option<WindowHandle<FindBar>> {
-    cx.try_global::<FindBars>().and_then(|bars| bars.0.get(&browser).copied())
+    cx.try_global::<FindBars>()
+        .and_then(|bars| bars.0.get(&browser).copied())
 }
 
 /// Opens `tab`'s find bar over the browser window `browser`, or selects its text if it's open, and
@@ -222,17 +224,35 @@ pub fn show(browser: bc::bc_id, tab: u64, cx: &mut App) {
         find.open = true;
         find.text = text.clone();
     });
-    let ui_view = window
-        .update(cx, |bar, window, cx| {
-            bar.tab = tab;
-            bar.searched = text.clone();
-            bar.input
-                .update(cx, |input, cx| input.reset(text.into(), window, cx));
-            bar.ui_view
+    let ui_view = window.update(cx, |bar, window, cx| {
+        bar.tab = tab;
+        bar.searched = text.clone();
+        bar.input
+            .update(cx, |input, cx| input.reset(text.into(), window, cx));
+        bar.ui_view
+    });
+    let Ok(ui_view) = ui_view else {
+        return;
+    };
+    // On Windows the field takes a character only once the bar has drawn with it, which a bar the
+    // host shows for the first time hasn't: the keys held since the shortcut, given as the bar
+    // takes the keyboard, came before its first frame, and the first was lost (#1917). So the bar
+    // shows first and takes the keyboard, and with it the held keys, once it has drawn: from a task
+    // its next frame starts, outside the frame, as taking the keyboard tells its window at once.
+    #[cfg(target_os = "windows")]
+    {
+        unsafe { platform::host_show_find_bar(ui_view, false) };
+        let shown = window.update(cx, |_, window, _| {
+            window.on_next_frame(move |_, cx| {
+                cx.spawn(async move |_| unsafe { platform::host_show_find_bar(ui_view, true) })
+                    .detach();
+            });
         });
-    if let Ok(ui_view) = ui_view {
-        unsafe { platform::host_show_find_bar(ui_view, true) };
+        if shown.is_ok() {
+            return;
+        }
     }
+    unsafe { platform::host_show_find_bar(ui_view, true) };
 }
 
 /// Goes to `tab`'s next match, or the one before, opening its find bar over the browser window
@@ -289,7 +309,9 @@ pub fn changed(tab: u64, find: Find, cx: &mut App) {
     if find.open {
         log!(
             "browser: find {tab} open {} of {} {}",
-            find.selected, find.matches, find.text
+            find.selected,
+            find.matches,
+            find.text
         );
     } else {
         log!("browser: find {tab} closed");
@@ -393,14 +415,30 @@ impl FindBar {
     /// The pointer has come onto or left `button`, whose tooltip names it and its key, hanging
     /// from it in the browser window, as Peek's buttons' do.
     fn hover(&mut self, button: Named, hovered: bool, cx: &mut Context<Self>) {
-        let frame = self.frames.borrow().get(&button).copied().filter(|_| hovered);
+        let frame = self
+            .frames
+            .borrow()
+            .get(&button)
+            .copied()
+            .filter(|_| hovered);
         match (frame, (self.place)(cx)) {
             (Some(frame), Some((origin, window))) => {
                 let (name, keystroke) = button.named();
-                let keys = keystroke_keys(keystroke).into_iter().map(Into::into).collect();
+                let keys = keystroke_keys(keystroke)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
                 let anchor = Anchor::under(Bounds::new(origin + frame.origin, frame.size), window);
                 self.tipped = Some(button);
-                tooltip::hover(self.browser, Tip { text: name.into(), keys }, anchor, cx);
+                tooltip::hover(
+                    self.browser,
+                    Tip {
+                        text: name.into(),
+                        keys,
+                    },
+                    anchor,
+                    cx,
+                );
             }
             // Unless the pointer went from it onto another button, whose tooltip took its place.
             _ if self.tipped == Some(button) => self.end_tip(cx),
@@ -428,7 +466,10 @@ impl FindBar {
         button
             .relative()
             .on_hover(cx.listener(move |bar, hovered: &bool, _, cx| bar.hover(named, *hovered, cx)))
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|bar, _, _, cx| bar.end_tip(cx)),
+            )
             .child(
                 canvas(
                     move |bounds, _, _| {
@@ -441,10 +482,27 @@ impl FindBar {
             )
     }
 
-    /// A 28 pt button with `icon`, which dims while it can't be used.
-    fn button(id: &'static str, icon: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    /// A 28 pt button with `icon`, which dims while it can't be used, and which an assistive app
+    /// reads as `name`, its tooltip's, if it's asked for the tree.
+    fn button(
+        id: &'static str,
+        icon: &'static str,
+        name: &'static str,
+        enabled: bool,
+        a11y: bool,
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
+            .when(a11y, |button| {
+                button
+                    .role(Role::Button)
+                    .aria_label(name)
+                    .a11y_synthetic_children(move |builder| {
+                        if !enabled {
+                            builder.parent_node().set_disabled();
+                        }
+                    })
+            })
             .flex_none()
             .size(px(BUTTON))
             .flex()
@@ -456,16 +514,18 @@ impl FindBar {
                     .hover(|style| style.bg(Palette::on_dark(STATE_HOVERED)))
                     .active(|style| style.bg(Palette::on_dark(STATE_PRESSED)))
             })
-            .child(svg().path(icon).size(px(GLYPH)).text_color(rgba(if enabled {
-                GLYPH_COLOR
-            } else {
-                GLYPH_DISABLED
-            })))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(GLYPH))
+                    .text_color(rgba(if enabled { GLYPH_COLOR } else { GLYPH_DISABLED })),
+            )
     }
 }
 
 impl Render for FindBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let a11y = window.is_a11y_active();
         let found = self.found();
         // Arc's count, "1/12", and its previous and next, or "NOT FOUND" in their place.
         let (status, matches) = match found {
@@ -480,20 +540,37 @@ impl Render for FindBar {
         );
         let enabled = matches.is_some();
         let not_found = found.is_some() && !enabled;
-        let previous = Self::button("previous", "icons/chevron-up.svg", enabled);
+        let previous = Named::Previous.named().0;
+        let previous = Self::button("previous", "icons/chevron-up.svg", previous, enabled, a11y);
         let previous = self
             .named(previous, Named::Previous, cx)
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(false, cx)))
             });
-        let next = Self::button("next", "icons/chevron-down.svg", enabled);
+        let next = Named::Next.named().0;
+        let next = Self::button("next", "icons/chevron-down.svg", next, enabled, a11y);
         let next = self
             .named(next, Named::Next, cx)
             .ml(px(-ARROW_OVERLAP))
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
             });
+        // What it says, said as it changes after what's typed, wherever VoiceOver's cursor is:
+        // "1 of 12" rather than its slash, and "not found" rather than its capitals.
+        let said = match found {
+            Some((_, 0)) => "Not found".to_string(),
+            Some((selected, matches)) => format!("{selected} of {matches}"),
+            None => String::new(),
+        };
         let status = div()
+            .id("matches")
+            .when(a11y, |status| {
+                status
+                    .role(Role::Status)
+                    .aria_label("Matches")
+                    .aria_value(said)
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
+            })
             .flex_none()
             .mr(px(COUNT_GAP))
             .when(not_found, |status| {
@@ -502,7 +579,9 @@ impl Render for FindBar {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(NOT_FOUND))
             })
-            .when(!not_found, |status| status.text_size(px(text::SMALL)).text_color(rgba(COUNT)))
+            .when(!not_found, |status| {
+                status.text_size(px(text::SMALL)).text_color(rgba(COUNT))
+            })
             .child(status);
         let divider = div()
             .flex_none()
@@ -511,7 +590,7 @@ impl Render for FindBar {
             .flex()
             .justify_center()
             .child(div().w(px(1.)).h_full().bg(rgba(DIVIDER)));
-        let close = Self::button("close", "icons/x.svg", true);
+        let close = Self::button("close", "icons/x.svg", Named::Close.named().0, true, a11y);
         let close = self
             .named(close, Named::Close, cx)
             .on_click(cx.listener(|bar, _, window, cx| bar.close(&Close, window, cx)));
@@ -521,51 +600,60 @@ impl Render for FindBar {
             .flex()
             .items_center()
             .justify_center()
-            .child(svg().path("icons/search.svg").size(px(GLYPH)).text_color(rgba(GLYPH_COLOR)));
+            .child(
+                svg()
+                    .path("icons/search.svg")
+                    .size(px(GLYPH))
+                    .text_color(rgba(GLYPH_COLOR)),
+            );
         // The browser's shortcuts work here too, below the bar's own keys.
-        div().key_context(shell::KEY_CONTEXT).size_full().font_family(browser::face::UI).child(
-            div()
-                .key_context("FindBar")
-                // A key ends a button's tooltip, as a click does.
-                .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
-                .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
-                .on_action(cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)))
-                .on_action(cx.listener(Self::select_all))
-                .on_action(cx.listener(Self::close))
-                .size_full()
-                .relative()
-                .flex()
-                .items_center()
-                .px(px(INSET))
-                .rounded(px(RADIUS))
-                .bg(rgb(FILL))
-                .text_color(rgb(TEXT))
-                .text_size(px(text::BODY))
-                .line_height(px(18.))
-                .child(search)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .ml(px(FIELD_GAP))
-                        .overflow_hidden()
-                        .child(self.input.clone()),
-                )
-                .child(status)
-                .when(!not_found, |bar| bar.child(previous).child(next))
-                .child(divider)
-                .child(close)
-                // The popover level's rim, its own layer so the border doesn't move the bar's
-                // parts. Its shadow is the window's, which the host's find bar still takes from
-                // the system.
-                .child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .rounded(px(RADIUS))
-                        .border(px(0.5))
-                        .border_color(Level::Popover.rim()),
-                ),
-        )
+        div()
+            .key_context(shell::KEY_CONTEXT)
+            .size_full()
+            .font_family(browser::face::UI)
+            .child(
+                div()
+                    .key_context("FindBar")
+                    // A key ends a button's tooltip, as a click does.
+                    .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
+                    .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
+                    .on_action(cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)))
+                    .on_action(cx.listener(Self::select_all))
+                    .on_action(cx.listener(Self::close))
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .px(px(INSET))
+                    .rounded(px(RADIUS))
+                    .bg(rgb(FILL))
+                    .text_color(rgb(TEXT))
+                    .text_size(px(text::BODY))
+                    .line_height(px(18.))
+                    .child(search)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .ml(px(FIELD_GAP))
+                            .overflow_hidden()
+                            .child(self.input.clone()),
+                    )
+                    .child(status)
+                    .when(!not_found, |bar| bar.child(previous).child(next))
+                    .child(divider)
+                    .child(close)
+                    // The popover level's rim, its own layer so the border doesn't move the bar's
+                    // parts. Its shadow is the window's, which the host's find bar still takes from
+                    // the system.
+                    .child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .rounded(px(RADIUS))
+                            .border(px(0.5))
+                            .border_color(Level::Popover.rim()),
+                    ),
+            )
     }
 }

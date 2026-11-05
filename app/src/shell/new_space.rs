@@ -6,8 +6,11 @@
 use std::{f32::consts::PI, time::Instant};
 
 use gpui::{
-    Bounds, BoxShadow, Context, Hsla, PathBuilder, Window, canvas, div, fill, hsla,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    Bounds, BoxShadow, Context, Hsla, PathBuilder, Window,
+    accesskit::{Live, Role},
+    canvas, div, fill, hsla, linear_color_stop, linear_gradient, point,
+    prelude::*,
+    px, size,
 };
 
 use super::{Command, Shell, Swipe};
@@ -17,8 +20,8 @@ use super::{Command, Shell, Swipe};
 const NEW_SPACE_READY: f32 = 22.7;
 const RING_FULL: f32 = 22.;
 use crate::tokens::shell::new_space::CIRCLE;
-use crate::tokens::shell::new_space::RING;
 use crate::tokens::shell::new_space::CUT;
+use crate::tokens::shell::new_space::RING;
 /// The circle's centre at rest, right of the page's edge, how much faster than the page it comes
 /// out, and how far left of the edge it stops, while the page goes on.
 const CIRCLE_START: f32 = 20.;
@@ -41,8 +44,8 @@ const UNREADY: f32 = 0.12;
 /// Let go readied, the circle goes back under the edge over 100 ms.
 const EXIT: f32 = 0.1;
 use crate::tokens::shell::new_space::GLOW;
-use crate::tokens::shell::new_space::GLOW_WIDTH;
 use crate::tokens::shell::new_space::GLOW_STRIP;
+use crate::tokens::shell::new_space::GLOW_WIDTH;
 use crate::tokens::shell::new_space::SHADOW;
 
 /// The circle going back under the page's edge after a pull made `space`, and where the fingers
@@ -68,9 +71,15 @@ enum Look {
 impl Shell {
     /// Whether `swipe` has pulled the last Space's page far enough to ready a new Space.
     fn pull_ready(&self, swipe: &Swipe) -> bool {
-        // A private window makes none.
-        let last = !self.private && self.spaces.last().is_some_and(|last| last.id == swipe.from);
-        last && !swipe.library && self.form.is_none() && self.swiped_to(swipe) <= -NEW_SPACE_READY
+        let beside = self.new_space_beside(swipe.from);
+        beside && !swipe.library && self.swiped_to(swipe) <= -NEW_SPACE_READY
+    }
+
+    /// Whether a new Space comes after `space`: the last, while no form is naming one. A private
+    /// window makes none.
+    pub(super) fn new_space_beside(&self, space: u64) -> bool {
+        let last = self.spaces.last().is_some_and(|last| last.id == space);
+        last && !self.private && self.form.is_none()
     }
 
     /// Readies a new Space as the fingers' pull reaches it and lets it go as they go back, with a
@@ -83,7 +92,10 @@ impl Shell {
         swipe.ready = ready;
         swipe.turned = Some(Instant::now());
         // check.sh waits for these lines.
-        log!("browser: new space {}", if ready { "ready" } else { "unready" });
+        log!(
+            "browser: new space {}",
+            if ready { "ready" } else { "unready" }
+        );
         self.browser.detent(cx);
     }
 
@@ -93,8 +105,13 @@ impl Shell {
         let accent = self.circle_accent(self.space);
         self.run(Command::NewSpace, "swipe", cx);
         if let Some(form) = &self.form {
-            let (space, start) = (form.space, Instant::now());
-            self.circle_exit = Some(CircleExit { space, accent, start, held });
+            let (space, start) = (form.space, crate::motion::start(cx));
+            self.circle_exit = Some(CircleExit {
+                space,
+                accent,
+                start,
+                held,
+            });
         }
     }
 
@@ -148,14 +165,18 @@ impl Shell {
 
     /// The circle halfway down the page's edge and its glow, while the last Space's page is pulled
     /// and as the circle goes back after making a Space.
-    pub(super) fn new_space_circle(&self) -> Option<impl IntoElement + use<>> {
+    pub(super) fn new_space_circle(&self, cx: &gpui::App) -> Option<impl IntoElement + use<>> {
         let (travel, accent, look) = match &self.circle_exit {
             Some(exit) => {
                 let t = exit.start.elapsed().as_secs_f32() / EXIT;
                 if t >= 1. {
                     return None;
                 }
-                (TRAVEL * (1. - smoothstep(t)), exit.accent, Look::Readying(1.))
+                (
+                    TRAVEL * (1. - smoothstep(t)),
+                    exit.accent,
+                    Look::Readying(1.),
+                )
             }
             None => {
                 let (space, pulled) = self.pulled()?;
@@ -168,7 +189,11 @@ impl Shell {
                     (false, Some(t)) if t < UNREADY => Look::Unreadying(t, way),
                     _ => Look::Pulling(way),
                 };
-                ((CIRCLE_SPEED * pulled).min(TRAVEL), self.circle_accent(space), look)
+                (
+                    (CIRCLE_SPEED * pulled).min(TRAVEL),
+                    self.circle_accent(space),
+                    look,
+                )
             }
         };
         let (accent, label) = accent;
@@ -177,7 +202,7 @@ impl Shell {
             Look::Readying(t) => (PI * ((t - POP_AT) / POP).clamp(0., 1.)).sin(),
             _ => 0.,
         };
-        let scale = 1. + (POP_SCALE - 1.) * popped;
+        let scale = crate::motion::scale(1. + (POP_SCALE - 1.) * popped, cx);
         let across = CIRCLE * scale;
         let disc = div()
             .relative()
@@ -217,6 +242,23 @@ impl Shell {
                     .children(plus(across, PLUS * scale, PLUS_STROKE * scale, accent))
             }
         };
+        // VoiceOver says when letting go makes the Space, as the trackpad's click does, while the
+        // fingers pull, and nothing once it's made.
+        let said = match look {
+            _ if self.circle_exit.is_some() => None,
+            Look::Readying(_) => Some("Let go to make it"),
+            _ => Some("Pull further to make one"),
+        };
+        let disc =
+            disc.id("new-space-circle")
+                .when_some(said.filter(|_| self.a11y), |disc, said| {
+                    disc.role(Role::Status)
+                        .aria_label("New Space")
+                        .aria_value(said)
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().set_live(Live::Polite)
+                        })
+                });
         let width = self.width();
         let centre = width + CIRCLE_START - travel;
         Some(

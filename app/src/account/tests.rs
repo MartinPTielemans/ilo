@@ -81,7 +81,11 @@ impl Host for Recorder {
     }
 
     fn copy_secret(&self, text: &str, kept: Duration, _: &mut App) {
-        self.record(format!("copy secret {} {}", text.split(' ').count(), kept.as_secs()));
+        self.record(format!(
+            "copy secret {} {}",
+            text.split(' ').count(),
+            kept.as_secs()
+        ));
     }
 
     fn confirm(
@@ -96,9 +100,9 @@ impl Host for Recorder {
     ) {
         self.record(format!("ask {message} {action}"));
         match self.dialog.borrow().clone() {
-            Some(dialog) => {
-                dialog::ask_in(&dialog, message, detail, action, on_return, confirmed, window, cx)
-            }
+            Some(dialog) => dialog::ask_in(
+                &dialog, message, detail, action, on_return, confirmed, window, cx,
+            ),
             None => *self.asked.borrow_mut() = Some((message, confirmed)),
         }
     }
@@ -112,7 +116,10 @@ struct Page {
 
 impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.account.clone()).children(dialog::cover(&self.dialog, cx))
+        div()
+            .size_full()
+            .child(self.account.clone())
+            .children(dialog::cover(&self.dialog, cx))
     }
 }
 
@@ -156,27 +163,38 @@ fn state(status: Status) -> State {
 }
 
 fn device(id: &str, current: bool) -> Device {
-    Device { id: id.into(), name: format!("Device {id}").into(), os: "macOS".into(), current }
+    Device {
+        id: id.into(),
+        name: format!("Device {id}").into(),
+        os: "macOS".into(),
+        current,
+    }
 }
 
 impl Shown<'_> {
     fn set(&mut self, state: State) {
-        self.account.update(self.cx, |account, cx| account.set_state(state, cx));
+        self.account
+            .update(self.cx, |account, cx| account.set_state(state, cx));
         self.cx.run_until_parked();
     }
 
     fn set_devices(&mut self, devices: Vec<Device>) {
-        self.account.update(self.cx, |account, cx| account.set_devices(devices, cx));
+        self.account
+            .update(self.cx, |account, cx| account.set_devices(devices, cx));
         self.cx.run_until_parked();
     }
 
     fn drawn(&mut self, name: &str) -> bool {
-        self.account.read_with(self.cx, |account, _| account.drawn(name)).is_some()
+        self.account
+            .read_with(self.cx, |account, _| account.drawn(name))
+            .is_some()
     }
 
     /// Clicks the button named `name`, which must be drawn.
     fn click(&mut self, name: &str) {
-        let bounds = self.account.read_with(self.cx, |account, _| account.drawn(name));
+        let bounds = self
+            .account
+            .read_with(self.cx, |account, _| account.drawn(name));
         let bounds = bounds.unwrap_or_else(|| panic!("no {name} drawn"));
         self.cx.simulate_click(bounds.center(), Modifiers::none());
         self.cx.run_until_parked();
@@ -200,7 +218,8 @@ impl Shown<'_> {
     }
 
     fn showing_words(&mut self) -> bool {
-        self.account.read_with(self.cx, |account, _| account.words.is_some())
+        self.account
+            .read_with(self.cx, |account, _| account.words.is_some())
     }
 }
 
@@ -228,11 +247,16 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     tab.type_text("ftp://example.org");
     tab.keys("enter");
     assert_eq!(tab.host.take(), ["server ftp://example.org"]);
-    let refused = tab.account.read_with(tab.cx, |account, _| account.server.as_ref().map(|f| f.refused));
+    let refused = tab.account.read_with(tab.cx, |account, _| {
+        account.server.as_ref().map(|f| f.refused)
+    });
     assert_eq!(refused, Some(true), "the field stays, saying so");
 
     tab.keys("escape");
-    assert!(tab.account.read_with(tab.cx, |account, _| account.server.is_none()));
+    assert!(
+        tab.account
+            .read_with(tab.cx, |account, _| account.server.is_none())
+    );
     assert!(tab.host.take().is_empty());
 
     tab.host.refuse.set(false);
@@ -240,7 +264,10 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     tab.type_text("https://ilo.example.net");
     tab.keys("enter");
     assert_eq!(tab.host.take(), ["server https://ilo.example.net"]);
-    assert!(tab.account.read_with(tab.cx, |account, _| account.server.is_none()));
+    assert!(
+        tab.account
+            .read_with(tab.cx, |account, _| account.server.is_none())
+    );
 }
 
 /// A build that names no server, before the user has named one, asks for the address in place of
@@ -248,10 +275,16 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
 /// field stays until the core has the server, as nothing else could name one.
 #[gpui::test]
 fn with_no_server_sign_in_asks_for_its_address(cx: &mut TestAppContext) {
-    let none = State { server: "".into(), default_server: false, ..state(Status::SignedOut) };
+    let none = State {
+        server: "".into(),
+        default_server: false,
+        ..state(Status::SignedOut)
+    };
     let mut tab = shown(none.clone(), cx);
     let field = |tab: &mut Shown| {
-        tab.account.read_with(tab.cx, |account, _| account.server.as_ref().map(|f| f.refused))
+        tab.account.read_with(tab.cx, |account, _| {
+            account.server.as_ref().map(|f| f.refused)
+        })
     };
     assert_eq!(field(&mut tab), Some(false), "it asks for the address");
     assert!(tab.drawn("sign-in") && !tab.drawn("change-server"));
@@ -263,14 +296,23 @@ fn with_no_server_sign_in_asks_for_its_address(cx: &mut TestAppContext) {
     assert!(field(&mut tab).is_some(), "the field stays");
 
     // The core's answer to a sign-in with no server says only to name one.
-    tab.set(State { problem: Some(Problem::Server), ..none.clone() });
+    tab.set(State {
+        problem: Some(Problem::Server),
+        ..none.clone()
+    });
     assert!(field(&mut tab).is_some());
     tab.click("field");
     tab.type_text("https://sync.example.net");
     tab.click("sign-in");
-    assert_eq!(tab.host.take(), ["server https://sync.example.net", "sign in"]);
+    assert_eq!(
+        tab.host.take(),
+        ["server https://sync.example.net", "sign in"]
+    );
     assert!(field(&mut tab).is_some(), "until the core has it");
-    tab.set(State { server: "https://sync.example.net".into(), ..none });
+    tab.set(State {
+        server: "https://sync.example.net".into(),
+        ..none
+    });
     assert_eq!(field(&mut tab), None);
     assert!(tab.drawn("change-server"));
 }
@@ -328,7 +370,11 @@ fn the_clipboard_lets_the_words_go(cx: &mut TestAppContext) {
     cx.update(|cx| copy_for(WORDS, WORDS_KEPT, cx));
     cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("mine".into())));
     cx.executor().advance_clock(WORDS_KEPT * 2);
-    assert_eq!(clipboard(cx).as_deref(), Some("mine"), "the user's own copy stays");
+    assert_eq!(
+        clipboard(cx).as_deref(),
+        Some("mine"),
+        "the user's own copy stays"
+    );
 }
 
 /// A new device asks the others to add it once, by itself, and shows the code once one answers.
@@ -338,7 +384,10 @@ fn a_new_device_asks_once_and_cancel_takes_it_back(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::NeedsSecret), cx);
     assert_eq!(tab.host.take(), ["request pairing"]);
     tab.set(state(Status::Pairing));
-    tab.set(State { code: "312568".into(), ..state(Status::Pairing) });
+    tab.set(State {
+        code: "312568".into(),
+        ..state(Status::Pairing)
+    });
     assert!(tab.drawn("cancel") && tab.drawn("use-words") && tab.drawn("sign-out"));
     tab.click("cancel");
     assert_eq!(tab.host.take(), ["cancel"]);
@@ -349,7 +398,10 @@ fn a_new_device_asks_once_and_cancel_takes_it_back(cx: &mut TestAppContext) {
 
     // Declined, it says so, and waits for the user too.
     tab.set(state(Status::Pairing));
-    tab.set(State { problem: Some(Problem::Declined), ..state(Status::NeedsSecret) });
+    tab.set(State {
+        problem: Some(Problem::Declined),
+        ..state(Status::NeedsSecret)
+    });
     assert!(tab.host.take().is_empty());
     assert!(tab.drawn("ask-again"));
 }
@@ -359,7 +411,10 @@ fn a_new_device_asks_once_and_cancel_takes_it_back(cx: &mut TestAppContext) {
 fn signing_in_again_asks_again(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::NeedsSecret), cx);
     assert_eq!(tab.host.take(), ["request pairing"]);
-    tab.set(State { problem: Some(Problem::Removed), ..state(Status::SignedOut) });
+    tab.set(State {
+        problem: Some(Problem::Removed),
+        ..state(Status::SignedOut)
+    });
     tab.set(state(Status::SigningIn));
     tab.set(state(Status::NeedsSecret));
     assert_eq!(tab.host.take(), ["request pairing"]);
@@ -376,13 +431,18 @@ fn the_recovery_words_instead(cx: &mut TestAppContext) {
     tab.click("use-words");
     assert_eq!(tab.host.take(), ["cancel"]);
     tab.set(state(Status::NeedsSecret));
-    assert!(tab.host.take().is_empty(), "it doesn't ask the other devices while they're typed");
+    assert!(
+        tab.host.take().is_empty(),
+        "it doesn't ask the other devices while they're typed"
+    );
 
     tab.host.refuse.set(true);
     tab.type_text("abandon ability");
     tab.keys("enter");
     assert_eq!(tab.host.take(), ["words 2"]);
-    let refused = tab.account.read_with(tab.cx, |account, _| account.entering.as_ref().map(|f| f.refused));
+    let refused = tab.account.read_with(tab.cx, |account, _| {
+        account.entering.as_ref().map(|f| f.refused)
+    });
     assert_eq!(refused, Some(true));
 
     tab.host.refuse.set(false);
@@ -390,10 +450,19 @@ fn the_recovery_words_instead(cx: &mut TestAppContext) {
     tab.type_text(WORDS);
     tab.click("continue");
     assert_eq!(tab.host.take(), ["words 24"]);
-    tab.set(State { problem: Some(Problem::WrongWords), ..state(Status::NeedsSecret) });
-    assert!(tab.drawn("continue"), "the field stays for the words to be fixed");
+    tab.set(State {
+        problem: Some(Problem::WrongWords),
+        ..state(Status::NeedsSecret)
+    });
+    assert!(
+        tab.drawn("continue"),
+        "the field stays for the words to be fixed"
+    );
     tab.set(state(Status::On));
-    assert!(tab.account.read_with(tab.cx, |account, _| account.entering.is_none()));
+    assert!(
+        tab.account
+            .read_with(tab.cx, |account, _| account.entering.is_none())
+    );
     assert_eq!(tab.host.take(), ["read devices"]);
 }
 
@@ -411,7 +480,10 @@ fn start_over_asks_then_shows_new_words(cx: &mut TestAppContext) {
     assert_eq!(tab.host.take(), ["start over"]);
     tab.set(state(Status::FirstDevice));
     assert!(tab.showing_words());
-    assert!(tab.account.read_with(tab.cx, |account, _| account.entering.is_none()));
+    assert!(
+        tab.account
+            .read_with(tab.cx, |account, _| account.entering.is_none())
+    );
 }
 
 /// ↩ in Start over's question does nothing, as erasing every device's synced data takes a click:
@@ -427,7 +499,10 @@ fn return_never_starts_over(cx: &mut TestAppContext) {
     let (page, cx) = cx.add_window_view(|_, cx| {
         let dialog = dialog::in_window(Rc::new(InWindow), cx);
         *core.dialog.borrow_mut() = Some(dialog.clone());
-        Page { account: cx.new(|cx| Account::new(core, cx)), dialog }
+        Page {
+            account: cx.new(|cx| Account::new(core, cx)),
+            dialog,
+        }
     });
     cx.simulate_resize(size(px(684.), px(650.)));
     let account = page.read_with(cx, |page, _| page.account.clone());
@@ -440,7 +515,8 @@ fn return_never_starts_over(cx: &mut TestAppContext) {
     assert_eq!(tab.host.take(), [asked]);
     let asking = |tab: &mut Shown| {
         let page = page.clone();
-        tab.cx.update(|_, cx| dialog::cover(&page.read(cx).dialog, cx).is_some())
+        tab.cx
+            .update(|_, cx| dialog::cover(&page.read(cx).dialog, cx).is_some())
     };
     assert!(asking(&mut tab));
 
@@ -449,7 +525,9 @@ fn return_never_starts_over(cx: &mut TestAppContext) {
     tab.cx.run_until_parked();
     assert!(tab.host.take().is_empty(), "↩ never starts over");
     assert!(asking(&mut tab), "the question stays for a click");
-    let now = tab.account.read_with(tab.cx, |account, _| account.state().clone());
+    let now = tab
+        .account
+        .read_with(tab.cx, |account, _| account.state().clone());
     assert_eq!(now, state(Status::NeedsSecret));
 
     tab.keys("escape");
@@ -507,7 +585,10 @@ fn sign_out_asks_only_on_the_only_device(cx: &mut TestAppContext) {
 
     tab.set_devices(vec![device("this", true)]);
     tab.click("sign-out");
-    assert_eq!(tab.host.take(), ["ask Sign out of ada@example.org? Sign Out"]);
+    assert_eq!(
+        tab.host.take(),
+        ["ask Sign out of ada@example.org? Sign Out"]
+    );
     tab.confirm();
     assert_eq!(tab.host.take(), ["sign out"]);
 }
@@ -545,17 +626,27 @@ fn the_other_device_asks_with_the_code() {
         signed_in: "2 minutes ago".into(),
     };
     let question = pairing_question(&pairing);
-    assert_eq!(question.message.as_ref(), "Add the device that asked at 15:04?");
+    assert_eq!(
+        question.message.as_ref(),
+        "Add the device that asked at 15:04?"
+    );
     assert_eq!(
         question.detail.as_ref(),
         "It signed in to your account 2 minutes ago. It calls itself “Pixel 9” on Android, which \
          nothing checks. Add it only if the device in front of you shows 312\u{a0}568."
     );
-    assert_eq!((question.action.as_ref(), question.cancel.as_ref()), ("Add", "Not me"));
+    assert_eq!(
+        (question.action.as_ref(), question.cancel.as_ref()),
+        ("Add", "Not me")
+    );
     assert_eq!(question.on_return, Return::Cancel);
     // A server that doesn't say when it signed in leaves that out.
-    let unnamed =
-        Pairing { name: "".into(), os: "".into(), signed_in: "".into(), ..pairing.clone() };
+    let unnamed = Pairing {
+        name: "".into(),
+        os: "".into(),
+        signed_in: "".into(),
+        ..pairing.clone()
+    };
     assert_eq!(
         pairing_question(&unnamed).detail.as_ref(),
         "Add it only if the device in front of you shows 312\u{a0}568."
@@ -596,7 +687,10 @@ fn since_reads_in_one_unit() {
 #[test]
 fn the_clock_reads_the_users_day() {
     let today = 1_700_000_000_000.;
-    assert_eq!(clock(today + (15. * 60. + 4.) * 60_000. + 59_000., today), "15:04");
+    assert_eq!(
+        clock(today + (15. * 60. + 4.) * 60_000. + 59_000., today),
+        "15:04"
+    );
     assert_eq!(clock(today, today), "00:00");
     assert_eq!(clock(today - 60_000., today), "23:59");
 }
@@ -607,4 +701,77 @@ fn the_server_is_named_by_its_host() {
     assert_eq!(host_of("https://sync.example.org/"), "sync.example.org");
     assert_eq!(host_of("http://127.0.0.1:8080/x?y"), "127.0.0.1:8080");
     assert_eq!(host_of("sync.example.org"), "sync.example.org");
+}
+
+/// What an assistive app finds in the tab as it's drawn now: each control it can press and each
+/// place ⇥ stops, all with a role and a name. Returns the names it can press.
+fn spoken_names(tab: &mut Shown) -> Vec<String> {
+    use crate::settings_rows::spoken::{pressable, stops, unnamed};
+    let pressable = pressable(tab.cx);
+    assert_eq!(
+        unnamed(&pressable),
+        [],
+        "a control without a name: {pressable:?}"
+    );
+    let stops = stops(tab.cx);
+    assert_eq!(unnamed(&stops), [], "a stop without a name: {stops:?}");
+    assert!(!stops.is_empty(), "⇥ reaches none of it");
+    pressable.into_iter().map(|(_, name, _)| name).collect()
+}
+
+/// Every control in each of the Sync tab's views is one an assistive app can name, and ⇥ stops
+/// only at those (#1911): a button says what it does, a device's Remove which device it takes,
+/// and the fields what goes in them.
+#[gpui::test]
+fn every_control_in_sync_has_a_name(cx: &mut TestAppContext) {
+    use gpui::accesskit::Role;
+    let mut tab = shown(state(Status::SignedOut), cx);
+    let names = spoken_names(&mut tab);
+    assert!(names.contains(&"Sign In".into()), "{names:?}");
+    assert!(names.contains(&"Change Server…".into()), "{names:?}");
+
+    tab.click("change-server");
+    tab.cx.run_until_parked();
+    spoken_names(&mut tab);
+    let tree = tab.cx.a11y_tree().expect("a tree");
+    let field = (tree.nodes.iter()).find(|(_, node)| node.role() == Role::TextInput);
+    assert_eq!(
+        field.and_then(|(_, node)| node.label()),
+        Some("Sync Server Address"),
+        "the server's field is called by its placeholder"
+    );
+    tab.keys("escape");
+
+    tab.set(state(Status::SigningIn));
+    assert!(spoken_names(&mut tab).contains(&"Cancel Sign In".into()));
+
+    tab.set(state(Status::NeedsSecret));
+    let names = spoken_names(&mut tab);
+    for name in ["Ask Again", "Use Recovery Words Instead", "Sign Out"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.set(state(Status::Pairing));
+    assert!(spoken_names(&mut tab).contains(&"Cancel Request".into()));
+    tab.click("use-words");
+    tab.set(state(Status::NeedsSecret));
+    let names = spoken_names(&mut tab);
+    for name in ["Back", "Continue", "Start Over…"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.click("back");
+
+    tab.set(state(Status::FirstDevice));
+    let names = spoken_names(&mut tab);
+    for name in ["Copy Recovery Words", "Done"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
+    tab.click("copy");
+    assert!(spoken_names(&mut tab).contains(&"Recovery Words Copied".into()));
+    tab.set(state(Status::On));
+    tab.click("done");
+    tab.set_devices(vec![device("a", true), device("b", false)]);
+    let names = spoken_names(&mut tab);
+    for name in ["Sign Out", "Remove Device b", "Show Recovery Words…"] {
+        assert!(names.contains(&name.into()), "{name} in {names:?}");
+    }
 }

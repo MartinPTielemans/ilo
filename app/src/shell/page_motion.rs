@@ -72,7 +72,11 @@ mod tests {
             shell.set_spaces(vec![space], cx);
             shell.set_space(1, cx);
             let splits = match split {
-                true => vec![Split { tabs: vec![1, 2], stacked: false, ..Split::default() }],
+                true => vec![Split {
+                    tabs: vec![1, 2],
+                    stacked: false,
+                    ..Split::default()
+                }],
                 false => Vec::new(),
             };
             shell.set_tabs(1, Vec::new(), vec![1, 2], splits, Folders::default(), cx);
@@ -100,7 +104,11 @@ mod tests {
     /// What the shell told the core about the motion, without the layouts between.
     fn told(host: &Recorder) -> Vec<&'static str> {
         let events = host.page_events.borrow();
-        events.iter().copied().filter(|&event| event != "layout").collect()
+        events
+            .iter()
+            .copied()
+            .filter(|&event| event != "layout")
+            .collect()
     }
 
     /// Presses the edge or gap at `x`, as the pointer would.
@@ -128,7 +136,11 @@ mod tests {
         draw(&shell, cx);
         assert_eq!(told(&host), ["moving", "still"]);
         let events = host.page_events.borrow().clone();
-        assert_eq!(&events[events.len() - 2..], ["layout", "still"], "{events:?}");
+        assert_eq!(
+            &events[events.len() - 2..],
+            ["layout", "still"],
+            "{events:?}"
+        );
         host.page_events.borrow_mut().clear();
         draw(&shell, cx);
         assert!(host.page_events.borrow().is_empty());

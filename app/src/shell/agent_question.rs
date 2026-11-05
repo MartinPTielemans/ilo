@@ -6,11 +6,11 @@
 //! handoff asks the same way: the agent needs the user in a tab, which Show Tab shows and Hand Back
 //! gives back. So does an agent asking for a tab the user took over: Keep, or Hand Back.
 
-use gpui::{Context, FontWeight, div, prelude::*, px, rgba};
+use gpui::{Context, FontWeight, div, prelude::*, px};
 
 use super::{
     Shell, TITLE,
-    permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
 };
 use crate::agents::{Answer, Question};
 use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
@@ -36,7 +36,9 @@ impl Shell {
 
     /// The agent's question the card shows, unless a page's question has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
-        self.agent_question.as_ref().filter(|_| self.question().is_none())
+        self.agent_question
+            .as_ref()
+            .filter(|_| self.question().is_none())
     }
 
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
@@ -47,68 +49,47 @@ impl Shell {
     }
 
     /// The agent's question, as a card under the URL field.
-    pub(super) fn agent_question_card(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let Some(question) = self.agent_question() else {
             // Drawn again, it's logged again.
             self.agent_question_drawn.set(None);
             return None;
         };
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
-        if let Some(tab) = question.handoff {
-            let first = match question.back {
-                true => card_button(&self.palette, "agent-keep", "Keep").on_click(
-                    cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Never, cx)),
-                ),
-                false => card_button(&self.palette, "agent-handoff-show", "Show Tab")
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.select(tab, cx))),
-            };
-            let back = card_button(&self.palette, "agent-handoff-back", "Hand Back")
-                .on_click(cx.listener(move |shell, _, _, cx| shell.browser.hand_back(tab, cx)));
-            let title = match question.back {
-                true => format!("{} asks for a tab", question.agent),
-                false => format!("{} needs you", question.agent),
-            };
-            return Some(
-                self.plate("agent-question")
-                    .child(listener)
-                    .child(
-                        div()
-                            .text_color(self.palette.text(TITLE))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(title),
-                    )
-                    .child(div().text_color(rgba(DETAIL)).child(question.why.clone()))
-                    .child(
-                        div()
-                            .mt(px(BUTTONS_TOP))
-                            .flex()
-                            .gap(px(BUTTON_GAP))
-                            .child(first)
-                            .child(back),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let button = |id: &'static str, label: &'static str, answer: Answer| {
-            card_button(&self.palette, id, label)
-                .on_click(cx.listener(move |shell, _, _, cx| shell.answer_agent(answer, cx)))
+        let buttons = buttons(question).into_iter().map(|button| {
+            let row = button.look == Look::Text;
+            card_button_as(&self.palette, button.id, button.label, button.look)
+                .when(row, |button| button.flex_basis(gpui::relative(1.)))
+                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
+                    Does::Answer(answer) => shell.answer_agent(answer, cx),
+                    Does::Show(tab) => shell.select(tab, cx),
+                    Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
+                }))
+        });
+        let title = match (question.handoff, question.back) {
+            (Some(_), true) => format!("{} asks for a tab", question.agent),
+            (Some(_), false) => format!("{} needs you", question.agent),
+            (None, _) => format!("{} wants to {}", question.agent, question.what),
         };
-        let close = card_close(&self.palette, "agent-question-close")
-            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
+        let close = question.handoff.is_none().then(|| {
+            card_close(&self.palette, "agent-question-close")
+                .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
+        });
         Some(
             self.plate("agent-question")
                 .child(listener)
                 .child(
                     div()
-                        .pr(px(BESIDE_CLOSE))
+                        .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
                         .text_color(self.palette.text(TITLE))
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(format!("{} wants to {}", question.agent, question.what)),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
                 )
-                .child(div().text_color(rgba(DETAIL)).child(question.why.clone()))
+                .child(
+                    div()
+                        .text_color(self.palette.on_overlay(DETAIL))
+                        .child(question.why.clone()),
+                )
                 // Three labels don't fit a row of the sidebar at its default width, so the last
                 // takes a row of its own, as wide as the card, rather than running past its edge.
                 .child(
@@ -117,13 +98,92 @@ impl Shell {
                         .flex()
                         .flex_wrap()
                         .gap(px(BUTTON_GAP))
-                        .child(button("agent-question-never", "Never", Answer::Never))
-                        .child(button("agent-question-once", "Allow Once", Answer::Once))
-                        .child(button("agent-question-always", "Always Allow", Answer::Always)),
+                        .children(buttons),
                 )
-                .child(close)
+                .children(close)
                 .into_any_element(),
         )
+    }
+}
+
+/// What a card's button does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Does {
+    Answer(Answer),
+    /// Shows the agent's tab, where the user does the step it handed them.
+    Show(u64),
+    /// Gives the tab back to the agent.
+    HandBack(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Button {
+    pub(super) id: &'static str,
+    pub(super) label: &'static str,
+    pub(super) look: Look,
+    does: Does,
+}
+
+/// The card's buttons, in order: the answer that leaves things as they are on the quiet plate, then
+/// the answer the agent waits on, the one primary, on the right as the dialog keeps its action;
+/// and for a confirmation Always Allow, which reaches further than it looks, as its words alone on
+/// a row of their own.
+pub(super) fn buttons(question: &Question) -> Vec<Button> {
+    let button = |id, label, look, does| Button {
+        id,
+        label,
+        look,
+        does,
+    };
+    match question.handoff {
+        Some(tab) if question.back => vec![
+            button(
+                "agent-keep",
+                "Keep",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-handoff-back",
+                "Hand Back",
+                Look::Primary,
+                Does::HandBack(tab),
+            ),
+        ],
+        Some(tab) => vec![
+            button(
+                "agent-handoff-back",
+                "Hand Back",
+                Look::Quiet,
+                Does::HandBack(tab),
+            ),
+            button(
+                "agent-handoff-show",
+                "Show Tab",
+                Look::Primary,
+                Does::Show(tab),
+            ),
+        ],
+        None => vec![
+            button(
+                "agent-question-never",
+                "Never",
+                Look::Quiet,
+                Does::Answer(Answer::Never),
+            ),
+            button(
+                "agent-question-once",
+                "Allow Once",
+                Look::Primary,
+                Does::Answer(Answer::Once),
+            ),
+            button(
+                "agent-question-always",
+                "Always Allow",
+                Look::Text,
+                Does::Answer(Answer::Always),
+            ),
+        ],
     }
 }
 
@@ -158,11 +218,22 @@ mod tests {
         let browser = host.clone();
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
         shell.update(cx, |shell, cx| {
-            let space = (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into());
+            let space = (
+                1,
+                "Space 1".into(),
+                None,
+                0,
+                "".into(),
+                "".into(),
+                "".into(),
+            );
             shell.set_spaces(vec![space], cx);
             shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
             shell.set_space(1, cx);
-            let page = Page { url: "https://example.com/".into(), ..Page::default() };
+            let page = Page {
+                url: "https://example.com/".into(),
+                ..Page::default()
+            };
             shell.set_page(10, page, cx);
             shell.set_selected(10, cx);
             shell.set_agent_question(Some(question(7)), cx);
@@ -176,28 +247,45 @@ mod tests {
             (card, last, last - px(BUTTON_HEIGHT + BUTTON_GAP))
         };
         let (card, _, above) = rows(&shell, cx);
-        cx.simulate_click(point(card.left() + card.size.width * 0.75, above), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, above),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 7 Once".to_string()));
         shell.read_with(cx, |shell, _| assert!(shell.agent_question().is_none()));
 
         shell.update(cx, |shell, cx| {
-            let asked = PageQuestion { site: "example.com".into(), permissions: Vec::new() };
+            let asked = PageQuestion {
+                site: "example.com".into(),
+                permissions: Vec::new(),
+            };
             shell.set_question(10, Some(asked), cx);
             shell.set_agent_question(Some(question(8)), cx);
-            assert!(shell.agent_question().is_none(), "the agent's card covered the page's");
+            assert!(
+                shell.agent_question().is_none(),
+                "the agent's card covered the page's"
+            );
             shell.set_question(10, None, cx);
             assert_eq!(shell.agent_question().map(|question| question.id), Some(8));
         });
         cx.run_until_parked();
         let (card, last, above) = rows(&shell, cx);
-        cx.simulate_click(point(card.left() + px(PADDING + 4.), last), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + px(PADDING + 4.), last),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 8 Always".to_string()));
 
-        shell.update(cx, |shell, cx| shell.set_agent_question(Some(question(9)), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(question(9)), cx)
+        });
         cx.run_until_parked();
-        cx.simulate_click(point(card.left() + card.size.width * 0.25, above), Modifiers::none());
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.25, above),
+            Modifiers::none(),
+        );
         cx.run_until_parked();
         assert!(host.take().contains(&"answer agent 9 Never".to_string()));
     }

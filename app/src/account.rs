@@ -19,11 +19,11 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, button, group};
+use crate::settings_rows::{Look, button, group, named_button};
 use crate::text_input::TextInput;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, HEADER_GAP, PADDING, PROFILE_ROW, SECTION_GAP, WORD_GAP, WORD_NUMBER,
-    WORDS_COLUMNS,
+    BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
+    WORD_GAP, WORD_NUMBER, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -94,7 +94,9 @@ impl Global for Synced {}
 
 /// The account as the core last said it is, signed out before it has said.
 pub fn synced(cx: &App) -> State {
-    cx.try_global::<Synced>().map(|synced| synced.0.clone()).unwrap_or_default()
+    cx.try_global::<Synced>()
+        .map(|synced| synced.0.clone())
+        .unwrap_or_default()
 }
 
 /// What the view tells the window it's in.
@@ -199,6 +201,8 @@ pub struct Account {
     /// It's the first launch's step, whose title, line and button say what its signed-out box
     /// would.
     step: bool,
+    /// An assistive app reads the window, as its last draw found: its controls are named then.
+    a11y: bool,
 }
 
 impl EventEmitter<AccountEvent> for Account {}
@@ -276,7 +280,10 @@ pub fn pairing_question(pairing: &Pairing) -> Question {
 /// and no more than a name needs.
 fn given(text: &str) -> String {
     const LONGEST: usize = 40;
-    let line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let line: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
     match line.chars().count() > LONGEST {
         true => format!("{}…", line.chars().take(LONGEST - 1).collect::<String>()),
@@ -328,7 +335,8 @@ impl Account {
             entering: None,
             asked: false,
             drawn: Rc::default(),
-            look: Look::settings(),
+            a11y: false,
+            look: Look::settings(true),
             step: false,
         }
     }
@@ -446,7 +454,10 @@ impl Account {
 
     fn show_words(&mut self, words: String) {
         let words = words.split_whitespace().map(str::to_owned).collect();
-        self.words = Some(Words { words, copied: None });
+        self.words = Some(Words {
+            words,
+            copied: None,
+        });
     }
 
     /// The server as the account names it: the build's own by the app's name, else its host.
@@ -472,11 +483,16 @@ impl Account {
         let server = self.state.server.clone();
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
+                .spoken("Sync Server Address")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
                 .with_text(server)
         });
-        self.server = Some(Field { input, refused: false, focus: true });
+        self.server = Some(Field {
+            input,
+            refused: false,
+            focus: true,
+        });
         cx.notify();
     }
 
@@ -506,10 +522,15 @@ impl Account {
         }
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
+                .spoken("Recovery Words")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
         });
-        self.entering = Some(Field { input, refused: false, focus: true });
+        self.entering = Some(Field {
+            input,
+            refused: false,
+            focus: true,
+        });
         cx.notify();
     }
 
@@ -542,7 +563,8 @@ impl Account {
         let Some(words) = &mut self.words else {
             return;
         };
-        self.host.copy_secret(&words.words.join(" "), WORDS_KEPT, cx);
+        self.host
+            .copy_secret(&words.words.join(" "), WORDS_KEPT, cx);
         words.copied = Some(cx.background_executor().now());
         // Once Copied is Copy again, and once the clipboard has let the words go.
         for after in [COPIED, WORDS_KEPT] {
@@ -558,7 +580,10 @@ impl Account {
     /// Signs out, asking first if this is the account's only device, as its words are then the
     /// only way to read what it synced.
     fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let alone = self.devices.as_ref().is_some_and(|devices| devices.len() == 1);
+        let alone = self
+            .devices
+            .as_ref()
+            .is_some_and(|devices| devices.len() == 1);
         if !alone || self.state.status != Status::On {
             self.host.sign_out();
             return;
@@ -620,7 +645,8 @@ impl Account {
         );
     }
 
-    /// A button that records where it's drawn, by `name`.
+    /// A button that records where it's drawn, by `name`, which an assistive app calls by its
+    /// `title`.
     fn button(
         &self,
         name: impl Into<String>,
@@ -628,8 +654,23 @@ impl Account {
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        let title = title.into();
+        self.button_said(name, title.clone(), title, cx, clicked)
+    }
+
+    /// As `button`, called `spoken` where its title alone doesn't say what it does, as a device's
+    /// Remove doesn't say which.
+    fn button_said(
+        &self,
+        name: impl Into<String>,
+        title: impl Into<SharedString>,
+        spoken: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+        clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
         let name = name.into();
         button(&self.look, SharedString::from(name.clone()), title)
+            .when(self.a11y, |button| named_button(button, spoken))
             .relative()
             .child(self.place(name))
             .on_click(cx.listener(move |account, _, window, cx| clicked(account, window, cx)))
@@ -637,16 +678,19 @@ impl Account {
 
     /// A quiet link in a line of small grey text, brightening under the pointer, that records where
     /// it's drawn, by `name`.
+    /// An assistive app reads it as a button called `spoken`, as it acts here, not elsewhere.
     fn link(
         &self,
         name: &'static str,
         title: &'static str,
+        spoken: &'static str,
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let ink = self.look.ink;
         div()
             .id(name)
+            .when(self.a11y, |link| named_button(link, spoken))
             .relative()
             .hover(move |link| link.text_color(ink))
             .child(title)
@@ -668,10 +712,10 @@ impl Account {
             },
             |_, _, _, _| {},
         )
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     /// Signed out: what signing in does, and the server it signs in to, which Change… changes. As
@@ -681,15 +725,19 @@ impl Account {
     fn signed_out(&self, cx: &mut Context<Self>) -> gpui::Div {
         let signing_in = self.state.status == Status::SigningIn;
         let control = match signing_in {
-            true => self.button("cancel", "Cancel", cx, |account, _, cx| {
-                account.host.cancel();
-                cx.notify();
+            true => self.button_said(
+                "cancel",
+                "Cancel",
+                "Cancel Sign In",
+                cx,
+                |account, _, cx| {
+                    account.host.cancel();
+                    cx.notify();
+                },
+            ),
+            false => self.button("sign-in", "Sign In", cx, |account, window, cx| {
+                account.sign_in(window, cx)
             }),
-            false => {
-                self.button("sign-in", "Sign In", cx, |account, window, cx| {
-                    account.sign_in(window, cx)
-                })
-            }
         };
         let detail = match (signing_in, self.state.problem) {
             (true, _) => Some("Finish in the window that opened."),
@@ -703,7 +751,7 @@ impl Account {
             None => {
                 let name = self.server_name();
                 div()
-                    .pl(px(PADDING))
+                    .pl(px(ROW_X))
                     .flex()
                     // Under the step's button, centred as it is.
                     .when(self.step, |line| line.pl_0().justify_center())
@@ -711,9 +759,13 @@ impl Account {
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
                     .when(!signing_in, |row| {
-                        row.child(self.link("change-server", "Change…", cx, |account, _, cx| {
-                            account.change_server(cx)
-                        }))
+                        row.child(self.link(
+                            "change-server",
+                            "Change…",
+                            "Change Server…",
+                            cx,
+                            |account, _, cx| account.change_server(cx),
+                        ))
                     })
             }
         };
@@ -732,16 +784,21 @@ impl Account {
         let boxed = said.is_some();
         div()
             .children(said.map(|said| group(&self.look, [said])))
-            .child(div().when(boxed, |below| below.mt(px(BUTTONS_TOP))).child(server))
+            .child(
+                div()
+                    .when(boxed, |below| below.mt(px(BUTTONS_TOP)))
+                    .child(server),
+            )
     }
 
     /// The field in `field`, and what it says when what was typed wasn't taken.
     fn field(&self, field: &Field, refused: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         div()
-            .child(
-                group(&self.look, [div()
+            .child(group(
+                &self.look,
+                [div()
                     .relative()
-                    .px(px(PADDING))
+                    .px(px(ROW_X))
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
@@ -750,17 +807,19 @@ impl Account {
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
-                        account.leave_field(window, cx)
-                    }))
+                    .on_action(
+                        cx.listener(|account, _: &Leave, window, cx| {
+                            account.leave_field(window, cx)
+                        }),
+                    )
                     .child(self.place("field".into()))
-                    .child(field.input.clone())]),
-            )
+                    .child(field.input.clone())],
+            ))
             .when(field.refused, |below| {
                 below.child(
                     div()
                         .mt(px(HEADER_GAP))
-                        .pl(px(PADDING))
+                        .pl(px(ROW_X))
                         .text_size(px(text::SMALL))
                         .text_color(self.look.detail)
                         .child(refused),
@@ -774,8 +833,12 @@ impl Account {
         let rows = words.words.len().div_ceil(columns);
         // Down each column, as they're written down.
         let column = |c: usize| {
-            div().flex_1().flex().flex_col().gap(px(WORD_GAP)).children(
-                (0..rows).filter_map(|r| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(px(WORD_GAP))
+                .children((0..rows).filter_map(|r| {
                     let index = c * rows + r;
                     let word = words.words.get(index)?;
                     Some(
@@ -789,32 +852,50 @@ impl Account {
                             )
                             .child(word.clone()),
                     )
-                }),
-            )
+                }))
         };
         // The executor's clock, which tests move on.
         let now = cx.background_executor().now();
         let copied = words.copied.is_some_and(|at| now - at < COPIED);
         let title = if copied { "Copied" } else { "Copy" };
-        let copy = self.button("copy", title, cx, |account, _, cx| account.copy_words(cx));
+        let spoken = match copied {
+            true => "Recovery Words Copied",
+            false => "Copy Recovery Words",
+        };
+        let copy = self.button_said("copy", title, spoken, cx, |account, _, cx| {
+            account.copy_words(cx)
+        });
         // Copied says it happened, with a check, until it's Copy again.
-        let check = svg().path("icons/check.svg").ml(px(HEADER_GAP)).size(px(text::BODY));
+        let check = svg()
+            .path("icons/check.svg")
+            .ml(px(HEADER_GAP))
+            .size(px(text::BODY));
         let copy = copy.when(copied, |copy| copy.child(check.text_color(self.look.ink)));
         div()
-            .child(header("Your recovery words", true))
-            .child(group(&self.look, [div()
-                .px(px(PADDING))
-                .py(px(PADDING))
-                .flex()
-                .children((0..columns).map(column))]))
+            .child(header(&self.look, "Your recovery words", true))
+            .child(group(
+                &self.look,
+                [div()
+                    .px(px(ROW_X))
+                    .py(px(PADDING))
+                    .flex()
+                    .children((0..columns).map(column))],
+            ))
             .child(note(
                 &self.look,
                 "Save these somewhere safe. You need them only if you lose every device.",
             ))
             // Where a copy went, and that it doesn't stay, while it's there.
-            .when(words.copied.is_some_and(|at| now - at < WORDS_KEPT), |words| {
-                words.child(note(&self.look, COPIED_NOTE).relative().child(self.place("copied".into())))
-            })
+            .when(
+                words.copied.is_some_and(|at| now - at < WORDS_KEPT),
+                |words| {
+                    words.child(
+                        note(&self.look, COPIED_NOTE)
+                            .relative()
+                            .child(self.place("copied".into())),
+                    )
+                },
+            )
             .child(
                 div()
                     .mt(px(BUTTONS_TOP))
@@ -838,12 +919,15 @@ impl Account {
             let refused = "These aren't 24 recovery words. Check each one.";
             let wrong = self.state.problem == Some(Problem::WrongWords) && !field.refused;
             return div()
-                .child(header("Enter your recovery words", true))
+                .child(header(&self.look, "Enter your recovery words", true))
                 .child(self.field(field, refused, cx))
-                .child(note(&self.look, match wrong {
-                    true => problem_text(Problem::WrongWords),
-                    false => "The 24 words you saved when you first turned on sync.",
-                }))
+                .child(note(
+                    &self.look,
+                    match wrong {
+                        true => problem_text(Problem::WrongWords),
+                        false => "The 24 words you saved when you first turned on sync.",
+                    },
+                ))
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
@@ -859,14 +943,18 @@ impl Account {
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
-                        .pl(px(PADDING))
+                        .pl(px(ROW_X))
                         .flex()
                         .text_size(px(text::SMALL))
                         .text_color(self.look.detail)
                         .child("Lost your devices and words? ")
-                        .child(self.link("start-over", "Start over…", cx, |account, window, cx| {
-                            account.start_over(window, cx)
-                        })),
+                        .child(self.link(
+                            "start-over",
+                            "Start over…",
+                            "Start Over…",
+                            cx,
+                            |account, window, cx| account.start_over(window, cx),
+                        )),
                 );
         }
         let pairing = self.state.status == Status::Pairing;
@@ -885,11 +973,19 @@ impl Account {
                         env!("APP_NAME"),
                     ),
                     None,
-                    Some(self.button("cancel", "Cancel", cx, |account, _, cx| {
-                        account.host.cancel();
-                        cx.notify();
-                    })
-                    .into_any_element()),
+                    Some(
+                        self.button_said(
+                            "cancel",
+                            "Cancel",
+                            "Cancel Request",
+                            cx,
+                            |account, _, cx| {
+                                account.host.cancel();
+                                cx.notify();
+                            },
+                        )
+                        .into_any_element(),
+                    ),
                 )
                 .child(
                     code.mt(px(PADDING))
@@ -904,26 +1000,33 @@ impl Account {
                     problem_text,
                 ),
                 None,
-                Some(self.button("ask-again", "Ask Again", cx, |account, _, cx| {
-                    account.ask_again(cx)
-                })
-                .into_any_element()),
+                Some(
+                    self.button("ask-again", "Ask Again", cx, |account, _, cx| {
+                        account.ask_again(cx)
+                    })
+                    .into_any_element(),
+                ),
             ),
         };
         div()
-            .child(header("Approve on another device", true))
+            .child(header(&self.look, "Approve on another device", true))
             .child(group(&self.look, [waiting]))
             .child(
                 div()
                     .mt(px(BUTTONS_TOP))
                     .flex()
                     .justify_between()
-                    .child(self.button("use-words", "Use Recovery Words Instead", cx, |a, _, cx| {
-                        a.enter_words(cx)
-                    }))
-                    .child(self.button("sign-out", "Sign Out", cx, |account, window, cx| {
-                        account.sign_out(window, cx)
-                    })),
+                    .child(self.button(
+                        "use-words",
+                        "Use Recovery Words Instead",
+                        cx,
+                        |a, _, cx| a.enter_words(cx),
+                    ))
+                    .child(
+                        self.button("sign-out", "Sign Out", cx, |account, window, cx| {
+                            account.sign_out(window, cx)
+                        }),
+                    ),
             )
     }
 
@@ -940,20 +1043,32 @@ impl Account {
         );
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
-                true => div().text_color(self.look.detail).child("This device").into_any_element(),
+                true => div()
+                    .text_color(self.look.detail)
+                    .child("This device")
+                    .into_any_element(),
                 false => {
                     let id = device.id.clone();
-                    let remove = move |account: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-                        account.host.remove_device(&id);
-                        cx.notify();
-                    };
-                    self.button(format!("remove {}", device.id), "Remove", cx, remove)
-                        .into_any_element()
+                    let remove =
+                        move |account: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
+                            account.host.remove_device(&id);
+                            cx.notify();
+                        };
+                    let spoken = format!("Remove {}", device.name);
+                    self.button_said(
+                        format!("remove {}", device.id),
+                        "Remove",
+                        spoken,
+                        cx,
+                        remove,
+                    )
+                    .into_any_element()
                 }
             };
             div()
-                .h(px(PROFILE_ROW))
-                .px(px(PADDING))
+                .min_h(px(ROW_HEIGHT))
+                .px(px(ROW_X))
+                .py(px(PADDING))
                 .flex()
                 .items_center()
                 .child(
@@ -969,7 +1084,7 @@ impl Account {
                                 .child(device.os.clone()),
                         ),
                 )
-                .child(div().flex_none().ml(px(PADDING)).child(control))
+                .child(div().flex_none().ml(px(END_GAP)).child(control))
         });
         let devices: Vec<gpui::Div> = devices.collect();
         div()
@@ -978,7 +1093,7 @@ impl Account {
             .child(group(&self.look, [account]))
             .when(!devices.is_empty(), |section| {
                 section
-                    .child(header("Devices", false))
+                    .child(header(&self.look, "Devices", false))
                     .child(group(&self.look, devices))
             })
             .child(div().mt(px(BUTTONS_TOP)).flex().child(self.button(
@@ -1005,13 +1120,14 @@ fn host_of(server: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
-/// A header over a box, as the Shortcuts tab's.
-fn header(title: &'static str, first: bool) -> gpui::Div {
+/// A heading over a group, as Settings' pages have theirs.
+fn header(look: &Look, title: &'static str, first: bool) -> gpui::Div {
     div()
-        .when(!first, |header| header.mt(px(SECTION_GAP)))
-        .mb(px(HEADER_GAP))
-        .pl(px(PADDING))
-        .font_weight(FontWeight::SEMIBOLD)
+        .when(!first, |header| header.mt(px(HEADING_TOP)))
+        .mb(px(HEADING_BOTTOM))
+        .px(px(ROW_X))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(look.heading)
         .child(title)
 }
 
@@ -1019,7 +1135,7 @@ fn header(title: &'static str, first: bool) -> gpui::Div {
 fn note(look: &Look, text: &'static str) -> gpui::Div {
     div()
         .mt(px(HEADER_GAP))
-        .pl(px(PADDING))
+        .pl(px(ROW_X))
         .text_size(px(text::SMALL))
         .text_color(look.detail)
         .child(text)
@@ -1032,15 +1148,22 @@ fn lines(
     detail: Option<SharedString>,
     control: Option<gpui::AnyElement>,
 ) -> gpui::Div {
-    div().px(px(PADDING)).py(px(PADDING)).child(
+    div().px(px(ROW_X)).py(px(PADDING)).child(
         div()
             .flex()
             .items_center()
-            .gap(px(BOX_GAP))
+            .gap(px(END_GAP))
             .child(
-                div().flex_1().min_w_0().child(text.into()).children(detail.map(|detail| {
-                    div().text_size(px(text::SMALL)).text_color(look.detail).child(detail)
-                })),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(text.into())
+                    .children(detail.map(|detail| {
+                        div()
+                            .text_size(px(text::SMALL))
+                            .text_color(look.detail)
+                            .child(detail)
+                    })),
             )
             .children(control.map(|control| div().flex_none().child(control))),
     )
@@ -1054,6 +1177,7 @@ impl Focusable for Account {
 
 impl Render for Account {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         self.ask_what_shows();
         self.focus_field(window, cx);
         self.drawn.borrow_mut().clear();
@@ -1065,7 +1189,10 @@ impl Render for Account {
             // Nothing until the core has made the first device's words.
             (None, Status::FirstDevice) => div(),
         };
-        div().track_focus(&self.focus).text_color(self.look.ink).child(content)
+        div()
+            .track_focus(&self.focus)
+            .text_color(self.look.ink)
+            .child(content)
     }
 }
 

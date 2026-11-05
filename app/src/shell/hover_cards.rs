@@ -6,6 +6,8 @@ use std::rc::Rc;
 
 use gpui::{App, Bounds, Context, Pixels, Point, px, size};
 
+use std::time::Duration;
+
 use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
 use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
@@ -14,6 +16,14 @@ use crate::{icon_picker, theme_picker};
 
 use super::{PLATE_INSET, Row, Shell, host};
 
+/// How long the switches are quiet before a page they hid is pictured: past the Dock dot's
+/// `QUIET`, and past the longest the core keeps the pages a switch left on screen over one that
+/// hasn't drawn yet (core/platform/mac/window_views.mm's kLeavingAtMost, 1 s), with a frame to
+/// spare. Asked while it's still there, a page isn't drawn unseen for its picture, and as it
+/// leaves during the copy, the copy comes back empty (#1658).
+pub(super) const PICTURE_HIDDEN: Duration = Duration::from_millis(1100);
+
+const _: () = assert!(PICTURE_HIDDEN.as_millis() > QUIET.as_millis());
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
@@ -37,19 +47,35 @@ impl Shell {
         };
         // A tile's card starts where a row's would, past the sidebar's rows, not over the tiles
         // beside it.
-        let right = self.sidebar_origin.get().x + px(self.width() - PLATE_INSET);
-        let row = Bounds::new(frame.origin, size(right.max(frame.right()) - frame.origin.x, frame.size.height));
+        let right = self.sidebar_origin.get().x + px(self.rows_width() - PLATE_INSET);
+        let row = Bounds::new(
+            frame.origin,
+            size(right.max(frame.right()) - frame.origin.x, frame.size.height),
+        );
         let shell = cx.weak_entity();
         // It may tell of the card inside this update, so what it tells waits for the update's end.
         let events = Rc::new(move |tab: u64, event: Event, cx: &mut App| {
             let shell = shell.clone();
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| shell.card_event(tab, event, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| shell.card_event(tab, event, cx))
+                    .ok();
             });
         });
-        let anchor = Anchor { row, window: self.viewport };
+        let anchor = Anchor {
+            row,
+            window: self.viewport,
+        };
         let window = self.browser.window();
-        self.browser.hover_card(Hover::Rest(Rest { window, card, anchor, events }), cx);
+        self.browser.hover_card(
+            Hover::Rest(Rest {
+                window,
+                card,
+                anchor,
+                events,
+            }),
+            cx,
+        );
     }
 
     /// The pointer came onto `row` or left it: a closed folder's row rests for its preview of the
@@ -86,7 +112,9 @@ impl Shell {
         let chosen = Rc::new(move |tab: u64, cx: &mut App| {
             let shell = shell.clone();
             cx.defer(move |cx| {
-                shell.update(cx, |shell, cx| shell.show_previewed(tab, cx)).ok();
+                shell
+                    .update(cx, |shell, cx| shell.show_previewed(tab, cx))
+                    .ok();
             });
         });
         let rest = folder_preview::Rest {
@@ -94,7 +122,10 @@ impl Shell {
             folder,
             name: self.folder_name(folder),
             items,
-            anchor: Anchor { row, window: self.viewport },
+            anchor: Anchor {
+                row,
+                window: self.viewport,
+            },
             chosen,
         };
         self.browser.folder_preview(Ask::Rest(rest), cx);
@@ -112,7 +143,10 @@ impl Shell {
 
     /// Whether `at` is on the row of `folder`, as last drawn.
     fn on_row(&self, folder: u64, at: Point<Pixels>) -> bool {
-        self.tip_frames.borrow().get(&folder).is_some_and(|row| row.contains(&at))
+        self.tip_frames
+            .borrow()
+            .get(&folder)
+            .is_some_and(|row| row.contains(&at))
     }
 
     /// What a closed `folder`'s preview lists: the tabs in it and in the folders in it, as their
@@ -127,7 +161,12 @@ impl Shell {
                 Some(each) => Icon::Emoji(each.page.icon.clone()),
                 None => Icon::Favicon(each.and_then(|each| each.favicon.clone())),
             };
-            Item { tab, title: self.title(tab), url: self.url(tab), icon }
+            Item {
+                tab,
+                title: self.title(tab),
+                url: self.url(tab),
+                icon,
+            }
         };
         self.folder_tabs(folder).into_iter().map(item).collect()
     }
@@ -153,7 +192,10 @@ impl Shell {
 
     /// What `tab`'s card shows, if it has one.
     pub(super) fn card(&self, tab: u64) -> Option<Card> {
-        if tab == 0 || self.is_folder(tab) || self.panes(tab).len() > 1 || !self.tabs.contains_key(&tab)
+        if tab == 0
+            || self.is_folder(tab)
+            || self.panes(tab).len() > 1
+            || !self.tabs.contains_key(&tab)
         {
             return None;
         }
@@ -184,8 +226,7 @@ impl Shell {
         let favorite = self.favorites.contains(&tab);
         if !self.private {
             match favorite {
-                true if !self.agents_space_shown() => actions.push(Action::Unfavorite),
-                true => {}
+                true => actions.push(Action::Unfavorite),
                 false if self.pinned().contains(&tab) => actions.push(Action::Unpin),
                 false => actions.push(Action::Pin),
             }
@@ -212,7 +253,8 @@ impl Shell {
         match event {
             // A loaded tab's picture is taken again, as the page is now.
             Event::Shown => {
-                if self.tabs.contains_key(&tab) && !self.on_screen(tab) && !self.page(tab).unloaded {
+                if self.tabs.contains_key(&tab) && !self.on_screen(tab) && !self.page(tab).unloaded
+                {
                     self.browser.card_picture(tab, cx);
                 }
             }
@@ -269,16 +311,20 @@ impl Shell {
     }
 
     /// The tab shown was `before`'s pages and is now another's: those it hid are pictured once
-    /// the switches have been quiet for QUIET, as the Dock's dot waits, so nothing lands on the
-    /// switch, and a run of switches pictures only what it left hidden.
+    /// the switches have been quiet for `PICTURE_HIDDEN`, so nothing lands on the switch, and a
+    /// run of switches pictures only what it left hidden.
     pub(super) fn hid_for_cards(&mut self, before: Vec<u64>, cx: &mut Context<Self>) {
         let shown = self.panes(self.selected);
-        self.card_hidden.extend(before.into_iter().filter(|tab| *tab != 0 && !shown.contains(tab)));
+        self.card_hidden.extend(
+            before
+                .into_iter()
+                .filter(|tab| *tab != 0 && !shown.contains(tab)),
+        );
         if self.card_hidden.is_empty() {
             return;
         }
         self.card_wait = Some(cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(QUIET).await;
+            cx.background_executor().timer(PICTURE_HIDDEN).await;
             shell.update(cx, |shell, cx| shell.picture_hidden(cx)).ok();
         }));
     }

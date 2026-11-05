@@ -171,6 +171,11 @@ if [ "$(uname)" = Linux ]; then
     BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
     pid=$!
     exec 3> "$out/drive"
+    # A launch numbers the Spaces it brings back afresh, and the first launch's may have given a
+    # number to a download the profile kept, as import's extension, so the ids are this launch's.
+    await '^browser: added space [0-9]* two$' || fail "$way: the second Space didn't come back"
+    first=$(sed -n 's/^browser: added space \([0-9]*\) Space 1$/\1/p' "$log" | head -1)
+    second=$(sed -n 's/^browser: added space \([0-9]*\) two$/\1/p' "$log" | head -1)
     await "^browser: space $second\$" || fail "$way: the second Space didn't come back"
     send key 1 ctrl
     expect "^browser: space $first in " "$way: ⌃1 didn't show the first Space"

@@ -23,8 +23,8 @@ use crate::elevation::Level;
 use crate::tokens::shell::picture::REST;
 /// It steps back from the card's size to REST as the page goes to the other window, easing out.
 const STEP_BACK: f32 = 0.2;
-use crate::tokens::shell::picture::VEIL;
 use crate::tokens::shell::picture::RIM;
+use crate::tokens::shell::picture::VEIL;
 
 static REQUESTS: AtomicU64 = AtomicU64::new(1);
 
@@ -51,7 +51,11 @@ pub fn picture_answered(
 ) {
     cx.spawn(async move |cx| {
         for shell in shells {
-            shell.update(cx, |shell, cx| shell.page_pictured(request, picture.clone(), cx)).ok();
+            shell
+                .update(cx, |shell, cx| {
+                    shell.page_pictured(request, picture.clone(), cx)
+                })
+                .ok();
         }
     })
     .detach();
@@ -87,7 +91,10 @@ impl PagePicture {
     fn shown(tab: u64) -> Option<Self> {
         SHOWN.with_borrow(|shown| {
             let (image, size) = shown.get(&tab)?;
-            Some(Self { image: image.upgrade()?, size: *size })
+            Some(Self {
+                image: image.upgrade()?,
+                size: *size,
+            })
         })
     }
 
@@ -110,9 +117,15 @@ struct Move {
 }
 
 impl Move {
-    /// From the card's size to REST, as the page goes.
-    fn step_back() -> Self {
-        Self { start: Instant::now(), from: 1., to: REST, duration: STEP_BACK }
+    /// From the card's size to REST, as the page goes, on the executor's clock, which the tests
+    /// move on themselves.
+    fn step_back(cx: &gpui::App) -> Self {
+        Self {
+            start: crate::motion::start_at(cx.background_executor().now(), cx),
+            from: 1.,
+            to: REST,
+            duration: STEP_BACK,
+        }
     }
 
     fn at(&self, now: Instant) -> f32 {
@@ -156,7 +169,12 @@ impl Shell {
             return self.drop_picture(cx);
         }
         // A report that was overtaken by the window's own pick.
-        if tab != self.selected || self.picture.as_ref().is_some_and(|picture| picture.tab == tab) {
+        if tab != self.selected
+            || self
+                .picture
+                .as_ref()
+                .is_some_and(|picture| picture.tab == tab)
+        {
             return;
         }
         self.drop_picture(cx);
@@ -165,7 +183,7 @@ impl Shell {
             tab,
             request: 0,
             pending: false,
-            motion: image.is_some().then(Move::step_back),
+            motion: image.is_some().then(|| Move::step_back(cx)),
             image,
             drawn: false,
             taken: false,
@@ -176,7 +194,9 @@ impl Shell {
 
     /// Whether the window shows `tab`'s picture, or waits for it, in place of its page.
     pub(super) fn pictured(&self, tab: u64) -> bool {
-        self.picture.as_ref().is_some_and(|picture| picture.tab == tab)
+        self.picture
+            .as_ref()
+            .is_some_and(|picture| picture.tab == tab)
     }
 
     /// The window selected `tab` or none: the picture of any other tab goes.
@@ -188,9 +208,10 @@ impl Shell {
 
     /// The window is in front: its picture is of the page as it is now.
     pub(super) fn refresh_picture(&mut self, cx: &mut Context<Self>) {
-        let seen = self.picture.as_ref().is_some_and(|picture| {
-            picture.image.is_some() && !picture.pending && !picture.taken
-        });
+        let seen = self
+            .picture
+            .as_ref()
+            .is_some_and(|picture| picture.image.is_some() && !picture.pending && !picture.taken);
         if seen {
             self.ask_picture(cx);
         }
@@ -215,7 +236,10 @@ impl Shell {
         if let Some(shown) = picture.image {
             self.stale_pictures.push(shown.image);
             let window = self.browser.window();
-            crate::log_handover("picture dropped", &format!("window {window}, tab {}", picture.tab));
+            crate::log_handover(
+                "picture dropped",
+                &format!("window {window}, tab {}", picture.tab),
+            );
         }
         cx.notify();
     }
@@ -227,11 +251,15 @@ impl Shell {
         image: Option<PagePicture>,
         cx: &mut Context<Self>,
     ) {
-        if self.talk_pictured(request, &image, cx) || self.task_pictured(request, image.clone(), cx) {
+        if self.talk_pictured(request, &image, cx) || self.task_pictured(request, image.clone(), cx)
+        {
             return;
         }
         let window = self.browser.window();
-        let Some(picture) = self.picture.as_mut().filter(|picture| picture.request == request)
+        let Some(picture) = self
+            .picture
+            .as_mut()
+            .filter(|picture| picture.request == request)
         else {
             return;
         };
@@ -243,13 +271,16 @@ impl Shell {
         // The page steps back as it goes, the first time; a fresh picture of it replaces the old
         // where it is.
         if picture.image.is_none() {
-            picture.motion = Some(Move::step_back());
+            picture.motion = Some(Move::step_back(cx));
         }
         if let Some(old) = picture.image.replace(image) {
             self.stale_pictures.push(old.image);
         }
         picture.drawn = false;
-        crate::log_handover("picture shown", &format!("window {window}, tab {}", picture.tab));
+        crate::log_handover(
+            "picture shown",
+            &format!("window {window}, tab {}", picture.tab),
+        );
         // check.sh waits for this line.
         log!("browser: window {window} pictures tab {}", picture.tab);
         cx.notify();
@@ -274,7 +305,10 @@ impl Shell {
     fn picture_card(&self) -> Bounds<Pixels> {
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
-        let focused = panes.iter().position(|&pane| pane == self.selected).unwrap_or(0);
+        let focused = panes
+            .iter()
+            .position(|&pane| pane == self.selected)
+            .unwrap_or(0);
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         pane_frames(frame, panes.len(), stacked, &shares)[focused]
     }
@@ -287,17 +321,20 @@ impl Shell {
     }
 
     /// Steps the motion for a frame, and lets go of the pictures the window has no use for.
-    pub(super) fn step_picture(&mut self, window: &mut Window) {
+    pub(super) fn step_picture(&mut self, window: &mut Window, cx: &gpui::App) {
         for image in self.stale_pictures.drain(..) {
             window.drop_image(image).ok();
         }
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let id = self.browser.window();
         let Some(picture) = &mut self.picture else {
             return;
         };
         if picture.image.is_some() && !std::mem::replace(&mut picture.drawn, true) {
-            crate::log_handover("picture drawn", &format!("window {id}, tab {}", picture.tab));
+            crate::log_handover(
+                "picture drawn",
+                &format!("window {id}, tab {}", picture.tab),
+            );
         }
         let Some(motion) = picture.motion else {
             return;
@@ -315,7 +352,7 @@ impl Shell {
     pub(super) fn picture_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picture = self.picture.as_ref()?;
         let ready = picture.image.as_ref()?;
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let bounds = self.picture_bounds(now)?;
         let scale = picture.scale(now);
         let veil = VEIL * (1. - (scale - REST) / (1. - REST)).clamp(0., 1.);
@@ -325,7 +362,9 @@ impl Shell {
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let corners = Corners::all(radius);
-                window.paint_image(bounds, bounds, corners, image.clone(), 0, false).ok();
+                window
+                    .paint_image(bounds, bounds, corners, image.clone(), 0, false)
+                    .ok();
             },
         )
         .absolute()
