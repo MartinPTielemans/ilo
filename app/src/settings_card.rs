@@ -217,6 +217,8 @@ impl Card {
             .child(
                 div()
                     .id("card")
+                    .tab_group()
+                    .tab_index(2)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)

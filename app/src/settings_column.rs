@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::drawn;
+use crate::settings_rows::{drawn, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
@@ -127,6 +127,26 @@ pub fn column(
                 let pick = pick.clone();
                 plate(base, selected, dark)
                     .id(section.name())
+                    // ⇥ reaches the list, and ↑ and ↓ move in it, as in the sidebar; Space or
+                    // Return shows the section.
+                    .tab_index(0)
+                    .focus_from_keys_only()
+                    .focus_visible(ring(base))
+                    .on_key_down(move |event, window, cx| {
+                        let key = event.keystroke.key.as_str();
+                        if event.keystroke.modifiers.modified() {
+                            return;
+                        }
+                        let all: Vec<Section> = Section::all().collect();
+                        let at = all.iter().position(|&each| each == section).unwrap_or(0);
+                        match key {
+                            "down" if at + 1 < all.len() => window.focus_next(cx),
+                            "up" if at > 0 => window.focus_prev(cx),
+                            "down" | "up" => {}
+                            _ => return,
+                        }
+                        cx.stop_propagation();
+                    })
                     .when(dimmed, |plate| plate.opacity(SEARCH_DIMMED))
                     .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
                     // A press on a plate is its click's, not the window's move.
@@ -151,6 +171,9 @@ pub fn column(
     let chromium = plate(base, false, dark)
         .mb_0()
         .id("chromium-settings")
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(base))
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -171,17 +194,34 @@ pub fn column(
         .flex()
         .flex_col()
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-        .child(div().flex_none().mb(px(SEARCH_GAP)).child(field))
+        // ⇥ goes through the sections, then the field, then the card's controls, then the foot.
+        .child(
+            div()
+                .flex_none()
+                .mb(px(SEARCH_GAP))
+                .tab_group()
+                .tab_index(1)
+                .child(field),
+        )
         // At the window's least height the sections scroll above the foot, not under it.
         .child(
             div()
                 .id("sections")
+                .tab_group()
+                .tab_index(0)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .children(groups),
         )
-        .child(div().flex_none().w(px(COLUMN)).child(chromium))
+        .child(
+            div()
+                .flex_none()
+                .w(px(COLUMN))
+                .tab_group()
+                .tab_index(3)
+                .child(chromium),
+        )
 }
 
 /// A section's plate: the sidebar's row, 8 in, lit under the pointer, and on the sidebar's
