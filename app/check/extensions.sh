@@ -34,10 +34,7 @@ script='chrome.action.onClicked.addListener(async tab => {
   chrome.tabs.create({url: "clicked.html"});
 });
 chrome.commands.onCommand.addListener(() => chrome.tabs.create({url: "command.html"}));'
-# Chrome keeps running the script it first registered for an extension, so a changed script is a
-# new extension, in a folder of its own. In a profile the check ran in before, the old one still
-# holds ⇧⌘Y and the new one gets no key, so what changes goes in its page's script instead.
-clicked_dir="$extensions/clicked-$(printf %s "$script" | cksum | cut -d' ' -f1)"
+clicked_dir="$extensions/clicked"
 mkdir -p "$clicked_dir" "$extensions/popup" "$extensions/third" "$extensions/panel"
 printf '%s\n' "$script" > "$clicked_dir/background.js"
 cat > "$clicked_dir/manifest.json" << 'EOF'
@@ -115,10 +112,14 @@ echo '<title>the tab panel</title><body style="font:16px system-ui">the tab pane
   "$extensions/panel/tab.html"
 page='data:text/html,<title>loading</title>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
+# A profile of the run's own, new each time: an unpacked extension's id comes from its folder's
+# path, so one that loaded them from another checkout would keep its copies in the menu (#1890).
+profile_dir="$extensions/profile"
+rm -rf "$profile_dir"
+mkdir -p "$profile_dir"
 log="$out/extensions.log"
 step=0
-rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
