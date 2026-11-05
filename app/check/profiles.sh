@@ -445,9 +445,25 @@ picks=$(sed -n 's/^browser: command bar picks kept in //p' "$log" | tail -1)
 [ -e "$picks" ] || fail "the command bar's picks aren't where it said: $picks"
 expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "the command bar didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
-send key tab
-send key space
-expect '^browser: history deleted ' "Delete in Clear browsing data didn't delete the history"
+# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell
+# (clear.sh asks DevTools, which this run hasn't): Tab and Space sent before then follow the
+# settings page's link instead, and ⌘← brings the dialog back for another try.
+deleted=
+for _ in 1 2 3; do
+  send key tab
+  send key space
+  missed=
+  for _ in $(seq 100); do
+    logged '^browser: history deleted ' && deleted=1 && break
+    logged '^browser: page [0-9]* back 1 forward 0 loading [01] chrome://settings/' && missed=1 && break
+    sleep 0.1
+  done
+  [ -z "$deleted" ] && [ -n "$missed" ] || break
+  history_key left back page
+  expect '^browser: page [0-9]* back 0 forward 1 loading 0 chrome://settings/clearBrowserData$' \
+    "⌘← didn't bring Clear browsing data back"
+done
+[ -n "$deleted" ] || fail "Delete in Clear browsing data didn't delete the history"
 expect "^browser: command bar picks none in $picks\$" "deleting the history kept the bar's picks"
 [ ! -e "$picks" ] || fail "deleting the history left the bar's picks: $picks"
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"

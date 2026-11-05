@@ -779,7 +779,11 @@ if [ "$active" = 1 ]; then
   expect "^browser: window closed $popup_window\$" "the pop-up's window didn't close with its page"
   expect "^browser: little window $opener has the keyboard back from $popup_window\$" \
     "the Little ilo window didn't get the keyboard back from its pop-up"
-  await "^browser: key window $opener\$" || fail "the Little ilo window isn't the key window again"
+  # The pop-up's window can close before the Little ilo window takes the keyboard back, which then
+  # is first among the windows already and logs no key window, so its header saying it's the one
+  # the user is in again counts too.
+  expect "^browser: \(key window $opener\|window $opener main true\)\$" \
+    "the Little ilo window isn't the key window again"
 else
   echo "skip: a page's full screen in Little ilo and the Little ilo window's sign-in pop-up. Browser wasn't the active app."
 fi
