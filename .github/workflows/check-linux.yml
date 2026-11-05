@@ -64,7 +64,8 @@ jobs:
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
     name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # A full run does Wayland's set after X11's, which together took just over 2 h (42095166995).
+    timeout-minutes: 180
     permissions:
       contents: read
       # A re-run reads the run's earlier attempts (main-check.sh rerun).
