@@ -41,6 +41,7 @@
 #include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
@@ -52,6 +53,7 @@
 #include "components/sync/protocol/unique_position.pb.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
@@ -128,6 +130,7 @@ SavedTab SaveFavorite(bc_id id) {
   if (tab.history.empty()) {
     return tab;
   }
+  tab.session_storage = saving->SessionStorageId();
   tab.pinned_url = Favorites::Url(id);
   tab.profile = Favorites::ProfileOf(id);
   tab.site = Favorites::SiteOf(id);
@@ -254,6 +257,7 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       if (tab.history.empty()) {
         continue;
       }
+      tab.session_storage = saving->SessionStorageId();
       if (id == shown) {
         to.shown = index;
       }
@@ -399,6 +403,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (tab.site) {
         dict.Set("site", tab.site);
+      }
+      if (!tab.session_storage.empty()) {
+        dict.Set("session_storage", tab.session_storage);
       }
       list.Append(std::move(dict));
     }
@@ -554,6 +561,9 @@ std::optional<SavedTab> ReadTab(const base::Value& value) {
     tab.profile = *profile;
   }
   tab.site = std::max(dict->FindInt("site").value_or(0), 0);
+  if (const std::string* storage = dict->FindString("session_storage")) {
+    tab.session_storage = *storage;
+  }
   return tab;
 }
 
@@ -973,6 +983,8 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     }
   }
 
+  bool kept() const { return kept_; }
+
   void Flush() {
     if (writer_.HasPendingWrite()) {
       writer_.DoScheduledWrite();
@@ -1164,6 +1176,10 @@ void FlushSession() {
   }
 }
 
+bool SessionKept() {
+  return g_saver && g_saver->kept();
+}
+
 Settings& UserSettings() {
   static Settings settings;
   return settings;
@@ -1332,7 +1348,37 @@ Space* RestoreSpace(Window& window,
   return space;
 }
 
+namespace {
+
+// Once the tabs are back from the last launch, deletes the sessionStorage no tab came back for, and
+// the session-only cookies of sites the user has cleared on exit, in each profile, as Chrome does
+// once its session restore has given its tabs theirs (SessionRestoreImpl), or at a launch that
+// restores none.
+void DeleteStaleSessionData() {
+  static bool deleted = false;
+  if (std::exchange(deleted, true) || !g_browser_process->profile_manager()) {
+    return;
+  }
+  for (Profile* profile : g_browser_process->profile_manager()->GetLoadedProfiles()) {
+    if (!profile->IsOffTheRecord()) {
+      profile->GetDefaultStoragePartition()->DeleteStaleSessionData();
+    }
+  }
+}
+
+bool RestoreSavedSession(Window& window);
+
+}  // namespace
+
 bool RestoreSession(Window& window) {
+  const bool restored = RestoreSavedSession(window);
+  DeleteStaleSessionData();
+  return restored;
+}
+
+namespace {
+
+bool RestoreSavedSession(Window& window) {
   std::optional<Saved> saved = g_saver ? g_saver->TakeLoaded() : std::nullopt;
   if (!saved || !StartProfile() || !Space::All().empty()) {
     return false;
@@ -1369,6 +1415,8 @@ bool RestoreSession(Window& window) {
   g_saver->ListSidebars();
   return true;
 }
+
+}  // namespace
 
 bool RestoreSidebar(Window& window, base::Time time) {
   return g_saver && g_saver->RestoreSidebar(window, time);

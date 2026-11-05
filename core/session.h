@@ -51,6 +51,10 @@ struct SavedTab {
   Space::Node node;
   // Whether it was muted, for a tab closed and reopened. The session file doesn't keep it.
   bool muted = false;
+  // The id of its page's sessionStorage in its profile, which the session file alone keeps, so the
+  // next launch gives the tab its own back (Tab::SessionStorageId), as Chrome's session does
+  // (#1934). A copy of a tab has none.
+  std::string session_storage;
   // A favorite's profile's directory. A Space's tabs are in the Space's.
   std::string profile;
   // What names a favorite's site, shared by its tabs in each profile under Every Space, or 0.
@@ -135,6 +139,10 @@ void KeepSession();
 
 // Writes a save still waiting, as Chrome shuts down.
 void FlushSession();
+
+// Whether the Spaces were saved for the next launch with the tabs closing now (KeepSession), as
+// they close with the last regular window or with the quit.
+bool SessionKept();
 
 // The docked sidebar's width the last launch saved for its front window, or 0.
 double SavedSidebarWidth();

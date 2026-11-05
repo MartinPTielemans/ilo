@@ -65,6 +65,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
+#include "chrome/browser/ui/startup/features.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
@@ -546,6 +547,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     features += features.empty() ? "" : ",";
     command_line->AppendSwitchASCII(switches::kEnableFeatures,
                                     features + features::kWebContentsDiscard.name);
+    // A profile's sessionStorage stays on disk across a launch, as Chrome keeps it when it restores
+    // the last session, for the tabs the Spaces bring back to find theirs again; the core deletes
+    // what no tab came back for once they're back (RestoreSession). Chrome otherwise clears it all
+    // as the profile starts, ilo having no startup preference for it to read (#1934).
+    std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
+    disabled += disabled.empty() ? "" : ",";
+    command_line->AppendSwitchASCII(
+        switches::kDisableFeatures,
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the

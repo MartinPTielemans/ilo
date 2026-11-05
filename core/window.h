@@ -29,6 +29,7 @@ class Profile;
 struct NavigateParams;
 
 namespace content {
+class SessionStorageNamespaceHandle;
 class WebContents;
 }
 
@@ -321,11 +322,13 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // page would, not shown: a link preview, which the app shows in a view of its own. Null while
   // the window is closing or Chromium is quitting.
   content::WebContents* OpenPreview(content::WebContents& opener, const GURL& url);
-  // Opens a tab for |profile| with |history|, at its |current| page, not shown. It loads once it's
-  // shown. Null while the window is closing or Chromium is quitting.
+  // Opens a tab for |profile| with |history|, at its |current| page, not shown, with |storage| for
+  // its sessionStorage if it isn't null, else a new one. It loads once it's shown. Null while the
+  // window is closing or Chromium is quitting.
   content::WebContents* RestoreTab(Profile* profile,
                                    base::span<const sessions::SerializedNavigationEntry> history,
-                                   int current);
+                                   int current,
+                                   content::SessionStorageNamespaceHandle* storage = nullptr);
 
   // Shows |contents|, a tab in one of this window's Browsers, at |frame| in place of the page shown
   // before, taking the keyboard if that page had it. In a split view, it shows the split with

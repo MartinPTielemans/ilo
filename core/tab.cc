@@ -54,6 +54,7 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_controller.h"
@@ -64,6 +65,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -303,6 +305,18 @@ bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   unloaded.history = saved.history;
   unloaded.current = std::clamp(saved.current, 0, static_cast<int>(saved.history.size()) - 1);
   unloaded.muted = saved.muted;
+  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
+  // backup brings back may.
+  const std::string& storage = saved.session_storage;
+  if (!storage.empty() && std::ranges::none_of(All(), [&](const Tab* other) {
+        return other != tab && other->SessionStorageId() == storage;
+      })) {
+    tab->storage_ =
+        profile->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
+            storage);
+    // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
+    tab->storage_->SetShouldPersist(true);
+  }
   tab->name_ = saved.name;
   tab->icon_ = saved.icon;
   if (!saved.last_seen.is_null()) {
@@ -471,6 +485,13 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+std::string Tab::SessionStorageId() const {
+  if (content::WebContents* contents = web_contents()) {
+    return contents->GetController().GetDefaultSessionStorageNamespace()->id();
+  }
+  return storage_ ? storage_->id() : std::string();
+}
+
 SavedTab Tab::Save() const {
   SavedTab saved = web_contents() ? SaveTab(*web_contents()) : unloaded_.value_or(SavedTab());
   saved.name = name_;
@@ -502,6 +523,8 @@ void Tab::Unload() {
   unloaded_->history = std::move(saved.history);
   unloaded_->current = saved.current;
   unloaded_->muted = muted();
+  // Its page's sessionStorage outlives the page, for its next (Wake).
+  storage_ = contents->GetController().GetDefaultSessionStorageNamespace();
   if (system_page_) {
     DropSystemPage();
   }
@@ -516,6 +539,9 @@ void Tab::Unload() {
     base::AutoReset<bool> unloading(&unloading_, true);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
   }
+  // Chrome's session forgets the storage of a tab its tab strip deletes, which would delete it
+  // with the tab's last reference, so it's kept for the next launch as the tab is.
+  storage_->SetShouldPersist(true);
   LOG(ERROR) << "browser: tab " << id_ << " without its page";
   StateChanged();
 }
@@ -527,11 +553,14 @@ content::WebContents* Tab::Wake(Window& window) {
   content::WebContents* contents = nullptr;
   {
     base::AutoReset<Tab*> waking(&g_waking, this);
-    contents = window.RestoreTab(profile(), unloaded_->history, unloaded_->current);
+    contents = window.RestoreTab(profile(), unloaded_->history, unloaded_->current,
+                                 storage_.get());
   }
   if (!contents) {
     return nullptr;
   }
+  // The page has it now.
+  storage_.reset();
   if (!web_contents()) {
     Attach(contents);
   }
@@ -548,6 +577,10 @@ content::WebContents* Tab::Wake(Window& window) {
 void Tab::Close() {
   if (web_contents()) {
     return;
+  }
+  // Its sessionStorage goes with it, unless it comes back at the next launch.
+  if (storage_) {
+    storage_->SetShouldPersist(SessionKept());
   }
   ReportClosed();
   Forget(id_);
@@ -1611,7 +1644,10 @@ void Tab::WebContentsDestroyed() {
     return;
   }
   // Closed, as at a quit or with its window. Its page is still there, so the session kept as the
-  // first tab closes saves this one from it too.
+  // first tab closes saves this one from it too, and its sessionStorage stays on disk for the next
+  // launch, as Chrome's session keeps its tabs'. Closed by the user, it goes.
+  web_contents()->GetController().GetDefaultSessionStorageNamespace()->SetShouldPersist(
+      SessionKept());
   ReportClosed();
   // What it posted, such as a report of its renderer ending, would tell the app of a closed tab.
   weak_factory_.InvalidateWeakPtrs();
