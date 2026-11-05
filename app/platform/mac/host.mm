@@ -2212,6 +2212,9 @@ NSStatusBarButton* HostLittleStatusButton() {
   return g_little_status_item.button;
 }
 
+// The Dock's menu has the Mac's New Little ilo Window (host_add_dock_items).
+void host_set_little_task(const char* title, const char* arguments) {}
+
 void host_set_little_status_item(void (*clicked)(void)) {
   g_little_clicked = clicked;
   if (!clicked) {

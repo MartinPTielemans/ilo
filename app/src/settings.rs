@@ -19,6 +19,7 @@ use browser::default_browser::{self, DefaultBrowser, Os};
 use browser::dialog;
 use browser::import::ImportView;
 use browser::link_rules::LinkRulesView;
+use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
@@ -2024,12 +2025,13 @@ impl Settings {
             ),
             Vec::new(),
         );
-        // The Mac's alone, the one with a host for the button so far.
-        let menu_bar = mac.then(|| {
+        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
+        // place every desktop shows (browser::little_launch).
+        let menu_bar = little_launch::button(little_launch::os()).map(|button| {
             let on = crate::little_in_menu_bar();
             let switch = self.toggle(
                 "little in the menu bar",
-                "Show in the menu bar",
+                button.row,
                 on,
                 set_little_in_menu_bar,
                 accent,
@@ -2037,8 +2039,8 @@ impl Settings {
             );
             nested(setting(
                 look,
-                "Show in the menu bar",
-                Some("A button there opens a new one.".into()),
+                button.row,
+                Some(button.line.into()),
                 vec![switch],
             ))
         });
