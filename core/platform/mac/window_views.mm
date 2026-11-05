@@ -536,6 +536,20 @@ void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
 }
 
+bool OverlayHasKeyboard(views::Widget* widget) {
+  if (!widget) {
+    return false;
+  }
+  NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
+  // A submenu's window is the menu's child.
+  for (NSWindow* over = NSApp.keyWindow.parentWindow; over; over = over.parentWindow) {
+    if (over == window) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
   NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
   NSResponder* had = window.firstResponder;

@@ -1226,6 +1226,11 @@ void ReleaseKeyboard(views::Widget* widget) {
   }
 }
 
+bool OverlayHasKeyboard(views::Widget* widget) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  return views && views->overlay_has_keyboard();
+}
+
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
   WindowViews* views = ViewsOf(widget);
   const bool ui = views && views->ui_has_keyboard();

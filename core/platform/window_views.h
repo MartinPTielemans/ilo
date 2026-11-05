@@ -115,6 +115,11 @@ bool KeyboardForPage(views::Widget* widget);
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
 
+// Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
+// the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
+// on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
+bool OverlayHasKeyboard(views::Widget* widget);
+
 // On Linux and Windows: the app's UI takes the keyboard in |widget|'s window, to keep
 // (bc_window_ui_takes_keyboard) or until a page shows (bc_window_ui_holds_keyboard), which
 // KeyboardForPage counts as the page's meanwhile. The Mac's window holds the keys for the next page
