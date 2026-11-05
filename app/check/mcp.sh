@@ -613,6 +613,14 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
       fresh_picture="the 15 s error" ;;
     *) fail "a screenshot of the tab just opened answered: $picture" ;;
   esac
+  # With the UI holding the keyboard, as after a click in the sidebar, nothing in the window changes,
+  # and a screenshot of a tab out of sight still answers with its picture, from its page's surface.
+  send click 100 600
+  picture=$(call screenshot "{\"tab\":$opened_tab}")
+  case "$picture" in
+    "image/jpeg "[1-9]*) ;;
+    *) fail "with the UI holding the keyboard, a screenshot of a tab out of sight answered: $picture" ;;
+  esac
   link=$(printf '%s\n' "$opened" | sed -n 's/.*- link "[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
   clicked=$(call click "{\"tab\":$opened_tab,\"ref\":\"$link\"}")
   case "$clicked" in
@@ -1082,7 +1090,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture)"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -21,7 +22,9 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/shell_integration.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
@@ -32,8 +35,11 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -580,39 +586,73 @@ void AgentPage::History(bool forward) {
 }
 
 void AgentPage::Screenshot() {
-  // A capture answers once the page draws a frame, which a tab out of sight may never do, so the
-  // agent hears that it didn't after as long as a page that won't load is waited for (#1461),
-  // rather than never. The session goes with the capture, as DevTools answers the tab's next
-  // commands only after it, and the next job attaches again. The timer runs only while it's out.
+  content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  if (!view) {
+    Fail("The page couldn't be pictured.");
+    return;
+  }
+  // A copy of the page's own surface, as the app's pictures of a page are (capture.cc). DevTools'
+  // capture waits for a redraw to be presented, which a page out of sight gets only as its window
+  // draws something new, so with the UI holding the keyboard and the window still it never came. A
+  // page no window shows is held in its tab's window, unseen, which gives it a compositor.
+  base::ScopedClosureRunner held;
+  if (!view->IsShowing()) {
+    Window* window = Window::Holding(tab_);
+    held = platform::DrawUnseen(window ? window->widget() : nullptr,
+                                GetWebContents().GetNativeView());
+  }
+  // Should no frame come, the agent hears so after as long as a page that won't load is waited for
+  // (#1461), rather than never. The timer runs only while the copy is out.
   const uint64_t request = job_->request;
   wait_.Start(FROM_HERE, kLoadTimeout,
               base::BindOnce(
                   [](AgentPage* page, uint64_t request) {
-                    if (!page->job_ || page->job_->request != request) {
-                      return;
+                    if (page->job_ && page->job_->request == request) {
+                      page->Fail(base::StrCat(
+                          {"The tab didn't draw a picture in ",
+                           base::NumberToString(kLoadTimeout.InSeconds()),
+                           " s. Try again, or ask the user to bring it to the front."}));
                     }
-                    page->Detach();
-                    page->Fail(base::StrCat(
-                        {"The tab didn't draw a picture in ",
-                         base::NumberToString(kLoadTimeout.InSeconds()),
-                         " s. Try again, or ask the user to bring it to the front."}));
                   },
                   base::Unretained(this), request));
-  Send("Page.captureScreenshot", base::DictValue().Set("format", "jpeg").Set("quality", 75),
-       base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, uint64_t request, const base::DictValue* result) {
-             if (!page || !page->job_ || page->job_->request != request) {
-               return;
-             }
-             page->wait_.Stop();
-             const std::string* data = result ? result->FindString("data") : nullptr;
-             if (!data) {
-               page->Fail("The page couldn't be pictured.");
-               return;
-             }
-             page->Answer(*data, /*error=*/false);
-           },
-           weak_factory_.GetWeakPtr(), request));
+  view->CopyFromSurface(
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t request, base::ScopedClosureRunner held,
+             const content::CopyFromSurfaceResult& result) {
+            if (!page || !page->job_ || page->job_->request != request) {
+              return;
+            }
+            if (!result.has_value() || result->bitmap.drawsNothing()) {
+              page->wait_.Stop();
+              page->Fail("The page couldn't be pictured.");
+              return;
+            }
+            // A page in a big window is millions of pixels, too many to encode on the UI thread.
+            base::ThreadPool::PostTaskAndReplyWithResult(
+                FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+                base::BindOnce(
+                    [](const SkBitmap& bitmap) {
+                      std::optional<std::vector<uint8_t>> jpeg =
+                          gfx::JPEGCodec::Encode(bitmap, /*quality=*/75);
+                      return jpeg ? base::Base64Encode(*jpeg) : std::string();
+                    },
+                    result->bitmap),
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
+                      if (!page || !page->job_ || page->job_->request != request) {
+                        return;
+                      }
+                      page->wait_.Stop();
+                      if (data.empty()) {
+                        page->Fail("The page couldn't be pictured.");
+                        return;
+                      }
+                      page->Answer(std::move(data), /*error=*/false);
+                    },
+                    page, request));
+          },
+          weak_factory_.GetWeakPtr(), request, std::move(held)));
 }
 
 void AgentPage::Snapshot() {
