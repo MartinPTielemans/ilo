@@ -2037,6 +2037,10 @@ opaque = 0.975
 colourful = 0.055
 # Above this relative luminance a one-colour icon is near-white.
 near-white = 0.88
+# A one-colour icon under this contrast with the window's tint, black or white, which the sidebar
+# lies under, is drawn in the ink on every tile and row, as the shown tile draws it in white
+# (ours: WCAG 1.4.11's 3:1 for graphics; Arc and Dia weren't recorded with a black favicon).
+legible-icon = 3.0
 blur-sigma = 5.0
 # The blurred icon is aspect-filled to this many tiles, centred.
 blur-scale = 2.5

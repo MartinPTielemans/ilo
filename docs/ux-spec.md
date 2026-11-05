@@ -346,6 +346,8 @@ Ours (dark only, `app/src/shell/tile_theme.rs`): the theme is made from the favi
 - An emoji icon has no theme yet and shows as no usable icon: GPUI can't give the pixels of text, so it needs the core to hand over the emoji as an image.
 - Light mode: not themed. A light window's selected tile is Dia's white one with the default ring, whatever its icon, until the light theme is built.
 
+On every tile and row, shown or not, a one-colour favicon that would barely show on the sidebar, under 3:1 against black in a dark window or against white in a light one (WCAG 1.4.11), is drawn in the ink instead, as the shown tile draws a one-colour icon in white (ours: Arc and Dia weren't recorded with a black favicon). A black logo reads on a dark sidebar, a white one on a light sidebar, and a colourful one is left as it is.
+
 What a favorite does (ours, *interim* until Arc's are captured):
 
 - **Scope** (ours: the owner's calls, 2026-10-27; Arc's favorites follow the profile, confirm in the capture). Settings › Tabs & Sidebar › Share favorites chooses who shares them, and the core keeps the choice with the Spaces:

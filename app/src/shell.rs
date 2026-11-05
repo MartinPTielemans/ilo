@@ -5156,7 +5156,11 @@ fn folder_icon(palette: &Palette, open: bool) -> AnyElement {
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
     match favicon {
-        Some(favicon) => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
+        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
+            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
+            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        },
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))
