@@ -227,10 +227,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..1468608003
+index 0000000000..6eab8da600
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1091 @@
+@@ -0,0 +1,1101 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -964,13 +964,21 @@ index 0000000000..1468608003
 +    #[allow(unused_variables, unused_mut)]
 +    let mut applied = false;
 +    while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
-+        let gives_keys = matches!(
-+            op,
-+            Op::Hide { keyboard: true, .. } | Op::Keyboard { keyboard: false, .. }
-+        );
++        let gave = match op {
++            Op::Hide {
++                view,
++                keyboard: true,
++                ..
++            }
++            | Op::Keyboard {
++                view,
++                keyboard: false,
++            } => Some(view),
++            _ => None,
++        };
 +        applied |= run_op(op);
-+        if gives_keys {
-+            left_by_press();
++        if let Some(gave) = gave {
++            left_by_press(gave);
 +        }
 +    }
 +    LEFT_BY_PRESS.with_borrow_mut(Vec::clear);
@@ -1082,12 +1090,12 @@ index 0000000000..1468608003
 +    }
 +}
 +
-+/// An overlay that had the keys let them go, as the ops a press led to ran: the overlay that has them
-+/// back, such as a find bar under the command bar a press on the page hid, is left too if that
-+/// press left it, as X11's hide says when the input focus went elsewhere than either. It kept the
-+/// keys while the overlay over it had them, to be given them back, and the press was outside both.
-+/// Under Wayland only, where the compositor never moves the keys between overlays.
-+fn left_by_press() {
++/// The overlay `gave`, which had the keys, let them go, as the ops a press led to ran: another that
++/// has them back, such as a find bar under the command bar a press on the page hid, is left too if
++/// that press left it, as X11's hide says when the input focus went elsewhere than either. It kept
++/// the keys while the overlay over it had them, to be given them back, and the press was outside
++/// both. Under Wayland only, where the compositor never moves the keys between overlays.
++fn left_by_press(gave: usize) {
 +    let wayland = super::platform::with_embedded_connection(|connection| {
 +        #[cfg(feature = "wayland")]
 +        if let DisplayConnection::Wayland(_) = connection {
@@ -1098,7 +1106,9 @@ index 0000000000..1468608003
 +    if wayland != Some(true) {
 +        return;
 +    }
-+    let Some(next) = keyboard_overlay_asked() else {
++    // The overlay that let the keys go isn't one that has them back, though it has them again: a
++    // right-click on another row hides the menu up and shows it again as that row's (#1908).
++    let Some(next) = keyboard_overlay_asked().filter(|&next| next != gave) else {
 +        return;
 +    };
 +    let pressed = LEFT_BY_PRESS.with_borrow_mut(|all| {

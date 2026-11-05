@@ -343,7 +343,7 @@ pub(crate) fn open_window_as(
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view) };
+        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe {

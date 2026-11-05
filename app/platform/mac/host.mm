@@ -301,8 +301,16 @@ struct Browser {
   double reveal_width = 0;
   id reveal_monitor;
 
-  // A Little ilo window's (host_set_window_little).
+  // A Little ilo window's, and whether it grows in as it first comes on screen
+  // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
+  // transform it grows from, and the opacity and shadow its window gets back after.
   bool little = false;
+  bool grows = false;
+  enum class Opening { kNone, kHeld, kGrowing };
+  Opening opening = Opening::kNone;
+  CATransform3D opening_small = CATransform3DIdentity;
+  BOOL opening_opaque = YES;
+  BOOL opening_shadow = YES;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -358,6 +366,13 @@ constexpr double kOverlayGrow = 0.2;
 constexpr double kOverlayGrowFade = 0.1;
 // Arc's theme picker shrinks to its arrow and fades as it closes, gone in 0.11 s.
 constexpr double kOverlayShrink = 0.11;
+// Little ilo grows in as Little Arc does, from a small rectangle to its frame in 6 to 7 frames,
+// easing out, never faded (Arc 1.168 at 60 fps, from an outside reverse-engineering, #1407).
+constexpr double kLittleGrow = 0.12;
+constexpr NSSize kLittleGrowFrom = {40, 28};
+// It's held small until its UI draws on screen, which takes a few frames; should that never come,
+// it shows at its frame after this.
+constexpr double kLittleHold = 0.5;
 
 // A window of the UI's over a browser window's page, translucent over a blur, with a shadow: the
 // command bar, the Space's icon or theme picker, or the Site Controls.
@@ -1539,10 +1554,108 @@ void* host_ui_view(void) {
   return (__bridge void*)g_browsers.back()->ui_view;
 }
 
-void host_set_window_little(void* ui_view) {
+void host_set_window_little(void* ui_view, bool grows) {
   if (Browser* browser = BrowserWithView(ui_view)) {
     browser->little = true;
+    browser->grows = grows;
   }
+}
+
+// Whether the user's last press in the app was a key's rather than a click's. A key from a page
+// reaches the app only once the page has passed on it, after other events, so the event at hand
+// can't say.
+static bool g_pressed_key = false;
+
+// Gives Little ilo's window of |ui_view| back its own opacity and shadow once its opening, at
+// |stage|, is over, or ended sooner as its UI never drew.
+static void EndLittleOpening(void* ui_view, Browser::Opening stage, const char* how) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->opening != stage) {
+    return;
+  }
+  browser->opening = Browser::Opening::kNone;
+  NSWindow* window = browser->window;
+  window.opaque = browser->opening_opaque;
+  window.hasShadow = browser->opening_shadow;
+  [window invalidateShadow];
+  // check.sh reads this line.
+  fprintf(stderr, "browser: little window %s\n", how);
+}
+
+// Holds Little ilo's |window| at a small rectangle under the pointer, or at its middle when a key
+// in the app opened it, as it comes on screen, until its UI has drawn there and it grows in
+// (host_grow_little_window). A link from another app was clicked there, under the pointer. What it
+// draws is scaled rather than its frame resized, so its page and UI are laid out at full size the
+// whole way and never again on a frame. The frame view's layer holds all the window draws, its
+// corners and material too, so the window is clear and without its shadow until it has grown, or
+// the rest of its frame would show from the start.
+static void HoldLittleWindow(Browser* browser, NSWindow* window) {
+  // AppKit makes the frame view's layer only once the window is first on screen, a frame too late.
+  NSView* frame_view = window.contentView.superview;
+  frame_view.wantsLayer = YES;
+  CALayer* layer = frame_view.layer;
+  if (!layer) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: little window can't grow, as its frame has no layer\n");
+    return;
+  }
+  const NSRect frame = window.frame;
+  // In the window, from its bottom left, as AppKit's y runs up.
+  NSPoint from = NSMakePoint(NSWidth(frame) / 2, NSHeight(frame) / 2);
+  if (!NSApp.active || !g_pressed_key) {
+    const NSPoint pointer = NSEvent.mouseLocation;
+    from = NSMakePoint(pointer.x - NSMinX(frame), pointer.y - NSMinY(frame));
+  }
+  const NSRect rest = layer.frame;
+  const NSRect small = NSMakeRect(from.x - kLittleGrowFrom.width / 2,
+                                  from.y - kLittleGrowFrom.height / 2, kLittleGrowFrom.width,
+                                  kLittleGrowFrom.height);
+  // The transform applies about the layer's position, so the rectangle at rest maps to the small
+  // one once that's taken out.
+  const double scale_x = NSWidth(small) / NSWidth(rest);
+  const double scale_y = NSHeight(small) / NSHeight(rest);
+  const double dx = NSMinX(small) - scale_x * NSMinX(rest) - layer.position.x * (1 - scale_x);
+  const double dy = NSMinY(small) - scale_y * NSMinY(rest) - layer.position.y * (1 - scale_y);
+  browser->opening_small =
+      CATransform3DScale(CATransform3DMakeTranslation(dx, dy, 0), scale_x, scale_y, 1);
+  browser->opening_opaque = window.opaque;
+  browser->opening_shadow = window.hasShadow;
+  browser->opening = Browser::Opening::kHeld;
+  window.opaque = NO;
+  window.hasShadow = NO;
+  CABasicAnimation* hold = [CABasicAnimation animationWithKeyPath:@"transform"];
+  hold.fromValue = [NSValue valueWithCATransform3D:browser->opening_small];
+  hold.toValue = hold.fromValue;
+  hold.duration = kLittleHold;
+  void* ui_view = (__bridge void*)browser->ui_view;
+  [CATransaction begin];
+  [CATransaction setCompletionBlock:^{
+    EndLittleOpening(ui_view, Browser::Opening::kHeld, "shown ungrown");
+  }];
+  [layer addAnimation:hold forKey:@"little opening"];
+  [CATransaction commit];
+  // check.sh reads this line: where it grows from, from the window's top left as the UI's points go.
+  fprintf(stderr, "browser: little window grows from %g %g\n", from.x, NSHeight(frame) - from.y);
+}
+
+void host_grow_little_window(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->opening != Browser::Opening::kHeld) {
+    return;
+  }
+  browser->opening = Browser::Opening::kGrowing;
+  CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"transform"];
+  grow.fromValue = [NSValue valueWithCATransform3D:browser->opening_small];
+  grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+  grow.duration = kLittleGrow;
+  grow.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+  [CATransaction begin];
+  [CATransaction setCompletionBlock:^{
+    EndLittleOpening(ui_view, Browser::Opening::kGrowing, "grown");
+  }];
+  // In the hold's place, which ends with it.
+  [browser->window.contentView.superview.layer addAnimation:grow forKey:@"little opening"];
+  [CATransaction commit];
 }
 
 // Brings Little ilo's |window| to the desktop shown on its way on screen, as Arc's Little Arc
@@ -1674,6 +1787,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
       }
     }
     ToActiveSpace(window);
+    // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
+    window.animationBehavior = NSWindowAnimationBehaviorNone;
+    // Closing it over another app's window, mid-grow too, leaves that app in front (#1692): the
+    // grow scales the frame view's layer and never orders the window out, so only a close does.
     WatchLittleOrderingOut(window);
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
@@ -1707,6 +1824,11 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   if (above && above->window) {
     [window orderWindow:NSWindowBelow relativeTo:above->window.windowNumber];
   } else {
+    // Before it's on screen, so its first frame is already the small one.
+    if (browser->grows) {
+      browser->grows = false;
+      HoldLittleWindow(browser, window);
+    }
     [window makeKeyAndOrderFront:nil];
     [g_launch_window orderOut:nil];
     g_launch_window = nil;
@@ -1723,6 +1845,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   static bool watching_clicks = false;
   if (!watching_clicks) {
     watching_clicks = true;
+    // Before the press reaches anything it could open a Little ilo window from.
+    [NSEvent addLocalMonitorForEventsMatchingMask:kMouseDown | NSEventMaskKeyDown
+                                          handler:^NSEvent*(NSEvent* event) {
+                                            g_pressed_key = event.type == NSEventTypeKeyDown;
+                                            return event;
+                                          }];
     [NSEvent addLocalMonitorForEventsMatchingMask:kMouseDown
                                           handler:^NSEvent*(NSEvent* event) {
                                             if (HostIsMenuWindow(event.window)) {

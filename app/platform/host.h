@@ -91,9 +91,17 @@ void host_capture_name(char* name, size_t capacity);
 
 // The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
 // screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
-// while a full-screen browser window has that desktop, it opens over it there. Before
-// host_show_window. Off the Mac, where the window manager places windows, nothing.
-void host_set_window_little(void* ui_view);
+// while a full-screen browser window has that desktop, it opens over it there. With |grows|,
+// host_show_window first shows it small, at a rectangle under the pointer, or at its middle when a
+// key opened it, until host_grow_little_window. Before host_show_window. Off the Mac, where the
+// window manager places windows and animates them its own way, it doesn't grow; Windows records
+// it, for closing it over another app's window (#1692), and Linux does nothing.
+void host_set_window_little(void* ui_view, bool grows);
+
+// Grows the Little ilo window of |ui_view| in from where host_show_window showed it small, once
+// its UI has drawn on screen, so the motion's start is seen. Nothing once it has grown or wasn't
+// held, as off the Mac.
+void host_grow_little_window(void* ui_view);
 
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
