@@ -271,9 +271,8 @@ elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
 else
   send $ime
-  # On Windows the page answers ⌘L late, and Microsoft's IME composes in TSF's document, which the
-  # host gives the bar's input context while the page keeps the keyboard (host.cc's ComposeInBar,
-  # #1784). The page's field keeps its y.
+  # On Windows the page answers ⌘L late, and while it keeps the keyboard the host has Microsoft's
+  # IME compose in the bar (host.cc's ComposeInBar, #1784). The page's field keeps its y.
   from=$(wc -l < "$log")
   typed_after l nihongo
   expect "^browser: command bar drew \"$preedit\"\$" \
