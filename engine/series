@@ -1,6 +1,7 @@
 # Applied in order after ungoogled-chromium's own series. One patch per line, relative to engine/patches/.
 # Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/.
 upstream/chromium-xkb-no-state-guard.patch
+upstream/chromium-rust-std-prebuilt-libs.patch
 ardia/chromium-component-updater-security-only.patch
 ardia/chromium-extension-omaha-attributes.patch
 ours/chromium-core-link.patch
@@ -20,7 +21,6 @@ ours/chromium-core-permission-prompt.patch
 ours/chromium-core-extension-install.patch
 ours/chromium-extensions-web-store.patch
 ours/chromium-core-password-prompt.patch
-ours/chromium-rust-std-component-link.patch
 ours/chromium-prefs-passwords-autofill-on.patch
 ours/chromium-passwords-generation-this-device.patch
 ours/chromium-search-default-duckduckgo.patch
