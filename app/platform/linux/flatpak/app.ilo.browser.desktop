@@ -12,3 +12,8 @@ StartupWMClass=app.ilo.browser
 Categories=Network;WebBrowser;
 Keywords=web;browser;internet;
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Actions=new-little-window;
+
+[Desktop Action new-little-window]
+Name=New Little ilo Window
+Exec=ilo --new-little-window

@@ -21,6 +21,7 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use browser::flatpak;
+use browser::little_launch;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
@@ -515,6 +516,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_switches(cx);
         needs_you_host::start(cx);
         open_window(None, None, cx);
+        // A launch for a new Little ilo window, from the jump list or the launcher, once there's a
+        // window for it to open from; a later one comes through the core (window_open_little).
+        if little_launch::asks_for_little(std::env::args()) {
+            cx.defer(|cx| new_little_window("command line", cx));
+        }
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
     // has closed by the time the thread-locals go at exit, and dropping them there crashes (#474).

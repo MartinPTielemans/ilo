@@ -273,6 +273,10 @@ pub(crate) unsafe extern "C" fn window_open_little(
         .to_string_lossy()
         .into_owned();
     update_app(|cx| {
+        // A launch that asked for one, from the jump list or the launcher, names no window or link.
+        if window == 0 && url.is_empty() {
+            return new_little_window("command line", cx);
+        }
         let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
         let Some(from) = from else {
             return;
