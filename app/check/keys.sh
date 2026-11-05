@@ -778,18 +778,24 @@ expect '^browser: command bar hidden$' "going somewhere didn't close the command
 expect '^browser: loaded [0-9]* https://example.com/$' "the page didn't load what was typed in the command bar"
 send state
 in_browser RenderWidgetHostViewCocoa "after the command bar loaded a page"
-# Words that name no page are a search, with DuckDuckGo until the user picks an engine.
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+# Words that name no page are a search, with DuckDuckGo until the user picks an engine. In a tab of
+# its own, which ⌘W closes: the steps below click the page the first tab shows, which DuckDuckGo's
+# results would put a link of theirs under (#1875).
+searched_from=$(today)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type arc browser
 send key return
 expect '^browser: command bar go https://duckduckgo.com/?q=arc+browser$' "words in the command bar didn't search: $(grep '^browser: command bar go' "$log" | tail -1)"
 searching 'arc+browser' "the search didn't start: $(grep '^browser: page ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/search.png" || fail "no window to capture"
+send key w cmd
+expect "^browser: today $searched_from\$" "⌘W didn't close the search's tab"
 # A .new address typed names what it makes, first, and ↩ opens it in a new tab though ⌘L's bar
 # edits the tab shown (#698). docs.new sends a browser that isn't signed in to Google's sign-in.
 before=$(today)
-edit_url_over_search
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send type docs.new
 expect '^browser: command bar new document docs.new: New Google Doc$' \
   "docs.new typed in the command bar didn't get its row"
