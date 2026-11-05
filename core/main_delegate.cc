@@ -99,6 +99,7 @@
 #include "components/prefs/pref_service.h"
 #endif
 #if BUILDFLAG(IS_LINUX)
+#include "base/nix/xdg_util.h"
 #include "browser_core/platform/linux/wayland.h"
 #include "ui/ozone/public/ozone_switches.h"
 #endif
@@ -149,6 +150,15 @@ void OpenCommandLine(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir,
                      Profile* profile,
                      bool process_startup) {
+#if BUILDFLAG(IS_LINUX)
+  // Under Wayland, the activation token the launcher gave the launch, for the window the app
+  // brings forward for it (WaylandToplevelWindow::Activate). Chrome's own windows read it from the
+  // switch (StartupBrowserCreatorImpl::OpenTabsInBrowser), which a launch the core takes skips.
+  // Without it the window asks with a token of its own, which no click in it backs, and the
+  // compositor may only mark it.
+  base::CommandLine with_token(command_line);
+  base::nix::ExtractXdgActivationTokenFromCmdLine(with_token);
+#endif
   // A launch for a new Little ilo window, as the jump list's task and the Linux launcher's action
   // run one: the app opens it for the Space in front, as the Mac's Dock item does (#693). The first
   // launch's own, the app reads once its windows are up.
