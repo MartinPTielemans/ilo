@@ -1704,6 +1704,18 @@ void bc_tab_capture(bc_id id, uint64_t request, bool full_page, bc_rect rect) {
 void bc_tab_picture(bc_id id, uint64_t request, int width, int height) {
   if (content::WebContents* contents = browser_core::Tab::FromId(id)) {
     browser_core::PicturePage(contents, request, gfx::Size(std::max(width, 0), std::max(height, 0)));
+  } else if (browser_core::Host().tab_pictured) {
+    // A tab without its page, or none: no picture, told from a task of its own, as the header
+    // promises, so the window asking stops waiting for one.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](bc_id tab, uint64_t request) {
+                         if (browser_core::Host().tab_pictured) {
+                           browser_core::Host().tab_pictured(browser_core::Host().context, tab,
+                                                             request, nullptr, 0, 0);
+                         }
+                       },
+                       id, request));
   }
 }
 
