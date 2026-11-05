@@ -89,10 +89,12 @@ Darwin)
       > "$out/handback-handler.py"
     key="HKCU\\Software\\Classes\\$scheme"
     command="\"$python\" \"$(cygpath -w "$out/handback-handler.py")\" \"$(cygpath -w "$handled")\" \"%1\""
-    MSYS2_ARG_CONV_EXCL='*' reg.exe add "$key" //ve //d "URL:Handback" //f > /dev/null &&
-      MSYS2_ARG_CONV_EXCL='*' reg.exe add "$key" //v "URL Protocol" //d "" //f > /dev/null &&
-      MSYS2_ARG_CONV_EXCL='*' reg.exe add "$key\\shell\\open\\command" //ve //d "$command" //f \
-        > /dev/null || fail "the registry didn't take the stand-in for $scheme"
+    # Git Bash converts none of these, so reg.exe gets its switches as written.
+    reg() { MSYS2_ARG_CONV_EXCL='*' reg.exe "$@" >> "$out/handback-reg.log" 2>&1; }
+    reg add "$key" /ve /d "URL:Handback" /f &&
+      reg add "$key" /v "URL Protocol" /d "" /f &&
+      reg add "$key\\shell\\open\\command" /ve /d "$command" /f ||
+      fail "the registry didn't take the stand-in for $scheme: $(tr '\r\n' '  ' < "$out/handback-reg.log")"
     standin=windows
   fi
   ;;
@@ -112,7 +114,7 @@ forget_standin() {
     done
     ;;
   mac) "$lsregister" -u "$applet" 2> /dev/null || true ;;
-  windows) MSYS2_ARG_CONV_EXCL='*' reg.exe delete "$key" //f > /dev/null 2>&1 || true ;;
+  windows) reg delete "$key" /f || true ;;
   esac
 }
 trap 'cleanup; forget_standin' EXIT
@@ -309,10 +311,12 @@ by_scheme() {
     cut -d' ' -f3)
   if ! seen '^browser: dialog settled$' 5 "$started"; then
     shown=$(grep "^browser: window [0-9]* shows $asked\$" "$log" | tail -1)
-    record "$1" "$2" "tab $asked asked, and no dialog showed (${shown:-no window shows it})"
+    behind=$(grep "^browser: little window [0-9]* put $asked in space " "$log" | tail -1)
+    record "$1" "$2" "tab $asked asked, and no dialog showed (${behind:-${shown:-no window shows it}})"
     close_little "$1"
     return 0
   fi
+  ../tools/window-screenshot.sh "$pid" "$out/handback-$1-$2.png" all || fail "no window to capture"
   confirm=$(sed -n "/^browser: drive $started: /,\$p" "$log" | grep '^browser: dialog confirm at ' |
     tail -1 | sed 's/.* at //')
   [ -n "$confirm" ] || seen '^browser: dialog confirm at ' 3 "$started" &&
@@ -361,6 +365,7 @@ local_server() {
     close_little "$1"
     return 0
   fi
+  ../tools/window-screenshot.sh "$pid" "$out/handback-$1-local.png" all || fail "no window to capture"
   send layout
   read -r qx qy qw qh << EOF
 $(grep "^browser: question $tab at " "$log" | tail -1 | cut -d' ' -f5-)
