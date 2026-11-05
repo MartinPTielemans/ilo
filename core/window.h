@@ -404,7 +404,12 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // mute. Returns its id.
   bc_id CloneInto(BrowserWindowInterface& browser, content::WebContents& contents);
   // |split_with| is the tab whose page opened it to show beside it, or 0.
-  void ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id split_with);
+  void ReportTabOpened(bc_id tab,
+                       bc_id opener,
+                       bool foreground,
+                       bc_id split_with,
+                       std::optional<bc_rect> popup,
+                       bool popup_placed);
   // The Space a tab opened by |opener|, or by nothing for 0, goes to: its opener's, else the one
   // the window shows.
   Space* SpaceForOpened(bc_id opener) const;
@@ -514,6 +519,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   bc_id split_with_ = 0;
   // The agent's tab whose page opens the tab the tab strip adds next (AdjustNavigate), or 0.
   bc_id agent_opener_ = 0;
+  // What the page asked of the pop-up the navigation being made opens, until its tab is inserted.
+  std::optional<bc_rect> popup_;
+  bool popup_placed_ = false;
   base::ObserverList<web_modal::ModalDialogHostObserver> dialog_observers_;
   // Where the app last asked an extension's popup to hang from.
   views::ViewTracker popup_anchor_;

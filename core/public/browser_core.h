@@ -776,6 +776,13 @@ typedef struct bc_host {
   // space_changed. Elsewhere it isn't shown until bc_tab_show; show it if |foreground|, since
   // Chrome made it the window's active tab.
   void (*tab_opened)(void* context, bc_id window, bc_id tab, bc_id opener, bool foreground);
+  // The tab tab_opened tells of next is a pop-up its page asked for with window.open() and a
+  // window's features, as a sign-in's is, not a link to a new tab: |opener| is the tab it came
+  // from. |requested| is the size the page asked for its content, 0 for a side it didn't ask, and
+  // with |placed| where on the screen it asked for its content's top-left. It opens as a tab
+  // (decision 3), where the app puts it.
+  void (*tab_popup)(void* context, bc_id window, bc_id tab, bc_id opener, bc_rect requested,
+                    bool placed);
   // The tab's page finished loading |url|.
   void (*tab_loaded)(void* context, bc_id tab, const char* url);
   // The tab's URL, its history or whether it's loading changed. A burst of changes is one call.

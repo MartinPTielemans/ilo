@@ -58,6 +58,142 @@ pub(crate) fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id, cx
     update_window_in(window, cx, |shell, cx| shell.little_sent(tab, cx));
 }
 
+thread_local! {
+    /// What a page asked of the pop-up each tab is, from tab_popup, until its tab_opened comes.
+    static POPUPS: RefCell<HashMap<u64, (bc::bc_rect, bool)>> = RefCell::default();
+    /// Each pop-up's window, by its tab, with the Little ilo window whose page opened it.
+    static POPUP_WINDOWS: RefCell<HashMap<u64, (bc::bc_id, bc::bc_id)>> = RefCell::default();
+}
+
+/// The tab opened next in `window` is a pop-up its page asked for, with its content's size and,
+/// if `placed`, where (bc_host's tab_popup).
+pub(crate) unsafe extern "C" fn tab_popup(
+    _: *mut c_void,
+    window: bc::bc_id,
+    tab: bc::bc_id,
+    opener: bc::bc_id,
+    requested: bc::bc_rect,
+    placed: bool,
+) {
+    let bc::bc_rect {
+        x,
+        y,
+        width,
+        height,
+    } = requested;
+    let at = if placed {
+        format!(" at {x:.0} {y:.0}")
+    } else {
+        String::new()
+    };
+    // check.sh reads this line.
+    log!("browser: tab {tab} popup of {opener} in window {window} asks {width:.0} {height:.0}{at}");
+    POPUPS.with_borrow_mut(|popups| popups.insert(tab, (requested, placed)));
+}
+
+/// What the page asked of `tab`, if it's a pop-up, once: its tab_opened has come.
+pub(crate) fn take_popup(tab: u64) -> Option<(bc::bc_rect, bool)> {
+    POPUPS.with_borrow_mut(|popups| popups.remove(&tab))
+}
+
+/// A pop-up a Little ilo window's page asked for, as a sign-in's, opens as a Little ilo window of
+/// its own over it, at the size the page asked, as Chrome's opens as a window (#1919): it's a tab
+/// still (decision 3), in its home's profile, its page live, which the window's bar names. Else,
+/// as a link's tab, it goes behind.
+pub(crate) fn little_popup_opened(
+    window: bc::bc_id,
+    tab: u64,
+    home: bc::bc_id,
+    (asked, placed): (bc::bc_rect, bool),
+    cx: &mut App,
+) {
+    let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
+    let Some(from) = from else {
+        return little_tab_opened(window, tab, home, cx);
+    };
+    let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+    let opener = match unsafe {
+        platform::host_window_frame(from.ui_view, &mut x, &mut y, &mut width, &mut height)
+    } {
+        true => Frame {
+            x,
+            y,
+            width,
+            height,
+        },
+        false => {
+            let (width, height) = little_size();
+            let (x, y) = platform::centered(width, height);
+            Frame {
+                x,
+                y,
+                width,
+                height,
+            }
+        }
+    };
+    let at = placed.then_some((asked.x, asked.y));
+    let frame = window_frames::popup(opener, (asked.width, asked.height), at, &screens());
+    let home = little_home(home, main_window_for(home).unwrap_or(0));
+    let profile = unsafe { bc::bc_space_profile(home) };
+    // Its page goes to its home's Today, where a Little ilo window takes it from.
+    unsafe { bc::bc_tab_move_to_space(tab, home) };
+    let at = bc::bc_rect {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    };
+    let opened = (profile != 0)
+        .then(|| {
+            open_window_as(
+                Some(from),
+                Some(Own::Little { profile, home }),
+                None,
+                Some(at),
+                cx,
+            )
+        })
+        .flatten();
+    let Some(popup) = opened else {
+        // check.sh reads this line.
+        log!("browser: little window {window} put {tab} in space {home}");
+        return;
+    };
+    if unsafe { bc::bc_window_take_tab(popup, tab) } == 0 {
+        unsafe { bc::bc_window_close(popup) };
+        log!("browser: little window {window} put {tab} in space {home}");
+        return;
+    }
+    POPUP_WINDOWS.with_borrow_mut(|windows| windows.insert(tab, (popup, window)));
+    // check.sh reads this line.
+    log!(
+        "browser: little window {window} popup {tab} in window {popup} at {:.0} {:.0} {:.0} {:.0}",
+        frame.x,
+        frame.y,
+        frame.width,
+        frame.height
+    );
+}
+
+/// A pop-up's page closed, as a sign-in's closes itself once it's done: its window goes, and the
+/// Little ilo window that opened it has the keyboard back.
+pub(crate) fn popup_closed(tab: u64) {
+    let Some((popup, opener)) = POPUP_WINDOWS.with_borrow_mut(|windows| windows.remove(&tab))
+    else {
+        return;
+    };
+    let open = |id| WINDOWS.with_borrow(|windows| windows.iter().any(|w| w.id == id));
+    if open(popup) {
+        unsafe { bc::bc_window_close(popup) };
+    }
+    if open(opener) {
+        unsafe { bc::bc_window_activate(opener) };
+        // check.sh reads this line.
+        log!("browser: little window {opener} has the keyboard back from {popup}");
+    }
+}
+
 /// Where a Little ilo window opens: centred a little above the middle of the screen the pointer is
 /// on, as Arc's, else of the one the windows open on.
 pub(crate) fn little_frame() -> bc::bc_rect {

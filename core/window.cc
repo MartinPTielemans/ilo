@@ -698,6 +698,9 @@ void Window::AdjustNavigate(NavigateParams& params) {
   if (!window) {
     return;
   }
+  // What a pop-up asked is this navigation's alone, so none is left from one that opened nothing.
+  window->popup_.reset();
+  window->popup_placed_ = false;
   // The page menu's Open Link in New Window and in Incognito Window: the app opens its windows, as
   // for ⌘N and ⇧⌘N. A private window's link stays private either way, as Chrome's does.
   if (params.started_from_context_menu &&
@@ -784,6 +787,16 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // (chromium-core-alt-click-split.patch).
   const bool split = source && params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW;
   window->split_with_ = split ? Tab::IdOf(params.source_contents) : 0;
+  // A page's pop-up, as a sign-in's: the app hears what it asked for with its tab (tab_popup).
+  if (source && params.disposition == WindowOpenDisposition::NEW_POPUP) {
+    const blink::mojom::WindowFeatures& features = params.window_features;
+    const gfx::Rect& asked = features.bounds;
+    window->popup_ = bc_rect{
+        static_cast<double>(asked.x()), static_cast<double>(asked.y()),
+        features.has_width ? static_cast<double>(asked.width()) : 0.,
+        features.has_height ? static_cast<double>(asked.height()) : 0.};
+    window->popup_placed_ = features.has_x && features.has_y;
+  }
   // Popups become tabs (decision 3). So do new windows: the app opens its own.
   if (split || params.disposition == WindowOpenDisposition::NEW_POPUP ||
       params.disposition == WindowOpenDisposition::NEW_WINDOW) {
@@ -799,7 +812,8 @@ void Window::AdjustNavigate(NavigateParams& params) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Window::ReportTabOpened, window->weak_factory_.GetWeakPtr(),
                                   Tab::IdOf(contents), Tab::IdOf(params.source_contents),
-                                  /*foreground=*/false, /*split_with=*/0));
+                                  /*foreground=*/false, /*split_with=*/0,
+                                  /*popup=*/std::nullopt, /*popup_placed=*/false));
     params.disposition = WindowOpenDisposition::IGNORE_ACTION;
   }
   // Chrome's downloads page, which it opens after the user stopped a quit to let downloads finish,
@@ -1453,7 +1467,8 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
   content::WebContents* contents =
       from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false) : nullptr;
   if (contents) {
-    ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0);
+    ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
+                    /*popup=*/std::nullopt, /*popup_placed=*/false);
   }
   return contents;
 }
@@ -2661,6 +2676,8 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
   }
   const bc_id split_with = std::exchange(split_with_, 0);
   const bc_id agent_opener = std::exchange(agent_opener_, 0);
+  const std::optional<bc_rect> popup = std::exchange(popup_, std::nullopt);
+  const bool popup_placed = std::exchange(popup_placed_, false);
   for (const TabStripModelChange::ContentsWithIndex& inserted : change.GetInsert()->contents) {
     tabs::TabInterface* opener = tab_strip_model->GetOpenerOfTabAt(inserted.index);
     bc_id opened_by = agent_opener;
@@ -2673,7 +2690,7 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
         base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
                        Tab::IdOf(inserted.contents), opened_by,
                        !agent_opener && tab_strip_model->active_index() == inserted.index,
-                       split_with));
+                       split_with, popup, popup_placed));
   }
 }
 
@@ -2925,7 +2942,12 @@ Space* Window::SpaceForOpened(bc_id opener) const {
   return space ? space : Space::FromId(space_);
 }
 
-void Window::ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id split_with) {
+void Window::ReportTabOpened(bc_id tab,
+                             bc_id opener,
+                             bool foreground,
+                             bc_id split_with,
+                             std::optional<bc_rect> popup,
+                             bool popup_placed) {
   // A popup can close itself at once.
   if (!Tab::FromId(tab)) {
     return;
@@ -2942,6 +2964,9 @@ void Window::ReportTabOpened(bc_id tab, bc_id opener, bool foreground, bc_id spl
     if (split) {
       PanesChanged();
     }
+  }
+  if (popup && Host().tab_popup) {
+    Host().tab_popup(Host().context, id_, tab, opener, *popup, popup_placed);
   }
   if (Host().tab_opened) {
     Host().tab_opened(Host().context, id_, tab, opener, foreground);
