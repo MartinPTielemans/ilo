@@ -11,7 +11,7 @@ use std::{
 
 use gpui::{
     AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight,
-    HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful,
     StyledText, Subscription, WeakEntity, Window, canvas, div, img, linear_color_stop,
     linear_gradient, list, prelude::*, px, relative, svg,
@@ -973,6 +973,44 @@ impl Shell {
         cx.notify();
     }
 
+    /// A click on the archived tab `id`'s row, at `at` in the window. It opens in a link preview
+    /// beside the Library, which stays, as Arc's archive previews its tabs (the owner, 2026-10-29,
+    /// #696): ⌘W, Esc or its Close leave it in the archive, and ⌘↩ or its Open as Tab restore it
+    /// (link_preview). With ⌘, Ctrl off the Mac, it's restored at once, as before, and so it is
+    /// where no preview can show it: a page that isn't http(s), previews off, or no tab whose page
+    /// the window lays out for the preview to go over.
+    fn open_archived(
+        &mut self,
+        id: u64,
+        at: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(url) = (self.archive.iter())
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.url.clone())
+        else {
+            return;
+        };
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        let page = self.preview_page().filter(|_| {
+            web && self.selected != 0 && !modifiers.secondary(cx) && self.browser.link_previews()
+        });
+        let Some(page) = page else {
+            return self.restore_archived(id, cx);
+        };
+        // check.sh waits for this line.
+        log!("browser: archived {id} in preview");
+        self.browser
+            .open_archived_preview(self.selected, id, url, at, page, cx);
+    }
+
+    /// The archived tab a preview showed is the window's tab now, kept from the preview, and the
+    /// Library closes as it does for one restored from its row.
+    pub fn restored_from_preview(&mut self, cx: &mut Context<Self>) {
+        self.set_library(false, cx);
+    }
+
     /// Opens the archived tab `id` at the top of the Space's Today tabs and closes the Library.
     fn restore_archived(&mut self, id: u64, cx: &mut Context<Self>) {
         // check.sh waits for this line.
@@ -1879,8 +1917,8 @@ impl Shell {
         self.set_library(false, cx);
     }
 
-    /// A line of the archive's list: a heading, or an archived tab, which reopens on a click and
-    /// shows its menu on a right-click.
+    /// A line of the archive's list: a heading, or an archived tab, which a click opens in a
+    /// preview and a right-click shows the menu of.
     fn archive_item(
         &mut self,
         index: usize,
@@ -1954,7 +1992,9 @@ impl Shell {
                     .block_mouse_except_scroll()
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.restore_archived(id, cx)))
+                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                        shell.open_archived(id, event.position(), event.modifiers(), cx)
+                    }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
@@ -2898,6 +2938,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 
 #[cfg(test)]
 mod drag_tests;
+#[cfg(test)]
+mod peek_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
