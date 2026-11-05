@@ -782,4 +782,40 @@ else
 fi
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
+
+# The launcher's action, Linux's: the desktop entry's New Little ilo Window runs the browser with
+# --new-little-window (#693), which opens a Little ilo window for the Space shown, launching the
+# browser if it isn't running, else handed on to the one that is, which needs an engine built with
+# core/main_delegate.cc as it is here. The run takes the action's command from the entry itself.
+if [ "$(uname)" = Linux ]; then
+  entry=platform/linux/flatpak/app.ilo.browser.desktop
+  grep -q '^Actions=.*new-little-window;' "$entry" || fail "the desktop entry lists no new-little-window action"
+  action=$(sed -n '/^\[Desktop Action new-little-window\]$/,/^\[/p' "$entry")
+  echo "$action" | grep -qx 'Name=New Little ilo Window' || fail "the action isn't called New Little ilo Window"
+  command=$(echo "$action" | sed -n 's/^Exec=//p')
+  [ "${command%% *}" = ilo ] || fail "the action doesn't run ilo: $command"
+  # As the launcher runs it, with the check's browser for the Flatpak's ilo.
+  arguments=${command#* }
+  log="$out/little-action.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" $arguments < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: command line opened little window [0-9]*$' ||
+    fail "the launcher's action, launching the browser, didn't open a Little ilo window"
+  launched=$(sed -n 's/^browser: command line opened little window //p' "$log" | tail -1)
+  await "^browser: little window opened $launched profile [0-9]* home [0-9]*\$" ||
+    fail "the action's Little ilo window didn't open"
+  if engine_has ../core/main_delegate.cc; then
+    "$browser" $arguments >> "$out/little-launch.log" 2>&1 || fail "the action's command didn't reach the browser"
+    await "^browser: command line opened little window [0-9]*\$" &&
+      [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] ||
+      fail "the launcher's action, with the browser running, didn't open a second Little ilo window"
+  else
+    echo "skip: the launcher's action handed to the browser running: the engine's core predates the switch (core/main_delegate.cc), until an engine is built with it."
+  fi
+  exec 3>&-
+  quit
+fi
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
