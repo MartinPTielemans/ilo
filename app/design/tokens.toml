@@ -619,22 +619,24 @@ section-glyph-gap = 9.0
 foot-bottom = 8.0
 foot-glyph = 15.0
 # A section's name and glyph, the selected one's plate (the sidebar's, white with its shadow in
-# light), and the foot's quieter name and glyph.
+# light), and the foot's quieter name and glyph: the name at the headings' alpha, the least that
+# reads at 4.5:1 on the light stand-in too (#1636).
 section-text = 0.78
 section-glyph-alpha = 0.66
 section-selected = 0.2
 section-selected-light = 0xffffffd9
 section-shadow = 0x00000033
 section-hovered = 0.12
-foot-text = 0.55
+foot-text = 0.66
 foot-glyph-alpha = 0.45
 # Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
-# 8 in, with the sections 12 under it. ⌘F sits at its end, quiet, until typing starts; then ✕ on an
-# 18 circle empties it. While it finds rows, the sections with none dim to 0.35, so where things
-# live stays readable, and a row a click on its section's name goes to flashes once: a plate under
-# it up to the sidebar's hovered 0.12 and back over 600 ms.
+# 8 in, with the sections 12 under it, and "Search" in the rows' grey. ⌘F sits at its end, at the
+# headings' alpha, as 0.4 read at 2.4:1 on the light field, until typing starts; then ✕ on an 18
+# circle empties it. While it finds rows, the sections with none dim to 0.35, so where things live
+# stays readable, and a row a click on its section's name goes to flashes once: a plate under it up
+# to the sidebar's hovered 0.12 and back over 600 ms.
 search-gap = 12.0
-search-hint = 0.4
+search-hint = 0.66
 search-clear = 18.0
 search-clear-glyph = 10.0
 search-clear-fill = 0.2
@@ -656,11 +658,11 @@ page-bottom = 36.0
 page-width = 632.0
 text-x = 14.0
 # The page's name, in the display face as the Library's heading (shell.library title-size and
-# title-line), then one sentence under it, and a heading over a group where it needs one.
+# title-line), then one sentence under it in the rows' grey (`detail`), and a heading over a group
+# where it needs one.
 title = 0.96
 lede-top = 4.0
 lede-line = 18.0
-lede = 0.55
 heading-top = 20.0
 heading-bottom = 7.0
 heading = 0.66
@@ -671,22 +673,23 @@ group = 0.04
 group-light = 0.035
 group-gap = 10.0
 first-group = 20.0
-# A row: at least 42 tall, its text 14 in and 10 from its top and bottom, a hairline between rows
-# from its text to 14 short of the plate's end; its name, then a grey line 2 under it, and its
-# controls 20 after the text, 8 apart.
-row-height = 42.0
+# A row: its text 14 in and 12 from its top and bottom, the agent card's padding
+# (shell.permission), so at least 48 tall, a control's 24 with that padding, and even with and
+# without one; a hairline between rows from its text to 14 short of the plate's end; its name, then
+# a grey line 4 under it, as the page's sentence is under its name, at the dialog's sub-line 16,
+# and its controls 20 after the text, 8 apart (#1636: at 10, 2 and 14 the line crowded its name).
+row-height = 48.0
 row-x = 14.0
-padding = 10.0
+padding = 12.0
 line = 0.07
 name = 0.92
 name-off = 0.7
-detail = 0.52
-# On a light card, a row's grey line, the lines between groups and the page's sentence: ink at
-# the dark's 0.52 over Settings' light boxes reads at 3.6:1, and 0.6 is the least that reads at
-# 4.5:1 on them, for text at 11 (#1900).
-detail-light = 0.6
-detail-top = 2.0
-detail-line = 14.0
+# The grey of a row's line, the page's sentence and the lines between groups, in dark and light:
+# a task card's status (shell.task status), the same 11 on 14 under a name, at 8:1 on Settings'
+# boxes, where 0.52 read at 4.7:1 on the dark card (#1636).
+detail = 0.75
+detail-top = 4.0
+detail-line = 16.0
 end-gap = 20.0
 control-gap = 8.0
 # A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
@@ -748,8 +751,9 @@ header-gap = 7.0
 section-gap = 20.0
 box-gap = 10.0
 # Keys in chips as the command bar shows them, at least 56 wide so they line up, with a command's
-# way back to its default 6 before its chip. A key that can't change is quieter, and None quieter
-# still.
+# way back to its default 6 before its chip. A key that can't change is quieter, on a quieter
+# plate, and None is the same grey on the keys' plate, both at the headings' alpha, as 0.4 and 0.3
+# read under 3.3:1 (#1636).
 chip-height = 20.0
 chip-padding = 6.0
 chip-width = 56.0
@@ -757,12 +761,12 @@ chip-gap = 6.0
 chip = 0.08
 chip-fixed = 0.04
 chip-text = 0.85
-chip-fixed-text = 0.4
-chip-none-text = 0.3
+chip-fixed-text = 0.66
+chip-none-text = 0.66
 chip-radius = 6.0
 restore-radius = 6.0
 # Rows as tall as a button's with their padding, so they're even with and without one.
-profile-row = 42.0
+profile-row = 48.0
 # Ours, for the Links section: a rule's row holds the pop-up of what its URL does, the field of
 # its text, 6 in, an arrow and the pop-up of its Space, 8 apart, and the trash at its end; + sits
 # under the rules, 4 in.
