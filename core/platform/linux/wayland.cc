@@ -21,7 +21,7 @@
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/platform/wayland/host/proxy/wayland_proxy.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/frame_view.h"
