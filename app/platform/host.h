@@ -323,7 +323,9 @@ bool host_fold_overlay(int overlay,
 void host_take_overlay_keyboard(int overlay);
 
 // Holds the keys typed from now until the command bar or the find bar takes the keyboard, and then
-// gives them to it: for a shortcut that opens one but reaches the page first, which may keep it.
+// gives them to it: for a shortcut that opens one but reaches the page first, which may keep it,
+// and on Windows for the find bar, which shows a frame before it takes the keyboard
+// (find_bar::show).
 // Showing either bar with the keyboard holds them by itself. The core says when the page has
 // answered the shortcut and no bar opens (host_release_held_keys).
 void host_hold_keys(void);
