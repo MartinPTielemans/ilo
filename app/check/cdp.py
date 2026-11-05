@@ -27,6 +27,10 @@ takes a command a line on its standard input:
                   starting with PREFIX has TEXT in a text node or an attribute, shadow trees
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
+  focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
+                  last at an address starting with PREFIX, through its shadow trees, its label or
+                  its text, or none for no such page or nothing focused: a WebUI dialog takes the
+                  keyboard a moment after its page loads
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -249,6 +253,33 @@ def shows(prefix, text):
     return "yes" if found else "no"
 
 
+# What has the keyboard, through the shadow trees a WebUI page's elements keep it in.
+FOCUSED = """(() => {
+  let focused = document.activeElement;
+  while (focused && focused.shadowRoot && focused.shadowRoot.activeElement) {
+    focused = focused.shadowRoot.activeElement;
+  }
+  if (!focused || focused === document.body) return "";
+  const name = focused.getAttribute("aria-label") || focused.textContent || "";
+  return name.trim().replace(/\\s+/g, " ").slice(0, 60);
+})()"""
+
+
+def focus(prefix):
+    with answered:
+        target = page_target(lambda url: url.startswith(prefix))
+    if not target:
+        return "none"
+    if target == attached:
+        sessions[target] = session
+    if target not in sessions:
+        sessions[target] = call("Target.attachToTarget",
+                                {"targetId": target, "flatten": True})["sessionId"]
+    value = call("Runtime.evaluate", {"expression": FOCUSED, "returnByValue": True},
+                 sessions[target]).get("result", {}).get("value")
+    return value or "none"
+
+
 for line in sys.stdin:
     words = line.split()
     if words[:1] == ["attach"] and len(words) == 2:
@@ -277,5 +308,7 @@ for line in sys.stdin:
         log("presence " + words[1])
     elif words[:1] == ["reveal"] and len(words) == 2:
         log("reveal " + reveal(words[1]))
+    elif words[:1] == ["focus"] and len(words) == 2:
+        log("focus " + focus(words[1]))
     elif words[:1] == ["shows"] and len(words) == 3:
         log("shows " + shows(words[1], words[2]))
