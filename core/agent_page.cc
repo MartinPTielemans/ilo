@@ -614,6 +614,13 @@ void AgentPage::ChooseNative(const std::vector<std::string>& frames,
         content::BrowserAccessibilityState::GetInstance()->CreateScopedModeForWebContents(
             &GetWebContents(), ui::AXMode::kWebContents);
   }
+  // Content gives a hidden tab, as an agent's is, the mode only once it's shown, unless it was
+  // asked for that tab alone (engine/patches/ours/chromium-core-agent-accessibility.patch).
+  // Without it the renderer never hears of the action.
+  if (!GetWebContents().GetAccessibilityMode().has_mode(ui::AXMode::kWebContents)) {
+    Fail("This browser's engine can't choose in a select in a tab that isn't shown.");
+    return;
+  }
   ui::AXActionData action;
   action.action = ax::mojom::Action::kDoDefault;
   action.target_tree_id = host->GetAXTreeID();
