@@ -34,6 +34,7 @@ jobs:
     outputs:
       core_linux: ${{ steps.detect.outputs.core_linux }}
       app_linux: ${{ steps.detect.outputs.app_linux }}
+      app_mac: ${{ steps.detect.outputs.app_mac }}
       engine_windows: ${{ steps.detect.outputs.engine_windows }}
     steps:
       # History without file contents, for the merge base, and only the files the decision reads.
@@ -58,6 +59,14 @@ jobs:
       contents: read
     uses: ./.github/workflows/core-linux.yml
 
+  app_mac:
+    name: UI on macOS
+    needs: changes
+    if: needs.changes.outputs.app_mac == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/app-mac.yml
+
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or
   # engine_windows), and add the job to Check's needs. The job's key must match its output's name.
@@ -65,7 +74,7 @@ jobs:
   check:
     name: Check
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, core_linux]
+    needs: [changes, core_linux, app_mac]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
