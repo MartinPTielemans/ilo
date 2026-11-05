@@ -2034,8 +2034,12 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   };
   add(@"New Window", 3);
   add(@"New Incognito Window", 4);
-  add(@"New Little ilo Window", 0);
-  switch (g_dock_little()) {
+  // With Little ilo off (-1), none of its items.
+  const int little = g_dock_little();
+  if (little >= 0) {
+    add(@"New Little ilo Window", 0);
+  }
+  switch (little) {
     case 1:
       add(@"Hide All Little ilo Windows", 2);
       break;

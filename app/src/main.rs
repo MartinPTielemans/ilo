@@ -536,7 +536,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
-    if little_in_menu_bar() {
+    if little_in_menu_bar() && unsafe { bc::bc_little_windows() } {
         unsafe { platform::host_set_little_status_item(Some(status_item_clicked)) };
     }
     if !FINISHED_LAUNCHING.replace(true)
