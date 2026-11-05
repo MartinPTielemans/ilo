@@ -43,8 +43,8 @@ jobs:
       - name: Install tools
         if: ${{ steps.check.outputs.built == 'true' }}
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev
           rustup update stable --no-self-update
           rustup target add wasm32-unknown-unknown
           version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
