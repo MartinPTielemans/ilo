@@ -458,6 +458,118 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
     );
 }
 
+/// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
+/// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
+/// holds it, nothing more happens; ⌘↩ then hands it back. The host hears the pages' presses only
+/// while an agent works.
+#[gpui::test]
+fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    assert_eq!(host.take(), ["hear page presses true"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert_eq!(host.take(), ["take over task-1 30"]);
+
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+    });
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert!(
+        host.take().is_empty(),
+        "a press in a page the user holds took it again"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::BackToPinnedUrl, "page", cx)
+    });
+    assert_eq!(host.take(), ["hand back 30", "focus ui"]);
+
+    shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
+    assert_eq!(host.take(), ["hear page presses false"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert!(
+        host.take().is_empty(),
+        "a press with no agent at work took a page"
+    );
+}
+
+/// The strip under an agent's page shows its speaker only while the page plays, crossed while it's
+/// muted, as an agent's tabs start (#1080), and the speaker's click unmutes it as a row's does.
+#[gpui::test]
+fn the_strips_speaker_shows_while_the_page_plays(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let speaker = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.strip_sound(30, cx).is_some())
+    };
+    assert!(!speaker(cx), "a silent page has a speaker");
+    let playing = Page {
+        url: "https://flights.example/".into(),
+        audible: true,
+        muted: true,
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, playing, cx));
+    assert!(speaker(cx), "a page playing muted has no speaker");
+    shell.update(cx, |shell, cx| shell.toggle_mute(30, cx));
+    assert_eq!(*host.muted.borrow(), [(30, false)]);
+}
+
+/// A scroll never takes the agent's page over: the wheel's buttons, 4 to 7 on X11, aren't presses,
+/// and scrolling over the page area takes nothing, where every mouse button's press does.
+#[gpui::test]
+fn a_scroll_in_the_agents_page_never_takes_it_over(cx: &mut TestAppContext) {
+    for button in [1, 2, 3, 8, 9] {
+        assert!(crate::agents::press_takes_over(button), "button {button}");
+    }
+    for wheel in 4..=7 {
+        assert!(
+            !crate::agents::press_takes_over(wheel),
+            "the wheel's {wheel}"
+        );
+    }
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    host.take();
+    let over_the_page = point(px(700.), px(400.));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_the_page,
+        delta: gpui::ScrollDelta::Lines(point(0., -3.)),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("take over")),
+        "{calls:?}"
+    );
+}
+
 /// Escape on a task's page watched steps back to the conversation from the page's keyboard, which
 /// a page the user clicked into has, as from the UI's, and stops neither the agent nor its load.
 #[gpui::test]
@@ -827,44 +939,29 @@ fn only_what_needs_the_user_has_a_primary() {
         );
     }
 
-    let primaries = |held, working, dot, open| -> Vec<StripChip> {
-        (strip_chips(held, working, dot, open).into_iter())
+    let primaries = |held, dot, open| -> Vec<StripChip> {
+        (strip_chips(held, dot, open).into_iter())
             .filter(|(_, look)| *look == Look::Primary)
             .map(|(chip, _)| chip)
             .collect()
     };
     assert_eq!(
-        primaries(true, false, Some(Dot::Waiting), false),
+        primaries(true, Some(Dot::Waiting), false),
         [StripChip::HandBack],
         "a handoff the user holds"
     );
-    for (held, working, dot, open, what) in [
-        (false, true, Some(Dot::Working), false, "at work"),
-        (
-            true,
-            false,
-            Some(Dot::Working),
-            false,
-            "taken over, nothing asked",
-        ),
-        (
-            false,
-            true,
-            Some(Dot::Waiting),
-            false,
-            "waiting on another tab",
-        ),
-        (false, false, Some(Dot::Done), true, "done, with Open"),
-        (false, false, Some(Dot::Ended), false, "stopped"),
+    for (held, dot, open, what) in [
+        (false, Some(Dot::Working), false, "at work"),
+        (true, Some(Dot::Working), false, "taken over, nothing asked"),
+        (false, Some(Dot::Waiting), false, "waiting on another tab"),
+        (false, Some(Dot::Done), true, "done, with Open"),
+        (false, Some(Dot::Ended), false, "stopped"),
     ] {
-        assert!(primaries(held, working, dot, open).is_empty(), "{what}");
+        assert!(primaries(held, dot, open).is_empty(), "{what}");
     }
     assert_eq!(
-        strip_chips(false, true, Some(Dot::Working), false),
-        [
-            (StripChip::TakeOver, Look::Quiet),
-            (StripChip::Stop, Look::Quiet)
-        ],
-        "at work, Take Over and Stop both quiet"
+        strip_chips(false, Some(Dot::Working), false),
+        [(StripChip::Stop, Look::Quiet)],
+        "at work, Stop alone and quiet: a press in the page takes it over"
     );
 }

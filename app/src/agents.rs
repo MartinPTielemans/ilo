@@ -192,6 +192,8 @@ pub trait Browser {
     fn hand_back(&self, tab: u64) -> bool;
     /// Closes `tab` as the user would (bc_tab_close): a Today tab goes to the archive.
     fn close_tab(&self, tab: u64, cx: &mut App);
+    /// Mutes or unmutes `tab`'s sound (bc_tab_set_muted).
+    fn set_muted(&self, tab: u64, muted: bool);
     /// Makes the hidden Space of the task agent `agent`, named `name`, in the profile of the
     /// user's Space `like` (bc_space_create_for_agent, bc_space_set_profile).
     fn make_task_space(&self, agent: &str, name: &str, like: u64, cx: &mut App) -> u64;
@@ -409,6 +411,12 @@ pub struct Activity {
 pub struct Agent {
     pub client: Client,
     token: String,
+}
+
+/// Whether a press of the X server's `button` in an agent's page takes it over: a click of any of
+/// the mouse's buttons, 1 to 3 and the side ones, but never the wheel's 4 to 7, which scroll (#1080).
+pub fn press_takes_over(button: u32) -> bool {
+    !(4..=7).contains(&button)
 }
 
 /// The entries the log keeps, all agents' together, as they're for this run of the browser.
@@ -1526,7 +1534,7 @@ impl Agents {
     }
 
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
-    /// they hand it back.
+    /// they hand it back. A press in its page does, as Take Over did (Shell::page_pressed).
     pub fn take_over(&mut self, agent: &str, tab: u64, cx: &mut Context<Self>) {
         if self.held.contains_key(&tab) {
             return;
@@ -2076,6 +2084,8 @@ impl Agents {
             cx.notify();
             self.current.insert(agent.clone(), tab);
             self.opened(&agent, call, tab);
+            // An agent's tab is quiet until the user wants to hear it (#1080).
+            self.browser.set_muted(tab, true);
             note = format!("Opened tab {tab}.");
         } else {
             if !self.act(&agent, tab, action, &reply, cx) {

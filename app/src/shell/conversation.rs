@@ -340,6 +340,14 @@ impl Shell {
         cx.notify();
     }
 
+    /// Draws the conversation shown again, as something of its pages changed that it reads from
+    /// the window, such as whether one plays.
+    pub(super) fn talk_redraw(&self, cx: &mut Context<Self>) {
+        if let Some(talk) = &self.talk {
+            talk.view.update(cx, |_, cx| cx.notify());
+        }
+    }
+
     /// The Agents' conversation of the task shown, as it changed. Its pages are pictured again as
     /// what it's doing changes, only while it shows, and not under a page watched over it.
     pub fn set_conversation(&mut self, conversation: Option<Conversation>, cx: &mut Context<Self>) {
@@ -1101,6 +1109,36 @@ impl TalkView {
                         .text_color(color)
                         .child(words)
                 };
+                // While its page plays, its speaker before its site, crossed while it's muted, as an
+                // agent's tabs start: a click on it unmutes or mutes it, as a row's does (#1080).
+                let sound = (self.shell.upgrade())
+                    .map(|shell| shell.read(cx).page(tab))
+                    .filter(|page| page.audible)
+                    .map(|page| {
+                        let shell = self.shell.clone();
+                        div()
+                            .id(("conversation-page-sound", tab))
+                            .flex_none()
+                            .mr(px(SITE_GAP))
+                            .child(
+                                svg()
+                                    .path(super::rows::speaker_glyph(page.muted))
+                                    .size(px(text::SMALL + 1.))
+                                    .text_color(look.palette.text(SECONDARY)),
+                            )
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                shell
+                                    .update(cx, |shell, cx| shell.toggle_mute(tab, cx))
+                                    .ok();
+                            })
+                    });
+                let caption = div()
+                    .mt(px(SITE_GAP))
+                    .flex()
+                    .items_center()
+                    .children(sound)
+                    .child(line(site.clone(), look.palette.text(TITLE)));
                 div()
                     .id(("conversation-page", tab))
                     .flex_none()
@@ -1110,7 +1148,7 @@ impl TalkView {
                     .opacity(opacity)
                     .cursor_pointer()
                     .child(picture)
-                    .child(line(site.clone(), look.palette.text(TITLE)).mt(px(SITE_GAP)))
+                    .child(caption)
                     .children(
                         step.clone()
                             .filter(|_| working)

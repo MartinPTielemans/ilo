@@ -2913,6 +2913,33 @@ void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
 }
 
+// The UI's, which hears a press in a page (host_watch_page_presses).
+void (*g_page_pressed)(void* ui_view) = nullptr;
+
+// A mouse button going down in a page: in a browser window, but neither the window itself, whose
+// frame answers there, nor GPUI's window over it. The thread's pages are Chromium's windows, which
+// the hook sees before they do; the wheel's messages aren't presses.
+LRESULT CALLBACK PagePressHook(int code, WPARAM wparam, LPARAM lparam) {
+  const bool press = wparam == WM_LBUTTONDOWN || wparam == WM_RBUTTONDOWN ||
+                     wparam == WM_MBUTTONDOWN || wparam == WM_XBUTTONDOWN;
+  if (code == HC_ACTION && press && g_page_pressed) {
+    const HWND hwnd = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->hwnd;
+    const HWND root = GetAncestor(hwnd, GA_ROOT);
+    void* ui_view = UiViewOf(root);
+    if (ui_view && hwnd != root && hwnd != Hwnd(ui_view) && !IsChild(Hwnd(ui_view), hwnd)) {
+      g_page_pressed(ui_view);
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+void host_watch_page_presses(void (*pressed)(void* ui_view)) {
+  g_page_pressed = pressed;
+  static const HHOOK hook =
+      SetWindowsHookExW(WH_MOUSE, PagePressHook, nullptr, GetCurrentThreadId());
+  (void)hook;
+}
+
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
 

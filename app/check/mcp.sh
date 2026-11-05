@@ -309,6 +309,8 @@ await_log "^browser: task plate task-${session#session-} at " "the client's card
 opened=$(call open_tab '{"url":"example.com"}')
 agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$agent_tab" ] || fail "open_tab example.com answered: $opened"
+# An agent's tab opens muted, until the user unmutes it or keeps it (#1080).
+await_log "^browser: page $agent_tab audible 0 muted 1\$" "the agent's tab didn't open muted"
 # Its page's picture in the card's conversation, once it shows: "x y width height".
 picture() {
   await_log "^browser: task picture $1 at " "the conversation didn't picture tab $1"
@@ -663,16 +665,28 @@ CARD
     *) fail "hand_off answered: $handed" ;;
   esac
 
-  # From the conversation, the strip under the page watched takes the tab the agent is at work
-  # in over with ⌘↩, and the agent's next action there is refused until the user hands it back.
+  # From the conversation, a press in the page watched takes the tab the agent is at work in over,
+  # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
+  # user hands it back. The strip then says the user drives.
   send key escape
   await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
   await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
   watch "$opened_tab"
   await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
   ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
-  send key return cmd
-  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "⌘↩ didn't take the tab"
+  read -r sx sy sw _ <<STRIP
+$(grep "^browser: task strip $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+STRIP
+  # In the page, above the strip, where nothing on example.com takes the click. On X11 the host
+  # hears the display's own presses, which the driver's press makes; elsewhere its click is one.
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    send handclick $((sx + sw / 2)) $((sy - 120))
+  else
+    send click $((sx + sw / 2)) $((sy - 120))
+  fi
+  await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the strip"
+  await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
   refused=$(call scroll "{\"tab\":$opened_tab}")
   case "$refused" in
     "error: "*"hand it back"*) ;;
@@ -1073,7 +1087,7 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, is refused a tab the user took over with the strip's ⌘↩ until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens"
+  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away, and a launch after the window quit in its Space shows the page it opens"
 else
   echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases). skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
 fi

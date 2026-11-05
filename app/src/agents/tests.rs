@@ -41,6 +41,8 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// Each mute or unmute asked of a tab, in order.
+    muted: RefCell<Vec<(u64, bool)>>,
 }
 
 impl Made {
@@ -188,6 +190,10 @@ impl Browser for Made {
 
     fn close_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn set_muted(&self, tab: u64, muted: bool) {
+        self.muted.borrow_mut().push((tab, muted));
     }
 
     /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
@@ -588,7 +594,8 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
     );
 }
 
-/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468).
+/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468),
+/// muted, as an agent's tabs are until the user unmutes or keeps one (#1080).
 #[gpui::test]
 fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
@@ -611,6 +618,11 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     assert_eq!(tab, 30);
     let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+    assert_eq!(
+        *browser.muted.borrow(),
+        [(30, true)],
+        "the agent's tab opened with sound"
+    );
     let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
         .recv()
         .unwrap();
@@ -2531,9 +2543,14 @@ mod tasks {
             ("Its page went to the Archive", Vec::new())
         );
         browser.tabs.borrow_mut().push(kept);
-        // Open <site> moves the tab to the user's Space.
+        // Open <site> moves the tab to the user's Space, theirs now, with its sound (#1080).
         let shown = agents.update(cx, |agents, cx| agents.open_result(&agent, None, cx));
         assert_eq!(shown, Some(30), "it shows");
+        assert_eq!(
+            browser.muted.borrow().last(),
+            Some(&(30, false)),
+            "kept, it's still muted"
+        );
         assert!(browser.tabs.borrow().contains(&(
             30,
             1,

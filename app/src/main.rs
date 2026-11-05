@@ -97,6 +97,9 @@ mod needs_you;
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
 #[cfg(target_os = "linux")]
+#[path = "../platform/linux/page_presses.rs"]
+mod page_presses;
+#[cfg(target_os = "linux")]
 #[path = "../platform/linux/panels.rs"]
 mod panels;
 #[cfg(target_os = "linux")]
@@ -389,10 +392,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
             // The page is in the window's own surface, so GPUI's focus doesn't see it take the
-            // keyboard.
+            // keyboard, nor the Shell hear the press (page_pressed).
             page_pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     ui_keyboard_left_in(window);
+                    page_pressed_in(window);
                 }
             },
             is_ui: |surface| {

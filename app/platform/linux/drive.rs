@@ -11,8 +11,8 @@
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
-//! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
-//! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
+//! clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
+//! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
 //! agentrelease, agentdisconnect, takeback, age and insert, and Windows' stack. The Mac's
@@ -2063,6 +2063,23 @@ fn run_command(line: &str) -> Option<()> {
                 click(at, 1, none, true)?;
             }
             Some(())
+        }
+        // handclick <x> <y>: a click there with the display's own pointer, through XTest, as a hand
+        // clicks: the host hears the screen's presses (page_presses.rs), which a click sent to a
+        // window isn't. The pointer stays there, as a hand's does.
+        "handclick" => {
+            let (x, y) = point(&mut words)?;
+            let at = target_at(x, y)?;
+            let server = server()?;
+            let (connection, root) = &*server;
+            let fake = |kind: u8, button: u8, (x, y): (i16, i16)| {
+                (connection.xtest_fake_input(kind, button, x11rb::CURRENT_TIME, *root, x, y, 0))
+                    .ok()?;
+                connection.get_input_focus().ok()?.reply().ok().map(drop)
+            };
+            fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
+            fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y))?;
+            fake(xproto::BUTTON_RELEASE_EVENT, 1, (at.root_x, at.root_y))
         }
         "clickkey" | "rightclickkey" | "doubleclickkey" => {
             let (x, y) = point(&mut words)?;
