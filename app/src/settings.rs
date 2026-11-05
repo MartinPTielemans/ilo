@@ -3932,6 +3932,7 @@ impl Settings {
             let on = automatic_update_checks();
             let switch = self.toggle(
                 "automatic update checks",
+                "Check for updates automatically",
                 on,
                 set_automatic_update_checks,
                 accent,
