@@ -191,7 +191,9 @@ for _ in $(seq 50); do
   curl -sf --cacert "$out/tls.pem" "$feed" > /dev/null && break
   sleep 0.2
 done
-curl -sf --cacert "$out/tls.pem" "$feed" | grep -q "$version" || fail "the feed isn't served"
+# grep reads the whole feed: -q would leave at the first match, and curl, still writing, fails
+# on the closed pipe, which pipefail makes the check's.
+curl -sf --cacert "$out/tls.pem" "$feed" | grep "$version" > /dev/null || fail "the feed isn't served"
 security verify-cert -c "$out/tls.pem" -p ssl -s github.com > "$out/verify-cert.txt" 2>&1 ||
   fail "macOS doesn't trust the run's certificate for github.com: $(tail -2 "$out/verify-cert.txt")"
 ok "github.com is this run's server, trusted by macOS, with $to's appcast and DMG"
