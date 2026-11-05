@@ -870,8 +870,7 @@ void SystemPage::ClearSite(const SystemStore& store,
                                     WebKitConstant("WKWebsiteDataTypeMemoryCache"), nil];
       break;
     case SiteData::kAll:
-      // From the store's class, as WebKit isn't linked.
-      types = data ? [[data class] allWebsiteDataTypes] : nil;
+      types = [WebKitClass(@"WKWebsiteDataStore") allWebsiteDataTypes];
       break;
   }
   if (!data || types.count == 0) {
