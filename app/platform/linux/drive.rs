@@ -1231,7 +1231,9 @@ pub(super) fn over_page(id: bc::bc_id, x: f64, y: f64) -> bool {
 /// content `width` by `height`, with the radius of their corners if they're round.
 /// shortcut: where the shell lays them out and the radius it gives their corners, which the core
 /// follows. They're Aura's windows in Chromium's one X window, and no core call says where they
-/// are or how round.
+/// are or how round. At the content's size now, which a resize lays the pages out at before the
+/// shell draws there: at the size it last drew, a page full screen in a window that had just
+/// grown read as the window before (#1903).
 pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
     let shell = WINDOWS
         .with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.shell.clone()))?;
@@ -1240,7 +1242,7 @@ pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
     let (pages, (_, radius)) = cx.update(|cx| {
         let shell = shell.upgrade()?;
         let shell = shell.read(cx);
-        Some((shell.shown_pages(), shell.page_frame(viewport)))
+        Some((shell.shown_pages_at(viewport), shell.page_frame(viewport)))
     })?;
     let views = pages.into_iter().map(|(_, page)| {
         let [x, bottom, width, high] = [

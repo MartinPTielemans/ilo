@@ -381,11 +381,17 @@ impl Shell {
 impl Shell {
     /// The tabs whose pages show in the card, in their order, with where the core puts each.
     pub fn shown_pages(&self) -> Vec<(u64, Bounds<Pixels>)> {
+        self.shown_pages_at(self.viewport)
+    }
+
+    /// As `shown_pages`, in a window whose content is `viewport`: a resize lays the pages out at
+    /// the window's new size before the shell draws there (`window_page_frame`).
+    pub fn shown_pages_at(&self, viewport: Size<Pixels>) -> Vec<(u64, Bounds<Pixels>)> {
         if self.selected == 0 {
             return Vec::new();
         }
         let panes = self.panes(self.selected);
-        let (frame, _) = self.page_frame(self.viewport);
+        let (frame, _) = self.page_frame(viewport);
         let frames = pane_frames(
             frame,
             panes.len(),
