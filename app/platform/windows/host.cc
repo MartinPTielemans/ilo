@@ -1421,12 +1421,22 @@ void ComposeInBar() {
   HWND bar = g_overlays[0].hwnd;
   HWND focus = GetFocus();
   ITfThreadMgr* manager = ThreadManager();
+  wchar_t kind[64] = L"";
+  if (focus) {
+    GetClassNameW(focus, kind, static_cast<int>(std::size(kind)));
+  }
+  HIMC own = focus ? ImmGetContext(focus) : nullptr;
+  if (own) {
+    ImmReleaseContext(focus, own);
+  }
+  // check.sh reads none of this: it says why a hold composes where it does.
+  fprintf(stderr, "browser: hold from %ls, its input context %s, bar %s, TSF %s\n", kind,
+          own ? "its own" : "none", bar ? "made" : "not made", manager ? "on" : "off");
   if (g_bar_composition || !bar || !focus || focus == bar || !manager) {
     return;
   }
-  if (HIMC own = ImmGetContext(focus)) {
-    // A GPUI window's: it composes in the bar's context already.
-    ImmReleaseContext(focus, own);
+  // A GPUI window's composes in the bar's context already.
+  if (own && GetClassLongPtrW(focus, GCW_ATOM) == GetClassLongPtrW(bar, GCW_ATOM)) {
     return;
   }
   HIMC context = ImmGetContext(bar);
