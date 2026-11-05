@@ -375,10 +375,10 @@ expect "^browser: page $a media 1 playing 1 next 1 pip 1 Quiet\$" "the page's mu
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
-# player_at <height> <failure>: waits for the front card drawn <height> tall, 33 at rest and 66
-# open, and reads where it is into mx, my, mw and mh.
+# player_at <height> <failure> [<step>]: waits for the front card drawn <height> tall, 33 at rest
+# and 66 open, since the last command or <step>, and reads where it is into mx, my, mw and mh.
 player_at() {
-  expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2"
+  expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2" "${3:-}"
   read -r mx my mw mh <<EOF
 $(grep "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$log" | tail -1 | cut -d' ' -f6-)
 EOF
@@ -411,7 +411,15 @@ expect '^browser: command media-picture-in-picture via player$' \
 expect "^browser: title $a floating\$" "the player's Picture in Picture didn't float the page"
 expect "^browser: page $a media 1 playing 0 next 1 pip 0 Quiet\$" \
   "the player kept Picture in Picture while the page floated"
-send click $((mx + 40)) $title_y
+# On the Mac the floating window takes the keyboard, and GPUI then reads the pointer from AppKit,
+# whose real one the driver's events never move: off the stack, which closes as it's left. On
+# Linux and Windows the driver's pointer stays on the open stack. The pointer leaves it here too,
+# and the card is pressed once it rests, wherever that is.
+floated=$step
+send move $page_point
+expect '^browser: media stack rest$' "the stack didn't rest once the pointer left it" "$floated"
+player_at 33 "the player wasn't drawn at rest once the page floated" "$floated"
+send click $((mx + 40)) $((my + mh / 2))
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the player didn't show its tab"
 expect "^browser: title $a landed\$" "the floating page didn't land as its tab showed"
 expect '^browser: media players $' "the tab shown kept its player"
