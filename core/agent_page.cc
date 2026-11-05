@@ -580,12 +580,31 @@ void AgentPage::History(bool forward) {
 }
 
 void AgentPage::Screenshot() {
+  // A capture answers once the page draws a frame, which a tab out of sight may never do, so the
+  // agent hears that it didn't after as long as a page that won't load is waited for (#1461),
+  // rather than never. The session goes with the capture, as DevTools answers the tab's next
+  // commands only after it, and the next job attaches again. The timer runs only while it's out.
+  const uint64_t request = job_->request;
+  wait_.Start(FROM_HERE, kLoadTimeout,
+              base::BindOnce(
+                  [](AgentPage* page, uint64_t request) {
+                    if (!page->job_ || page->job_->request != request) {
+                      return;
+                    }
+                    page->Detach();
+                    page->Fail(base::StrCat(
+                        {"The tab didn't draw a picture in ",
+                         base::NumberToString(kLoadTimeout.InSeconds()),
+                         " s. Try again, or ask the user to bring it to the front."}));
+                  },
+                  base::Unretained(this), request));
   Send("Page.captureScreenshot", base::DictValue().Set("format", "jpeg").Set("quality", 75),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
-             if (!page) {
+           [](base::WeakPtr<AgentPage> page, uint64_t request, const base::DictValue* result) {
+             if (!page || !page->job_ || page->job_->request != request) {
                return;
              }
+             page->wait_.Stop();
              const std::string* data = result ? result->FindString("data") : nullptr;
              if (!data) {
                page->Fail("The page couldn't be pictured.");
@@ -593,7 +612,7 @@ void AgentPage::Screenshot() {
              }
              page->Answer(*data, /*error=*/false);
            },
-           weak_factory_.GetWeakPtr()));
+           weak_factory_.GetWeakPtr(), request));
 }
 
 void AgentPage::Snapshot() {
