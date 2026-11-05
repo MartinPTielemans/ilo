@@ -322,7 +322,7 @@ send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
 post clickkey $(drawn "archive [0-9]*")
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "a click on Archive Today tabs after didn't show the times, with 12 hours chosen"
 send choose 24 hours
 expect '^browser: profile [0-9]* archive tabs after 24 hours$' \
@@ -610,7 +610,7 @@ send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
 post clickkey $(drawn "archive [0-9]*")
-expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days, Never$' \
   "Settings didn't keep 24 hours across the quit"
 send choose "12 hours (default)"
 expect '^browser: profile [0-9]* archive tabs after 12 hours (default)$' \

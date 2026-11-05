@@ -428,17 +428,17 @@ send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
 post clickkey $(drawn "archive $work")
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "the second profile's Archive Today tabs after didn't show the times, with 12 hours chosen"
 send choose 7 days
 expect "^browser: profile $work archive tabs after 7 days\$" "choosing 7 days didn't set the second profile's"
 post clickkey $(drawn "archive $default")
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "the second profile's time changed the first's"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the first profile's times"
 post clickkey $(drawn "archive $work")
-expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 days$' \
+expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 days, Never$' \
   "the second profile didn't keep 7 days"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
