@@ -50,7 +50,6 @@ impl Shell {
             (page.microphone, "using the microphone"),
             (page.sharing, "sharing"),
             (page.shared, "being shared"),
-            (self.agent_at_work(tab), "agent working"),
             (page.loading, "loading"),
             (page.unloaded, "unloaded"),
         ];

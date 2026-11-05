@@ -91,6 +91,25 @@ const say = () => document.title = "scheme " + (dark.matches ? "dark" : "light")
 say();
 dark.onchange = say;
 </script>' > "$out/site/scheme.html"
+# Its title says all a page can see of the browser's colours: "seen scheme=… contrast=…
+# forced=…", then each CSS system colour the engine has as name=rrggbb, or name=none, which a
+# Space's theme must never change (#684).
+printf '%s' '<title>loading</title><div id=probe></div><script>
+const q = (m) => matchMedia(m).matches;
+const hex = (c) => (c.match(/[0-9.]+/g) || []).slice(0, 3)
+  .map((n) => Math.round(+n).toString(16).padStart(2, "0")).join("") || "none";
+const names = ["AccentColor", "AccentColorText", "Canvas", "CanvasText", "Highlight",
+  "HighlightText", "LinkText", "SelectedItem", "SelectedItemText", "ButtonFace", "Field", "Mark"];
+const colours = names.map((name) => {
+  probe.style.color = "";
+  probe.style.color = name;
+  return name + "=" + (probe.style.color ? hex(getComputedStyle(probe).color) : "none");
+});
+document.title = "seen scheme=" + (q("(prefers-color-scheme: dark)") ? "dark" : "light") +
+  " contrast=" + (q("(prefers-contrast: more)") ? "more"
+    : q("(prefers-contrast: less)") ? "less" : "no-preference") +
+  " forced=" + (q("(forced-colors: active)") ? "active" : "none") + " " + colours.join(" ");
+</script>' > "$out/site/theme.html"
 # Its title says "login" once it has painted, then "filled" each time Chrome fills a saved password
 # in, and "cleared" when the password filled in is edited. Chrome can fill a saved login before the
 # paint, so the page tells of a fill only after it, or the title would never say "login" (#1069).
@@ -384,8 +403,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-        print("GET", "chromium" if "Chrome/" in agent else "safari",
-              self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none")
+        # In one write: print writes each part on its own, so two requests at once, on their own
+        # threads, ran their lines into each other and a run looking for one found neither.
+        sys.stdout.write(" ".join(["GET", "chromium" if "Chrome/" in agent else "safari",
+            self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none"]) + "\n")
         path, _, query = self.path.partition("?")
         if path == "/bounce":
             self.send_response(302)

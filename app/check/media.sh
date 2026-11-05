@@ -47,7 +47,9 @@ onkeydown = async e => {
       for (let i = 0; i < n; i++) {
         wav.setUint8(44 + i, 128);
       }
-      const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
+      // Kept by the window: a paused element nothing refers to is garbage, and its player goes
+      // with it, so Chrome ends the session, and the sidebar loses its player.
+      const music = window.music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
       music.loop = true;
       music.onplaying = () => document.title = "playing";
       music.onpause = () => document.title = "paused";
@@ -287,19 +289,19 @@ floats() {
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
   send click $page_point
 }
-# mini_player: Settings' Advanced switch for it, which says it went <on or off>.
+# mini_player: Settings' Features switch for it, which says it went <on or off>.
 mini_player() {
   send key , cmd
   expect '^browser: settings shown ' "⌘, from the page didn't show Settings"
   # A click before its first frame finds no tabs to land on.
   expect '^browser: settings drew ' "Settings didn't draw"
-  # Settings opens at the tab it last showed.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Advanced$'; then
-    send clickkey $(drawn "toolbar Advanced")
-    expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-    settings_drew Advanced
+  # Settings opens at the section it last showed.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+    settings_drew Features
   fi
-  send clickkey 592 208
+  send clickkey $(drawn "switch mini player")
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"
@@ -410,6 +412,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $private\$" "the private window didn't open"
+new_window_bar
 send window 2
 # private_page <name>: opens the call page named <name> in the private window, as $p.
 private_page() {

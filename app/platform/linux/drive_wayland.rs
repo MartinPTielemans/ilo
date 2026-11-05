@@ -99,6 +99,8 @@ thread_local! {
     static KEY_FLAGS: Cell<u16> = const { Cell::new(0) };
     /// The last press: when, where in sway's layout, and its button.
     static LAST_CLICK: Cell<Option<(Instant, f64, f64, u32)>> = const { Cell::new(None) };
+    /// Where in sway's layout the pointer was last put.
+    static POINTER: Cell<Option<(f64, f64)>> = const { Cell::new(None) };
 }
 
 /// Makes the driver's pointer and keyboard under Wayland, before the app's windows, so Chromium
@@ -558,6 +560,7 @@ fn motion(x: f64, y: f64) -> Option<()> {
         let extent = |each: f64| (each * SUBPOINTS) as u32;
         (session.pointer).motion_absolute(time, at(x), at(y), extent(width), extent(height));
         session.pointer.frame();
+        POINTER.set(Some((x, y)));
         Some(())
     })?
 }
@@ -732,7 +735,11 @@ fn insert(text: &str) -> Option<()> {
 /// A turn of the wheel by `notches` along `axis` at (`x`, `y`) in sway's layout, down or right
 /// for a positive one.
 fn wheel(x: f64, y: f64, axis: wl_pointer::Axis, notches: i32) -> Option<()> {
-    motion(x, y)?;
+    // The notches alone where the pointer already is, as drive.rs turns them: a move before them
+    // stops a page's scroll short of the notches' points, as the window run's did (#1573).
+    if POINTER.get() != Some((x, y)) {
+        motion(x, y)?;
+    }
     with_modifiers(0, || {
         with_session(|session, time| {
             for _ in 0..notches.unsigned_abs() {
