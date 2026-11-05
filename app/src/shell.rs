@@ -100,6 +100,7 @@ mod recent_downloads;
 #[cfg(test)]
 mod recorder;
 mod rows;
+mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
 pub(crate) mod scaled;
