@@ -1629,9 +1629,14 @@ change-gap = 6.0
 
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a
-# row in it, its glyph before its name over what it's doing.
+# row in it, its glyph before its name over what it's doing. A page's device chooser has the same
+# rows (#1649). The list starts `list-top` under the card's words, and a row's glyph sits on the
+# card's text column, so its plate, at a tab row's radius, hangs `row-inset` outside it.
 row = 40.0
 row-gap = 2.0
+list-top = 6.0
+row-inset = 8.0
+glyph-gap = 10.0
 glyph = 16.0
 name = 13.0
 status = 11.0

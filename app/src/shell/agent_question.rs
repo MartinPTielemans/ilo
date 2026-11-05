@@ -35,11 +35,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// The agent's question the card shows, unless a page's question has the place.
+    /// The agent's question the card shows, unless a page's question or chooser has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
-        self.agent_question
-            .as_ref()
-            .filter(|_| self.question().is_none())
+        self.agent_question.as_ref().filter(|_| !self.page_asks())
     }
 
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {

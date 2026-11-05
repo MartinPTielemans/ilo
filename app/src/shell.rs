@@ -46,6 +46,7 @@ mod blank_tests;
 mod browser;
 mod card_strip;
 mod cast;
+mod chooser;
 mod chosen;
 mod clean_link;
 #[cfg(test)]
@@ -135,6 +136,7 @@ pub use browser::{
     Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
+pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
 use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
@@ -1500,6 +1502,11 @@ pub struct Shell {
     question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tab whose question's card shows, and its moment on screen before Block and Allow work.
     question_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What the tabs' pages ask for a device (chooser.rs), kept as the questions are.
+    choosers: HashMap<u64, chooser::Asked>,
+    chooser_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose chooser shows, and its moment on screen before a click grants.
+    chooser_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1854,6 +1861,9 @@ impl Shell {
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
+            choosers: HashMap::new(),
+            chooser_drawn: Rc::default(),
+            chooser_settling: RefCell::default(),
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
@@ -4253,6 +4263,7 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.chooser_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))

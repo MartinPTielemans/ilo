@@ -62,6 +62,10 @@ namespace net {
 class AuthChallengeInfo;
 }
 
+namespace permissions {
+class ChooserController;
+}
+
 namespace policy {
 class ConfigurationPolicyProvider;
 }
@@ -125,6 +129,14 @@ extern std::unique_ptr<RenderViewContextMenuBase> (*g_browser_core_show_page_men
 extern std::unique_ptr<permissions::PermissionPrompt> (*g_browser_core_permission_prompt)(
     content::WebContents* contents,
     permissions::PermissionPrompt::Delegate* delegate);
+
+// chrome/browser/ui/views/permissions/chooser_bubble_ui.cc: shows a page's request for a device in
+// a tab of the core's windows, in place of Chrome's chooser bubble, which hangs from a toolbar they
+// don't have. |controller| still finds the devices and answers the page. Returns what closes it
+// without an answer.
+extern base::OnceClosure (*g_browser_core_device_chooser)(
+    content::RenderFrameHost* owner,
+    std::unique_ptr<permissions::ChooserController> controller);
 
 // chrome/browser/ui/views/extensions/extension_install_dialog_view.cc: asks the user to confirm an
 // extension's install, re-enable or new permissions, in place of Chrome's dialog. |done_callback|

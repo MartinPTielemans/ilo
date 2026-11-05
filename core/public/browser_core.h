@@ -397,6 +397,44 @@ typedef struct bc_autofill_entry {
 #define BC_DEVELOPER_MODE_ON 1
 #define BC_DEVELOPER_MODE_OFF 2
 
+// What a page asks a device for, as its chooser says: navigator.serial, .hid, .usb or .bluetooth.
+#define BC_DEVICE_SERIAL 0
+#define BC_DEVICE_HID 1
+#define BC_DEVICE_USB 2
+#define BC_DEVICE_BLUETOOTH 3
+
+// How a page's device chooser comes by its devices: it follows what's plugged in (serial, HID and
+// USB once Chrome has listed them), Bluetooth is looking, it stopped looking, Bluetooth is off, or
+// the system hasn't let the browser use Bluetooth, as the Mac asks first.
+#define BC_SCAN_LIVE 0
+#define BC_SCAN_SCANNING 1
+#define BC_SCAN_STOPPED 2
+#define BC_SCAN_OFF 3
+#define BC_SCAN_DENIED 4
+
+// A device a page's chooser lists, as Chrome's chooser would.
+typedef struct bc_chooser_device {
+  // The core's, for bc_tab_choose_device: the same while the device stays, and again if it comes
+  // back.
+  const char* id;
+  const char* name;
+  // What tells two alike apart, as Chrome puts it in brackets after the name, such as a serial
+  // port's path, or Chrome's "Paired" for a paired Bluetooth device; "" for none.
+  const char* detail;
+} bc_chooser_device;
+
+// A device the site of a tab's page was given, as Chrome's page info lists it.
+typedef struct bc_site_device {
+  // Chrome's name for it, such as "Arduino Uno".
+  const char* name;
+  // Chrome's words for what it is, such as "Serial port" or "USB device".
+  const char* kind;
+  // A BC_DEVICE_ value, for its glyph.
+  int type;
+  // bc_tab_remove_site_device takes it away; false for one a policy gave.
+  bool removable;
+} bc_site_device;
+
 // The site of a tab's page, for its Site Controls.
 typedef struct bc_site_controls {
   // The site as the user should see it, such as "example.com".
@@ -431,6 +469,10 @@ typedef struct bc_site_controls {
   int ad_blocking;
   // A BC_DEVELOPER_MODE_ value, which bc_tab_set_developer_mode changes.
   int developer_mode;
+  // The devices the site was given, |device_count| of them, as Chrome's page info lists them, which
+  // bc_tab_remove_site_device takes away.
+  const bc_site_device* devices;
+  size_t device_count;
 } bc_site_controls;
 
 // What a device to cast to is doing, as Chrome's Cast dialog shows it.
@@ -862,6 +904,19 @@ typedef struct bc_host {
                    const char* header,
                    const bc_cast_device* devices,
                    size_t count);
+  // The tab's page asks for a device, in place of Chrome's chooser: |site| as the user should see
+  // it, a BC_DEVICE_ |kind|, the devices found, |count| of them, in the order found, and a BC_SCAN_
+  // |scan|. Again as they change, while the request lasts, and the core keeps it while another tab
+  // shows. Once it ends, with |site| null: a device chosen, bc_tab_cancel_chooser, the page gone or
+  // the tab closed. Never for a tab in an agent's Space, whose request ends at once as cancelled,
+  // with an agent_activity entry: a device is the user's alone to give.
+  void (*tab_chooser)(void* context,
+                      bc_id tab,
+                      const char* site,
+                      int kind,
+                      const bc_chooser_device* devices,
+                      size_t count,
+                      int scan);
   // The box of the element at (|x|, |y|) bc_tab_element_at asked for, its border's in points from
   // the top-left of the page's view, or a box 0 wide if there's none or the page went.
   void (*tab_element_box)(void* context, bc_id tab, double x, double y, bc_rect box);
@@ -2537,6 +2592,28 @@ BC_EXPORT void bc_cast_close(void);
 // it, one casting stops, and one available casts the tab, or the page's presentation where it
 // has one. Then tab_cast as it changes.
 BC_EXPORT void bc_tab_cast_to(bc_id tab, const char* id);
+
+// A click on the device |id| in the tab's chooser (tab_chooser): the page gets it, and the site may
+// use it again until bc_tab_remove_site_device. Then tab_chooser with a null site. The user's:
+// agents get none.
+BC_EXPORT void bc_tab_choose_device(bc_id tab, const char* id);
+
+// Ends the tab's device request as Chrome's Cancel does: the page gets none. Then tab_chooser with
+// a null site.
+BC_EXPORT void bc_tab_cancel_chooser(bc_id tab);
+
+// Bluetooth looks for devices again, as Chrome's Re-scan does, for a chooser whose scan stopped.
+// Then tab_chooser.
+BC_EXPORT void bc_tab_scan_devices(bc_id tab);
+
+// Opens the system's settings for the tab's Bluetooth chooser: where Bluetooth is turned on, for
+// BC_SCAN_OFF, on the Mac and Windows, or where the browser is let use it, for BC_SCAN_DENIED.
+BC_EXPORT void bc_tab_device_settings(bc_id tab);
+
+// Takes the device at |index| of the tab's Site Controls' devices away from its site, as Chrome's
+// page info's delete button does, if bc_tab_site_controls is watching the tab. Then
+// tab_site_controls. The user's, as bc_tab_set_site_permission is.
+BC_EXPORT void bc_tab_remove_site_device(bc_id tab, size_t index);
 
 // Gives the site of the tab's page |value|, a BC_SITE_ value, for the permission of |type|, as
 // Chrome's page info does, if it's one of the permission's choices and bc_tab_site_controls is

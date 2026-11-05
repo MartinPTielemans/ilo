@@ -1836,9 +1836,21 @@ pub(super) struct Breath {
 impl Breath {
     /// How strong a loading dot drawn now is.
     pub(super) fn strength(&self) -> f32 {
+        self.through(BREATH).map_or(1., breath_strength)
+    }
+
+    /// How far round a loading ring drawn now is, as a fraction of a turn each `turn`: none while
+    /// motion is reduced.
+    pub(super) fn turned(&self, turn: Duration) -> f32 {
+        self.through(turn).unwrap_or(0.)
+    }
+
+    /// How far through its `period` something drawn now on this clock is, or None while motion is
+    /// reduced and it holds still.
+    fn through(&self, period: Duration) -> Option<f32> {
         self.drawn.set(true);
         if self.still.get() {
-            return 1.;
+            return None;
         }
         let now = Instant::now();
         if self
@@ -1849,7 +1861,7 @@ impl Breath {
             self.since.set(Some(now));
         }
         let since = self.since.get().unwrap_or(now);
-        breath_strength((now.duration_since(since).as_secs_f32() / BREATH.as_secs_f32()).fract())
+        Some((now.duration_since(since).as_secs_f32() / period.as_secs_f32()).fract())
     }
 
     /// Something drawn now moves on this clock, as a loading dot does.

@@ -531,6 +531,22 @@ impl Browser for Recorder {
         self.record(format!("cast to {tab} {id}"));
     }
 
+    fn choose_device(&self, tab: u64, id: SharedString, _: &mut App) {
+        self.record(format!("choose device {tab} {id}"));
+    }
+
+    fn cancel_chooser(&self, tab: u64, _: &mut App) {
+        self.record(format!("cancel chooser {tab}"));
+    }
+
+    fn scan_devices(&self, tab: u64, _: &mut App) {
+        self.record(format!("scan devices {tab}"));
+    }
+
+    fn device_settings(&self, tab: u64, _: &mut App) {
+        self.record(format!("device settings {tab}"));
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         let id = self.core.ticket();
         self.edit(format!("clear as {id}"));

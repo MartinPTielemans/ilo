@@ -210,6 +210,8 @@ source_set("browser_core") {
     "crash_reports.h",
     "developer_mode.cc",
     "developer_mode.h",
+    "device_chooser.cc",
+    "device_chooser.h",
     "downloads.cc",
     "downloads.h",
     "drm_request.cc",

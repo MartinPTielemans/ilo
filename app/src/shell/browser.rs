@@ -125,6 +125,16 @@ pub trait Browser {
     fn cast_close(&self, cx: &mut App);
     /// A click on the device `id` in `tab`'s Cast dialog: casts to it, or stops it casting.
     fn cast_to(&self, tab: u64, id: SharedString, cx: &mut App);
+    /// A click on the device `id` in `tab`'s chooser: the page gets it, and the site may use it
+    /// until the user removes it in Site Controls.
+    fn choose_device(&self, tab: u64, id: SharedString, cx: &mut App);
+    /// The chooser's ×: the page's request ends as Chrome's Cancel ends it.
+    fn cancel_chooser(&self, tab: u64, cx: &mut App);
+    /// The chooser's Scan again: Bluetooth looks for devices again.
+    fn scan_devices(&self, tab: u64, cx: &mut App);
+    /// The chooser's Bluetooth Settings… or System Settings…: the system's settings, where
+    /// Bluetooth is turned on, or ilo let use it.
+    fn device_settings(&self, tab: u64, cx: &mut App);
     /// Closes the Today tabs of the Space shown, but the one shown, unless it shows them all, and
     /// returns the id of the clear, or 0 if it closed none.
     fn clear(&self, cx: &mut App) -> u64;
