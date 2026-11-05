@@ -257,6 +257,13 @@ pub struct Task {
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
+    /// When it started, and when it ended as Library › Agents last kept it.
+    pub started: SystemTime,
+    pub(super) kept: Option<SystemTime>,
+    /// The orders it placed and the messages it sent, each once the user allowed it and the page
+    /// did it, for Library › Agents. A session counts its own, for its receipt.
+    pub(super) orders: usize,
+    pub(super) sent: usize,
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
@@ -986,6 +993,10 @@ impl Agents {
             model,
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1767,6 +1778,10 @@ impl Agents {
             model: SharedString::default(),
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1795,18 +1810,80 @@ impl Agents {
         }
     }
 
-    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt.
+    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt,
+    /// or, for a task of the user's, the task, for Library › Agents.
     pub(super) fn counted(&mut self, agent: &str, call: u64, did: super::Did) {
-        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+        let Some(key) = self.tracer(agent, call) else {
             return;
         };
-        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+        let Some(task) = self.task_mut(&key) else {
             return;
         };
-        match did {
-            super::Did::Order => session.orders += 1,
-            super::Did::Message => session.messages += 1,
+        match (did, task.session.as_mut()) {
+            (super::Did::Order, Some(session)) => session.orders += 1,
+            (super::Did::Message, Some(session)) => session.messages += 1,
+            (super::Did::Order, None) => task.orders += 1,
+            (super::Did::Message, None) => task.sent += 1,
         }
+    }
+
+    /// Each task that has ended since Library › Agents last kept it, as its receipt shows it, with
+    /// its home Space, or a session's own, whose profile keeps it. A later turn of a task ends
+    /// again, and is kept again in its earlier one's place.
+    pub fn take_ended(&mut self, cx: &App) -> Vec<(u64, crate::agent_history::Past)> {
+        let finished = |task: &Task| {
+            matches!(
+                task.state,
+                State::Done { .. } | State::Stopped | State::Failed { .. }
+            )
+        };
+        let ended: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| finished(task) && task.ended.is_some() && task.ended != task.kept)
+            .map(|task| task.agent.clone())
+            .collect();
+        let mut kept = Vec::new();
+        for key in ended {
+            let Some(task) = self.task(&key) else {
+                continue;
+            };
+            let tabs = match &task.session {
+                Some(session) => session.tabs.clone(),
+                None => self.browser.space_tab_ids(task.space, cx),
+            };
+            let pages = (tabs.iter())
+                .map(|&tab| self.browser.tab(tab, cx))
+                .filter(|page| !page.url.is_empty())
+                .map(|page| (page.title.to_string(), page.url.to_string()))
+                .collect();
+            let past = crate::agent_history::Past {
+                id: format!("{}-{}", task.agent, seconds(task.started)),
+                title: task.title.to_string(),
+                agent: task.name.to_string(),
+                started: seconds(task.started),
+                ended: task.ended.map(seconds).unwrap_or_default(),
+                pages,
+                orders: task
+                    .session
+                    .as_ref()
+                    .map_or(task.orders, |session| session.orders),
+                messages: task
+                    .session
+                    .as_ref()
+                    .map_or(task.sent, |session| session.messages),
+            };
+            // A session has no home of the user's, so its agent's Space says its profile.
+            let home = if task.home != 0 {
+                task.home
+            } else {
+                task.space
+            };
+            kept.push((home, past));
+            let ended = task.ended;
+            if let Some(task) = self.task_mut(&key) {
+                task.kept = ended;
+            }
+        }
+        kept
     }
 
     /// The client's Space was made again, as the core lost it: its sessions' Space.

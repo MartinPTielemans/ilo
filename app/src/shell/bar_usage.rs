@@ -25,7 +25,7 @@ impl Global for BarUsage {}
 
 impl Shell {
     /// The profile whose use the command bar learns from in this window, None in a private one.
-    fn learning_profile(&self) -> Option<u64> {
+    pub(super) fn learning_profile(&self) -> Option<u64> {
         let space = self.shown_space().filter(|_| !self.one_space())?;
         Some(space.profile)
     }
@@ -128,6 +128,17 @@ pub fn history_deleted(profile: u64, deleted: HistoryDeleted, cx: &mut App) {
             .filter(|&tab| urls.iter().any(|url| *url == *shell.url(tab)))
             .collect(),
     };
+    // Library › Agents' past tasks go with the history of their time, as the owner asked (#1080).
+    let past = crate::agent_history::read(&browser.agent_history(profile));
+    let left = match &deleted {
+        HistoryDeleted::All => Vec::new(),
+        HistoryDeleted::Some { begin, end, .. } => {
+            crate::agent_history::outside(past.clone(), *begin, *end)
+        }
+    };
+    if left.len() != past.len() {
+        browser.set_agent_history(profile, &crate::agent_history::write(&left));
+    }
     let usage = cx.default_global::<BarUsage>();
     let (begin, end) = match deleted {
         HistoryDeleted::All => {

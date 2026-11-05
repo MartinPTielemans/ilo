@@ -1,5 +1,6 @@
-//! Where the command bar's picks (browser::shell::bar_usage) are kept: in each profile's own folder,
-//! which the core answers, so a deleted profile's go with it and a renamed one's stay with it.
+//! Where the command bar's picks (browser::shell::bar_usage) and Library › Agents' past tasks
+//! (browser::agent_history) are kept: in each profile's own folder, which the core answers, so a
+//! deleted profile's go with it and a renamed one's stay with it.
 
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -38,4 +39,29 @@ pub fn profiles_changed(profiles: &[(u64, String)]) {
         "browser: command bar picks moved into {} profiles' folders",
         named.len()
     );
+}
+
+/// `profile`'s past tasks, as Library › Agents lists them, or none for a profile the core doesn't
+/// know.
+pub fn sessions(profile: u64) -> String {
+    let path = folder(profile).map(|folder| folder.join(browser::agent_history::FILE));
+    path.and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default()
+}
+
+/// Keeps `text` as `profile`'s past tasks; none leaves no file.
+pub fn set_sessions(profile: u64, text: &str) {
+    let Some(path) = folder(profile).map(|folder| folder.join(browser::agent_history::FILE)) else {
+        return;
+    };
+    let saved = match text.is_empty() {
+        true => std::fs::remove_file(&path).or_else(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(error),
+        }),
+        false => std::fs::write(&path, text),
+    };
+    if let Err(error) = saved {
+        log!("couldn't save Library › Agents' past tasks: {error}");
+    }
 }

@@ -1327,6 +1327,9 @@ if [ "$driven" = 1 ]; then
   # Its card ends on its receipt, which names only what had consequences (#1080): the bank's site
   # it was allowed to open is no order or message, and its pages are Open's to count, so it says
   # when it ended.
+  # Library › Agents keeps it, in its agent's profile (#1080).
+  await_log '^browser: agents history keeps session-[0-9]*-[0-9]* in profile [1-9]' \
+    "the client's ended session wasn't kept for Library › Agents: $(grep '^browser: agents history' "$log" | tail -1)"
   await_log '^browser: task card session-[0-9]* Done Done [0-9]' \
     "the client's card didn't say when it ended: $(grep '^browser: task card session-[0-9]* Done ' "$log" | tail -1)"
   grep '^browser: task card session-[0-9]* Done ' "$log" | grep -q '[0-9] pages\{0,1\}' &&

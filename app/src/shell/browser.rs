@@ -337,6 +337,14 @@ pub trait Browser {
     fn profile_folder(&self, _profile: u64) -> Option<std::path::PathBuf> {
         None
     }
+    /// Library › Agents' past tasks kept for `profile`, as `agent_history::write` writes them, on
+    /// this computer only: never synced, sent or put in a crash report, and no agent path reads
+    /// them.
+    fn agent_history(&self, _profile: u64) -> String {
+        String::new()
+    }
+    /// Keeps `text` as `profile`'s past tasks, as `agent_history` reads them.
+    fn set_agent_history(&self, _profile: u64, _text: &str) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;

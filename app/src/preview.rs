@@ -816,6 +816,49 @@ impl Browser for Fake {
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
     // In UTC, with weeks from Monday.
+    // Library › Agents' made-up past tasks: two today, one yesterday, one last week.
+    fn agent_history(&self, _: u64) -> String {
+        let at = (now() / 1000.) as u64;
+        let past =
+            |id: &str, title: &str, agent: &str, ago: u64, pages: usize, orders, messages| {
+                browser::agent_history::Past {
+                    id: id.into(),
+                    title: title.into(),
+                    agent: agent.into(),
+                    started: at - ago - 300,
+                    ended: at - ago,
+                    pages: (0..pages)
+                        .map(|n| (format!("Page {n}"), format!("https://example.com/{n}")))
+                        .collect(),
+                    orders,
+                    messages,
+                }
+            };
+        let day = 24 * 60 * 60;
+        browser::agent_history::write(&[
+            past("task-4", "Book a table for four", "Claude", 1800, 3, 1, 0),
+            past("session-3", "Shipping form", "Claude Code", 7200, 2, 0, 0),
+            past(
+                "task-2",
+                "Reply to the landlord",
+                "Codex",
+                day + 3600,
+                1,
+                0,
+                1,
+            ),
+            past(
+                "session-1",
+                "Compare the museum passes",
+                "Claude Code",
+                6 * day,
+                5,
+                0,
+                0,
+            ),
+        ])
+    }
+
     fn day_starts(&self) -> [f64; 4] {
         let today = now() - now() % DAY;
         // 1 January 1970 was a Thursday.
@@ -2456,14 +2499,15 @@ fn main() {
             });
             let shell_window = window.as_ref().ok().copied();
             match window {
-                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads or =spaces opens
-                // it there; =rename opens its Spaces with the first card's name in its field.
+                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces or
+                // =agents opens it there; =rename opens its Spaces with the first card's name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
                             match std::env::var("PREVIEW_LIBRARY").as_deref() {
                                 Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
                                 Ok("spaces") => shell.show_spaces(cx),
+                                Ok("agents") => shell.show_agents(cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);

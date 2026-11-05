@@ -1523,6 +1523,8 @@ pub struct Shell {
     /// The tasks in the Archive, the last to leave the foot first, which Archived Tabs lists among
     /// the tabs.
     archived_tasks: Vec<crate::agents::task::ArchivedTask>,
+    /// Library › Agents' past tasks of the window's profile, as read when it shows them.
+    agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
@@ -1873,6 +1875,7 @@ impl Shell {
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
+            agent_history: Vec::new(),
             show_restored: None,
             talk: None,
             focus_talk: false,

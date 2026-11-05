@@ -5628,6 +5628,27 @@ mod sessions {
             (card.dot, card.status.as_ref()),
             (Dot::Done, "Done · 1 order placed")
         );
+        // Library › Agents keeps it once, as its receipt shows it: its title, agent, pages and the
+        // order, never what the pages said.
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        let (_, past) = &kept[0];
+        assert_eq!(
+            (
+                past.agent.as_str(),
+                past.orders,
+                past.messages,
+                past.pages.len()
+            ),
+            ("Claude Code", 1, 0, 1)
+        );
+        assert!(past.ended >= past.started);
+        assert!(
+            agents
+                .update(cx, |agents, cx| agents.take_ended(cx))
+                .is_empty(),
+            "kept twice"
+        );
 
         hello(&agents, "claude-code", "claude-code", cx);
         let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);

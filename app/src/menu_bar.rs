@@ -299,6 +299,7 @@ pub(crate) fn menus(
                 item("Open Library…", Command::ViewLibrary),
                 item("View Downloads…", Command::ViewDownloads),
                 item("View Media…", Command::ViewMedia),
+                item("View Agents…", Command::ViewAgents),
             ],
         ),
         menu(

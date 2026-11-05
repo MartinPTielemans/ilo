@@ -365,6 +365,8 @@ pub(super) enum Section {
     Downloads,
     Spaces,
     Archive,
+    /// The past tasks and sessions of the window's profile's agents (#1080).
+    Agents,
 }
 
 impl Section {
@@ -374,6 +376,7 @@ impl Section {
             Section::Downloads => "downloads",
             Section::Spaces => "spaces",
             Section::Archive => "archive",
+            Section::Agents => "agents",
         }
     }
 }
@@ -449,6 +452,10 @@ enum Item {
     Tab(usize),
     /// The task at this index of `Shell::archived_tasks`.
     Task(usize),
+    /// The past task at this index of `Shell::agent_history`.
+    Past(usize),
+    /// Agents' Clear, over its list.
+    Clear,
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -822,6 +829,11 @@ impl Shell {
         self.view_section(Section::Spaces, cx);
     }
 
+    /// Opens the Library on its Agents, for the preview.
+    pub fn show_agents(&mut self, cx: &mut Context<Self>) {
+        self.view_section(Section::Agents, cx);
+    }
+
     /// Shows the Library's Downloads for Chrome, which asks after the user stopped a quit to let
     /// downloads finish. Unlike ⇧⌘J, it leaves the Library open when Downloads are shown already.
     pub fn show_downloads(&mut self, cx: &mut Context<Self>) {
@@ -843,6 +855,7 @@ impl Shell {
             Section::Downloads => "Search Downloads…",
             Section::Spaces => "",
             Section::Archive => "Search Archive…",
+            Section::Agents => "Search Agents…",
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
@@ -937,6 +950,9 @@ impl Shell {
     /// Lists the archived tabs, downloads or media the search finds, under their headings. With
     /// `changed` false, only if the search did.
     fn filter(&mut self, changed: bool, cx: &mut Context<Self>) {
+        if self.section == Section::Agents && self.library.is_some() {
+            self.read_agent_history();
+        }
         let Some(library) = &mut self.library else {
             return;
         };
@@ -969,6 +985,14 @@ impl Shell {
                 listed.sort_by(|a, b| b.1.total_cmp(&a.1));
                 listed
             }
+            Section::Agents => (self.agent_history.iter().enumerate())
+                .filter(|(_, past)| {
+                    query.is_empty()
+                        || found(&past.title.clone().into())
+                        || found(&past.agent.clone().into())
+                })
+                .map(|(index, past)| (Item::Past(index), past.ended as f64 * 1000.)) // The Library's times are milliseconds.
+                .collect(),
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
                 .map(|(index, download)| (Item::Download(index), download.started))
@@ -992,6 +1016,9 @@ impl Shell {
         };
         let starts = self.browser.day_starts();
         let mut items = Vec::new();
+        if self.section == Section::Agents && !found.is_empty() {
+            items.push(Item::Clear);
+        }
         let mut heading = None;
         for (item, time) in found {
             let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
@@ -1274,6 +1301,8 @@ impl Shell {
             (Section::Archive, false) if tasks => "No tasks match.",
             (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
             (Section::Archive, false) => "No archived tabs match.",
+            (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
+            (Section::Agents, false) => "No tasks match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
             (Section::Media, true) => "Saved captures and downloaded media show here.",
@@ -1308,6 +1337,10 @@ impl Shell {
             .children(
                 self.has_section(Section::Archive)
                     .then(|| self.section_button(Section::Archive, color, cx)),
+            )
+            .children(
+                self.has_section(Section::Agents)
+                    .then(|| self.section_button(Section::Agents, color, cx)),
             );
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
@@ -2060,6 +2093,8 @@ impl Shell {
             }
             Item::Tab(tab) => tab,
             Item::Task(task) => return self.archived_task_item(task, cx),
+            Item::Past(past) => return self.past_task_item(past, cx),
+            Item::Clear => return self.agents_clear_item(cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -2208,6 +2243,150 @@ impl Shell {
                                 self.palette.text(SECONDARY),
                             )),
                     ),
+            )
+            .into_any_element()
+    }
+
+    /// Reads the window's profile's past tasks, as Library › Agents shows them, leaving those that
+    /// ended 30 days ago or more, which go from the file too. None in a private window.
+    fn read_agent_history(&mut self) {
+        let Some(profile) = self.learning_profile() else {
+            self.agent_history = Vec::new();
+            return;
+        };
+        let read = crate::agent_history::read(&self.browser.agent_history(profile));
+        let count = read.len();
+        let living = crate::agent_history::living(read, crate::usage::now());
+        if living.len() != count {
+            self.browser
+                .set_agent_history(profile, &crate::agent_history::write(&living));
+        }
+        self.agent_history = living;
+    }
+
+    /// Delete on a past task: it goes from Library › Agents and its file.
+    pub(super) fn delete_past_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agents history delete {id}");
+        let entries = crate::agent_history::read(&self.browser.agent_history(profile));
+        let entries = crate::agent_history::deleted(entries, id);
+        self.browser
+            .set_agent_history(profile, &crate::agent_history::write(&entries));
+        self.filter(true, cx);
+    }
+
+    /// Agents' Clear: the profile's past tasks all go.
+    pub(super) fn clear_agent_history(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agents history cleared");
+        self.browser.set_agent_history(profile, "");
+        self.filter(true, cx);
+    }
+
+    /// A past task's row: its title over its agent, when it ended and what it did, as its receipt
+    /// said, with ✕ at its end under the pointer, which deletes it.
+    fn past_task_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let id = past.id.clone();
+        let group: SharedString = format!("past-{index}").into();
+        let mark = self.status_mark(crate::agents::task::Dot::Done);
+        let close = div()
+            .id(("past-delete", index))
+            .absolute()
+            .right(px(8.))
+            .top_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .invisible()
+            .group_hover(group.clone(), |style| style.visible())
+            .child(
+                svg()
+                    .path("icons/x.svg")
+                    .size(px(14.))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                shell.delete_past_task(&id, cx)
+            }));
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("past-task", index))
+                    .group(group)
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X + (FAVICON_SIZE - TASK_GLYPH) / 2.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(mark),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(30.))
+                            .child(text_line(
+                                past.title.clone().into(),
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                past.about().into(),
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    )
+                    .child(close),
+            )
+            .into_any_element()
+    }
+
+    /// Agents' Clear, at the end of a line over its list.
+    fn agents_clear_item(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w_full()
+            .h(px(ARCHIVED_PITCH))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .flex()
+            .items_center()
+            .justify_end()
+            .child(
+                div()
+                    .id("agents-clear")
+                    .px(px(8.))
+                    .py(px(3.))
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .text_size(px(text::SMALL))
+                    .text_color(self.palette.text(SECONDARY))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .child("Clear")
+                    .on_click(cx.listener(|shell, _, _, cx| shell.clear_agent_history(cx))),
             )
             .into_any_element()
     }
@@ -2473,6 +2652,7 @@ impl Shell {
             Section::Downloads => ("icons/arrow-down-to-line.svg", "Downloads"),
             Section::Spaces => ("icons/spaces.svg", "Spaces"),
             Section::Archive => ("icons/archive.svg", "Archived Tabs"),
+            Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
         };
         div()
             .id(label)
@@ -3039,6 +3219,8 @@ pub(super) fn of(received: i64, total: i64) -> String {
 }
 
 #[cfg(test)]
+mod agents_tests;
+#[cfg(test)]
 mod drag_tests;
 #[cfg(test)]
 mod private_tests;
@@ -3224,8 +3406,8 @@ mod tests {
         });
         cx.run_until_parked();
         let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fourth button, the column's four centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 145.));
+        // The fourth button, Archived Tabs, the column's five centred 5 above its middle, 100 apart.
+        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());
