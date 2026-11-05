@@ -6,12 +6,14 @@ one in front alone. `list PID` prints each top-level window of the process, with
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
-prints them (#1350). `cover PID ilo|away [FRONT]` opens a window of another app in front of the
-process's browser window, over its lower half, with the foreground in ilo's window or in a window
-away from it, says "cover <handle>, foreground <ilo|away|other>" and keeps it until it's ended
+prints them (#1350). `cover PID ilo|away|behind [FRONT]` opens a window of another app in front
+of the process's browser window, over its lower half, with the foreground in ilo's window or in a
+window away from it, or with behind between ilo's window with the foreground and its others, as a
+window another app opens behind the one the user is in (#1689), says "cover <handle>, foreground
+<ilo|away|other>" and keeps it until it's ended
 (#1419), or with FRONT until that file exists, when it brings the browser window to the front, as
 a click on its taskbar button does, and ends (#1365).
-Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away [FRONT]"""
+Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away|behind [FRONT]"""
 
 import ctypes
 import ctypes.wintypes as w
@@ -164,8 +166,11 @@ def cover(pid, foreground, front_file):
     the browser's process has ended, or once FRONT_FILE exists, having brought the browser window
     to the front, which Windows lets the app with the foreground do."""
     user32.SetProcessDPIAware()
-    browser = next((hwnd for hwnd in windows(pid)
-                    if holds_ui(hwnd) and user32.IsWindowVisible(hwnd)), None)
+    user32.GetForegroundWindow.restype = w.HWND
+    shown = [hwnd for hwnd in windows(pid) if holds_ui(hwnd) and user32.IsWindowVisible(hwnd)]
+    in_front = user32.GetForegroundWindow()
+    # With behind, the backmost: the one with the foreground stays in front of the cover.
+    browser = (shown[-1] if foreground == "behind" else shown[0]) if shown else None
     if not browser:
         sys.exit("process %d has no browser window on screen" % pid)
     frame = w.RECT()
@@ -220,7 +225,13 @@ def cover(pid, foreground, front_file):
         show("away", at[0], at[1], size[0], size[1], True)
     # ilo's window goes under the cover, rather than the cover over it, as Windows keeps a window
     # that doesn't have the foreground from going over the window that has it.
-    user32.SetWindowPos(browser, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    if foreground == "behind":
+        # Right under the window with the foreground, and the others under it, in their order.
+        user32.SetWindowPos(cover, in_front, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+        for hwnd in reversed([hwnd for hwnd in shown if hwnd != in_front]):
+            user32.SetWindowPos(hwnd, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    else:
+        user32.SetWindowPos(browser, cover, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
     # Until it's ended, or the browser's process ends, so it's never over a later run's windows.
     SYNCHRONIZE, INFINITE, QS_ALLINPUT, PM_REMOVE = 0x100000, 0xFFFFFFFF, 0x4FF, 1
     kernel32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
@@ -262,7 +273,7 @@ def main():
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
     if command == "cover":
-        if sys.argv[3] not in ("ilo", "away"):
+        if sys.argv[3] not in ("ilo", "away", "behind"):
             sys.exit(__doc__.splitlines()[-1])
         cover(pid, sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else None)
         return

@@ -2366,9 +2366,64 @@ LRESULT CALLBACK FrameChildProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM l
   return DefSubclassProc(hwnd, message, wparam, lparam);
 }
 
+// The UI views of Little ilo windows (host_set_window_little).
+std::vector<HWND>& LittleViews() {
+  static std::vector<HWND> views;
+  return views;
+}
+
+bool IsLittle(HWND root) {
+  return std::any_of(LittleViews().begin(), LittleViews().end(),
+                     [root](HWND view) { return GetAncestor(view, GA_ROOT) == root; });
+}
+
+// The window on screen right behind |root| that could have the keyboard, any app's, as Windows
+// stacks them all.
+HWND WindowBehind(HWND root) {
+  for (HWND next = GetWindow(root, GW_HWNDNEXT); next; next = GetWindow(next, GW_HWNDNEXT)) {
+    BOOL cloaked = FALSE;
+    DwmGetWindowAttribute(next, DWMWA_CLOAKED, &cloaked, sizeof cloaked);
+    RECT rect{};
+    GetWindowRect(next, &rect);
+    const LONG_PTR extended = GetWindowLongPtrW(next, GWL_EXSTYLE);
+    if (IsWindowVisible(next) && !cloaked && !IsIconic(next) && IsWindowEnabled(next) &&
+        !(extended & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) && !IsRectEmpty(&rect)) {
+      return next;
+    }
+  }
+  return nullptr;
+}
+
+// A Little ilo window going with the keyboard leaves another app's window right behind it in front
+// and active, as closing any app's window does (#1689): Windows would hand the keyboard to the
+// window of the app's that had it before, the main window, and bring it in front of that app's.
+// Chromium hides a closing window before it destroys it. One without the keyboard, as the archive
+// closes one and ⌘O, which gives the main window the keyboard first, leaves all as is.
+void LittleHiding(HWND root) {
+  if (GetForegroundWindow() != root || !IsLittle(root)) {
+    return;
+  }
+  HWND behind = WindowBehind(root);
+  DWORD owner = 0;
+  if (!behind || (GetWindowThreadProcessId(behind, &owner), owner == GetCurrentProcessId())) {
+    return;
+  }
+  // The foreground's app may give the foreground away.
+  SetForegroundWindow(behind);
+  // check.sh reads this line, the title read without a message to that app, which could hang.
+  wchar_t title[128] = L"";
+  InternalGetWindowText(behind, title, static_cast<int>(std::size(title)));
+  fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+}
+
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                            DWORD_PTR) {
   switch (message) {
+    case WM_WINDOWPOSCHANGING:
+      if (reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_HIDEWINDOW) {
+        LittleHiding(hwnd);
+      }
+      break;
     case WM_NCCALCSIZE: {
       if (!wparam || !(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION)) {
         break;
@@ -2421,6 +2476,9 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     case WM_NCDESTROY:
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
+      std::erase_if(LittleViews(), [hwnd](HWND view) {
+        return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
+      });
       break;
     // Windows tells every top-level window that "Show animations in Windows" changed.
     case WM_SETTINGCHANGE:
@@ -2806,7 +2864,11 @@ void host_activate(void* ui_view) {
 }
 
 // Windows opens a window on the virtual desktop shown, and has no full-screen desktops.
-void host_set_window_little(void* ui_view, bool grows) {}
+// Windows draws a new window's motion its own way, so a Little ilo window doesn't grow in, |grows|
+// or not: it's only recorded, for closing it over another app's window (#1692).
+void host_set_window_little(void* ui_view, bool grows) {
+  LittleViews().push_back(Hwnd(ui_view));
+}
 void host_grow_little_window(void* ui_view) {}
 
 // Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list

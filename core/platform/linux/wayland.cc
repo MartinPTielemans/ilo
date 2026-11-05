@@ -1,7 +1,10 @@
 #include "browser_core/platform/linux/wayland.h"
 
 #include <wayland-client-core.h>
+#include <wayland-client-protocol.h>
 
+#include <algorithm>
+#include <cstring>
 #include <memory>
 
 #include "base/auto_reset.h"
@@ -13,6 +16,7 @@
 #include "ui/base/hit_test.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/ozone/platform/wayland/host/proxy/wayland_proxy.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -58,6 +62,41 @@ gfx::Size ContentSizeOf(views::Widget* widget) {
       1 / widget->GetNativeWindow()->GetHost()->device_scale_factor());
 }
 
+// The compositor global on Chromium's display, bound on a queue of the core's own, so the round
+// trip that finds it dispatches none of Chromium's events. Its requests make regions, which have
+// no events.
+wl_compositor* Compositor(wl_display* display) {
+  static wl_compositor* const compositor = [display] {
+    static const wl_registry_listener listener = {
+        .global =
+            [](void* data, wl_registry* registry, uint32_t name, const char* interface,
+               uint32_t version) {
+              auto* found = static_cast<wl_compositor**>(data);
+              if (!*found && std::strcmp(interface, wl_compositor_interface.name) == 0) {
+                *found = static_cast<wl_compositor*>(wl_registry_bind(
+                    registry, name, &wl_compositor_interface, std::min<uint32_t>(version, 4)));
+              }
+            },
+        .global_remove = [](void*, wl_registry*, uint32_t) {},
+    };
+    wl_event_queue* queue = wl_display_create_queue(display);
+    auto* wrapped = static_cast<wl_display*>(wl_proxy_create_wrapper(display));
+    wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wrapped), queue);
+    wl_registry* registry = wl_display_get_registry(wrapped);
+    wl_proxy_wrapper_destroy(wrapped);
+    wl_compositor* found = nullptr;
+    wl_registry_add_listener(registry, &listener, &found);
+    wl_display_roundtrip_queue(display, queue);
+    wl_registry_destroy(registry);
+    if (found) {
+      wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(found), nullptr);
+    }
+    wl_event_queue_destroy(queue);
+    return found;
+  }();
+  return compositor;
+}
+
 }  // namespace
 
 bool OnWayland() {
@@ -84,6 +123,36 @@ void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {
   *size = ContentSizeOf(widget);
   return proxy->GetWlSurfaceForAcceleratedWidget(
       widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+}
+
+void SetInputRegionNow(views::Widget* widget, const std::vector<gfx::Rect>& region, float scale) {
+  gfx::Size size;
+  auto* surface = static_cast<wl_surface*>(WaylandSurfaceOf(widget, &size));
+  if (!surface) {
+    return;
+  }
+  wl_display* display = wl_proxy_get_display(reinterpret_cast<wl_proxy*>(surface));
+  wl_compositor* compositor = Compositor(display);
+  if (!compositor) {
+    return;
+  }
+  // In the surface's coordinates, which are DIPs, as Chromium's own region is given.
+  wl_region* input = nullptr;
+  if (!region.empty()) {
+    input = wl_compositor_create_region(compositor);
+    for (const gfx::Rect& rect : region) {
+      const gfx::Rect dips = gfx::ScaleToEnclosingRect(rect, 1 / scale);
+      wl_region_add(input, dips.x(), dips.y(), dips.width(), dips.height());
+    }
+  }
+  wl_surface_set_input_region(surface, input);
+  if (input) {
+    wl_region_destroy(input);
+  }
+  // With no buffer attached the commit changes only the region, and applies the subsurfaces'
+  // state they committed, as Chromium's own commit of the region would.
+  wl_surface_commit(surface);
+  wl_display_flush(display);
 }
 
 void SetUpWindow(views::Widget::InitParams& params, views::WidgetDelegate& delegate) {

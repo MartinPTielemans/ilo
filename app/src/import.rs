@@ -680,6 +680,11 @@ impl ImportView {
         self.focus.get_or_insert_with(|| cx.focus_handle());
     }
 
+    /// The keyboard's place in it, once it takes the keys.
+    pub fn focus(&self) -> Option<FocusHandle> {
+        self.focus.clone()
+    }
+
     /// Draws it in `look`, the ground and text of the view it's shown in.
     pub fn look(mut self, look: Look) -> ImportView {
         self.look = look;

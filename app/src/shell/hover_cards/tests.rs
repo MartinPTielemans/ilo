@@ -18,11 +18,14 @@ use crate::{
 };
 
 /// A drawn shell with the pinned tab 1, the Today tabs 2, 3 and 4, and the favorite 10, showing 2.
+/// Under Reduce Motion, so the rows are in their places from the first frame: their motion runs on
+/// real time, and a press at a row's frame drawn mid-slide lands on its neighbour.
 fn with_tabs(
     cx: &mut TestAppContext,
 ) -> (gpui::Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
@@ -289,9 +292,8 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
         host.take().iter().any(|call| call.starts_with("card rest"))
     };
     rest_on(&shell, cx, &host, 3);
-    shell.update(cx, |shell, cx| {
-        shell.show_theme_picker(1, point(200., 100.), cx)
-    });
+    let at = theme_picker::At::Row(point(200., 100.));
+    shell.update(cx, |shell, cx| shell.show_theme_picker(1, at, cx));
     assert!(host.take().contains(&"card close".to_string()));
     assert!(!rests(cx, 4), "the theme picker shows");
     cx.update(|_, cx| theme_picker::dismissed(cx));

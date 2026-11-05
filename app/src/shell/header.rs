@@ -7,7 +7,7 @@ use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
 
 use gpui::{
-    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
+    App, Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
     prelude::*, px, size, svg,
 };
@@ -461,10 +461,10 @@ impl Shell {
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
     /// command bar's placeholder, there from the frame the card's mark is, or at once with a
     /// task's conversation, which shows at once.
-    pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
+    pub(super) fn url_field_words(&self, url: &str, cx: &App) -> (SharedString, Hsla) {
         let shown = match self.task_area {
             Some(_) => 1.,
-            None => self.empty_opacity(Instant::now()),
+            None => self.empty_opacity(cx.background_executor().now()),
         };
         self.url_words(self.field_tab(), url, shown)
     }
@@ -488,7 +488,7 @@ impl Shell {
 
     pub(super) fn url_field(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let url = self.url(self.field_tab());
-        let (words, color) = self.url_field_words(&url);
+        let (words, color) = self.url_field_words(&url, cx);
         if *self.url_field_drawn.borrow() != words {
             // check.sh reads this line.
             log!("browser: url field {words}");

@@ -682,7 +682,7 @@ fn the_url_field_shows_the_whole_url_in_developer_mode(cx: &mut TestAppContext) 
             };
             shell.set_page(1, page, cx);
             shell.set_selected(1, cx);
-            shell.url_field_words(url).0.to_string()
+            shell.url_field_words(url, cx).0.to_string()
         })
     };
     assert_eq!(words(false), "localhost");

@@ -406,6 +406,9 @@ expect "^browser: today [0-9]* $d\$" "Clear browsing data didn't open in the Spa
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data.png" || fail "no window to capture"
 send key w cmd
 expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \"$(today)\""
+# Settings opens only once the tab ⌘W leaves is shown: its page, shown later, would take the
+# keyboard back from Settings, and the click on its section would go to the browser window.
+expect "^browser: selected $d\( in .*\)\{0,1\}\$" "⌘W didn't show the second Space's tab again"
 # A profile's own settings sit in the sections they belong to, a row per profile: its search
 # engine and download folder in General, its archive time in Tabs & Sidebar. Settings › Profiles
 # lists the profiles, with New Profile under them. Settings logs where it draws each control the
@@ -552,8 +555,9 @@ expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 post rightclick $tiled_name
-expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Set Profile › Default (checked), \
-Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
+# The Space is now the lone one, and unnamed, so its menu also offers to hide its name row.
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, Hide Space Header, \
+Set Profile › Default (checked), Set Profile › personal, Set Profile › New Profile, Set Profile › Delete “personal”, \
 New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the menu didn't offer to delete the unused profile by the name Settings gave it"
 post choose Delete “personal”

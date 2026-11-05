@@ -355,10 +355,23 @@ settings_drew() {
   expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
-# draws one ("browser: settings $1 at x y").
+# draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
+# waited for, which drawn_after leaves out.
 drawn() {
   for _ in $(seq 100); do
     sed -n "s/^browser: settings $1 at //p" "$log" | tail -1 | grep . && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# As drawn, from a frame drawn after the last line that matches $2, the state the run waited for:
+# a point drawn before it is the old layout's, where a press lands on whatever was there (#1885).
+drawn_after() {
+  for _ in $(seq 100); do
+    awk -v state="$2" -v name="browser: settings $1 at " '
+      $0 ~ state { at = "" }
+      index($0, name) == 1 { at = substr($0, length(name) + 1) }
+      END { if (at == "") exit 1; print at }' "$log" && return 0
     sleep 0.1
   done
   return 1

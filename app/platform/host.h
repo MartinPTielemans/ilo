@@ -94,7 +94,8 @@ void host_capture_name(char* name, size_t capacity);
 // while a full-screen browser window has that desktop, it opens over it there. With |grows|,
 // host_show_window first shows it small, at a rectangle under the pointer, or at its middle when a
 // key opened it, until host_grow_little_window. Before host_show_window. Off the Mac, where the
-// window manager places windows and animates them its own way, nothing.
+// window manager places windows and animates them its own way, it doesn't grow; Windows records
+// it, for closing it over another app's window (#1692), and Linux does nothing.
 void host_set_window_little(void* ui_view, bool grows);
 
 // Grows the Little ilo window of |ui_view| in from where host_show_window showed it small, once
@@ -871,6 +872,14 @@ void host_check_for_updates(void);
 // Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
 void host_check_for_updates_quietly(void);
 
+// Settings › About's "Check for updates automatically" (#1793). Off, the updater asks the feed
+// nothing on its own: on the Mac, Sparkle neither checks nor downloads on its schedule; on
+// Windows, the updater's 8-hour timer doesn't fire. Check for Updates… still checks, once, when
+// asked. Given before host_start_updater, the updater starts that way; after, a change takes
+// effect at once, and turned on, the schedule runs again from the last check, which checks at
+// once if one is due. Not on Linux, whose Flatpak's updates are the system's.
+void host_set_automatic_update_checks(bool on);
+
 // Restart to Update: restarts through host_start_updater's |restart|, to relaunch into the update
 // that's HOST_UPDATE_READY. On the Mac, once macOS has checked the new version as it would at its
 // first launch, or after 15 s. Nothing installs or relaunches before the restart goes ahead
@@ -900,6 +909,43 @@ bool host_choose(const char* title);
 // For the test driver: the NSWindow of the browser window whose view host_ui_view made |index|th,
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
+
+// AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
+// Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,
+// which the app carries out as a click would. A script asks with one Apple Event at a time,
+// |event| (its sender's pid and return ID), from |sender|, the app that sent it by its name. The
+// strings are UTF-8, copied as bc_space_name copies them.
+typedef struct {
+  // Whether scripts may control the browser, asked once for each Apple Event that reads, with
+  // |action| "read". The app logs it, refused if not.
+  bool (*allowed)(uint64_t event, const char* sender, const char* action);
+  // The windows, front to back, never a private one; the Space each shows, 0 for none of the
+  // user's, and the tab it shows, 0 for none; and its name, the shown tab's title.
+  size_t (*windows)(uint64_t* windows, size_t capacity);
+  uint64_t (*window_space)(uint64_t window);
+  uint64_t (*window_tab)(uint64_t window);
+  size_t (*window_name)(uint64_t window, char* name, size_t capacity);
+  // The user's Spaces, as the switcher lists them, never an agent's.
+  size_t (*spaces)(uint64_t* spaces, size_t capacity);
+  size_t (*space_name)(uint64_t space, char* name, size_t capacity);
+  // The tabs of |space|, pinned then Today, or with 0 of the Space |window| shows.
+  size_t (*tabs)(uint64_t window, uint64_t space, uint64_t* tabs, size_t capacity);
+  size_t (*tab_title)(uint64_t tab, char* title, size_t capacity);
+  size_t (*tab_url)(uint64_t tab, char* url, size_t capacity);
+  // The commands, each logged: |window| shows |space|, or |tab|; a window opens as ⌘N's does; a
+  // tab opens loading |url|, an http or https page, in |space| of |window|, or with |window| 0 as a
+  // link from another app does. Each returns false or 0, and copies why into |why|, if refused.
+  bool (*focus_space)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      char* why, size_t capacity);
+  bool (*select_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t tab, char* why,
+                     size_t capacity);
+  uint64_t (*new_window)(uint64_t event, const char* sender, char* why, size_t capacity);
+  uint64_t (*new_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      const char* url, char* why, size_t capacity);
+} host_scripting;
+
+// Answers scripts with |scripting|, which the app keeps for as long as it runs.
+void host_set_scripting(const host_scripting* scripting);
 
 #ifdef __cplusplus
 }

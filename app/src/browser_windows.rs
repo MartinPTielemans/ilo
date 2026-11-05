@@ -325,9 +325,27 @@ pub(crate) unsafe extern "C" fn window_resized(
     width: f64,
     height: f64,
 ) {
-    if let Some(ui_view) = ui_view_of(window) {
-        gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
-        frames::sized(ui_view, [width, height]);
+    let Some(ui_view) = ui_view_of(window) else {
+        return;
+    };
+    let again = frames::size_of(ui_view) == Some([width, height]);
+    gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
+    frames::sized(ui_view, [width, height]);
+    // The core tells the size again once the window has gone full screen or maximized, or back.
+    // At the size GPUI's window has, as a window already its screen's size goes or one whose size
+    // came before its state, no resize comes to ask and to lay the page out, so it's done here, as
+    // the resize does (#1220).
+    if again {
+        let viewport = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+        update_app_later(move |cx| {
+            update_window_in(window, cx, |shell, cx| {
+                shell.bounds_changed(cx);
+                if let Some(frame) = shell.window_page_frame(viewport) {
+                    set_frames(window, shell, frame, viewport);
+                    shell.full_screen_step("laid", viewport);
+                }
+            });
+        });
     }
 }
 

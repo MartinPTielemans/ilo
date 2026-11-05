@@ -621,16 +621,20 @@ fn the_conversation_shows_no_page_in_the_url_field_or_the_rows(cx: &mut TestAppC
         };
         shell.set_page(10, page, cx);
     });
-    let words = |shell: &Shell| shell.url_field_words(&shell.url(shell.field_tab())).0;
+    let words =
+        |shell: &Shell, cx: &gpui::App| shell.url_field_words(&shell.url(shell.field_tab()), cx).0;
     assert_eq!(
-        shell.read_with(cx, |shell, _| words(shell)).as_ref(),
+        shell.read_with(cx, |shell, cx| words(shell, cx)).as_ref(),
         "en.wikipedia.org"
     );
     still(cx);
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
-    shell.read_with(cx, |shell, _| {
-        assert_eq!(words(shell).as_ref(), crate::command_bar::PLACEHOLDER_TEXT);
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(
+            words(shell, cx).as_ref(),
+            crate::command_bar::PLACEHOLDER_TEXT
+        );
         assert!(
             shell.selected_row().is_none(),
             "the Space's tab kept its plate"
@@ -652,8 +656,8 @@ fn the_conversation_shows_no_page_in_the_url_field_or_the_rows(cx: &mut TestAppC
     );
 
     shell.update(cx, |shell, cx| shell.close_task(cx));
-    shell.read_with(cx, |shell, _| {
-        assert_eq!(words(shell).as_ref(), "en.wikipedia.org");
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(words(shell, cx).as_ref(), "en.wikipedia.org");
         assert!(
             shell.selected_row() == Some(crate::shell::Row::Tab(10)),
             "the tab didn't get its plate back"

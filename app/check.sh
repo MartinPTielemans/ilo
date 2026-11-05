@@ -9,10 +9,10 @@
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
-# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
-# real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
-# pages on the internet, so it runs only when named too.
+# Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
+# which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
+# keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
+# the Store's pictures from pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -40,6 +40,9 @@ set -e
 export BROWSER_DISPLAY="${BROWSER_DISPLAY:-builtin}"
 # Each run starts a new profile, which would play the onboarding first. Only its own run plays it.
 export BROWSER_ONBOARDING=skip
+# The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
+# Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
+export BROWSER_SPACE_HEADER=shown
 cd "$(dirname "$0")"
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
@@ -71,7 +74,7 @@ runs="load keys tabs window popup history spaces agents profiles restore relaunc
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts"
-named="store adblock-live widevine updates nightly keychain shots"
+named="store adblock-live widevine updates nightly update-checks keychain shots"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -243,6 +246,8 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
+  # And without Hide Space Header's choice, which spaces' makes and takes back.
+  rm -f "$profile_dir/Space Header"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites

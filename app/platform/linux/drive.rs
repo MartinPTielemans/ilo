@@ -14,11 +14,11 @@
 //! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 //! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
-//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
-//! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
-//! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
-//! them, cmd with Ctrl and alt with Alt. flags presses and lets
-//! go of those keys, the last key's among them, and the keys after it go with what it holds. insert
+//! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
+//! agentrelease, agentdisconnect, takeback, age and insert, and Windows' stack. The Mac's
+//! modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl and alt
+//! with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt with Alt.
+//! flags presses and lets go of those keys, the last key's among them, and the keys after it go with what it holds. insert
 //! commits its text to a field of the UI's, not a page's. scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
@@ -56,6 +56,7 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use browser::log;
@@ -123,22 +124,47 @@ pub fn start() {
                     await_key_title(n, text.to_owned(), 100);
                     return;
                 }
-                if !run(&line) {
-                    log!("browser: drive {n}: can't do that");
-                }
-                if let Some(rest) = LATER.take() {
-                    rest(Box::new(move || settle(n)));
-                    return;
-                }
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                match (ACTIVATING.take(), RESIZING.take()) {
-                    (Some(window), _) => await_focus(n, window, until),
-                    (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
-                    (None, None) => settle(n),
-                }
+                attempt(n, line, None);
             }));
         }
     });
+}
+
+/// Runs command `n`, `line`, and again 10 ms on while it asks to be (`again`), until `until`.
+fn attempt(n: u64, line: String, until: Option<Instant>) {
+    RETRY_UNTIL.set(until);
+    let done = run(&line);
+    RETRY_UNTIL.set(None);
+    if !done {
+        if let Some(until) = AGAIN.take() {
+            after(10, Box::new(move || attempt(n, line, Some(until))));
+            return;
+        }
+        log!("browser: drive {n}: can't do that");
+    }
+    if let Some(rest) = LATER.take() {
+        rest(Box::new(move || settle(n)));
+        return;
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    match (ACTIVATING.take(), RESIZING.take()) {
+        (Some(window), _) => await_focus(n, window, until),
+        (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
+        (None, None) => settle(n),
+    }
+}
+
+/// Has the command running, which can't yet, run again soon, as one naming a window the window
+/// manager hasn't listed yet. False once it has been trying for 2 s, when it can't.
+pub(super) fn again() -> bool {
+    let until = RETRY_UNTIL
+        .get()
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(2));
+    let trying = Instant::now() < until;
+    if trying {
+        AGAIN.set(Some(until));
+    }
+    trying
 }
 
 /// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
@@ -273,6 +299,10 @@ thread_local! {
     /// The rest of a command that goes on after it returns, as a swipe that rests before the
     /// fingers lift (drive_wayland.rs), which reports it done (go_on).
     static LATER: Cell<Option<Box<dyn FnOnce(Box<dyn FnOnce()>)>>> = const { Cell::new(None) };
+    /// Until when the command running may run again, once it has asked to (`again`).
+    static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// That the command running asked to run again, and until when.
+    static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
@@ -1081,6 +1111,81 @@ fn name_of(browser: &Browser) -> String {
     )
 }
 
+/// Logs the windows on screen over the driven browser window and overlapping it, front first, down
+/// to it, as the X server stacks them and Windows' driver lists them: a browser window by what
+/// order calls it, another of the app's as "ilo" and its title, and another app's as "other" and
+/// its title.
+fn stack() -> Option<()> {
+    let driven = driven()?;
+    let x = server()?;
+    let (connection, root) = &*x;
+    let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
+    let bounds = |window| {
+        let geometry = connection.get_geometry(window).ok()?.reply().ok()?;
+        let [x, y] = [geometry.x, geometry.y].map(i32::from);
+        Some([
+            x,
+            y,
+            x + i32::from(geometry.width),
+            y + i32::from(geometry.height),
+        ])
+    };
+    let own = tops
+        .iter()
+        .copied()
+        .find(|&top| within(connection, driven.window, top))?;
+    let over = bounds(own)?;
+    let browsers: Vec<Browser> = (0..MADE.with_borrow(Vec::len) + WINDOWS.with_borrow(Vec::len))
+        .filter_map(browser)
+        .collect();
+    let mut stack = Vec::new();
+    for &top in tops.iter().rev() {
+        if top == own {
+            stack.push("driven".to_string());
+            break;
+        }
+        let Some(at) = bounds(top) else { continue };
+        if !viewable(connection, top)
+            || at[0] >= over[2]
+            || over[0] >= at[2]
+            || at[1] >= over[3]
+            || over[1] >= at[3]
+        {
+            continue;
+        }
+        if let Some(browser) = browsers.iter().find(|b| within(connection, b.window, top)) {
+            stack.push(name_of(browser));
+            continue;
+        }
+        // The window manager's frame holds the client, which has the title and process.
+        let mut clients = vec![top];
+        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let property = |window, name: &str| {
+            let reply = connection
+                .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
+                .ok()?
+                .reply()
+                .ok()?;
+            (!reply.value.is_empty()).then_some(reply)
+        };
+        let title = clients.iter().find_map(|&client| {
+            let reply = property(client, "_NET_WM_NAME").or_else(|| property(client, "WM_NAME"))?;
+            Some(String::from_utf8_lossy(&reply.value).into_owned())
+        });
+        let pid = clients
+            .iter()
+            .find_map(|&client| property(client, "_NET_WM_PID")?.value32()?.next());
+        let whose = if pid == Some(std::process::id()) {
+            "ilo"
+        } else {
+            "other"
+        };
+        stack.push(format!("{whose} {}", title.unwrap_or_default()));
+    }
+    log!("browser: stack {}", stack.join(", "));
+    Some(())
+}
+
 /// The browser windows that are open, front to back, as the X server stacks them.
 fn stacked() -> Option<Vec<Browser>> {
     let x = server()?;
@@ -1099,6 +1204,27 @@ fn stacked() -> Option<Vec<Browser>> {
             })
             .collect(),
     )
+}
+
+/// Whether (`x`, `y`) in browser window `id`'s content is on one of its pages.
+/// shortcut: where the shell lays them out, as `pages` has them.
+pub(super) fn over_page(id: bc::bc_id, x: f64, y: f64) -> bool {
+    let shell =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.shell.clone()));
+    let (Some(shell), Some(cx)) = (shell, CX.with_borrow(Clone::clone)) else {
+        return false;
+    };
+    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+    cx.update(|cx| {
+        let Some(shell) = shell.upgrade() else {
+            return false;
+        };
+        shell
+            .read(cx)
+            .shown_pages()
+            .iter()
+            .any(|(_, page)| page.contains(&at))
+    })
 }
 
 /// The pages of browser window `id`, as drive.mm lists their views: from the bottom-left corner of
@@ -1889,8 +2015,20 @@ fn run_command(line: &str) -> Option<()> {
         "window" => {
             let number: usize = words.next()?.parse().ok()?;
             let browser = browser(number.checked_sub(1)?)?;
+            let behind = match words.next() {
+                None => false,
+                Some("behind") => true,
+                Some(_) => return None,
+            };
             DRIVEN.set(number - 1);
-            log!("browser: drive window {number}");
+            log!(
+                "browser: drive window {number}{}",
+                if behind { " behind" } else { "" }
+            );
+            // With behind, it stays where it is, as drive.mm's does, for another app's window over it.
+            if behind {
+                return Some(());
+            }
             // To the front with the keyboard, as a click on it does.
             let x = server()?;
             let (connection, root) = &*x;
@@ -2176,6 +2314,7 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: order{order}, key {key}");
             Some(())
         }
+        "stack" => stack(),
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {

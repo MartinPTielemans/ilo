@@ -27,7 +27,11 @@ pub fn still(cx: &App) -> bool {
 /// When a change in place starts moving: now, or long enough ago under Reduce Motion that its
 /// motion is over by its first frame.
 pub fn start(cx: &App) -> Instant {
-    let now = Instant::now();
+    start_at(Instant::now(), cx)
+}
+
+/// `start` on the clock `now` is read from, such as the executor's, which a test moves on itself.
+pub fn start_at(now: Instant, cx: &App) -> Instant {
     match still(cx) {
         true => now.checked_sub(LONG_AGO).unwrap_or(now),
         false => now,

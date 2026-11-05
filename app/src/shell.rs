@@ -100,6 +100,7 @@ mod recent_downloads;
 #[cfg(test)]
 mod recorder;
 mod rows;
+mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
 pub(crate) mod scaled;
@@ -161,6 +162,7 @@ pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
 use recent_downloads::RecentDownloads;
 pub use recent_downloads::{FilePreview, HOVER_ALL};
+pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
@@ -708,10 +710,10 @@ impl Space {
         split.map_or(0, |split| split.expanded)
     }
 
-    /// Where its rows are in the list, from its top.
-    fn slots(&self) -> HashMap<Slot, f32> {
+    /// Where its rows are in the list, from its top, under a head `head` tall.
+    fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(&pinned, &today)
+        slots(head, &pinned, &today)
     }
 }
 
@@ -1511,6 +1513,7 @@ pub struct Shell {
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
+    media_stack: media_player::MediaStack,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What the update banner at the foot offers, whether it's open under the pointer or says a
     /// restart is under way, its opening or closing from a height, and what the log said last
@@ -1555,6 +1558,9 @@ pub struct Shell {
     /// watches that draw the window again once either changes.
     system_tone: Tone,
     app_appearance: Appearance,
+    /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
+    /// as the window last drew.
+    lone_header: bool,
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
@@ -1826,6 +1832,7 @@ impl Shell {
             task_strip_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
+            media_stack: Default::default(),
             media_drawn: Rc::default(),
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
@@ -1858,6 +1865,7 @@ impl Shell {
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
+            lone_header: false,
             forced_tone: None,
             window_active: true,
             window_main: true,
@@ -1993,8 +2001,9 @@ impl Shell {
 
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
+        let head = self.list_head();
         self.shown_space()
-            .map_or_else(|| slots(&[], &[]), Space::slots)
+            .map_or_else(|| slots(head, &[], &[]), |space| space.slots(head))
     }
 
     /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
@@ -2477,12 +2486,13 @@ impl Shell {
         folders: Folders,
         cx: &mut Context<Self>,
     ) {
+        let head = self.list_head();
         let Some(entry) = self.spaces.iter_mut().find(|entry| entry.id == space) else {
             return self.set_task_tabs(space, pinned, today, cx);
         };
         // The rows of the Space shown move from where they were, unless it's being filled.
         let had_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
-        let before = (space == self.space && had_tabs).then(|| entry.slots());
+        let before = (space == self.space && had_tabs).then(|| entry.slots(head));
         let listed = &mut self.listed;
         let opened: Vec<u64> = pinned
             .iter()
@@ -2816,6 +2826,7 @@ impl Shell {
     /// Makes `tab` the Space's shown tab, whose row a closed folder keeps, and moves the rows if
     /// that changes them.
     fn show_in_space(&mut self, tab: u64, cx: &App) {
+        let head = self.list_head();
         let space = self.spaces.iter_mut().find(|space| space.id == self.space);
         let Some(space) = space.filter(|space| space.shown != tab) else {
             return;
@@ -2825,9 +2836,9 @@ impl Shell {
             space.shown = tab;
             return;
         }
-        let before = space.slots();
+        let before = space.slots(head);
         space.shown = tab;
-        if space.slots() != before {
+        if space.slots(head) != before {
             self.move_rows(before, Curve::Slide, cx);
         }
     }
@@ -3017,6 +3028,8 @@ impl Shell {
         self.tab_changed(tab, changed, cx);
         // A player is for a tab out of sight, whose row may not be drawn.
         if media_changed && self.lists(tab) {
+            // So the stack's order is when each player came, not when it was next drawn.
+            self.media_players();
             cx.notify();
         }
         if let Some(trouble) = trouble {
@@ -3117,7 +3130,8 @@ impl Shell {
 
     /// The window's bounds changed, as they do when it's maximized or restored: the third button
     /// shows which it would do next. They change as it goes full screen or comes back too, which
-    /// on Linux nothing else says.
+    /// on Linux nothing else says, and under Wayland the core tells the size again once the window
+    /// has, for one that keeps its size (`window_resized`).
     pub fn bounds_changed(&mut self, cx: &mut Context<Self>) {
         let maximized = self.browser.window_maximized();
         if maximized != std::mem::replace(&mut self.maximized, maximized) {
@@ -3577,6 +3591,9 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        self.lone_header = cx
+            .try_global::<LoneSpaceHeader>()
+            .is_some_and(|kept| kept.0);
         self.full_screen_step("drawn", window.viewport_size());
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
@@ -3711,8 +3728,9 @@ impl Render for Shell {
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
         self.step_foot(window, cx);
-        self.step_picture(window);
+        self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
+        self.step_media_stack(window, cx);
         self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
@@ -3734,7 +3752,7 @@ impl Render for Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
-        self.step_empty(window);
+        self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
         let drop_targets = self
@@ -4023,8 +4041,9 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
-                    .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which its open grows over.
+                    .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
                     .children(self.task_ghosts())
@@ -4653,15 +4672,16 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
     Some(1. - decay * ((damped * t).cos() + damping * omega / damped * (damped * t).sin()))
 }
 
-/// Where the list's rows are from its top, by the heights they're drawn at in `list`.
-fn slots(pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
+/// Where the list's rows are from its top, under a head `head` tall (`Shell::list_head`), by the
+/// heights they're drawn at in `list`.
+fn slots(head: f32, pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
     let rows = pinned
         .iter()
         .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
         .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
-    let mut top = NAME_HEIGHT;
+    let mut top = head;
     rows.map(|(slot, height)| {
         top += height;
         (slot, top - height)
