@@ -505,14 +505,6 @@ impl Browser for Engine {
         agents_core::update(move |agents, cx| agents.hand_back(tab, cx));
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-    fn hear_page_presses(&self, on: bool, cx: &mut App) {
-        // The Mac's and Windows' hosts always tell the app (host_watch_page_presses), and Wayland's
-        // GPUI does; X11 tells the host only while it listens.
-        #[cfg(target_os = "linux")]
-        crate::page_presses::hear(on, cx);
-    }
-
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         // A task's Stop, from its page's strip too, ends its turn as well as what it's doing.
         agents_core::update(move |agents, cx| match browser::agents::is_task(&agent) {

@@ -1456,10 +1456,6 @@ impl Browser for Recorder {
         self.record(format!("hand back {tab}"));
     }
 
-    fn hear_page_presses(&self, on: bool, _: &mut App) {
-        self.record(format!("hear page presses {on}"));
-    }
-
     fn stop_agent(&self, agent: SharedString, _: &mut App) {
         self.record(format!("stop agent {agent}"));
     }

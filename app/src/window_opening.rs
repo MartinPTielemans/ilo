@@ -556,8 +556,6 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
-        #[cfg(not(target_os = "linux"))]
-        platform::host_watch_page_presses(page_pressed);
         platform::host_watch_resigning_active(launch_picture_on_resigning);
         platform::host_watch_active(became_active);
     }

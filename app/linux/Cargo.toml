@@ -36,7 +36,7 @@ zbus = { version = "5.13", default-features = false, features = ["async-io"] }
 futures-lite = "2"
 # The test driver's X connection (platform/linux/drive.rs), the held Escape's
 # (platform/linux/held_escape.rs) and the windows' frames' (platform/linux/frames.rs).
-x11rb = { version = "0.13", features = ["xkb", "randr", "xinput"] }
+x11rb = { version = "0.13", features = ["xkb", "randr"] }
 # The driver's pointer and keyboard in the headless sway session, and sway's answers
 # (platform/linux/drive_wayland.rs), as ../Cargo.toml has them.
 wayland-client = "0.31"

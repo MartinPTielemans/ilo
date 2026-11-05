@@ -37,7 +37,7 @@ use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
 use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
 use crate::tokens::text;
-use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS};
+use crate::tokens::toast::CHIP_GAP;
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -950,37 +950,6 @@ impl Shell {
             .map(|(_, site)| format!("Open {site}"))
     }
 
-    /// The page watched's speaker, before the strip's chips while it plays: crossed while it's
-    /// muted, as an agent's tabs start (#1080), and a click unmutes or mutes it, as a row's does.
-    fn strip_sound(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
-        let page = self.page(tab);
-        page.audible.then_some(())?;
-        let palette = self.palette;
-        Some(
-            div()
-                .id("task-sound")
-                .flex_none()
-                .size(px(CHIP_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(CHIP_RADIUS))
-                .bg(palette.plate(CHIP_FILL))
-                .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-                .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
-                .child(
-                    svg()
-                        .path(super::rows::speaker_glyph(page.muted))
-                        .size(px(CHIP_GLYPH))
-                        .text_color(palette.text(TITLE)),
-                )
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.toggle_mute(tab, cx);
-                })),
-        )
-    }
-
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown()
@@ -1007,11 +976,16 @@ impl Shell {
         let dot = card.map(|card| card.dot);
         let open = self.task_strip_open(tab);
         let held = matches!(bar, Some(Bar::Held { .. }));
+        let working = matches!(bar, Some(Bar::Working { .. }));
         let chips: Vec<_> =
-            (strip_chips(held, dot, open.is_some()).into_iter())
+            (strip_chips(held, working, dot, open.is_some()).into_iter())
                 .map(|(chip, look)| match chip {
                     StripChip::HandBack => {
                         strip_chip(palette, "task-hand-back", "Hand Back", take_over(cx), look)
+                            .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx)))
+                    }
+                    StripChip::TakeOver => {
+                        strip_chip(palette, "task-take-over", "Take Over", take_over(cx), look)
                             .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx)))
                     }
                     StripChip::Stop => {
@@ -1099,14 +1073,7 @@ impl Shell {
                             .child(detail)
                     })),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .gap(px(CHIP_GAP))
-                    .children(self.strip_sound(tab, cx))
-                    .children(chips),
-            )
+            .child(div().flex_none().flex().gap(px(CHIP_GAP)).children(chips))
             .into_any_element()
     }
 }
@@ -1115,20 +1082,32 @@ impl Shell {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StripChip {
     HandBack,
+    TakeOver,
     Stop,
     Open,
 }
 
 /// The strip's chips, in order, each with its look: Hand Back while the user holds the page,
-/// `held`; Stop while its task works or waits; Open once it's done and left the user the page, if
-/// it did. A press in the page takes it over, and ⌘↩ still does, so there's no Take Over (#1080).
-/// Quiet until the agent needs the user: only while its card waits on them is Hand Back, the
-/// answer it waits for, the one primary.
-pub(super) fn strip_chips(held: bool, dot: Option<Dot>, open: bool) -> Vec<(StripChip, Look)> {
+/// `held`; Take Over, while the bar shows the agent `working`, and Stop while its task works or
+/// waits; Open once it's done and left the user the page, if it did. Quiet until the agent needs
+/// the user (#1080): only while its card waits on them is Hand Back, the answer it waits for, the
+/// one primary.
+pub(super) fn strip_chips(
+    held: bool,
+    working: bool,
+    dot: Option<Dot>,
+    open: bool,
+) -> Vec<(StripChip, Look)> {
     match (held, dot) {
         (true, Some(Dot::Waiting)) => vec![(StripChip::HandBack, Look::Primary)],
         (true, _) => vec![(StripChip::HandBack, Look::Quiet)],
-        (false, Some(Dot::Working | Dot::Waiting)) => vec![(StripChip::Stop, Look::Quiet)],
+        (false, Some(Dot::Working | Dot::Waiting)) => {
+            let take_over = working.then_some((StripChip::TakeOver, Look::Quiet));
+            take_over
+                .into_iter()
+                .chain([(StripChip::Stop, Look::Quiet)])
+                .collect()
+        }
         (false, Some(Dot::Done)) if open => vec![(StripChip::Open, Look::Quiet)],
         _ => Vec::new(),
     }

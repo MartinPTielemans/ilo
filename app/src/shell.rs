@@ -2950,8 +2950,7 @@ impl Shell {
                 flag(left_pinned_host)
             );
         }
-        let sounded = (page.audible, page.muted) != (entry.page.audible, entry.page.muted);
-        if sounded {
+        if (page.audible, page.muted) != (entry.page.audible, entry.page.muted) {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
@@ -3039,10 +3038,6 @@ impl Shell {
         // View › Developer names it, so only its change rebuilds the menus, not each load.
         if tab == self.selected && self.developer_mode(tab) != developer_mode {
             self.update_menus(cx);
-        }
-        // A task's Pages draw its pages' speakers (#1080).
-        if sounded {
-            self.talk_redraw(cx);
         }
     }
 
