@@ -488,7 +488,9 @@ cover_main() {
     Linux)
       # shellcheck disable=SC2086 # the frame's four numbers
       set -- $main_frame
-      display -title cover -geometry "$3x$4+$1+$2" -size "$3x$4" xc:'#406080' \
+      # On Wayland through sway's Xwayland, as another app's X11 window, which sway lists too.
+      DISPLAY=${DISPLAY:-${BROWSER_XWAYLAND:-}} \
+        display -title cover -geometry "$3x$4+$1+$2" -size "$3x$4" xc:'#406080' \
         > "$out/cover.log" 2>&1 &
       helper=$!
       ;;
