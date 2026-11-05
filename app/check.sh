@@ -252,6 +252,10 @@ for run in ${*:-$runs}; do
   rm -f "$profile_dir/Link rules"
   # And without Hide Space Header's choice, which spaces' makes and takes back.
   rm -f "$profile_dir/Space Header"
+  # And without the command bar's picks, which put a command picked first among equal matches
+  # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
+  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
+  rm -f "$profile_dir/Command bar picks"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
