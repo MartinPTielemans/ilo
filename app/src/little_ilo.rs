@@ -63,6 +63,14 @@ thread_local! {
     static POPUPS: RefCell<HashMap<u64, (bc::bc_rect, bool)>> = RefCell::default();
     /// Each pop-up's window, by its tab, with the Little ilo window whose page opened it.
     static POPUP_WINDOWS: RefCell<HashMap<u64, (bc::bc_id, bc::bc_id)>> = RefCell::default();
+    /// The pop-ups' windows, until each closes: sized by their pages, not the user.
+    static POPUP_IDS: RefCell<std::collections::HashSet<bc::bc_id>> = RefCell::default();
+}
+
+/// Whether `window`, closing, is a pop-up's, which it forgets: a sign-in's size is its page's, so
+/// it isn't the next Little ilo window's to open at (save_little_size).
+pub(crate) fn popup_window_closed(window: bc::bc_id) -> bool {
+    POPUP_IDS.with_borrow_mut(|ids| ids.remove(&window))
 }
 
 /// The tab opened next in `window` is a pop-up its page asked for, with its content's size and,
@@ -166,6 +174,7 @@ pub(crate) fn little_popup_opened(
         return;
     }
     POPUP_WINDOWS.with_borrow_mut(|windows| windows.insert(tab, (popup, window)));
+    POPUP_IDS.with_borrow_mut(|ids| ids.insert(popup));
     // check.sh reads this line.
     log!(
         "browser: little window {window} popup {tab} in window {popup} at {:.0} {:.0} {:.0} {:.0}",

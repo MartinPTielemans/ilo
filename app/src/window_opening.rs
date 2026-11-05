@@ -743,7 +743,9 @@ pub(crate) unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         if !own && !regular && !unsafe { bc::bc_quitting() } {
             save_launch_frame(window.ui_view);
         }
-        if window.little.is_some() {
+        // A sign-in pop-up's size is its page's, not the next Little ilo window's (#1919).
+        let popup = crate::little_ilo::popup_window_closed(id);
+        if window.little.is_some() && !popup {
             save_little_size(window.ui_view);
         }
         unsafe { platform::host_forget_window(window.ui_view) };
