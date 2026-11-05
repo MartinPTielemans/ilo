@@ -225,6 +225,8 @@ pub fn column(
                 })
                 .tab_group()
                 .tab_index(0)
+                // Its sections are the stops, not the list that scrolls them.
+                .tab_stop(false)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
