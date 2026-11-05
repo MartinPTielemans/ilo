@@ -94,7 +94,9 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
     Watching().Watch(window);
   }
   gfx::Rect placed = bounds;
-  if (shown) {
+  // Chrome hides a tab's Mini Player and shows the same window when the tab floats a video again,
+  // so one showing again, hidden yet, goes by the rule as a new one does.
+  if (shown && window->IsVisible()) {
     // Kept on its screen as a move keeps it, where Chrome would keep it a margin from its corner.
     placed.AdjustToFit(work_area);
     return placed;
