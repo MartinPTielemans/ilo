@@ -1407,13 +1407,16 @@ bool Run(const std::string& line) {
   }
   // A trackpad's scrolls, as a precision touchpad sends them: wheel messages of a pixel's worth
   // each, which Chrome scrolls 100 pixels by for every notch of 120, at the Mac driver's pace.
-  if (action == "scroll" || action == "swipe" || action == "wheel") {
+  // scrollkey scrolls in the window with the keyboard, such as Settings', as clickkey clicks
+  // there.
+  if (action == "scroll" || action == "scrollkey" || action == "swipe" || action == "wheel") {
     double x, y, dx = 0, dy = 0;
     int count = 1, pause = 0;
     if (!(words >> x >> y)) {
       return false;
     }
-    if (action == "scroll" && !(words >> dy >> count)) {
+    const bool in_key = action == "scrollkey";
+    if ((action == "scroll" || in_key) && !(words >> dy >> count)) {
       return false;
     }
     if (action == "swipe" && !(words >> dx >> dy >> count)) {
@@ -1426,7 +1429,7 @@ bool Run(const std::string& line) {
       return false;
     }
     Target target;
-    if (count < 1 || !TargetAt(x, y, &target)) {
+    if (count < 1 || !(in_key ? TargetInKey(x, y, &target) : TargetAt(x, y, &target))) {
       return false;
     }
     // Two fingers over GPUI's view reach it as Direct Manipulation hands it a precision
