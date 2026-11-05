@@ -570,6 +570,9 @@ send type d
 expect '^browser: download [0-9]* done profile.txt$' "the second profile's page didn't download"
 [ -f "$work_downloads/profile.txt" ] ||
   fail "the second profile's download isn't in the folder Change… gave it"
+# Its icon flies to the Library button first, over the sidebar the right-click below goes to.
+flight=$(grep '^browser: download [0-9]* done profile.txt$' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: download landed $flight\$" "the second profile's download didn't land"
 # Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
 # user confirms.
 post rightclick $name_point

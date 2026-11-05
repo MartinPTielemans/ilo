@@ -134,6 +134,12 @@ grep -q "^browser: key $tab offer\$" "$log" || fail "the offer gave its tab no k
 key_at() { grep '^browser: key drawn at ' "$log" | tail -1 | cut -d' ' -f5-6; }
 [ -n "$(key_at)" ] || fail "the key wasn't drawn"
 ../tools/window-screenshot.sh "$pid" "$out/password-key.png" || fail "no window to capture"
+# The pointer on the key hovers the sidebar, whose tools come out in the URL field and move the
+# key: it's clicked where it is with them out, or the press can land on what took its place.
+if [ "$(grep '^browser: sidebar tools ' "$log" | tail -1)" != "browser: sidebar tools shown" ]; then
+  send move $(key_at)
+  expect '^browser: sidebar tools shown$' "the pointer on the key didn't bring the sidebar's tools out"
+fi
 send click $(key_at)
 expect "^browser: key $tab clicked\$" "a click on the key didn't reach it"
 offered save
