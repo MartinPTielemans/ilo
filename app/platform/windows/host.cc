@@ -2253,7 +2253,7 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         };
         // The top at the window's top and the foot at its bottom: a shorter window loses the
         // room just above the foot, and a taller one repeats it (launch_picture.rs).
-        place(0, foot + std::min(grows, 0L), 0);
+        place(0, foot + (std::min)(grows, 0L), 0);
         place(foot, g_launch.picture_size.cy, foot + grows);
         if (grows > 0) {
           place(foot - grows, foot, foot);
