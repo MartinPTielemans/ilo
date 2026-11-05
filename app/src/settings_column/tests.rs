@@ -19,7 +19,7 @@ struct Shown {
 }
 
 impl Render for Shown {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.weak_entity();
         let picked = self.picked.clone();
         let pick: Pick = Rc::new(move |section, _, cx| {
@@ -40,6 +40,7 @@ impl Render for Shown {
             None,
             pick,
             foot,
+            window.is_a11y_active(),
         ))
     }
 }
@@ -169,6 +170,185 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     );
 }
 
+/// VoiceOver reads the column as a tab list of the twelve sections, the one shown selected, and
+/// Chromium settings as a button; its press on a section shows it, as a click does (#1381).
+#[gpui::test]
+fn voiceover_reads_the_sections_as_tabs(cx: &mut TestAppContext) {
+    use gpui::accesskit::{Action, Role};
+    let (view, cx) = shown(cx);
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let tabs: Vec<(String, bool)> = (tree.nodes.iter())
+        .filter(|(_, node)| node.role() == Role::Tab)
+        .map(|(_, node)| {
+            (
+                node.label().unwrap_or_default().into(),
+                node.is_selected() == Some(true),
+            )
+        })
+        .collect();
+    let names: Vec<&str> = tabs.iter().map(|(name, _)| name.as_str()).collect();
+    let all: Vec<&str> = Section::all().map(Section::name).collect();
+    assert_eq!(names, all);
+    let selected: Vec<&str> = (tabs.iter().filter(|(_, selected)| *selected))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(selected, ["General"]);
+    let list = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::TabList);
+    assert_eq!(list.and_then(|(_, node)| node.label()), Some("Sections"));
+    let chromium = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::Button && node.label() == Some("Chromium settings"));
+    assert!(chromium.is_some(), "no Chromium settings button");
+    let privacy = (tree.nodes.iter())
+        .find(|(_, node)| node.role() == Role::Tab && node.label() == Some("Privacy"))
+        .map(|(id, _)| *id)
+        .expect("no Privacy tab");
+    cx.simulate_a11y_action(privacy, Action::Click);
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::Privacy);
+}
+
+/// Settings in small with one of each of its tab stops, drawn as Settings draws them: the column
+/// and its search field, and on the card a button, a switch, a pop-up, and a command's chip with
+/// its ↺, while VoiceOver asks.
+struct Stops {
+    input: gpui::Entity<crate::text_input::TextInput>,
+    card: crate::settings_card::Card,
+}
+
+impl Render for Stops {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        use crate::settings_rows::{
+            Chip, Look, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
+        };
+        let a11y = window.is_a11y_active();
+        let look = Look::settings(true);
+        let accent = look.accent;
+        let field = div()
+            .h(px(SEARCH_HEIGHT))
+            .child(self.input.clone())
+            .into_any_element();
+        let controls = div()
+            .flex()
+            .flex_col()
+            .child(stop_button(&look, "restore", "Restore…", a11y))
+            .child(stop_switch(
+                &look,
+                "haptics",
+                "Haptic feedback",
+                true,
+                1.,
+                accent,
+                a11y,
+            ))
+            .child(stop_popup(
+                &look,
+                "appearance",
+                "Appearance",
+                "Dark".into(),
+                155.,
+                false,
+                a11y,
+            ))
+            .child(stop_restore(&look, "restore-new-tab", "New Tab", a11y))
+            .child(stop_chip(
+                &look,
+                rgb(PAPER),
+                "new-tab",
+                "New Tab",
+                "⌘T".into(),
+                Chip::Keys,
+                a11y,
+            ));
+        let colors = crate::settings_card::Colors {
+            line: look.line,
+            name: look.ink,
+            heading: look.heading,
+        };
+        let card = self.card.draw("General", controls, true, colors);
+        div()
+            .size_full()
+            .flex()
+            .child(column(
+                Section::General,
+                true,
+                Rc::default(),
+                field,
+                None,
+                Rc::new(|_, _, _| {}),
+                Rc::new(|_, _| {}),
+                a11y,
+            ))
+            .child(card)
+    }
+}
+
+/// Every place ⇥ stops in Settings is one VoiceOver can name: each has a role and a name, and ⇥
+/// goes round all nineteen, the twelve sections, the field, the card's five and the foot.
+#[gpui::test]
+fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
+    use gpui::accesskit::{NodeId, Role};
+    cx.update(crate::text_input::bind_keys);
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let input = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+        let _ = input.read(cx).focus_handle(cx).tab_stop(true);
+        Stops {
+            input,
+            card: Default::default(),
+        }
+    });
+    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let field = view.read(cx).input.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+    });
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    let mut stops: Vec<(NodeId, Role, String)> = Vec::new();
+    for _ in 0..40 {
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let focused = (tree.nodes.iter()).find(|(id, _)| *id == tree.focus);
+        let (id, node) = focused.expect("the focus has no node in the tree");
+        if stops.first().is_some_and(|(first, ..)| first == id) {
+            break;
+        }
+        let name = node.label().unwrap_or_default().to_string();
+        stops.push((*id, node.role(), name));
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+    }
+    let unnamed: Vec<_> = (stops.iter())
+        .filter(|(_, role, name)| {
+            name.is_empty() || matches!(role, Role::Window | Role::GenericContainer | Role::Unknown)
+        })
+        .collect();
+    assert!(
+        unnamed.is_empty(),
+        "stops VoiceOver can't name: {unnamed:?} of {stops:?}"
+    );
+    let names: Vec<&str> = stops.iter().map(|(_, _, name)| name.as_str()).collect();
+    for name in [
+        "Restore…",
+        "Haptic feedback",
+        "Appearance",
+        "Restore Defaults for New Tab",
+        "New Tab, ⌘T",
+        "Chromium settings",
+        "General",
+        "About",
+    ] {
+        assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
+    }
+    assert_eq!(stops.len(), 19, "{names:?}");
+}
+
 /// Settings in small for the keyboard: the column with the search field, and the card with a
 /// button, under Settings' key context, as the window has them.
 struct Keyed {
@@ -180,7 +360,7 @@ struct Keyed {
 }
 
 impl Render for Keyed {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::settings_search::{NextControl, PreviousControl, field};
         let view = cx.weak_entity();
         let pick: Pick = Rc::new(move |section, _, cx| {
@@ -222,6 +402,7 @@ impl Render for Keyed {
                 None,
                 pick,
                 Rc::new(|_, _| {}),
+                window.is_a11y_active(),
             ))
             .child(card)
     }

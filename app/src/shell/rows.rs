@@ -571,18 +571,22 @@ impl Shell {
     /// separate, which takes the tabs out of the split and closes none, as Arc's ⌥-click does.
     fn close_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let row = tabs[0];
-        let angle = if self.close_glyph(row) == UNLOAD {
-            0.
-        } else {
-            45.
-        };
+        let unload = self.close_glyph(row) == UNLOAD;
+        let angle = if unload { 0. } else { 45. };
         let split = tabs.len() > 1;
-        let glyph = match self.on_split_close == Some((row, true)) {
+        let separate = self.on_split_close == Some((row, true));
+        let glyph = match separate {
             true => SEPARATE.into(),
             false => super::assets::bars_path(angle),
         };
+        let name = match (separate, unload) {
+            (true, _) => "Separate All Tabs",
+            (false, true) => "Unload Tab",
+            (false, false) => "Close Tab",
+        };
         div()
             .id(("close", row))
+            .when(self.a11y, |button| button.button_named(name))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -656,6 +660,7 @@ impl Shell {
         let row = tabs[0];
         div()
             .id(("remove", row))
+            .when(self.a11y, |button| button.button_named(REMOVE_TIP))
             .flex_none()
             .ml(px(4.))
             .mr(px(CLOSE_RIGHT))
@@ -731,6 +736,9 @@ impl Shell {
         (page.audible || page.muted).then(|| {
             div()
                 .id(("speaker", tab))
+                .when(self.a11y, |button| {
+                    button.button_named(if page.muted { "Unmute" } else { "Mute" })
+                })
                 .flex_none()
                 .mr(px(SPEAKER_GAP))
                 .size(px(SPEAKER_SIZE))
@@ -1853,7 +1861,9 @@ mod tests {
 
     use gpui::{
         Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, TestAppContext,
-        VisualTestContext, point, px,
+        VisualTestContext,
+        accesskit::{Action, Role},
+        point, px,
     };
 
     use super::{
@@ -3636,6 +3646,67 @@ mod tests {
         cx.simulate_click(point(px(today.0), px(today.1)), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["close 5"]);
+    }
+
+    /// VoiceOver reads the button the row under the pointer shows by what it does, and the speaker
+    /// by what a press on it would do (#1381). Its press closes the tab as a click does.
+    #[gpui::test]
+    fn the_row_buttons_say_what_they_do(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4, 5], 4);
+        shell.update(cx, |shell, cx| {
+            shell.set_page(
+                5,
+                Page {
+                    audible: true,
+                    ..Page::default()
+                },
+                cx,
+            );
+            shell.set_page(
+                3,
+                Page {
+                    unloaded: true,
+                    ..Page::default()
+                },
+                cx,
+            );
+        });
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let button = |cx: &mut VisualTestContext, name: &str| {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let found = tree
+                .nodes
+                .into_iter()
+                .find(|(_, node)| node.role() == Role::Button && node.label() == Some(name));
+            found.map(|(id, _)| id)
+        };
+        assert!(button(cx, "Mute").is_some());
+        assert!(button(cx, "Close Tab").is_none(), "only under the pointer");
+        for (tab, name) in [(2, "Unload Tab"), (3, "Remove Tab"), (5, "Close Tab")] {
+            let at = close_button(&shell, cx, tab);
+            move_to(cx, at);
+            assert!(button(cx, name).is_some(), "{name}");
+        }
+
+        host.take();
+        let close = button(cx, "Close Tab").expect("Video's ✕");
+        cx.simulate_a11y_action(close, Action::Click);
+        cx.run_until_parked();
+        assert!(host.take().contains(&"close 5".to_owned()));
+        shell.update(cx, |shell, cx| {
+            shell.set_page(
+                5,
+                Page {
+                    audible: true,
+                    muted: true,
+                    ..Page::default()
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(button(cx, "Unmute").is_some());
     }
 
     /// The button the row under the pointer draws, as check.sh reads it: "1" for ✕, "−" for −,

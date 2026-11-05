@@ -40,19 +40,18 @@ use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
-    Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
-    popup, ring, ring_round, row, switch, text,
+    Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
+    named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTON_GLYPH, BUTTONS_TOP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_GAP, CHIP_HEIGHT,
-    CHIP_NONE_TEXT, CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL_GAP, CONTROL_PADDING,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH,
-    FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT,
-    LEDE, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
-    RESTORE_RADIUS, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL_LINE, DETAIL_TOP, END_GAP,
+    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
+    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE, LEDE_LINE, LEDE_TOP,
+    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
+    SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -391,6 +390,23 @@ enum Popup {
     Appearance,
 }
 
+impl Popup {
+    /// What an assistive app calls it: its row's name.
+    fn spoken(self) -> SharedString {
+        match self {
+            Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
+            Popup::Favorites => "Share favorites".into(),
+            Popup::PasswordsProfile => "Profile".into(),
+            Popup::SearchEngine(_) => "Search engine".into(),
+            Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
+            Popup::Notes(_) => "New Note".into(),
+            Popup::TaskAgent => "Run tasks on".into(),
+            Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
+            Popup::Appearance => "Appearance".into(),
+        }
+    }
+}
+
 pub struct Settings {
     section: Section,
     focus: FocusHandle,
@@ -402,6 +418,8 @@ pub struct Settings {
     card: Card,
     /// It was asked to show, or changed section, and logs the section it draws next.
     shown: bool,
+    /// An assistive app asks for the tree, so Settings names what it draws (#1381).
+    a11y: bool,
     /// Which switch last changed, and when, for its knob's slide.
     switched: Option<(&'static str, Instant)>,
     /// The pop-up menu that is open, whose button shows pressed.
@@ -1170,6 +1188,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             look,
             card: Card::default(),
             shown: false,
+            a11y: false,
             switched: None,
             choosing: None,
             renaming: None,
@@ -1311,13 +1330,14 @@ fn dark_in(appearance: gpui::WindowAppearance, cx: &App) -> bool {
 /// where the browser window's is, on Linux and on Windows alike, as the browser window's buttons
 /// stay top left on Windows for now. Settings can't be minimized or zoomed, so it's alone. `at`
 /// logs where it's drawn.
-fn close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
+fn close_button(base: Rgba, at: gpui::Canvas<()>, a11y: bool) -> AnyElement {
     if cfg!(target_os = "windows") {
-        return windows_close_button(base, at);
+        return windows_close_button(base, at, a11y);
     }
     let (x, colour) = shell::WINDOW_BUTTONS[0];
     div()
         .id("close")
+        .when(a11y, |close| named_button(close, "Close"))
         .absolute()
         .left(px(x - WINDOW_BUTTON_SIZE / 2.))
         .top(px(WINDOW_BUTTON_Y - WINDOW_BUTTON_SIZE / 2.))
@@ -1341,10 +1361,11 @@ fn close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
 
 /// Windows' close, as the browser window's (shell.rs's `windows_buttons`): the column's grey
 /// glyph, on Windows' red under the pointer, centred where the Mac's close is.
-fn windows_close_button(base: Rgba, at: gpui::Canvas<()>) -> AnyElement {
+fn windows_close_button(base: Rgba, at: gpui::Canvas<()>, a11y: bool) -> AnyElement {
     let (x, _) = shell::WINDOW_BUTTONS[0];
     div()
         .id("close")
+        .when(a11y, |close| named_button(close, "Close"))
         .absolute()
         .left(px(x - WINDOWS_BUTTON_PLATE / 2.))
         .top(px(WINDOW_BUTTON_Y - WINDOWS_BUTTON_PLATE / 2.))
@@ -1647,7 +1668,7 @@ impl Settings {
                 log!("browser: make default browser");
                 settings.default_browser.read(cx).make_default();
             });
-            button(&self.look, "make-default-browser", "Make Default")
+            self.button("make-default-browser", "Make Default")
                 .relative()
                 .child(self.drawn("make default".into()))
                 .on_click(make)
@@ -1655,10 +1676,18 @@ impl Settings {
         });
         let look = &self.look;
         let restore = unsafe { bc::bc_restore_windows() };
-        let restore = self.toggle("restore windows", restore, set_restore_windows, accent, cx);
+        let restore = self.toggle(
+            "restore windows",
+            "Reopen your windows and tabs",
+            restore,
+            set_restore_windows,
+            accent,
+            cx,
+        );
         let warn = unsafe { bc::bc_warn_before_quitting() };
         let warn = self.toggle(
             "warn before quitting",
+            "Ask before quitting",
             warn,
             set_warn_before_quitting,
             accent,
@@ -1711,7 +1740,8 @@ impl Settings {
         let folders = self.per_profile(profiles, "Save downloads to", None, |profile| {
             let id = profile.id;
             let folder = download_folder(id)?;
-            let change = button(&self.look, ("download-folder", id), "Change…")
+            let change = self
+                .button(("download-folder", id), "Change…")
                 .relative()
                 .child(self.drawn(format!("download folder {id}")))
                 .on_click(cx.listener(move |_, _, _, cx| choose_download_folder(id, cx)));
@@ -1754,7 +1784,14 @@ impl Settings {
         // The Dock's, which the Mac alone has.
         if cfg!(target_os = "macos") {
             let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle("dock icon color", colored, set_dock_icon_color, accent, cx);
+            let colored = self.toggle(
+                "dock icon color",
+                "Dock icon takes the Space's color",
+                colored,
+                set_dock_icon_color,
+                accent,
+                cx,
+            );
             looks.push(setting(
                 look,
                 "Dock icon takes the Space's color",
@@ -1818,7 +1855,14 @@ impl Settings {
             },
         );
         let unload = unsafe { bc::bc_unload_idle_tabs() };
-        let unload = self.toggle("unload idle tabs", unload, set_unload_idle_tabs, accent, cx);
+        let unload = self.toggle(
+            "unload idle tabs",
+            "Unload tabs you haven't looked at",
+            unload,
+            set_unload_idle_tabs,
+            accent,
+            cx,
+        );
         let unload = setting(
             look,
             "Unload tabs you haven't looked at",
@@ -1847,6 +1891,7 @@ impl Settings {
         );
         let moving = self.toggle(
             "warn moving profiles",
+            "Ask before moving a tab to another profile",
             unsafe { bc::bc_warn_moving_profiles() },
             set_warn_moving_profiles,
             accent,
@@ -1865,6 +1910,7 @@ impl Settings {
         ];
         let edge = self.toggle(
             "edge reveals sidebar",
+            "Show the hidden sidebar at the window's edge",
             !off(NO_EDGE_REVEAL),
             set_edge_reveals,
             accent,
@@ -1883,8 +1929,13 @@ impl Settings {
         // Where the host watches for it (host_watch_option_taps).
         if cfg!(any(target_os = "macos", target_os = "linux")) {
             let option = unsafe { bc::bc_option_reveals_sidebar() };
+            let spoken = match cfg!(target_os = "macos") {
+                true => "Show the hidden sidebar when ⌥ is pressed alone",
+                false => "Show the hidden sidebar when Alt is pressed alone",
+            };
             let option = self.toggle(
                 "option reveals sidebar",
+                spoken,
                 option,
                 set_option_reveals,
                 accent,
@@ -1907,7 +1958,14 @@ impl Settings {
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
             let haptics = unsafe { bc::bc_haptics() };
-            let haptics = self.toggle("haptics", haptics, set_haptics, accent, cx);
+            let haptics = self.toggle(
+                "haptics",
+                "Haptic feedback",
+                haptics,
+                set_haptics,
+                accent,
+                cx,
+            );
             let row = setting(
                 look,
                 "Haptic feedback",
@@ -1921,7 +1979,8 @@ impl Settings {
         }
         // Once the core has backed the sidebar up, which it does as it saves the Spaces.
         if front_shell().is_some_and(|shell| shell.read(cx).has_sidebar_backups()) {
-            let restore = button(look, "restore-sidebar", "Restore…")
+            let restore = self
+                .button("restore-sidebar", "Restore…")
                 .relative()
                 .child(self.drawn("restore sidebar".into()))
                 .on_click(|_, _, cx| restore_earlier_sidebar(cx));
@@ -1966,6 +2025,7 @@ impl Settings {
             let on = crate::little_in_menu_bar();
             let switch = self.toggle(
                 "little in the menu bar",
+                "Show in the menu bar",
                 on,
                 set_little_in_menu_bar,
                 accent,
@@ -2001,7 +2061,14 @@ impl Settings {
             .chain([little_archive])
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
-        let previews = self.toggle("link previews", previews, set_link_previews, accent, cx);
+        let previews = self.toggle(
+            "link previews",
+            "Peek",
+            previews,
+            set_link_previews,
+            accent,
+            cx,
+        );
         let peek = feature(
             look,
             "icons/eye.svg",
@@ -2016,7 +2083,14 @@ impl Settings {
             vec![previews],
         );
         let mini_player = unsafe { bc::bc_auto_picture_in_picture() };
-        let mini_player = self.toggle("mini player", mini_player, set_mini_player, accent, cx);
+        let mini_player = self.toggle(
+            "mini player",
+            "Mini Player",
+            mini_player,
+            set_mini_player,
+            accent,
+            cx,
+        );
         let mini_player = feature(
             look,
             "icons/picture-in-picture-2.svg",
@@ -2104,7 +2178,14 @@ impl Settings {
     ) -> Page {
         let look = &self.look;
         let ad_blocking = unsafe { bc::bc_ad_blocking() };
-        let ad_blocking = self.toggle("ad blocking", ad_blocking, set_ad_blocking, accent, cx);
+        let ad_blocking = self.toggle(
+            "ad blocking",
+            "Block ads and trackers",
+            ad_blocking,
+            set_ad_blocking,
+            accent,
+            cx,
+        );
         let ad_blocking = setting(
             look,
             "Block ads and trackers",
@@ -2124,7 +2205,8 @@ impl Settings {
         let several = profiles.len() > 1;
         let clear = clear.into_iter().enumerate().map(|(index, profile)| {
             let id = profile.id;
-            let button = button(look, ("clear-browsing-data", id), "Clear…")
+            let button = self
+                .button(("clear-browsing-data", id), "Clear…")
                 .relative()
                 .child(self.drawn(format!("clear {id}")))
                 .on_click(cx.listener(move |_, _, _, cx| {
@@ -2156,6 +2238,7 @@ impl Settings {
             let send = unsafe { bc::bc_send_crash_reports() };
             let send = self.toggle(
                 "send crash reports",
+                "Send crash reports",
                 send,
                 set_send_crash_reports,
                 accent,
@@ -2182,7 +2265,8 @@ impl Settings {
         let rows = sites.iter().enumerate().map(|(index, off)| {
             let (profile, site) = (off.profile, off.site.clone());
             let at = self.drawn(format!("turn on {}", off.site));
-            let turn_on = button(look, ("ad-blocking-on", index as u64), "Turn On")
+            let turn_on = self
+                .button(("ad-blocking-on", index as u64), "Turn On")
                 .relative()
                 .child(at);
             let turn_on = turn_on.on_click(cx.listener(move |_, _, _, cx| {
@@ -2224,6 +2308,15 @@ impl Settings {
         }
     }
 
+    /// A push button with `title`, which an assistive app reads by it.
+    fn button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        title: impl Into<SharedString>,
+    ) -> gpui::Stateful<gpui::Div> {
+        stop_button(&self.look, id, title, self.a11y)
+    }
+
     /// Logs where the element it fills is drawn (settings_rows::drawn). Put it in a relative one.
     fn drawn(&self, what: String) -> gpui::Canvas<()> {
         browser::settings_rows::drawn(what, self.drawn_logged.clone())
@@ -2252,28 +2345,34 @@ impl Settings {
         .inset_0();
         let press = Rc::new(press);
         let pressed = press.clone();
-        popup(&self.look, label, width, self.choosing == Some(which))
-            .relative()
-            .id(SharedString::from(format!("popup-{which:?}")))
-            // ⇥ reaches it, and Space or Return opens its menu as a press does.
-            .tab_index(0)
-            .focus_from_keys_only()
-            .focus_visible(ring(self.look.ink))
-            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                press(event, window, cx)
-            })
-            .on_click(move |event, window, cx| {
-                if event.is_keyboard() {
-                    pressed(&MouseDownEvent::default(), window, cx)
-                }
-            })
-            .child(at)
+        let id = SharedString::from(format!("popup-{which:?}"));
+        let open = self.choosing == Some(which);
+        stop_popup(
+            &self.look,
+            id,
+            which.spoken(),
+            label,
+            width,
+            open,
+            self.a11y,
+        )
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            press(event, window, cx)
+        })
+        // Space or Return opens its menu as a press does.
+        .on_click(move |event, window, cx| {
+            if event.is_keyboard() {
+                pressed(&MouseDownEvent::default(), window, cx)
+            }
+        })
+        .child(at)
     }
 
     /// The switch `name`, `on` now, that calls `set` with the other way when clicked.
     fn toggle(
         &self,
         name: &'static str,
+        spoken: &'static str,
         on: bool,
         set: impl Fn(bool, &mut App) + 'static,
         accent: Rgba,
@@ -2285,13 +2384,7 @@ impl Settings {
             }
             _ => 1.,
         };
-        div()
-            .id(name)
-            // ⇥ reaches it, and Space or Return flips it as a click does.
-            .tab_index(0)
-            .focus_from_keys_only()
-            .rounded_full()
-            .focus_visible(ring_round(self.look.ink))
+        stop_switch(&self.look, name, spoken, on, slid, accent, self.a11y)
             .on_click(cx.listener(move |settings, _, _, cx| {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
@@ -2299,8 +2392,6 @@ impl Settings {
                 settings.switched = Some((name, browser::motion::start(cx)));
                 cx.notify();
             }))
-            .relative()
-            .child(switch(&self.look, on, slid, accent))
             .child(self.drawn(format!("switch {name}")))
             .into_any_element()
     }
@@ -2549,7 +2640,7 @@ impl Settings {
             let rename =
                 (!naming).then(|| {
                     let name = profile.name.clone();
-                    button(look, ("rename-profile", id), "Rename")
+                    self.button(("rename-profile", id), "Rename")
                         .relative()
                         .child(self.drawn(format!("rename profile {id}")))
                         .on_click(cx.listener(move |settings, _, _, cx| {
@@ -2559,7 +2650,7 @@ impl Settings {
                 });
             let name = profile.name.clone();
             let delete = profile.deletable.then(|| {
-                button(look, ("delete-profile", id), "Delete")
+                self.button(("delete-profile", id), "Delete")
                     .relative()
                     .child(self.drawn(format!("delete profile {id}")))
                     .on_click(cx.listener(move |settings, _, window, cx| {
@@ -2574,7 +2665,8 @@ impl Settings {
                 .when(!controls.is_empty(), |row| row.child(end(controls)))
         });
         let rows: Vec<gpui::Div> = rows.collect();
-        let new = button(look, "new-profile", "New Profile")
+        let new = self
+            .button("new-profile", "New Profile")
             .relative()
             .child(self.drawn("new profile".into()))
             .on_click(cx.listener(|settings, _, _, cx| settings.new_profile(cx)));
@@ -2750,7 +2842,8 @@ impl Settings {
         let login_row = |index: usize, login: &Login, cx: &mut Context<Self>| {
             let (site, username) = passwords::lines(login);
             let login = login.clone();
-            let remove = button(&look, ("remove-login", index), "Remove")
+            let remove = self
+                .button(("remove-login", index), "Remove")
                 .relative()
                 .child(self.drawn(format!("remove login {index}")))
                 .on_click(cx.listener(move |settings, _, window, cx| {
@@ -2772,7 +2865,8 @@ impl Settings {
             } else {
                 "icons/map-pin.svg"
             };
-            let remove = button(&look, ("remove-autofill", index), "Remove")
+            let remove = self
+                .button(("remove-autofill", index), "Remove")
                 .relative()
                 .child(self.drawn(format!("remove autofill {index}")))
                 .on_click(cx.listener({
@@ -2865,11 +2959,12 @@ impl Settings {
                 let set = move |offer, _: &mut App| unsafe {
                     bc::bc_profile_set_offers_to_save(profile, what as i32, offer);
                 };
-                row(title, self.toggle(name, on, set, accent, cx))
+                row(title, self.toggle(name, title, on, set, accent, cx))
             })
         });
         let switches: Vec<gpui::Div> = switches.into_iter().flatten().collect();
-        let manage = button(&look, "manage-passwords", "Manage Passwords…")
+        let manage = self
+            .button("manage-passwords", "Manage Passwords…")
             .relative()
             .child(self.drawn("manage passwords".into()))
             .on_click(move |_, _, cx| manage_passwords(profile, cx));
@@ -3021,7 +3116,7 @@ impl Settings {
         let switch = {
             let agents = agents.clone();
             let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", on, set, accent, cx)
+            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
         };
         let model = agents.read(cx);
         let about: SharedString = match model.trouble() {
@@ -3052,7 +3147,14 @@ impl Settings {
                 let set = move |on, cx: &mut App| {
                     agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
                 };
-                self.toggle("agent tasks", tasks_on, set, accent, cx)
+                self.toggle(
+                    "agent tasks",
+                    "Tasks from the command bar",
+                    tasks_on,
+                    set,
+                    accent,
+                    cx,
+                )
             };
             let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
             let bar = shell::keystroke_label("cmd-t");
@@ -3259,13 +3361,13 @@ impl Settings {
             Ready::SignedIn => ("Signed in".into(), None),
         };
         if let Some(command) = command {
-            let copy = button(look, ("copy-task-command", cli as usize), "Copy").on_click(
-                move |_, _, cx| {
+            let copy = self
+                .button(("copy-task-command", cli as usize), "Copy")
+                .on_click(move |_, _, cx| {
                     // check.sh reads this line.
                     log!("browser: task command copied {command}");
                     cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
-                },
-            );
+                });
             let controls = vec![copy.into_any_element()];
             return feature_row(look, cli.glyph(), cli.name(), Some(detail), controls);
         }
@@ -3380,7 +3482,7 @@ impl Settings {
             let id = format!("revoke-{}-{}", client.id(), site.as_deref().unwrap_or(""));
             let at = self.drawn(format!("revoke {}", site.as_deref().unwrap_or("all")));
             let agents = agents.clone();
-            button(look, gpui::ElementId::Name(id.into()), title)
+            self.button(gpui::ElementId::Name(id.into()), title)
                 .relative()
                 .child(at)
                 .on_click(move |_, _, cx| {
@@ -3413,14 +3515,11 @@ impl Settings {
         let tabs = agents.read(cx).tabs_to_take(client.id(), cx).len();
         if tabs > 0 {
             let agents = agents.clone();
-            let take = button(
-                look,
-                ("take-back-agent-tabs", client as usize),
-                "Take Back All",
-            )
-            .on_click(move |_, _, cx| {
-                agents.update(cx, |agents, cx| agents.take_back_all(client.id(), cx))
-            });
+            let take = self
+                .button(("take-back-agent-tabs", client as usize), "Take Back All")
+                .on_click(move |_, _, cx| {
+                    agents.update(cx, |agents, cx| agents.take_back_all(client.id(), cx))
+                });
             let open = match tabs {
                 1 => "1 tab it may act in".into(),
                 _ => format!("{tabs} tabs it may act in"),
@@ -3480,7 +3579,7 @@ impl Settings {
             .then(|| model.setup(client))
             .flatten();
         let copy = setup.map(|setup| {
-            button(look, ("copy-agent-setup", index), "Copy Setup")
+            self.button(("copy-agent-setup", index), "Copy Setup")
                 .on_click(move |_, _, cx| {
                     // check.sh reads this line.
                     log!("browser: agent setup copied");
@@ -3491,17 +3590,19 @@ impl Settings {
         let agents = agents.clone();
         let (action, at) = match connected {
             true => (
-                button(look, ("disconnect-agent", index), "Disconnect").on_click(
-                    move |_, _, cx| agents.update(cx, |agents, cx| agents.disconnect(client, cx)),
-                ),
+                self.button(("disconnect-agent", index), "Disconnect")
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.disconnect(client, cx))
+                    }),
                 "disconnect",
             ),
             false => (
-                button(look, ("connect-agent", index), "Connect").on_click(move |_, _, cx| {
-                    // check.sh reads this line.
-                    log!("browser: connect agent {}", client.id());
-                    agents.update(cx, |agents, cx| agents.connect(client, cx))
-                }),
+                self.button(("connect-agent", index), "Connect")
+                    .on_click(move |_, _, cx| {
+                        // check.sh reads this line.
+                        log!("browser: connect agent {}", client.id());
+                        agents.update(cx, |agents, cx| agents.connect(client, cx))
+                    }),
                 "connect",
             ),
         };
@@ -3532,7 +3633,7 @@ impl Settings {
                 settings.widevine.update(cx, |row, cx| row.act(action, cx));
             });
             let what = format!("widevine {}", format!("{action:?}").to_lowercase());
-            button(look, ("widevine", index), title)
+            self.button(("widevine", index), title)
                 .relative()
                 .child(self.drawn(what))
                 .on_click(act)
@@ -3577,11 +3678,12 @@ impl Settings {
                 .iter()
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
-                        (Keys::Of(command), _) => self.shortcut(*command, accent, cx),
+                        (Keys::Of(command), _) => self.shortcut(*command, &shown(name), accent, cx),
                         (Keys::FavoritesNumbered, _) => {
                             let on = shell::user_keys(cx).favorites_numbered();
                             self.toggle(
                                 "favorites numbered",
+                                "Include Favorites in ⌘1–⌘8",
                                 on,
                                 set_favorites_numbered,
                                 accent,
@@ -3590,7 +3692,14 @@ impl Settings {
                         }
                         (Keys::LastTabNinth, _) => {
                             let on = shell::user_keys(cx).last_tab_ninth();
-                            self.toggle("last tab ninth", on, set_last_tab_ninth, accent, cx)
+                            self.toggle(
+                                "last tab ninth",
+                                "Last Tab Goes to the Ninth Tab",
+                                on,
+                                set_last_tab_ninth,
+                                accent,
+                                cx,
+                            )
                         }
                         (_, keys) => self
                             .chip(keys.unwrap_or_default().into(), Chip::Fixed)
@@ -3609,7 +3718,7 @@ impl Settings {
             blocks.push(Block::Heading((*section).into()));
             blocks.push(Block::Rows(rows));
         }
-        let restore = button(&self.look, "restore-shortcuts", "Restore Defaults");
+        let restore = self.button("restore-shortcuts", "Restore Defaults");
         let restore = restore
             .relative()
             .child(self.drawn("restore shortcuts".into()));
@@ -3630,33 +3739,21 @@ impl Settings {
         )
     }
 
-    /// Keys as a chip, as the command bar shows a command's: quieter for keys that can't change,
-    /// and quieter still for None.
+    /// Keys as a chip, as the command bar shows a command's (settings_rows::chip).
     fn chip(&self, keys: SharedString, kind: Chip) -> gpui::Div {
-        let base = self.base();
-        let (fill, text) = match kind {
-            Chip::Keys => (CHIP, CHIP_TEXT),
-            Chip::Fixed => (CHIP_FIXED, CHIP_FIXED_TEXT),
-            Chip::None => (CHIP, CHIP_NONE_TEXT),
-        };
-        div()
-            .flex_none()
-            .h(px(CHIP_HEIGHT))
-            .min_w(px(CHIP_WIDTH))
-            .px(px(CHIP_PADDING))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(CHIP_RADIUS))
-            .bg(base.opacity(fill))
-            .text_size(px(text::SMALL))
-            .text_color(base.opacity(text))
-            .child(keys)
+        chip(self.base(), keys, kind)
     }
 
     /// `command`'s chip, which records its keys if they can be changed, after why the last keys
-    /// were refused and the way back to its default, if it has others.
-    fn shortcut(&self, command: Command, accent: Rgba, cx: &mut Context<Self>) -> AnyElement {
+    /// were refused and the way back to its default, if it has others. An assistive app reads
+    /// them by its row's `name`.
+    fn shortcut(
+        &self,
+        command: Command,
+        name: &str,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let look = &self.look;
         let user = shell::user_keys(cx);
         if !shell::rebindable(command) {
@@ -3664,10 +3761,10 @@ impl Settings {
             return self.chip(keys.into(), Chip::Fixed).into_any_element();
         }
         let recording = self.recording == Some(command);
-        let chip = match user.label(command) {
-            _ if recording => self.chip("Type Keys".into(), Chip::Keys).text_color(accent),
-            Some(keys) => self.chip(keys.into(), Chip::Keys),
-            None => self.chip("None".into(), Chip::None),
+        let (keys, kind) = match user.label(command) {
+            _ if recording => ("Type Keys".into(), Chip::Keys),
+            Some(keys) => (keys.into(), Chip::Keys),
+            None => ("None".into(), Chip::None),
         };
         let said = |text: SharedString| div().text_color(look.detail).child(text);
         let refused = (self.refused.as_ref())
@@ -3677,41 +3774,17 @@ impl Settings {
         let preferred = user
             .prefers_ilo(command)
             .then(|| said(MenuEntry::label(PREFER_ILO)));
-        let (hovered, pressed) = (look.hovered, look.pressed);
         let restore = user.changed(command).then(|| {
-            div()
-                .id(SharedString::from(format!(
-                    "restore-{}",
-                    command.key_name()
-                )))
-                .tab_index(0)
-                .focus_from_keys_only()
-                .focus_visible(ring(look.ink))
-                .size(px(CHIP_HEIGHT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(RESTORE_RADIUS))
-                .hover(move |restore| restore.bg(hovered))
-                .active(move |restore| restore.bg(pressed))
-                .relative()
-                .child(
-                    svg()
-                        .path("icons/rotate-ccw.svg")
-                        .size(px(BUTTON_GLYPH))
-                        .text_color(look.ink),
-                )
+            let id = SharedString::from(format!("restore-{}", command.key_name()));
+            stop_restore(look, id, name, self.a11y)
                 .child(self.drawn(format!("restore {}", command.key_name())))
                 .on_click(cx.listener(move |settings, _, _, cx| settings.restore(command, cx)))
         });
-        let chip = chip
-            .id(SharedString::from(command.key_name()))
-            .tab_index(0)
-            .focus_from_keys_only()
-            .focus_visible(ring(look.ink))
-            .when(recording, |chip| chip.border_1().border_color(accent))
-            .hover(move |chip| chip.bg(hovered))
-            .active(move |chip| chip.bg(pressed))
+        let id = SharedString::from(command.key_name());
+        let chip = stop_chip(look, self.base(), id, name, keys, kind, self.a11y)
+            .when(recording, |chip| {
+                chip.text_color(accent).border_1().border_color(accent)
+            })
             .on_click(cx.listener(move |settings, _, window, cx| {
                 settings.start_recording(command, window, cx)
             }))
@@ -3737,7 +3810,8 @@ impl Settings {
     /// Import & Export: the import's view, as it is, and Export Spaces as Markdown.
     fn import_export(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
-        let export = button(look, "export-spaces", "Export…")
+        let export = self
+            .button("export-spaces", "Export…")
             .relative()
             .child(self.drawn("export spaces".into()))
             .on_click(|_, _, cx| crate::export_spaces(cx));
@@ -3802,7 +3876,7 @@ impl Settings {
                 )
                 .absolute()
                 .inset_0();
-                let open = button(look, id, "Open").relative().child(at);
+                let open = self.button(id, "Open").relative().child(at);
                 open.on_click(move |_, _, cx| open_notice(&url, cx))
                     .into_any_element()
             })
@@ -3844,6 +3918,7 @@ impl Settings {
         ];
         let whats_new = self.toggle(
             "whats new",
+            "Show what's new after an update",
             !off(updates::NO_WHATS_NEW),
             set_whats_new,
             accent,
@@ -3861,6 +3936,7 @@ impl Settings {
             let on = automatic_update_checks();
             let switch = self.toggle(
                 "automatic update checks",
+                "Check for updates automatically",
                 on,
                 set_automatic_update_checks,
                 accent,
@@ -4332,14 +4408,6 @@ fn short_row(name: impl Into<SharedString>, control: AnyElement) -> gpui::Div {
         .child(end([control]))
 }
 
-/// What a chip holds: keys that can change, keys that can't, or none.
-#[derive(Clone, Copy)]
-enum Chip {
-    Keys,
-    Fixed,
-    None,
-}
-
 /// Why keys weren't given to a command, as its row says it.
 fn refusal(refused: Refused) -> String {
     let holder = match refused {
@@ -4461,6 +4529,7 @@ fn save_shortcuts(cx: &App) {
 
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         // The app's window, not a Space's, so ilo green rather than a Space's accent (#319).
         let accent = rgb(NO_THEME_ACCENT);
         // As Linux's client-side decorations leave it, and Windows', where GPUI hides the system's
@@ -4555,6 +4624,7 @@ impl Render for Settings {
             found.as_deref(),
             pick,
             foot,
+            self.a11y,
         );
         // Once scrolled, the section's name and the heading gone under it hold at the card's top,
         // and where rows go on under the card's foot, it fades into the card's fill.
@@ -4609,7 +4679,7 @@ impl Render for Settings {
             .text_color(self.look.ink)
             .child(column)
             .child(card)
-            .children(frameless.then(|| close_button(base, self.drawn("close".into()))))
+            .children(frameless.then(|| close_button(base, self.drawn("close".into()), self.a11y)))
             .children(self.cover(cx))
     }
 }

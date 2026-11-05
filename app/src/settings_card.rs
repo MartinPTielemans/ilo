@@ -219,6 +219,8 @@ impl Card {
                     .id("card")
                     .tab_group()
                     .tab_index(2)
+                    // Its controls are the stops, not the scrolling page they're on.
+                    .tab_stop(false)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
