@@ -137,7 +137,3 @@ pub mod usage;
 pub mod widevine;
 pub mod window_frames;
 pub mod zoom_hud;
-
-// Breaks the Mac build on purpose, to see the UI on macOS job fail (#1872).
-#[cfg(target_os = "macos")]
-const _: u32 = "not a number";
