@@ -269,18 +269,21 @@ if [ "$(uname)" = Linux ]; then
   echo "skip: composing right after ⌘L: the Linux driver types plain keys in a page."
 elif windows && [ -z "$japanese" ]; then
   echo "skip: composing right after ⌘L: the runner has no Japanese IME, and the Windows driver's own composes in the UI's fields alone, not in a page."
+elif windows; then
+  # The host holds the keys typed until the bar has the keyboard (host.cc's HoldKeys), but
+  # Microsoft's IME composes them in the page before the hold sees them, and a repost of a key
+  # passes the IME by. TSF's keystroke manager doesn't hand held keys to it in the bar either, and
+  # giving TSF's focus to the bar's own document for the hold composes there only while the page
+  # keeps the default input context it shares with the bar, whose deactivation as the page lets the
+  # keyboard go commits the composition half-typed (#1784).
+  echo "skip: composing right after Ctrl+L: Microsoft's Japanese IME composes in the page the keys the host holds for the bar (#1784)."
 else
   send $ime
-  # On Windows the page answers ⌘L late, and while it keeps the keyboard the host has Microsoft's
-  # IME compose in the bar (host.cc's ComposeInBar, #1784). The page's field keeps its y.
-  from=$(wc -l < "$log")
   typed_after l nihongo
   expect "^browser: command bar drew \"$preedit\"\$" \
     "a composition typed right after ⌘L didn't go to the command bar: $(drew 'command bar')"
   send state
   [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
-  ! tail -n "+$((from + 1))" "$log" | grep -q '^browser: title [0-9]* value y.' ||
-    fail "the page took some of what was typed right after ⌘L: $(grep '^browser: title [0-9]* value' "$log" | tail -1)"
   send key escape
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar"
