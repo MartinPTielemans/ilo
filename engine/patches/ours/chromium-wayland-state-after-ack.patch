@@ -5,11 +5,13 @@ sway 1.9 configures a window that leaves full screen before acking its entry at 
 entered at, and one that enters before acking its exit at the size it left at, as its
 should_configure compares with the state the unacked configure never applied; it then keeps the
 size its floating window commits, so a page's full screen left quickly brought the window back
-at the output's size, swinging between the two first (#1714). A sync after each request
-orders no configure: wlroots answers it once it has handled the requests before it, and sends
-the configures they bring later, from an idle callback in the same turn of its loop, flushed
-with the answer. So the held state goes in a task posted from the answer, once the rest of that
-read is dispatched, and waits for any configure in it to be acked.
+at the output's size, swinging between the two first (#1714). The fix relies on the hold: a
+state goes out only once Chromium has acked every configure it has received. The sync after
+each request only makes sure the compositor has handled it first; it orders no configure, as
+wlroots answers a sync once it has handled the requests before it and sends the configures they
+bring after, from an idle callback, so a state held until the answer can still go out before
+the configure that answer came with is dispatched. Waiting past the answer for that configure
+instead let sway's answer to the last commit, with the state before, reach a held state.
 --- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 +++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 @@ -219,6 +219,13 @@
@@ -64,7 +66,7 @@ read is dispatched, and waits for any configure in it to be acked.
  #include "base/unguessable_token.h"
  #include "third_party/skia/include/core/SkPath.h"
  #include "ui/base/hit_test.h"
-@@ -662,6 +664,67 @@
+@@ -662,6 +664,65 @@
  
    ProcessSequencePoint(seq);
    MaybeApplyLatestStateRequest(/*force=*/false);
@@ -93,12 +95,10 @@ read is dispatched, and waits for any configure in it to be acked.
 +                                        uint32_t time) {
 +  auto* window = static_cast<WaylandToplevelWindow*>(data);
 +  window->state_sync_.reset();
-+  // Posted: wlroots sends a request's configures after answering the sync,
-+  // flushed with it, so they're dispatched once the rest of this read is, and
-+  // the held state then waits for their frame.
-+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-+      FROM_HERE, base::BindOnce(&WaylandToplevelWindow::MaybeSendHeldState,
-+                                window->weak_ptr_factory_.GetWeakPtr()));
++  // The compositor has handled the request, though wlroots sends the
++  // configures it brings after this answer; the held state waits for those
++  // Chromium has received to be acked.
++  window->MaybeSendHeldState();
 +}
 +
 +void WaylandToplevelWindow::MaybeSendHeldState() {
@@ -132,7 +132,7 @@ read is dispatched, and waits for any configure in it to be acked.
  }
  
  bool WaylandToplevelWindow::OnInitialize(
-@@ -907,6 +970,8 @@
+@@ -907,6 +968,8 @@
        return applied_state().window_state == state ||
               GetLatestRequestedState().window_state == state;
      };
@@ -141,7 +141,7 @@ read is dispatched, and waits for any configure in it to be acked.
      // Call UnSetMaximized only if current state is normal. Otherwise, if the
      // current state is fullscreen and the previous is maximized, calling
      // UnSetMaximized may result in wrong restored window position that clients
-@@ -914,6 +979,10 @@
+@@ -914,6 +977,10 @@
      if (window_state == PlatformWindowState::kMinimized) {
        xdg_toplevel_->SetMinimized();
        pending_minimize_ = true;
@@ -152,7 +152,7 @@ read is dispatched, and waits for any configure in it to be acked.
      } else if (window_state == PlatformWindowState::kFullScreen) {
        xdg_toplevel_->SetFullscreen(
            GetWaylandOutputForDisplayId(fullscreen_display_id));
-@@ -929,6 +998,11 @@
+@@ -929,6 +996,11 @@
          xdg_toplevel_->UnSetMaximized();
        }
      }
