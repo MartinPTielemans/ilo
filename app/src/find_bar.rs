@@ -239,8 +239,11 @@ pub fn show(browser: bc::bc_id, tab: u64, cx: &mut App) {
     // takes the keyboard, came before its first frame, and the first was lost (#1917). So the bar
     // shows first and takes the keyboard, and with it the held keys, once it has drawn: from a task
     // its next frame starts, outside the frame, as taking the keyboard tells its window at once.
+    // Until then the keys are held, as only a shortcut the page gets first holds them: from the UI,
+    // keys typed before that frame went to the browser window and were lost.
     #[cfg(target_os = "windows")]
     {
+        unsafe { platform::host_hold_keys() };
         unsafe { platform::host_show_find_bar(ui_view, false) };
         let shown = window.update(cx, |_, window, _| {
             window.on_next_frame(move |_, cx| {
