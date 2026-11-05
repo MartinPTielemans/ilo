@@ -883,6 +883,24 @@ void SendVirtualKey(UINT vk) {
   SendInput(2, inputs, sizeof inputs[0]);
 }
 
+// The key window's title, once it holds |text|, looking again every 100 ms up to |tries| times, as
+// drive.mm's title waits: a window that opens from a command, such as DevTools undocked, takes
+// the keyboard a moment after it (#1922). With no |text|, the title it has now.
+void AwaitKeyTitle(const std::string& text, int tries) {
+  wchar_t title[512] = L"";
+  GetWindowTextW(GetActiveWindow(), title, 512);
+  const std::string shown = Utf8(title);
+  if (text.empty() || shown.find(text) != std::string::npos) {
+    fprintf(stderr, "browser: key window titled %s\n", shown.c_str());
+  } else if (tries == 0) {
+    fprintf(stderr, "browser: no key window titled %s, the key window titled %s\n", text.c_str(),
+            shown.c_str());
+  } else {
+    g_steps.push_front({[text, tries] { AwaitKeyTitle(text, tries - 1); }});
+    g_steps.push_front({[] {}, 100});
+  }
+}
+
 // Waits, up to |tries| times, for the keys SendInput queued to be handled: the driver's posted
 // messages come off the queue before input does.
 void WaitForKeys(int tries) {
@@ -1531,9 +1549,7 @@ bool Run(const std::string& line) {
     return true;
   }
   if (action == "title") {
-    wchar_t title[512] = L"";
-    GetWindowTextW(GetActiveWindow(), title, 512);
-    fprintf(stderr, "browser: key window titled %s\n", Utf8(title).c_str());
+    AwaitKeyTitle(rest, 100);
     return true;
   }
   if (action == "front") {
