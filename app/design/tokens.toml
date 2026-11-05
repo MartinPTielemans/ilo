@@ -87,6 +87,11 @@ field-radius = 20.0
 field-input-text = 13.0
 # Over a new pane of a split view, the bar's right edge stays this far inside the card's (Arc).
 beside-end = 70.0
+# In a Little ilo window, ⌘L and ⌘T open the bar inside the window, this wide, centred across it,
+# its top this far down the window (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407).
+little-width = 500.0
+little-down = 0.333_333
 # The bar is the palette's overlay, opaque, and what's on it the palette's ink at these alphas
 # (Arc's white ones over its #191919), text raised to the overlay's floor (palette.rs).
 line-color = 0.1
@@ -1128,6 +1133,27 @@ windows-close-hovered = 0xc42b1c
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
 little-glyph = 18.0
+# Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
+# little-open-pad in from its half's sides and little-open-gap apart, the half no wider than
+# little-open-max; a line little-split tall; then the chevron's half, whose plate ends where the last
+# button's did. Copy Link's plate ends little-copy-gap before the words' half.
+little-open = 0.85
+little-open-key = 0.45
+little-open-pad = 10.0
+little-open-gap = 6.0
+little-open-max = 200.0
+little-split = 16.0
+little-split-line = 0.16
+little-chevron = 28.0
+little-chevron-glyph = 12.0
+little-copy-gap = 2.0
+# The chevron's Spaces menu is the compact command bar this wide, its top this far under the
+# button, and its right edge the button's, but no nearer the window's than every overlay keeps
+# (host_show_overlay), so no host narrows or moves it.
+little-spaces-width = 240.0
+little-spaces-below = 4.0
+little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page

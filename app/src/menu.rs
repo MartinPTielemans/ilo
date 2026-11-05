@@ -97,6 +97,13 @@ pub struct Swatch {
     pub to: u32,
 }
 
+impl Swatch {
+    /// The mark as a menu draws it on `panel`, ringed where its edge would fade into the panel.
+    pub fn dot(self, panel: Rgba) -> gpui::Div {
+        crate::palette::Swatch::of_two(rgb(self.from), rgb(self.to)).draw(SWATCH, &[panel])
+    }
+}
+
 /// The menu's look: the panel's material, Ink in a dark window and Paper in a light one, and the
 /// highlight in its Space's accent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1497,10 +1504,9 @@ impl ContextMenu {
                 )
             })
         });
-        let swatch = entry.swatch.map(|swatch| {
-            let panel = rgb(palette.fill >> 8);
-            crate::palette::Swatch::of_two(rgb(swatch.from), rgb(swatch.to)).draw(SWATCH, &[panel])
-        });
+        let swatch = entry
+            .swatch
+            .map(|swatch| swatch.dot(rgb(palette.fill >> 8)));
         let favicon = entry.page.then(|| match entry.favicon.clone() {
             Some(favicon) => img(favicon)
                 .size(px(FAVICON))

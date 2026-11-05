@@ -11,7 +11,7 @@ use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, Focusable, FontWeight, Global, HoverListenerMode,
-    Hsla, Image, KeyBinding, Pixels, ScrollHandle, SharedString, TitlebarOptions, Window,
+    Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle, SharedString, TitlebarOptions, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, actions,
     div, img, point, prelude::*, px, size, svg,
 };
@@ -101,6 +101,7 @@ use crate::tokens::text;
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
+const SPACES_PLACEHOLDER: &str = "Search Spaces…";
 /// What its input says, and its chip, while it lists only commands (ours).
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
@@ -168,6 +169,8 @@ pub struct Suggestion {
     /// While the bar asks an agent (Agent task): the agent the row runs the task on, or the row
     /// that sets agents up.
     pub task: Option<TaskRow>,
+    /// The mark of the Space a Spaces menu's row sends the page to.
+    pub swatch: Option<crate::menu::Swatch>,
     /// A setting's row, which opens Settings at it: its section and its name, as Settings' search
     /// finds it.
     pub setting: Option<(Section, SharedString)>,
@@ -253,6 +256,8 @@ enum Icon {
     /// Its page's favicon, with a globe until it comes or if it has none.
     Favicon,
     Glyph(&'static str),
+    /// A Space's mark, as Move to Space's menu shows it.
+    Swatch(crate::menu::Swatch),
     None,
 }
 
@@ -291,6 +296,9 @@ impl Suggestion {
     /// Arc's: a page only in the profile's history has a clock, and an open tab or a well-known
     /// site its favicon. Each command has its own glyph.
     fn icon(&self) -> Icon {
+        if let Some(swatch) = self.swatch {
+            return Icon::Swatch(swatch);
+        }
         match &self.task {
             // Its CLI's terminal: an agent is named in words, never by its maker's logo or colour.
             Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
@@ -521,6 +529,8 @@ enum Target {
     Beside(u64),
     /// None: Search Tabs only switches to one of its tabs.
     Tabs,
+    /// None: a Little ilo window's Spaces menu only sends its page to one of its Spaces.
+    Spaces,
 }
 
 pub struct CommandBar {
@@ -568,6 +578,8 @@ pub struct CommandBar {
     favicons: HashMap<String, Option<Arc<Image>>>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
+    /// The Spaces a Spaces menu lists.
+    spaces: Vec<shell::BarSpace>,
     /// The pages shown as it opened, whose rows go last, as Arc's bar deranks the current page.
     shown: Vec<SharedString>,
     scroll: ScrollHandle,
@@ -695,6 +707,7 @@ pub fn open_at(
                 ask: None,
                 favicons: HashMap::new(),
                 tabs: Vec::new(),
+                spaces: Vec::new(),
                 shown: Vec::new(),
                 scroll: ScrollHandle::new(),
                 tipped: None,
@@ -760,6 +773,51 @@ pub fn show(
             );
         }
         None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
+    }
+}
+
+/// Shows the command bar at `bar` in the window, with the keyboard, on `editing`'s URL, selected, or
+/// empty, listing `tabs`: a Little ilo window's for ⌘L and ⌘T, inside it (Arc).
+pub fn show_in(
+    editing: Option<(u64, SharedString)>,
+    shown: Vec<SharedString>,
+    tabs: Vec<shell::BarTab>,
+    bar: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let target = editing
+        .as_ref()
+        .map_or(Target::NewTab, |&(tab, _)| Target::Tab(tab));
+    let text = editing.map(|(_, url)| url).unwrap_or_default();
+    // check.sh reads this line.
+    log!("browser: command bar opens inside the window");
+    if let Some(host) = reset(target, text, shown, tabs, false, cx) {
+        let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
+        host.show(false, left, top, width, RADIUS, Level::Modal);
+    }
+}
+
+/// Shows the compact command bar at `bar` in a Little ilo window, its Spaces menu: it lists only
+/// `spaces`, filters them by what's typed and sends the window's page to the one ↩ takes (Arc).
+pub fn show_spaces(spaces: Vec<shell::BarSpace>, bar: Bounds<Pixels>, cx: &mut App) {
+    // check.sh reads this line.
+    let ids: Vec<String> = spaces.iter().map(|space| space.space.to_string()).collect();
+    log!("browser: command bar lists spaces {}", ids.join(" "));
+    let Some(window) = cx.try_global::<CommandBarWindow>().map(|bar| bar.0) else {
+        return;
+    };
+    // Before the reset, which lists them as the bar opens.
+    window.update(cx, |bar, _, _| bar.spaces = spaces).ok();
+    if let Some(host) = reset(
+        Target::Spaces,
+        SharedString::default(),
+        Vec::new(),
+        Vec::new(),
+        true,
+        cx,
+    ) {
+        let (left, top, width) = (bar.left().into(), bar.top().into(), bar.size.width.into());
+        host.show(false, left, top, width, FIELD_RADIUS, FIELD_LEVEL);
     }
 }
 
@@ -849,6 +907,7 @@ fn reset(
             bar.task_agents = bar.learned_agents(cx);
             let placeholder = match target {
                 Target::Tabs => TABS_PLACEHOLDER,
+                Target::Spaces => SPACES_PLACEHOLDER,
                 _ => PLACEHOLDER_TEXT,
             };
             bar.input.update(cx, |input, cx| {
@@ -890,6 +949,10 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
     bar_window
         .update(cx, |bar, window, cx| {
             if !bar.open.get() {
+                return false;
+            }
+            // A Little ilo window shows its own Space alone.
+            if bar.lists_spaces() {
                 return false;
             }
             if let Target::Beside(_) = bar.target {
@@ -1048,7 +1111,7 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
             // Older text's come after the bar has asked about newer, and Search Tabs asks for none.
             // The commands-only list asks for none either, nor does an ask.
             if text != bar.request()
-                || matches!(bar.target, Target::Tabs)
+                || bar.lists_own()
                 || bar.commands.is_some()
                 || bar.ask.is_some()
             {
@@ -1127,6 +1190,19 @@ fn pasted(cx: &App) -> Option<String> {
 
 /// Whether a word of `tab`'s title, or of its site's name, starts with `typed`, lowercase. A site's
 /// name is its host's labels without the last, the top-level domain, and without a leading www.
+/// Whether a word of the Space `name` starts with `typed`, lowercase, as a tab's title is named.
+fn names_space(name: &str, typed: &str) -> bool {
+    let name = name.to_lowercase();
+    let word_start = |&(at, c): &(usize, char)| {
+        c.is_alphanumeric()
+            && !name[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+    };
+    (name.char_indices().filter(word_start)).any(|(at, _)| name[at..].starts_with(typed))
+}
+
 fn names_tab(tab: &shell::BarTab, typed: &str) -> bool {
     let title = tab.title.to_lowercase();
     let word_start = |&(at, c): &(usize, char)| {
@@ -1283,6 +1359,9 @@ impl CommandBar {
         if matches!(self.target, Target::Tabs) {
             return self.name_tabs(text, window, cx);
         }
+        if self.lists_spaces() {
+            return self.name_spaces(text, window, cx);
+        }
         if self.commands.is_some() {
             return self.list_commands(text, window, cx);
         }
@@ -1371,9 +1450,47 @@ impl CommandBar {
         }
     }
 
-    /// Whether the bar lists commands: not over a new pane or for Search Tabs.
+    /// Whether the bar lists commands: not over a new pane, for Search Tabs or a Spaces menu.
     fn lists_commands(&self) -> bool {
         matches!(self.target, Target::NewTab | Target::Tab(_))
+    }
+
+    /// Whether the bar lists only rows of its own, which nothing suggests for and ↩ alone takes:
+    /// Search Tabs' tabs or a Spaces menu's Spaces.
+    fn lists_own(&self) -> bool {
+        matches!(self.target, Target::Tabs | Target::Spaces)
+    }
+
+    fn lists_spaces(&self) -> bool {
+        matches!(self.target, Target::Spaces)
+    }
+
+    /// The Spaces menu's rows: its Spaces whose names have a word starting with `typed`, in the
+    /// sidebar's order, each sending the page to its Space.
+    fn space_rows(&self, typed: &str) -> Vec<Suggestion> {
+        (self.spaces.iter())
+            .filter(|space| typed.is_empty() || names_space(&space.name, typed))
+            .map(|space| Suggestion {
+                text: space.name.clone(),
+                command: Some(shell::Command::MoveToSpace(space.space)),
+                swatch: Some(space.swatch),
+                ..Suggestion::default()
+            })
+            .collect()
+    }
+
+    /// Lists the Spaces what's typed names.
+    fn name_spaces(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = text.trim().to_lowercase();
+        let rows = self.space_rows(&typed);
+        // check.sh reads this line.
+        let names: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
+        log!(
+            "browser: command bar finds spaces \"{typed}\": {}",
+            names.join(", ")
+        );
+        self.asked = text.clone();
+        self.set_rows(text, rows, window, cx);
     }
 
     /// Lists only the commands, entered by Tab in an empty field or by `by`, "/ ", typed, as
@@ -1722,7 +1839,7 @@ impl CommandBar {
     /// only its commands, and an ask, which goes only to an agent.
     fn typed_url(&self, text: &str) -> Option<String> {
         match &self.site {
-            _ if matches!(self.target, Target::Tabs) || self.commands.is_some() => None,
+            _ if self.lists_own() || self.commands.is_some() => None,
             _ if self.ask.is_some() => None,
             Some(site) => self.host.search_url(Some(&site.keyword), text),
             None => self.host.typed_url(text),
@@ -2042,7 +2159,7 @@ impl CommandBar {
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
     /// does for what's typed.
     fn paste_and_search(&mut self, _: &PasteAndSearch, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.target, Target::Tabs) || self.commands.is_some() || self.ask.is_some() {
+        if self.lists_own() || self.commands.is_some() || self.ask.is_some() {
             return;
         }
         let site = self.site.as_ref().map(|site| site.keyword.as_str());
@@ -2077,7 +2194,10 @@ impl CommandBar {
     /// an ask, where the keys that open a page elsewhere take what ↩ takes.
     fn takes_in_place(&self) -> bool {
         let command = self.chosen().is_some_and(Suggestion::named);
-        command || self.ask.is_some() || matches!(self.target, Target::Beside(_) | Target::Tabs)
+        command
+            || self.ask.is_some()
+            || matches!(self.target, Target::Beside(_))
+            || self.lists_own()
     }
 
     /// The page ↩ goes to: its row's, a tab's row's too, else the one what's typed names.
@@ -2115,7 +2235,7 @@ impl CommandBar {
         let typed = self.typed(cx);
         let word = !typed.is_empty() && typed.chars().all(|c| c.is_alphanumeric() || c == '-');
         let word = word && self.site.is_none() && self.commands.is_none() && self.ask.is_none();
-        let word = word && !matches!(self.target, Target::Tabs);
+        let word = word && !self.lists_own();
         word.then(|| self.host.typed_url(&format!("www.{typed}.com")))
             .flatten()
     }
@@ -2145,7 +2265,7 @@ impl CommandBar {
     /// ⇧⌘↩: searches for what was typed, even if it names a page, where ↩ goes (Dia). Search Tabs
     /// searches only its tabs.
     fn search(&mut self, _: &Search, _: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.target, Target::Tabs) || self.commands.is_some() || self.ask.is_some() {
+        if self.lists_own() || self.commands.is_some() || self.ask.is_some() {
             return;
         }
         let typed = self.typed(cx);
@@ -2265,7 +2385,7 @@ impl CommandBar {
             Target::Tab(tab) if shell::task_page_shown(tab, cx) => 0,
             Target::Tab(tab) | Target::Beside(tab) => tab,
             Target::NewTab => shell::shown_tab(cx),
-            Target::Tabs => 0,
+            Target::Tabs | Target::Spaces => 0,
         };
         if with != 0 {
             self.target = Target::Beside(with);
@@ -2276,7 +2396,7 @@ impl CommandBar {
     /// Shows `url` where the bar shows the page chosen.
     fn show_page(&self, url: &str, cx: &mut App) {
         match self.target {
-            Target::NewTab | Target::Tabs => self.host.open_tab(url, false),
+            Target::NewTab | Target::Tabs | Target::Spaces => self.host.open_tab(url, false),
             Target::Tab(tab) => self.host.navigate(tab, url),
             Target::Beside(with) => self.host.open_split(url, with, cx),
         }
@@ -2469,11 +2589,12 @@ impl CommandBar {
         }
     }
 
-    /// `row`'s icon, `size` square, in `color` where it's a glyph.
-    fn glyph(&self, row: &Suggestion, size: f32, color: Hsla) -> Option<AnyElement> {
+    /// `row`'s icon, `size` square, in `color` where it's a glyph, on `behind`.
+    fn glyph(&self, row: &Suggestion, size: f32, color: Hsla, behind: Rgba) -> Option<AnyElement> {
         Some(match row.icon() {
             Icon::Favicon => self.favicon(&row.url, size, color),
             Icon::Glyph(path) => glyph(path, size, color),
+            Icon::Swatch(swatch) => swatch.dot(behind).into_any_element(),
             Icon::None => return None,
         })
     }
@@ -2497,6 +2618,7 @@ impl CommandBar {
     fn tab_rows(&self) -> Vec<Suggestion> {
         let shown = match self.target {
             Target::Tabs => shell::BAR_ROWS,
+            Target::Spaces => return self.space_rows(""),
             _ => shell::BAR_TABS_SHOWN,
         };
         self.tabs
@@ -2519,8 +2641,12 @@ impl CommandBar {
         if !self.page.is_empty() && self.asked == self.page {
             return self.favicon(&self.page, size, color);
         }
-        let row = self.chosen().filter(|_| !self.asked.is_empty());
-        match row.and_then(|row| self.glyph(row, size, color)) {
+        // A Spaces menu searches, whichever Space is selected.
+        let row = self
+            .chosen()
+            .filter(|_| !self.asked.is_empty() && !self.lists_spaces());
+        let overlay = palette::current(cx).overlay;
+        match row.and_then(|row| self.glyph(row, size, color, overlay)) {
             Some(icon) => icon,
             None if self.commands.is_some() => glyph(COMMAND_GLYPH, size, color),
             None => glyph("icons/search.svg", size, color),
@@ -2643,6 +2769,13 @@ impl CommandBar {
             (false, Kind::Command) => Some(palette.plate(CHIP)),
             _ => None,
         };
+        // What a Space's mark is ringed against: the selected row's tile, else the panel, which a
+        // command's faint tile hardly changes.
+        let tile_behind = if selected {
+            label
+        } else {
+            Hsla::from(palette.overlay)
+        };
         let icon = div()
             .size(px(ICON_BOX))
             .mr(px(TITLE_X - ICON_BOX_X - ICON_BOX))
@@ -2652,7 +2785,7 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .when_some(tile, |icon, tile| icon.bg(tile))
-            .children(self.glyph(row, ICON_SIZE, glyph));
+            .children(self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)));
         // A key's chip: the accent's label with the accent on it on the selected row.
         let chip = |text: SharedString| {
             let (fill, text_color) = match selected {

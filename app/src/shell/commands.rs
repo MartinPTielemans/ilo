@@ -765,6 +765,15 @@ pub struct BarTab {
     pub switched: f32,
 }
 
+/// One of the user's Spaces, which a Little ilo window's Spaces menu lists for its page to go to,
+/// with the mark Move to Space's menu shows it by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarSpace {
+    pub space: u64,
+    pub name: SharedString,
+    pub swatch: crate::menu::Swatch,
+}
+
 /// The commands that do something now that match `typed`, best first.
 pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     let shell = key_shell(cx).and_then(|shell| shell.upgrade());
@@ -1333,6 +1342,16 @@ impl Shell {
         if self.private && !private_runs(command) {
             return;
         }
+        // ⌘T in a Little ilo window opens its command bar on its page, as ⌘L does (Arc): it holds
+        // one page.
+        let command = match command {
+            Command::NewTab if self.little.is_some() => Command::EditUrl,
+            command => command,
+        };
+        // Its Spaces menu sends its page to the Space picked, in the main window (Arc).
+        if let (Command::MoveToSpace(space), Some(_)) = (command, &self.little) {
+            return self.open_in_space(space, cx);
+        }
         if self.little.is_some() && !little_runs(command) {
             return;
         }
@@ -1384,10 +1403,21 @@ impl Shell {
                 let tab = self.field_tab();
                 let editing = (tab != 0).then(|| (tab, self.url(tab)));
                 self.set_bar_over_card(editing.is_none(), cx);
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
-                // Little ilo window's opens compact over its bar's title either way.
-                let field = match self.little_field_bounds() {
-                    Some(title) => Some(title),
+                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
+                // Little ilo window a click on its bar's title opens it compact over the title, and
+                // the keys inside the window.
+                let field = match self.little_field_bounds(cx) {
+                    Some(title) if from == "little bar" => Some(title),
+                    Some(_) => {
+                        let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
+                        return self.browser.command_bar_in(
+                            editing,
+                            shown,
+                            self.bar_tabs(cx),
+                            bar,
+                            cx,
+                        );
+                    }
                     None if from == "sidebar" => self.url_field_bounds(),
                     None => None,
                 };

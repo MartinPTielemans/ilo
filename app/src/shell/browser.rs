@@ -9,7 +9,9 @@ use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, p
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
-use super::{Answer, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog};
+use super::{
+    Answer, BarSpace, BarTab, DownloadAction, MenuBar, MenuEntry, PageReply, ShownPageDialog,
+};
 
 /// What the shell asks of the browser. The browser answers by updating the shell afterwards, never
 /// during the call.
@@ -422,6 +424,9 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
+    /// (host_grow_little_window).
+    fn little_drawn(&self, cx: &mut App);
     /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
     fn toggle_full_screen(&self, _cx: &mut App) {}
     /// Does what a click on the window's close, minimize or zoom button does.
@@ -606,6 +611,19 @@ pub trait Browser {
         field: Option<Bounds<Pixels>>,
         cx: &mut App,
     );
+    /// Opens the command bar at `bar` in the window, for a new tab or on `editing`'s URL, with
+    /// `tabs` to list before anything is typed: a Little ilo window's for ⌘L and ⌘T.
+    fn command_bar_in(
+        &self,
+        editing: Option<(u64, SharedString)>,
+        shown: Vec<SharedString>,
+        tabs: Vec<BarTab>,
+        bar: Bounds<Pixels>,
+        cx: &mut App,
+    );
+    /// Opens the compact command bar at `bar` in a Little ilo window, listing only `spaces` and
+    /// filtering them by what's typed, for its page to go to the one picked.
+    fn spaces_menu(&self, spaces: Vec<BarSpace>, bar: Bounds<Pixels>, cx: &mut App);
     /// Opens the command bar centred for Search Tabs, listing only `tabs` and filtering them by
     /// what's typed, to switch to one.
     fn search_tabs(&self, tabs: Vec<BarTab>, cx: &mut App);
@@ -762,9 +780,10 @@ pub trait Browser {
     /// Opens a Little ilo window for `tab`'s Space and moves `tab`, one of its Today tabs, into it,
     /// its page live with its history, as ⌥⌘-click on its row does (Arc).
     fn open_tab_in_little(&self, tab: u64, cx: &mut App);
-    /// A Little ilo window's ⌘O: moves `tab`, live, to the user's Space `home` in a regular window,
-    /// which shows it and comes to the front, and closes this window.
-    fn open_in_main_window(&self, tab: u64, home: u64, cx: &mut App);
+    /// A Little ilo window's ⌘O and its Spaces menu: moves `tab` to the user's Space `space` in a
+    /// regular window, live in the same profile and loaded again in another's, which shows it
+    /// and comes to the front, and closes this window.
+    fn open_in_main_window(&self, tab: u64, space: u64, cx: &mut App);
     /// A Little ilo window's profile picker: opens its page, at `url`, in `profile`, in a new Little ilo
     /// window for a Space of it, closing this one, and keeps `profile` for the page's site, which
     /// links from other apps then open in (Arc's Little Arc). With the window's own, only keeps it.
