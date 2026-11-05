@@ -911,11 +911,18 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let (x, y) = in_driven_point(&mut words)?;
             motion(x, y)
         })(),
-        // A notch of the wheel for each event, down for content moving up.
+        // A page, Chromium's, scrolls a notch of the wheel an event, down for content moving up, as
+        // drive.rs's does. GPUI's windows scroll by the points asked, as the Mac's trackpad events
+        // do, with two fingers on the touchpad, where a notch moves three lines.
         "scroll" => (|| {
-            let (x, y) = in_driven_point(&mut words)?;
+            let (x, y) = drive::point(&mut words)?;
             let dy: f64 = words.next()?.parse().ok()?;
             let count: i32 = words.next()?.parse().ok()?;
+            let over_page = drive::over_page(driven()?.0, x, y);
+            let (x, y) = in_driven(x, y)?;
+            if !over_page {
+                return swipe(x, y, (0., -dy), count.max(1).unsigned_abs(), 0);
+            }
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
             wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
         })(),

@@ -41,9 +41,9 @@ use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
     Look as RowLook, SLIDE, button, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, named_popup, named_switch, popup, row, switch, text,
+    named_button, named_popup, named_switch, popup, ring, ring_round, row, switch, text,
 };
-use browser::settings_search::{self, EndSearch, Entry, Search};
+use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
@@ -440,6 +440,11 @@ pub struct Settings {
     searched: String,
     /// The row a click on a found section's name showed, which flashes once, and when.
     flash: Option<(SharedString, Instant)>,
+    /// That row, which gives its control the keyboard once it has drawn, and the handle the row
+    /// takes for it, which is no stop of its own: the control is the stop after it.
+    focus_row: Option<SharedString>,
+    row_focus: FocusHandle,
+    row_drawn: Rc<Cell<bool>>,
     default_browser: Entity<DefaultBrowser>,
     account: Entity<Account>,
     /// The sites with ad blocking off, as Privacy last logged them for check.sh.
@@ -902,7 +907,12 @@ fn show_now(cx: &mut App) {
     };
     window
         .update(cx, |settings, window, cx| {
-            window.focus(&settings.focus, cx);
+            // On Settings itself, unless it opens at a row: typing goes to the search, as a
+            // type-to-search list's does (type_to_search), while ⌘Z, Esc and the rest are
+            // Settings' and its views' as they were.
+            if settings.focus_row.is_none() {
+                window.focus(&settings.focus, cx);
+            }
             settings.shown = true;
             if settings.section == Section::Agents {
                 look_for_clients(cx);
@@ -1039,6 +1049,15 @@ fn open(cx: &mut App) {
                     if dark { "dark" } else { "light" }
                 );
             }
+            // A control that had the keyboard from ⇥ and went, as a Remove's row does once its
+            // Space or Return removed it, gives it back to Settings, or to the import it was in,
+            // so ⌘W, Esc and ⌘Z still reach them.
+            cx.on_focus_out(&settings.focus.clone(), window, |_, _, window, cx| {
+                cx.defer_in(window, |settings, window, cx| {
+                    settings.keep_the_keyboard(window, cx)
+                });
+            })
+            .detach();
             cx.observe_window_appearance(window, |settings: &mut Settings, window, cx| {
                 settings.follow_appearance(window, cx)
             })
@@ -1153,6 +1172,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
                 .caret_color(look.ink)
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        // ⇥ stops at the field, after the sections.
+        let _ = search.read(cx).focus_handle(cx).tab_stop(true);
         Settings {
             account,
             #[cfg(target_os = "linux")]
@@ -1178,6 +1199,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
             search,
             searched: String::new(),
             flash: None,
+            focus_row: None,
+            row_focus: cx.focus_handle().tab_stop(false),
+            row_drawn: Rc::default(),
             off_sites_logged: None,
             drawn_logged: Rc::default(),
             popup_texts: Rc::default(),
@@ -2322,16 +2346,29 @@ impl Settings {
         .absolute()
         .inset_0();
         let a11y = self.a11y;
+        let press = Rc::new(press);
+        let pressed = press.clone();
         popup(
             &self.look,
             label.clone(),
             width,
             self.choosing == Some(which),
         )
-        .id(SharedString::from(format!("{which:?}")))
-        .when(a11y, |popup| named_popup(popup, which.spoken(), label))
         .relative()
-        .on_mouse_down(MouseButton::Left, press)
+        .id(SharedString::from(format!("popup-{which:?}")))
+        .when(a11y, |popup| named_popup(popup, which.spoken(), label))
+        // ⇥ reaches it, and Space or Return opens its menu as a press does.
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(self.look.ink))
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            press(event, window, cx)
+        })
+        .on_click(move |event, window, cx| {
+            if event.is_keyboard() {
+                pressed(&MouseDownEvent::default(), window, cx)
+            }
+        })
         .child(at)
     }
 
@@ -2354,6 +2391,11 @@ impl Settings {
         div()
             .id(name)
             .when(self.a11y, |switch| named_switch(switch, spoken, on))
+            // ⇥ reaches it, and Space or Return flips it as a click does.
+            .tab_index(0)
+            .focus_from_keys_only()
+            .rounded_full()
+            .focus_visible(ring_round(self.look.ink))
             .on_click(cx.listener(move |settings, _, _, cx| {
                 // check.sh waits for this line.
                 log!("browser: {name} {}", if on { "off" } else { "on" });
@@ -3711,6 +3753,9 @@ impl Settings {
                     "restore-{}",
                     command.key_name()
                 )))
+                .tab_index(0)
+                .focus_from_keys_only()
+                .focus_visible(ring(look.ink))
                 .size(px(CHIP_HEIGHT))
                 .flex()
                 .items_center()
@@ -3730,6 +3775,9 @@ impl Settings {
         });
         let chip = chip
             .id(SharedString::from(command.key_name()))
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(ring(look.ink))
             .when(recording, |chip| chip.border_1().border_color(accent))
             .hover(move |chip| chip.bg(hovered))
             .active(move |chip| chip.bg(pressed))
@@ -3878,9 +3926,34 @@ impl Settings {
             Some("Its notes open in a tab. What's New opens them any time.".into()),
             vec![whats_new],
         );
+        // The Mac's and Windows' own updater's: a Flatpak's updates are the system's, and the
+        // Store's are the Store's.
+        let checks = (cfg!(not(target_os = "linux")) && updates::own_updater(cx)).then(|| {
+            let on = automatic_update_checks();
+            let switch = self.toggle(
+                "automatic update checks",
+                on,
+                set_automatic_update_checks,
+                accent,
+                cx,
+            );
+            let line = match on {
+                true => "Every 8 hours, and it downloads them in the background.".to_string(),
+                false => format!(
+                    "{} won't look for new versions until you choose Check for Updates.",
+                    env!("APP_NAME")
+                ),
+            };
+            setting(
+                look,
+                "Check for updates automatically",
+                Some(line.into()),
+                vec![switch],
+            )
+        });
         let blocks = vec![
             Block::Group(group(look, version.into_iter().flatten())),
-            Block::Rows(vec![whats_new]),
+            Block::Rows(checks.into_iter().chain([whats_new]).collect()),
             Block::Group(group(look, notices)),
         ];
         Page::new(Section::About, "a good tool.", blocks)
@@ -4098,6 +4171,21 @@ fn set_edge_reveals(reveals: bool, cx: &mut App) {
 fn set_dock_icon_color(colored: bool, cx: &mut App) {
     set_off(DOCK_ICON_PLAIN, !colored);
     browser::dock_dot::set_plain(!colored, cx);
+}
+
+/// About's "Check for updates automatically", which only the Mac and Windows show.
+fn automatic_update_checks() -> bool {
+    #[cfg(not(target_os = "linux"))]
+    return crate::updates_host::automatic_checks();
+    #[cfg(target_os = "linux")]
+    true
+}
+
+fn set_automatic_update_checks(on: bool, _: &mut App) {
+    #[cfg(not(target_os = "linux"))]
+    crate::updates_host::set_automatic_checks(on);
+    #[cfg(target_os = "linux")]
+    let _ = on;
 }
 
 fn set_whats_new(shown: bool, _: &mut App) {
@@ -4442,6 +4530,12 @@ impl Render for Settings {
         }
         // Only a frame drawn on screen counts: AppKit puts the window there some frames after it's
         // shown, and a click before then finds nothing to land on.
+        // The row opened at has drawn: its control takes the keyboard, the stop after the row.
+        if self.focus_row.is_some() && self.row_drawn.get() {
+            self.focus_row = None;
+            window.focus(&self.row_focus, cx);
+            window.focus_next(cx);
+        }
         if self.shown && !window.is_visible() {
             window.request_animation_frame();
         } else if std::mem::take(&mut self.shown) {
@@ -4538,6 +4632,9 @@ impl Render for Settings {
             .capture_key_down(cx.listener(|settings, event: &KeyDownEvent, _, cx| {
                 settings.record(&event.keystroke, cx)
             }))
+            .on_key_down(cx.listener(|settings, event: &KeyDownEvent, window, cx| {
+                settings.type_to_search(event, window, cx)
+            }))
             .on_action(|_: &CloseSettings, _, cx| hide(cx))
             .on_action(cx.listener(|settings, _: &Search, window, cx| {
                 settings.recording = None;
@@ -4545,6 +4642,8 @@ impl Render for Settings {
                 window.focus(&focus, cx);
                 cx.notify();
             }))
+            .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
                 if !settings.end_search(window, cx) {
                     cx.propagate();
@@ -4746,6 +4845,57 @@ impl Settings {
         }
     }
 
+    /// Typing a character with Settings itself holding the keyboard, as it opens, starts a search
+    /// with it, as a type-to-search list does: the search field takes the keyboard and the text.
+    fn type_to_search(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let keys = &event.keystroke;
+        let Some(typed) = keys.key_char.as_deref().filter(|typed| {
+            !typed.is_empty() && typed.chars().all(|c| !c.is_control()) && *typed != " "
+        }) else {
+            return;
+        };
+        if keys.modifiers.platform || keys.modifiers.control || !self.focus.is_focused(window) {
+            return;
+        }
+        cx.stop_propagation();
+        let focus = self.search.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        let typed = typed.to_string();
+        self.search.update(cx, |search, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(search, None, &typed, window, cx)
+        });
+    }
+
+    /// Settings, or the import while it shows, takes the keyboard back once nothing in the window
+    /// holds it.
+    fn keep_the_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.focused(cx).is_some() {
+            return;
+        }
+        let import = (self.section == Section::ImportExport)
+            .then(|| {
+                self.import
+                    .as_ref()
+                    .and_then(|import| import.read(cx).focus())
+            })
+            .flatten();
+        // check.sh reads this line.
+        log!(
+            "browser: settings keyboard back to {}",
+            if import.is_some() {
+                "import"
+            } else {
+                "settings"
+            }
+        );
+        window.focus(&import.unwrap_or_else(|| self.focus.clone()), cx);
+    }
+
     /// Esc: the field empties and the section shows again. False when there was nothing to end.
     fn end_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !settings_search::end(&self.search, window, cx) {
@@ -4770,6 +4920,8 @@ impl Settings {
         // check.sh waits for this line.
         log!("browser: settings found {} › {row}", section.name());
         self.card.reveal_next();
+        self.row_drawn.set(false);
+        self.focus_row = Some(row.clone());
         self.flash = Some((row, Instant::now()));
         cx.notify();
     }
@@ -4782,10 +4934,16 @@ impl Settings {
         };
         let t = (at.elapsed().as_secs_f32() / FOUND_FLASH_TIME).min(1.);
         let up = 1. - (2. * t - 1.).abs();
+        let drawn = self.row_drawn.clone();
+        let focused = self.focus_row.as_ref() == Some(name);
         div.relative()
             .rounded(px(radius::ROW))
             .bg(self.base().opacity(FOUND_FLASH * up))
             .child(self.card.reveal())
+            .when(focused, |row| {
+                row.track_focus(&self.row_focus)
+                    .child(canvas(|_, _, _| {}, move |_, _, _, _| drawn.set(true)))
+            })
     }
 
     #[cfg(target_os = "linux")]

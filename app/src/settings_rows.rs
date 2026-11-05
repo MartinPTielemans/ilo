@@ -24,6 +24,7 @@ use crate::tokens::settings::{
     NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
     ROW_HEIGHT, ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
+use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
 
 /// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
@@ -80,6 +81,36 @@ pub fn named_popup<E: StatefulInteractiveElement>(
         .aria_label(name)
         .aria_value(item)
         .a11y_synthetic_children(|builder| builder.parent_node().set_has_popup(HasPopup::Menu))
+}
+
+/// The keyboard's ring, Focus Sidebar's: `shell.keyed-ring` wide inside the control's plate, in
+/// the ink `ink` is in at `shell.keyed`, while it has the keyboard from a key. A click shows none.
+pub fn ring(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let color = Rgba { a: KEYED, ..ink };
+    move |style| {
+        style.shadow(vec![BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(KEYED_RING),
+            inset: true,
+        }])
+    }
+}
+
+/// The same ring round a control whose own plate fills it, as a switch's pill does, which would
+/// cover a ring inside: just outside its edge, as Site Controls ring a round control.
+pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let color = Rgba { a: KEYED, ..ink };
+    move |style| {
+        style.shadow(vec![BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(KEYED_RING),
+            inset: false,
+        }])
+    }
 }
 
 /// A switch's knob slides across over 150 ms (ours).
@@ -345,6 +376,11 @@ pub fn primary(
 fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
     let (hovered, pressed) = (look.hovered, look.pressed);
     control
+        // The keyboard reaches it with ⇥, and Space or Return clicks it. A press clicks it and
+        // leaves the keyboard where a press put it before it was a stop: with the view around it.
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
         .flex_none()
         .h(px(CONTROL_HEIGHT))
         .flex()
