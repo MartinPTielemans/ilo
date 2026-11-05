@@ -143,6 +143,18 @@ impl Shell {
                     .on_mouse_up(MouseButton::Left, cx.listener(release))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(release))
             })
+            // Reload's lists its kinds of reload, right-clicked, also while it's stop (menus.rs).
+            .when(
+                matches!(command, Command::Reload | Command::Stop),
+                |button| {
+                    button.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.reload_menu(event.position, cx)
+                        }),
+                    )
+                },
+            )
             .when(enabled && lists, |button| {
                 button.on_mouse_down(
                     MouseButton::Right,

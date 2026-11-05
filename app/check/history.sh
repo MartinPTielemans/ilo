@@ -2,7 +2,9 @@
 # the header's buttons, which dim with nowhere to go, and from a swipe over the page. Reload loads
 # the page again, and while a page loads, reload is stop, which ⌘., escape and the button do. A
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
-# host typed in the command bar goes over https first, then http, and a local one over http.
+# host typed in the command bar goes over https first, then http, and a local one over http. A
+# right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, the last deleting
+# the site's cookies, storage and cache, not another site's, before the page loads again.
 
 # Back, forward, reload and stop. stuck.test leads to a server that takes connections and never
 # answers, so its page keeps loading until it's stopped, and $plain to the check's own, which has no
@@ -138,7 +140,89 @@ go_from_bar "$nearby:$port"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$nearby:$port/\$" \
   "$nearby:$port didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "$nearby:$port was tried over https"
+
+# A right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload (#1959), shown
+# light and dark. stored.html says whether its site has the cookie, the localStorage value and the
+# IndexedDB entry named by its query, then stores them: $nearby's first, another site that keeps
+# them, then 127.0.0.1's, which the third item deletes before the page loads again.
+cat > "$out/site/stored.html" << 'PAGE'
+<title>loading</title><script>
+const key = location.search.slice(1);
+const db = () => new Promise((ok, no) => {
+  const open = indexedDB.open(key, 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("items");
+  open.onsuccess = () => ok(open.result);
+  open.onerror = () => no(open.error);
+});
+const kept = async () => {
+  const base = await db();
+  const had = await new Promise(ok => {
+    const get = base.transaction("items").objectStore("items").get(key);
+    get.onsuccess = () => ok(get.result === 1);
+    get.onerror = () => ok(false);
+  });
+  await new Promise(ok => {
+    const put = base.transaction("items", "readwrite");
+    put.objectStore("items").put(1, key);
+    put.oncomplete = ok;
+  });
+  base.close();
+  return had;
+};
+(async () => {
+  const cookie = document.cookie.split("; ").includes(key + "=1") ? 1 : 0;
+  const local = localStorage.getItem(key) === "1" ? 1 : 0;
+  const entry = await kept() ? 1 : 0;
+  document.cookie = key + "=1; max-age=3600; path=/";
+  localStorage.setItem(key, "1");
+  document.title = `stored cookie ${cookie} local ${local} idb ${entry}`;
+})();
+</script>
+PAGE
+key="kept$(date +%s)"
+stored() { # <url> <cookie local idb, as 0 or 1> <what failed>
+  expect "^browser: title $tab stored cookie ${2% * *} local $(echo "$2" | cut -d' ' -f2) idb ${2##* }\$" \
+    "$3: $(grep "^browser: title $tab " "$log" | tail -1)"
+}
+reload_menu="$(cased 'Reload, Hard Reload, Clear Site Data and Reload')"
+# Picks the item $1 of reload's menu, which it opens with a right-click.
+reload_item() {
+  post rightclick $reload_button
+  expect "^browser: menu shown $reload_menu\$" \
+    "a right-click on reload didn't show its menu: $(grep '^browser: menu shown' "$log" | tail -1)"
+  send choose "$(cased "$1")"
+}
+go_from_bar "http://$nearby:$port/stored.html?$key"
+stored "$nearby" "0 0 0" "$nearby's page found its data before it stored it"
+go_from_bar "http://127.0.0.1:$port/stored.html?$key"
+stored 127.0.0.1 "0 0 0" "127.0.0.1's page found its data before it stored it"
+send key r cmd
+stored 127.0.0.1 "1 1 1" "⌘R lost the page's cookie, localStorage or IndexedDB"
+for look in dark light; do
+  item=Dark
+  [ $look = dark ] || item=Light
+  send menu "Appearance › $item"
+  expect "^browser: appearance $look\$" "View › Appearance › $item didn't change the appearance"
+  post rightclick $reload_button
+  expect "^browser: menu shown $reload_menu\$" \
+    "a right-click on reload didn't show its menu: $(grep '^browser: menu shown' "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/reload-menu-$look.png" || fail "no window to capture"
+  send key escape
+  expect '^browser: menu closed' "escape didn't close reload's menu"
+done
+send menu "Appearance › Automatic"
+reload_item Reload
+expect '^browser: command reload via sidebar$' "the menu's Reload didn't reload"
+stored 127.0.0.1 "1 1 1" "the menu's Reload lost the page's data"
+reload_item "Hard Reload"
+expect '^browser: command force-reload via sidebar$' "the menu's Hard Reload didn't force a reload"
+stored 127.0.0.1 "1 1 1" "the menu's Hard Reload lost the page's data"
+reload_item "Clear Site Data and Reload"
+expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Reload didn't run"
+stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
+go_from_bar "http://$nearby:$port/stored.html?$key"
+stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and falls back to http, and a local one goes over http at once. Windows: $out/history.png, $out/loading.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and falls back to http, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"

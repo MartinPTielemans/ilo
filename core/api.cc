@@ -1607,7 +1607,13 @@ void bc_tab_wait(bc_id id) {
 }
 
 void bc_tab_clear_site(bc_id id, bool cookies) {
-  browser_core::ClearSiteAndReload(id, cookies);
+  browser_core::ClearSiteAndReload(
+      id, cookies ? browser_core::platform::SiteData::kCookies
+                  : browser_core::platform::SiteData::kCache);
+}
+
+void bc_tab_clear_site_data(bc_id id) {
+  browser_core::ClearSiteAndReload(id, browser_core::platform::SiteData::kAll);
 }
 
 bool bc_system_engine_available(void) {

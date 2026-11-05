@@ -893,6 +893,8 @@ impl Browser for Fake {
 
     fn clear_site(&self, _: u64, _: bool, _: &mut App) {}
 
+    fn clear_site_data(&self, _: u64, _: &mut App) {}
+
     fn set_developer_mode(&self, _: u64, _: bool, _: &mut App) {}
 
     // The made-up pages ask nothing.
