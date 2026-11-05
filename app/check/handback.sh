@@ -287,6 +287,24 @@ close_little() {
   seen "^browser: window closed $little\$" 5 || true
 }
 
+# On the Mac the stand-in comes to the front to take the URL, as the app a sign-in hands back to
+# does, then quits, and macOS gives ilo the front again a moment later. The next case waits for
+# that, as the user goes back to the browser: typed while the stand-in had the front, its keys
+# went nowhere and its command bar closed as ilo stopped being the active app (#1930).
+back_from_standin() {
+  [ "$standin" = mac ] || return 0
+  for _ in $(seq 100); do
+    pgrep -f "$handback_applet/Contents/MacOS/" > /dev/null || break
+    sleep 0.1
+  done
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && return 0
+    sleep 0.1
+  done
+  fail "ilo didn't become the active app again once the stand-in app had taken the URL and quit"
+}
+
 # by_scheme <context> <case>: the case's page hands back by the scheme, and the run follows it
 # from the core's question to the stand-in's file.
 by_scheme() {
@@ -349,6 +367,7 @@ by_scheme() {
   done
   if grep -q "^$scheme://$2" "$handled"; then
     record "$1" "$2" ok
+    back_from_standin
   else
     record "$1" "$2" "Open answered, and the stand-in got nothing"
   fi
