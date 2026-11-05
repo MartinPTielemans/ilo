@@ -7,7 +7,9 @@
 # for the tab shown as it changes. A click on a pinned action runs
 # it, its popup hanging from it, and its right-click menu unpins it, opens its options or its
 # details on Chrome's extensions page, or removes it once the user confirms. The actions that don't
-# fit are behind an overflow button in the last place, whose menu runs them. Manage Extensions…
+# fit are behind an overflow button in the last place, whose menu runs them. In a Little ilo window
+# they end its bar's title, and a click on one runs it there, its popup hanging from it (#693).
+# Manage Extensions…
 # opens Chrome's extensions page. The Site Controls list every turned-on extension, unpinned ones
 # too, and a click on one's tile runs it, its popup hanging from the tile. A right-click on a tile
 # gives its menu: Move to Top pins it first, Unpin puts it back by name, and Remove asks first. An
@@ -216,6 +218,37 @@ fi
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
 close_popup
+# In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
+# click on one runs it there, its popup hanging from its button (#693).
+send key n cmd alt
+expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window"
+little=$(grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect "^browser: window opened $little\$" "the Little ilo window didn't open"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+send insert "data:text/html,<title>little</title>A page in Little ilo"
+send key return
+expect "^browser: extension actions $popup[^ ]* $clicked" "the Little ilo window didn't list the pinned actions"
+# Logged as the window first drew its bar, before its page.
+await '^browser: little bar title ends at ' || fail "the Little ilo window's bar didn't say where its title ends"
+read -r end_x end_y << EOF
+$(sed -n 's/^browser: little bar title ends at //p' "$log" | tail -1)
+EOF
+# Check Popup, before Check Clicked, which ends the title.
+send click $((end_x - 45)) "$end_y"
+expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
+expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
+../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
+if [ "$(uname)" = Linux ]; then
+  send click $((end_x - 45)) "$end_y"
+else
+  send key escape
+fi
+expect '^browser: extension popup none$' "Check Popup's popup in Little ilo didn't close"
+send key w cmd
+expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
+send window 1
 # A right-click on an action shows its menu: Manage Extension opens its details, and Unpin
 # unpins it. Check Clicked has no options.
 post rightclick $second_place

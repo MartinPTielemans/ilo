@@ -9,7 +9,9 @@
 # size the last one closed at. On the Mac one grows in, from its middle when a key opened it, else
 # from under the pointer, and is recorded doing so. It opens over a full-screen window, and the
 # Dock's menu opens one after its New Window, and hides and shows them all. One takes its Space's
-# look as its theme turns light and dark, captured with a title too long for its bar. Closed over
+# look as its theme turns light and dark, captured with a title too long for its bar. A page in one
+# goes full screen in it, as a video's button takes it, and its escape leaves full screen without
+# closing the window. Closed over
 # another app's window, one leaves that window in front and its app active, with a stand-in for the
 # app that the run opens itself.
 
@@ -618,6 +620,48 @@ if [ "$active" = 1 ]; then
 else
   echo "skip: the unused Little ilo window. Browser wasn't the active app."
 fi
+
+# A page in a Little ilo window goes full screen there, as a video's full-screen button takes it,
+# not into the main window: its window takes the page full screen, and the page's escape brings it
+# back without closing the window, as Esc closes one only with no full screen to leave (#693).
+printf '<title>loading</title><p style="font:16px system-ui">A video</p>
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+addEventListener("keydown", e => e.key == "f" && document.documentElement.requestFullscreen());
+document.addEventListener("fullscreenchange",
+  () => document.title = "fullscreen " + (document.fullscreenElement ? 1 : 0));
+</script>' > "$out/site/little-video.html"
+if [ "$active" = 1 ]; then
+  send window 1
+  send key n cmd alt
+  expect "^browser: little window opened [0-9]* profile [0-9]* home [0-9]*\$" \
+    "⌥⌘N didn't open a Little ilo window for the video"
+  video_window=$(opened)
+  expect "^browser: window opened $video_window\$" "the video's Little ilo window didn't open"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+  send insert "${site}little-video.html"
+  send key return
+  expect '^browser: title [0-9]* ready$' "the video's page didn't draw"
+  video=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  send click $page_point
+  send key f
+  expect "^browser: title $video fullscreen 1\$" "the page in Little ilo didn't go full screen"
+  expect '^browser: page entered full screen$' "the app didn't hear the page went full screen"
+  expect '^browser: window entered full screen$' "the Little ilo window didn't take the page full screen"
+  ../tools/window-screenshot.sh "$pid" "$out/little-page-fullscreen.png" all || fail "no window to capture"
+  grep -q "^browser: little window $video_window put $video " "$log" &&
+    fail "the page left its Little ilo window to go full screen"
+  send key escape
+  expect "^browser: title $video fullscreen 0\$" "escape didn't take the page out of full screen"
+  expect '^browser: window left full screen$' "the Little ilo window didn't leave full screen"
+  none_since "^browser: window closed $video_window\$" ||
+    fail "the escape that left full screen closed the Little ilo window too"
+  send key w cmd
+  expect "^browser: window closed $video_window\$" "⌘W didn't close the video's Little ilo window"
+else
+  echo "skip: a page's full screen in Little ilo. Browser wasn't the active app."
+fi
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4"
