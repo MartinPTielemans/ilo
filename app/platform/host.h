@@ -872,6 +872,14 @@ void host_check_for_updates(void);
 // Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
 void host_check_for_updates_quietly(void);
 
+// Settings › About's "Check for updates automatically" (#1793). Off, the updater asks the feed
+// nothing on its own: on the Mac, Sparkle neither checks nor downloads on its schedule; on
+// Windows, the updater's 8-hour timer doesn't fire. Check for Updates… still checks, once, when
+// asked. Given before host_start_updater, the updater starts that way; after, a change takes
+// effect at once, and turned on, the schedule runs again from the last check, which checks at
+// once if one is due. Not on Linux, whose Flatpak's updates are the system's.
+void host_set_automatic_update_checks(bool on);
+
 // Restart to Update: restarts through host_start_updater's |restart|, to relaunch into the update
 // that's HOST_UPDATE_READY. On the Mac, once macOS has checked the new version as it would at its
 // first launch, or after 15 s. Nothing installs or relaunches before the restart goes ahead

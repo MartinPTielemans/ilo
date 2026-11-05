@@ -140,10 +140,12 @@ await '^browser: account FirstDevice None$' ||
   fail "the server didn't keep the account's passkey"
 await '^browser: account On None$' || fail "the first device's recovery words didn't turn sync on"
 settings_keyboard
-at=$(drawn "sync done") || fail "Settings › Sync didn't show the recovery words with Done"
+# The words and Done show from FirstDevice on, where On can move them: a frame drawn once it's on.
+on='^browser: account On None$'
+at=$(drawn_after "sync done" "$on") || fail "Settings › Sync didn't show the recovery words with Done"
 ../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "sync copy")
+  send clickkey $(drawn_after "sync copy" "$on")
   copied_at=$(date +%s)
   words='^browser: pasteboard text \([^ ][^ ]* \)\{23\}[^ ][^ ]*$'
   for _ in $(seq 30); do
@@ -153,7 +155,7 @@ if [ "$(uname)" = Darwin ]; then
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
 fi
-send clickkey $(drawn "sync done")
+send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
   fail "sync's service didn't become active: $(grep 'browser: sync service ' "$log" | tail -1)"
 grep -q 'browser: sync engine ' "$log" || fail "sync's engine made no request"
@@ -307,7 +309,10 @@ done
 # Signing in again, Use a Passkey, after the address field and Continue, signs in with it, on a key
 # in the new window's page that holds it, with none of Chrome's dialogs: asked for any passkey, as
 # the server names none, its dialog would ask which, even of one.
-send clickkey $(drawn "sync sign-in")
+# Sign In as the signed-out frame draws it: the one before is the signed-in layout's (#1885).
+at=$(drawn_after "sync sign-in" '^browser: account SignedOut None$') ||
+  fail "Settings › Sync didn't draw Sign In once signed out"
+send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In, signed out, didn't start signing in again"
 for _ in $(seq 300); do
   [ "$(grep -c 'browser: sync sign-in loaded /authorize$' "$log")" -ge 2 ] && break

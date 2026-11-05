@@ -71,6 +71,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
         "Show what's new after an update" => &["release notes", "changelog"],
+        "Check for updates automatically" => &["auto update", "software update"],
         "Dock icon takes the Space's color" => &["dock dot"],
         _ => &[],
     }

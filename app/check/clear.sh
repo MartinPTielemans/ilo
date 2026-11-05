@@ -112,10 +112,15 @@ clear_point="200 185"
 devtools_point="150 64"
 copy_point="178 64"
 site_controls_point="206 64"
-field_point="600 760"
-# Windows' runner has a 768 pixel tall screen, which leaves the window shorter, with the page's
-# bottom 679 pt down.
-if windows; then field_point="600 650"; fi
+# The field is the page's bottom 60 pt, the page 10 above the window's foot, wherever the screen
+# leaves that: Windows' runners have given the window 761 and 792 pt.
+send layout
+drawn_height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+case "$drawn_height" in
+  [0-9]*) field_point="600 $((drawn_height - 40))" ;;
+  *) fail "the driver didn't say how tall the window is: $drawn_height" ;;
+esac
 open_from_bar example.com
 b=$tab
 open_from_bar example.org
@@ -725,7 +730,15 @@ expect "^browser: url field http://localhost:$port/index.html\$" \
 expect "^browser: developer outline $r at " "in Developer Mode the tab drew no outline"
 # In Developer Mode the URL field has DevTools' button before Copy URL, under the pointer as those
 # are: a click docks DevTools in the card, as ⌥⌘I does, and another closes them.
+# Windows' driver lists the pages the UI lays out, and docked DevTools are an aura window in
+# Chromium's, which Windows doesn't see, so there it doesn't count them, as find.sh. The Mac's sees
+# them, and Linux's lists them beside their page (drive.rs).
+case "$(uname)" in
+  Darwin | Linux) ;;
+  *) echo "skip: where DevTools' button docks DevTools: Windows' driver can't see aura windows." ;;
+esac
 page_views() {
+  case "$(uname)" in Darwin | Linux) ;; *) return 0 ;; esac
   for _ in $(seq 50); do
     send layout
     views=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
@@ -759,7 +772,7 @@ send menu Developer › Turn on Developer Mode for this site
 expect "^browser: page $r developer mode 1\$" "View › Developer didn't turn Developer Mode on"
 # Off the Mac ⌃D is pressed as Alt+D, Chrome's for the address bar, so Developer Mode has no key
 # there (commands.rs), and fields don't delete forward on it.
-if [ "$(uname)" = Linux ]; then
+if [ "$(uname)" != Darwin ]; then
   echo "skip: ⌃D for Developer Mode and forward delete: off the Mac it's Alt+D, the address bar's."
 else
   # So does ⌃D, which the page gets first: in its text field it deletes forward, as in any Mac
@@ -949,12 +962,15 @@ EOF
 # click, whose page can say it loaded WebKit before the next line runs.
 early=$(grep '^browser: system engine loaded for ' "$log" | grep -v ' for clearing a site' || true)
 # On Linux the note's button downloads Google's Widevine module from Google, which the widevine run
-# checks, so it isn't pressed here.
-[ "$(uname)" = Linux ] || send click $((nx + nw / 2)) $((ny + nh - 26))
+# checks, so it isn't pressed here, and on Windows the note has none (drm_note.rs).
+[ "$(uname)" != Darwin ] || send click $((nx + nw / 2)) $((ny + nh - 26))
 # Safari's engine keeps a store for each profile from macOS 14; before it, the note offers Safari.
 if [ "$(uname)" = Linux ]; then
   drm_done="nothing, as on Linux it offers Google's Widevine module, the widevine run's"
   echo "skip: the note's button: on Linux it downloads Google's Widevine module (the widevine run)."
+elif windows; then
+  drm_done="nothing, as on Windows the note offers none"
+  echo "skip: the note's button: on Windows the note says why the PC can't play the video, and offers nothing."
 elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   drm_done="Safari's engine"
   [ -z "$early" ] || fail "WebKit loaded before its first page: $early"
@@ -1280,7 +1296,10 @@ printf '%s' "<title>long link</title><a href=\"${site}$long_path\" style=\"posit
 # which reports no link targets.
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type "file://$PWD/$out/site/long-link.html"
+# Windows' path, D:\a\…, is file:///D:/a/….
+long_file=$(native_path "$PWD/$out/site/long-link.html" | sed 's|\\|/|g')
+case "$long_file" in /*) ;; *) long_file="/$long_file" ;; esac
+send type "file://$long_file"
 send key return
 expect '^browser: command bar hidden$' "going to the long link's page didn't close the command bar"
 expect '^browser: title [0-9]* long link$' "the page with the long link didn't load"
