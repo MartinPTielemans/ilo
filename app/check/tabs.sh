@@ -1400,13 +1400,14 @@ expect '^browser: command mute-all-tabs via command bar$' "Mute All Tabs didn't 
 expect '^browser: page [0-9]* audible [01] muted 1$' "Mute All Tabs muted no tab"
 bar_command unmute-all-tabs "Unmute All Tabs" unmute
 expect '^browser: page [0-9]* audible [01] muted 0$' "Unmute All Tabs unmuted no tab"
-# Linux's UI hears full screen as the window resizes, and the headless sway session's window fills
-# its output already, so there it's made smaller first, as a window the user goes full screen from.
-if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  size=$(grep '^browser: drawn at ' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9]*\)x\([0-9]*\)$/\1 \2/')
-  smaller="$((${size% *} - 100)) $((${size#* } - 100))"
-  send resize $smaller
-  expect "^browser: drawn at ${smaller% *}x${smaller#* }\$" "the window didn't draw smaller before full screen"
+# A window that already fills its screen goes full screen at the size it has, as a tiled one does
+# under sway or Hyprland, so the UI can't wait for a resize to hear it (#1864). The headless sway
+# session's window fills its output already; under Xvfb, openbox's tiled case is a window
+# maximized to the screen, so there it's maximized first.
+if [ "${BROWSER_HEADLESS:-}" = xvfb ]; then
+  send doubleclick 115 24
+  expect '^browser: window maximized true$' "a double-click on the header didn't maximize the window"
+  expect '^browser: drawn at 1280x800$' "the maximized window didn't draw at Xvfb's 1280 by 800 screen"
 fi
 bar_command toggle-full-screen "Enter Full Screen" "enter full"
 expect '^browser: window entered full screen$' "Enter Full Screen didn't put the window full screen"

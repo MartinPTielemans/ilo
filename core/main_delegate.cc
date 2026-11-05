@@ -53,6 +53,7 @@
 #include "browser_core/sync_spaces.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -241,6 +242,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
+    RegisterWebRtc();
     widevine::Start();
   }
 

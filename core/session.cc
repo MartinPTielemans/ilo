@@ -40,6 +40,7 @@
 #include "browser_core/space.h"
 #include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
 #include "build/build_config.h"
@@ -588,6 +589,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("unload_idle_tabs", saved.settings.unload_idle_tabs)
                            .Set("ad_blocking", saved.settings.ad_blocking)
                            .Set("send_crash_reports", saved.settings.send_crash_reports)
+                           .Set("relay_calls", saved.settings.relay_calls)
                            .Set("link_previews", saved.settings.link_previews)
                            .Set("auto_picture_in_picture",
                                 saved.settings.auto_picture_in_picture)
@@ -859,6 +861,7 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.ad_blocking = settings->FindBool("ad_blocking").value_or(true);
     saved.settings.send_crash_reports =
         settings->FindBool("send_crash_reports").value_or(false);
+    saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);
     saved.settings.link_previews = settings->FindBool("link_previews").value_or(true);
     saved.settings.auto_picture_in_picture =
         settings->FindBool("auto_picture_in_picture").value_or(true);
@@ -1226,6 +1229,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     // The profile the browser started in loaded before the settings were read.
     ApplyAdBlocking();
     ApplyAutoPictureInPicture(/*changed=*/false);
+    ApplyWebRtc();
     ArchiveDefaultRead();
     // The profiles the Spaces and favorites are in load before they come back.
     std::set<std::string> profiles;

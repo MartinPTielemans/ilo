@@ -196,6 +196,8 @@ struct Settings {
   bool ad_blocking = true;
   // Whether the browser sends its crash reports (crash_reports.h).
   bool send_crash_reports = false;
+  // Whether WebRTC goes only through TURN relays in every profile, proxy or not (webrtc.h).
+  bool relay_calls = false;
   // Whether a link to another site in a pinned tab or a favorite opens in a link preview.
   bool link_previews = true;
   // Whether a page may take its video or call into Picture in Picture as its tab is hidden, in

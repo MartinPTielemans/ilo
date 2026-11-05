@@ -2298,8 +2298,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, each profile's browsing data, and crash
-    /// reports where the build names a collector.
+    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// profile's browsing data, and crash reports where the build names a collector.
     fn privacy(
         &self,
         profiles: &[Profile],
@@ -2347,6 +2347,18 @@ impl Settings {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
         }
+        let relay = unsafe { bc::bc_relay_calls() };
+        let relay = self.toggle(
+            "relay calls",
+            "Relay calls",
+            relay,
+            set_relay_calls,
+            accent,
+            cx,
+        );
+        let line = "Calls always go through a relay. Some apps won't connect, and calls may lag.";
+        let relay = setting(look, "Relay calls", Some(line.into()), vec![relay]);
+        blocks.push(Block::Rows(vec![relay]));
         // Only a profile one of the user's Spaces is in, for Clear Browsing Data's tab to open in.
         let clear = profiles
             .iter()
@@ -4317,6 +4329,11 @@ fn set_unload_idle_tabs(unload: bool, _: &mut App) {
 /// In every profile; a site's own stays as the user set it in the Site Controls.
 fn set_ad_blocking(on: bool, _: &mut App) {
     unsafe { bc::bc_set_ad_blocking(on) };
+}
+
+/// On, a page's WebRTC goes only through its TURN relays, as it does in a profile with a proxy.
+fn set_relay_calls(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_relay_calls(on) };
 }
 
 /// Off, the next launch opens one window with no Today tabs, theirs going in the archive.

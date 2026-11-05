@@ -30,6 +30,7 @@
 #include "browser_core/session.h"
 #include "browser_core/space.h"
 #include "browser_core/system_engine.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -285,6 +286,7 @@ void UseProfile(Profile* profile) {
   ObserveDownloads(profile);
   ObserveExtensions(profile);
   ObserveHistoryDeletions(profile);
+  FollowProxy(profile);
   ApplyAutoPictureInPicture(/*changed=*/false);
   ApplyEveryday(std::nullopt);
 }

@@ -2235,6 +2235,15 @@ BC_EXPORT void bc_set_page_zoom(double factor);
 // question by default; a site the user allowed or blocked keeps its own choice.
 BC_EXPORT bool bc_notification_prompts(void);
 BC_EXPORT void bc_set_notification_prompts(bool on);
+// Whether a page's WebRTC, its calls and what it sends straight to other browsers, goes only
+// through the TURN relays the page names, in every profile and its private windows: off unless the
+// user turned it on, when a page with no relay can't connect. Off, WebRTC gathers on the default
+// route's public interface alone, which tells a page no address its HTTP didn't, except in a
+// profile that uses a proxy, which relays only and through the proxy (decision 10). A policy's,
+// an extension's or the profile's own webrtc.ip_handling_policy wins either way. The core keeps it
+// with the Spaces. The user's: agents get none.
+BC_EXPORT bool bc_relay_calls(void);
+BC_EXPORT void bc_set_relay_calls(bool on);
 // Whether a page may take its video or call into Picture in Picture as its tab is hidden, the
 // Mini Player, in every profile: on unless the user turned it off. Off blocks it by default, as
 // Chrome's settings do, and a site the user allows in its Site Controls still may. The core keeps
