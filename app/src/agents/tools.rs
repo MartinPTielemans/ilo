@@ -659,6 +659,7 @@ pub fn describe(action: &str) -> &'static str {
         "handed back" => "You handed the tab back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
+        "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
         "passkey" => "Handed you a tab for your passkey",

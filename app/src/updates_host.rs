@@ -41,7 +41,7 @@ pub(crate) fn updates_available() -> bool {
 }
 
 /// Starts checking for updates: Sparkle on the Mac, ilo's own on Windows, Flatpak's portal on
-/// Linux. Settings › About's row, Restart to Update at the sidebar's foot and Check for Updates…'s
+/// Linux. Settings › About's row, the update banner at the sidebar's foot and Check for Updates…'s
 /// title follow what it says.
 pub(crate) fn start_updates(cx: &mut App) {
     let updater = if updates_available() {
@@ -89,6 +89,8 @@ pub(crate) fn start_updates(cx: &mut App) {
             }
             unsafe { platform::host_take_install(installed) };
         }
+        // As the user left it, before the updater's first check could ask the feed anything.
+        unsafe { platform::host_set_automatic_update_checks(automatic_checks()) };
         unsafe { platform::host_start_updater(restart, update_changed) };
     }
     #[cfg(target_os = "linux")]
@@ -118,6 +120,30 @@ pub(crate) fn start_updates(cx: &mut App) {
         })
         .detach();
     }
+}
+
+/// Where Settings › About's "Check for updates automatically" is kept while it's off: the app's,
+/// not a profile's, as its updates are. On without it.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn automatic_checks_path() -> String {
+    format!("{}/no-automatic-update-checks", profile_dir())
+}
+
+/// Whether the updater checks on its schedule, which the user can turn off (#1793).
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn automatic_checks() -> bool {
+    !std::path::Path::new(&automatic_checks_path()).exists()
+}
+
+/// Turns the updater's own checks on or off, now and for the launches after.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn set_automatic_checks(on: bool) {
+    let path = automatic_checks_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    unsafe { platform::host_set_automatic_update_checks(on) };
 }
 
 /// Where the builds the user chose in Settings › About are kept: "nightly" or "release", for the
@@ -180,6 +206,18 @@ impl updates::Host for SystemUpdater {
         }
     }
 
+    /// On the Mac, Sparkle's window on the update it found and won't download by itself. Only the
+    /// Mac's updater has one to show; elsewhere it's a check, as About's.
+    fn show(&self, cx: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = cx;
+            unsafe { platform::host_check_for_updates() };
+        }
+        #[cfg(target_os = "linux")]
+        flatpak::check(cx);
+    }
+
     fn restart(&self, cx: &mut App) {
         #[cfg(not(target_os = "linux"))]
         {
@@ -225,6 +263,7 @@ pub(crate) extern "C" fn update_changed(stage: c_int, version: *const c_char) {
         platform::UPDATE_CHECKING => Stage::Checking,
         platform::UPDATE_CURRENT => Stage::Current,
         platform::UPDATE_FOUND => Stage::Found(version),
+        platform::UPDATE_AVAILABLE => Stage::Available(version),
         platform::UPDATE_DOWNLOADING => Stage::Downloading(version),
         platform::UPDATE_READY => Stage::Ready(version),
         platform::UPDATE_FAILED => Stage::Failed { found: false },

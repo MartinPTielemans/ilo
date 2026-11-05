@@ -50,7 +50,7 @@ key_window() {
 
 scratch=$(mktemp -d)
 start_with_cdp 'data:text/html,<title>account check</title>' "$profile_dir" "" \
-  --sync-url="$server_url" --log-net-log="$netlog"
+  --sync-url="$server_url" --log-net-log="$(app_path "$PWD/$netlog")"
 await_load
 await 'browser: sync service disabled, not signed in$' ||
   fail "signed out, sync isn't disabled for want of an account"
@@ -59,7 +59,7 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 send clickkey $(drawn "toolbar Sync")
 expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
 at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out.png" || fail "no window to capture"
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In didn't start signing in"
 await 'browser: sync sign-in loaded /authorize$' ||
@@ -82,7 +82,7 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
 fi
-../tools/window-screenshot.sh "$pid" "$out/sync-passkey-dialog.png" all ||
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-passkey-dialog.png" all ||
   fail "no window to capture"
 if [ "$(uname)" = Darwin ] && { [ "$keyed" = "$sign_in_key" ] || [ "$keyed" = none ]; }; then
   fail "Chrome's passkey dialog didn't take the keyboard from the sign-in window, $keyed:" \
@@ -139,10 +139,12 @@ await '^browser: account FirstDevice None$' ||
   fail "the server didn't keep the account's passkey"
 await '^browser: account On None$' || fail "the first device's recovery words didn't turn sync on"
 settings_keyboard
-at=$(drawn "sync done") || fail "Settings › Sync didn't show the recovery words with Done"
-../tools/window-screenshot.sh "$pid" "$out/sync-words.png" || fail "no window to capture"
+# The words and Done show from FirstDevice on, where On can move them: a frame drawn once it's on.
+on='^browser: account On None$'
+at=$(drawn_after "sync done" "$on") || fail "Settings › Sync didn't show the recovery words with Done"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "sync copy")
+  send clickkey $(drawn_after "sync copy" "$on")
   copied_at=$(date +%s)
   words='^browser: pasteboard text \([^ ][^ ]* \)\{23\}[^ ][^ ]*$'
   for _ in $(seq 30); do
@@ -152,7 +154,7 @@ if [ "$(uname)" = Darwin ]; then
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
 fi
-send clickkey $(drawn "sync done")
+send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
   fail "sync's service didn't become active: $(grep 'browser: sync service ' "$log" | tail -1)"
 grep -q 'browser: sync engine ' "$log" || fail "sync's engine made no request"
@@ -285,7 +287,7 @@ fi
 # Not send: the alert runs its own loop until it closes, so the driver may only finish after.
 post key return
 await '^browser: account SignedOut None$' || fail "Sign Out didn't sign out"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out-again.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out-again.png" || fail "no window to capture"
 for _ in $(seq 50); do
   left=$(stored "SELECT count(*) FROM devices")
   [ "$left" = 0 ] && break
@@ -296,7 +298,10 @@ done
 # Signing in again, Use a Passkey, after the address field and Continue, signs in with it, on a key
 # in the new window's page that holds it, with none of Chrome's dialogs: asked for any passkey, as
 # the server names none, its dialog would ask which, even of one.
-send clickkey $(drawn "sync sign-in")
+# Sign In as the signed-out frame draws it: the one before is the signed-in layout's (#1885).
+at=$(drawn_after "sync sign-in" '^browser: account SignedOut None$') ||
+  fail "Settings › Sync didn't draw Sign In once signed out"
+send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In, signed out, didn't start signing in again"
 for _ in $(seq 300); do
   [ "$(grep -c 'browser: sync sign-in loaded /authorize$' "$log")" -ge 2 ] && break

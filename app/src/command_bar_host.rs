@@ -126,10 +126,12 @@ impl command_bar::Host for Bar {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn dismiss(&self) {
         unsafe { platform::host_dismiss_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn take_keyboard(&self) {
@@ -144,10 +146,23 @@ impl command_bar::Host for Bar {
         shell::bar_commands(text, cx)
     }
 
+    fn settings_index(&self, _: &App) -> Option<std::rc::Rc<Vec<browser::settings_search::Entry>>> {
+        crate::settings::index()
+    }
+
+    fn show_setting(
+        &self,
+        section: browser::settings_column::Section,
+        name: SharedString,
+        cx: &mut App,
+    ) {
+        crate::settings::show_row(section, name, cx);
+    }
+
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
-        if !agents.is_on() {
+        if !agents.tasks_on() {
             return None;
         }
         let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
@@ -281,5 +296,6 @@ pub(crate) fn rgba_u32(color: gpui::Rgba) -> u32 {
 /// The user left the command bar without choosing anything in it.
 pub(crate) extern "C" fn command_bar_dismissed() {
     update_app(command_bar::dismissed);
+    crate::settings::bar_hidden();
     update_window(front().0, |shell, cx| shell.command_bar_dismissed(cx));
 }
