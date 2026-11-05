@@ -276,7 +276,10 @@ else
     IFS=,
     for name in $browsers; do
       name=${name# }
-      grep -q " $button \"Import\( Again\)\{0,1\} from $name…\"" "$import" ||
+      # Each name as it reads, not a pattern: the Mac's grep missed "Import from Safari…" with the
+      # pattern's optional Again before the …, though the line was there (run 41985967620).
+      grep -qF " $button \"Import from $name…\"" "$import" ||
+        grep -qF " $button \"Import Again from $name…\"" "$import" ||
         fail "the import's button for $name doesn't say it imports from $name: $import"
     done
     IFS=$old_ifs
