@@ -168,6 +168,7 @@ if [ "$(cat "$src/.windows-tags" 2>/dev/null)" != "$tags" ]; then
   apply_domsub
   write_args "$_out_dir"
   fix_tool_downloading
+  unlink_esbuild "$_src_dir"
   setup_toolchain
   target_tools "$_src_dir"
   remove_agent_instructions "$_src_dir"
