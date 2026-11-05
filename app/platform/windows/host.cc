@@ -1482,8 +1482,43 @@ struct BarComposition {
   HIMC context = nullptr;
   // TSF's focus as the hold began, the page's document.
   ITfDocumentMgr* document = nullptr;
+  // The page's input context, the thread's default the bar's shares, which the page doesn't have
+  // during the hold: Windows would end the composition with it as the page lets the keyboard go.
+  HIMC page_context = nullptr;
 };
 std::optional<BarComposition> g_bar_composition;
+
+// Until when the host logs the IME's messages to the bar and the page, from a hold to just after
+// it ends, for check.sh's logs: none of it is read.
+ULONGLONG g_ime_trace_until = 0;
+HWND g_ime_traced[2] = {};
+HHOOK g_ime_trace_hook = nullptr;
+
+LRESULT CALLBACK TraceIme(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HC_ACTION && GetTickCount64() < g_ime_trace_until) {
+    const CWPSTRUCT* sent = reinterpret_cast<CWPSTRUCT*>(lparam);
+    const char* name = nullptr;
+    switch (sent->message) {
+      case WM_IME_STARTCOMPOSITION: name = "start"; break;
+      case WM_IME_COMPOSITION: name = "composition"; break;
+      case WM_IME_ENDCOMPOSITION: name = "end"; break;
+      case WM_IME_SETCONTEXT: name = "setcontext"; break;
+      case WM_IME_NOTIFY: name = "notify"; break;
+      case WM_SETFOCUS: name = "setfocus"; break;
+      case WM_KILLFOCUS: name = "killfocus"; break;
+    }
+    const char* who = sent->hwnd == g_ime_traced[0]   ? "bar"
+                      : sent->hwnd == g_ime_traced[1] ? "page"
+                                                      : nullptr;
+    if (name && who) {
+      fprintf(stderr, "browser: ime trace %s %s %llx %llx\n", who, name,
+              static_cast<unsigned long long>(sent->wParam),
+              static_cast<unsigned long long>(sent->lParam));
+    }
+  }
+  (void)wparam;
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
 
 using SetActiveContext = BOOL(WINAPI*)(HWND, HIMC, BOOL);
 // imm32's, which Windows calls as a window gets the keyboard, and which the SDK doesn't declare.
@@ -1511,8 +1546,15 @@ void ComposeInBar() {
   if (context) {
     ImmReleaseContext(bar, context);
   }
-  BarComposition composing{bar, page, context, nullptr};
+  BarComposition composing{bar, page, context, nullptr, nullptr};
+  g_ime_traced[0] = bar;
+  g_ime_traced[1] = page;
+  g_ime_trace_until = GetTickCount64() + 3000;
+  if (!g_ime_trace_hook) {
+    g_ime_trace_hook = SetWindowsHookExW(WH_CALLWNDPROC, TraceIme, nullptr, GetCurrentThreadId());
+  }
   manager->GetFocus(&composing.document);
+  composing.page_context = ImmAssociateContext(page, nullptr);
   // The document the bridge keeps for the bar, if it associates one with its window.
   ITfDocumentMgr* associated = nullptr;
   if (SUCCEEDED(manager->AssociateFocus(bar, nullptr, &associated)) && associated) {
@@ -1560,6 +1602,7 @@ void EndBarComposition(HWND to, bool to_bar) {
   const LONG bytes =
       composing->context ? ImmGetCompositionStringW(composing->context, GCS_COMPSTR, nullptr, 0)
                          : 0;
+  g_ime_trace_until = GetTickCount64() + 1500;
   // check.sh reads this line.
   fprintf(stderr, "browser: held composition %ld characters for %s\n",
           std::max<LONG>(bytes, 0) / static_cast<LONG>(sizeof(wchar_t)),
@@ -1573,9 +1616,12 @@ void EndBarComposition(HWND to, bool to_bar) {
     if (bytes > 0) {
       ImmNotifyIME(composing->context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
     }
-    if (composing->document && GetFocus() == composing->page) {
-      ThreadManager()->SetFocus(composing->document);
-    }
+  }
+  if (composing->page_context && IsWindow(composing->page)) {
+    ImmAssociateContext(composing->page, composing->page_context);
+  }
+  if (!to_bar && composing->document && GetFocus() == composing->page) {
+    ThreadManager()->SetFocus(composing->document);
   }
   if (composing->document) {
     composing->document->Release();
