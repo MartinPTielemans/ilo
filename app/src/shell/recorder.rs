@@ -831,7 +831,15 @@ impl Browser for Recorder {
         *self.edit_titles.borrow_mut() = (undo.map(Into::into), redo.map(Into::into));
     }
 
-    fn run_extension(&self, _: &str, _: Bounds<Pixels>, _: &mut App) -> bool {
+    fn run_extension(&self, id: &str, from: Bounds<Pixels>, _: &mut App) -> bool {
+        let (origin, size) = (from.origin, from.size);
+        self.record(format!(
+            "run extension {id} from {} {} {} {}",
+            f32::from(origin.x),
+            f32::from(origin.y),
+            f32::from(size.width),
+            f32::from(size.height)
+        ));
         Default::default()
     }
 

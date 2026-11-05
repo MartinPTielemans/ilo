@@ -865,3 +865,70 @@ fn accept() -> crate::shell::PageReply {
         checked: false,
     }
 }
+
+/// A Little ilo window's pinned extensions are buttons at its bar's title's end, as at the URL
+/// field's in the sidebar, on its pitch: a click runs one, its popup hanging from its button. More
+/// than fit end in the overflow button (#693).
+#[gpui::test]
+fn its_pinned_extensions_end_its_bars_title(cx: &mut TestAppContext) {
+    use crate::shell::ExtensionAction;
+    use crate::tokens::shell::URL_BUTTON_SIZE;
+
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::little_window(browser, 9, 1, 1, None, cx));
+    // Little ilo's first size.
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(640.)));
+    let action = |id: &str| ExtensionAction {
+        id: id.to_string().into(),
+        title: id.to_string().into(),
+        icon: None,
+        badge: "".into(),
+        badge_color: 0,
+        enabled: true,
+        pinned: true,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(9, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_selected(10, cx);
+        let url = "https://example.com/".into();
+        shell.set_page(
+            10,
+            Page {
+                url,
+                ..Page::default()
+            },
+            cx,
+        );
+        shell.set_extension_actions(vec![action("guard"), action("notes")], cx);
+    });
+    cx.run_until_parked();
+    let title = shell
+        .read_with(cx, |shell, _| {
+            shell.little.as_ref().and_then(|l| l.title.get())
+        })
+        .expect("the bar's title wasn't drawn");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.shown_actions()),
+        (2, false)
+    );
+    host.take();
+    shell.update(cx, |shell, cx| shell.run_extension("notes", cx));
+    let size = URL_BUTTON_SIZE;
+    let top = f32::from(title.top()) + (f32::from(title.size.height) - size) / 2.;
+    let left = f32::from(title.right()) - size;
+    assert_eq!(
+        host.take(),
+        [format!(
+            "run extension notes from {left} {top} {size} {size}"
+        )],
+        "the last one's popup hangs from the title's end"
+    );
+
+    // More than its room: the last place is the overflow button.
+    let many: Vec<_> = (0..40).map(|n| action(&format!("e{n}"))).collect();
+    shell.update(cx, |shell, cx| shell.set_extension_actions(many, cx));
+    cx.run_until_parked();
+    let (shown, overflow) = shell.read_with(cx, |shell, _| shell.shown_actions());
+    assert!(overflow && shown < 40, "{shown} shown, overflow {overflow}");
+}

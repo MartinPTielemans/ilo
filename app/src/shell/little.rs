@@ -16,7 +16,7 @@ use gpui::{
 
 use super::{
     BarSpace, CARD_INSET, Command, DialogKind, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PageDialog,
-    Shell, Space, SpaceEntry, Swapped, TITLE, WINDOW_BUTTONS,
+    Shell, Space, SpaceEntry, Swapped, TITLE, URL_BUTTON_INSET, URL_BUTTON_SIZE, WINDOW_BUTTONS,
     access::Accessible,
     browser::Browser,
     favicon,
@@ -52,6 +52,8 @@ pub(super) struct Little {
     /// The tabs its page opened, which went behind: their pages' questions to open another app
     /// are asked here, where the user is, as a sign-in's pop-up's hand-back is (#1914).
     pub(super) sent: Vec<u64>,
+    /// Where its bar's title went in its last draw, at whose end its extensions' buttons are.
+    pub(super) title: Cell<Option<Bounds<Pixels>>>,
 }
 
 /// One of the user's Spaces, as a Little ilo window knows it: enough to name and mark it in its
@@ -112,6 +114,7 @@ impl Shell {
             drawn: false,
             picker_at: Cell::new(None),
             sent: Vec::new(),
+            title: Cell::new(None),
         });
         shell.spaces = vec![Space {
             id: space,
@@ -490,7 +493,22 @@ impl Shell {
         }
         let tab = self.selected;
         let url = self.url(tab);
-        let bounds = self.little_title_bounds(cx);
+        let row = self.little_title_bounds(cx);
+        if let Some(little) = &self.little
+            && little.title.replace(Some(row)) != Some(row)
+        {
+            // check.sh reads this line, to click the extensions' buttons at the title's end.
+            log!(
+                "browser: little bar title ends at {:.0} {:.0}",
+                f32::from(row.right()),
+                f32::from(row.center().y)
+            );
+        }
+        // The pinned extensions' buttons end the title, as they end the URL field in the sidebar,
+        // the title giving up their room.
+        let (shown, overflow) = self.shown_actions();
+        let actions = px((shown + overflow as usize) as f32 * URL_BUTTON_SIZE);
+        let bounds = Bounds::new(row.origin, size(row.size.width - actions, row.size.height));
         let end = self.little_end(cx);
         // The page's host, or with no page the URL field's placeholder, which says what a click on
         // the bar does, in the URL field's colours.
@@ -681,8 +699,21 @@ impl Shell {
             .left_0()
             .right_0()
             .h(px(LITTLE_BAR));
+        // In a strip at the title's end, where the URL field's buttons place themselves from its
+        // right, with its inset.
+        let extensions = (actions > px(0.)).then(|| {
+            let top = row.top() + (row.size.height - px(URL_BUTTON_SIZE)) / 2.;
+            div()
+                .absolute()
+                .left(row.right() - actions - px(URL_BUTTON_INSET))
+                .top(top - px(URL_BUTTON_INSET))
+                .w(actions + px(2. * URL_BUTTON_INSET))
+                .h(px(URL_BUTTON_SIZE + 2. * URL_BUTTON_INSET))
+                .children(self.action_buttons(cx))
+        });
         Some(
             bar.child(title)
+                .children(extensions)
                 .children(profile)
                 .child(copy)
                 .child(open)
