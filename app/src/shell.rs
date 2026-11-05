@@ -3711,7 +3711,7 @@ impl Render for Shell {
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
         self.step_foot(window, cx);
-        self.step_picture(window);
+        self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
         self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
@@ -3734,7 +3734,7 @@ impl Render for Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
-        self.step_empty(window);
+        self.step_empty(window, cx);
         self.step_crash_cards(window);
         let drop_targets = self
             .drag

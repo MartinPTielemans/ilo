@@ -18,11 +18,14 @@ use crate::{
 };
 
 /// A drawn shell with the pinned tab 1, the Today tabs 2, 3 and 4, and the favorite 10, showing 2.
+/// Under Reduce Motion, so the rows are in their places from the first frame: their motion runs on
+/// real time, and a press at a row's frame drawn mid-slide lands on its neighbour.
 fn with_tabs(
     cx: &mut TestAppContext,
 ) -> (gpui::Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
