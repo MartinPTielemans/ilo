@@ -52,7 +52,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$branch"
-          git commit -qm "$(cat "$WORK/pr-title")" engine/pins.ini
+          git commit -s -qm "$(cat "$WORK/pr-title")" engine/pins.ini
           git push -q origin "$branch"
           # Without "Allow GitHub Actions to create pull requests" in the repository's settings,
           # the bump still reaches the owner, as an issue naming the branch.

@@ -123,7 +123,11 @@ impl Shell {
             return;
         };
         let theme = Theme::parse(&theme);
-        if self.spaces.first().is_some_and(|own| (own.color, own.theme) != (color, theme)) {
+        if self
+            .spaces
+            .first()
+            .is_some_and(|own| (own.color, own.theme) != (color, theme))
+        {
             // check.sh reads this line, as the main window's "themed space".
             let text = theme.map_or("none".to_string(), |theme| theme.to_text());
             log!("browser: little window for {home} looks {text}");
@@ -154,7 +158,9 @@ impl Shell {
         event: &gpui::MouseDownEvent,
         cx: &mut Context<Self>,
     ) -> bool {
-        let users = self.shown_space().is_some_and(|space| space.agent.is_empty());
+        let users = self
+            .shown_space()
+            .is_some_and(|space| space.agent.is_empty());
         // ⌘ is Control off the Mac, where the platform key is Super.
         let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
         if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
@@ -183,14 +189,21 @@ impl Shell {
     /// None with only one, when there's nothing to pick.
     fn little_profiles(&self) -> Option<Vec<(u64, SharedString, bool)>> {
         let own = self.spaces.first()?.profile;
-        let profiles = self.profiles.iter().map(|(id, name)| (*id, name.clone(), *id == own));
+        let profiles = self
+            .profiles
+            .iter()
+            .map(|(id, name)| (*id, name.clone(), *id == own));
         Some(profiles.collect()).filter(|profiles: &Vec<_>| profiles.len() > 1)
     }
 
     /// The bar's buttons, from its right end: Open in Main Window, Copy Link and, while there's
     /// more than one profile, the profile picker.
     fn little_buttons(&self) -> usize {
-        if self.little_profiles().is_some() { 3 } else { 2 }
+        if self.little_profiles().is_some() {
+            3
+        } else {
+            2
+        }
     }
 
     /// The profile picker's menu, hanging from its button: the profiles, the page's checked. One
@@ -204,7 +217,10 @@ impl Shell {
             .collect();
         // From its plate's left edge, 4 under it.
         let plate = little_button_middle(self.viewport.width, 2);
-        let at = point(plate.x - px(NAV_SIZE / 2.), plate.y + px(NAV_SIZE / 2. + 4.));
+        let at = point(
+            plate.x - px(NAV_SIZE / 2.),
+            plate.y + px(NAV_SIZE / 2. + 4.),
+        );
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -234,7 +250,10 @@ impl Shell {
             return card;
         }
         let top = px(LITTLE_BAR);
-        Bounds::new(point(card.origin.x, top), size(card.size.width, card.bottom() - top))
+        Bounds::new(
+            point(card.origin.x, top),
+            size(card.size.width, card.bottom() - top),
+        )
     }
 
     /// Where the bar's title goes, which a click opens the command bar over, as the URL field's
@@ -349,23 +368,49 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| shell.copy_url_from_button(cx)))
             .child(self.swaps.glyph(
                 Swapped::CopyUrl,
-                if self.url_copied.is_some() { CHECK } else { LINK },
+                if self.url_copied.is_some() {
+                    CHECK
+                } else {
+                    LINK
+                },
                 LITTLE_GLYPH,
                 glyph,
+                cx,
             ));
-        let main = button("little-main", 0, Some(Command::OpenInMainWindow), "Open in Main Window", cx)
-            .on_click(cx.listener(|shell, _, _, cx| {
-                shell.run(Command::OpenInMainWindow, "little bar", cx)
-            }))
-            .child(svg().path("icons/external-link.svg").size(px(LITTLE_GLYPH)).text_color(glyph));
+        let main = button(
+            "little-main",
+            0,
+            Some(Command::OpenInMainWindow),
+            "Open in Main Window",
+            cx,
+        )
+        .on_click(
+            cx.listener(|shell, _, _, cx| shell.run(Command::OpenInMainWindow, "little bar", cx)),
+        )
+        .child(
+            svg()
+                .path("icons/external-link.svg")
+                .size(px(LITTLE_GLYPH))
+                .text_color(glyph),
+        );
         // Profiles' glyph, as Settings' Profiles tab has it, and nothing with only one profile. It
         // runs no command, so it has no tooltip: its menu names the profiles.
         let profile = self.little_profiles().map(|_| {
             button("little-profile", 2, None, "Profile", cx)
                 .on_click(cx.listener(|shell, _, _, cx| shell.little_profile_menu(cx)))
-                .child(svg().path("icons/user.svg").size(px(LITTLE_GLYPH)).text_color(glyph))
+                .child(
+                    svg()
+                        .path("icons/user.svg")
+                        .size(px(LITTLE_GLYPH))
+                        .text_color(glyph),
+                )
         });
-        let bar = div().absolute().top_0().left_0().right_0().h(px(LITTLE_BAR));
+        let bar = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(LITTLE_BAR));
         Some(bar.child(title).children(profile).child(copy).child(main))
     }
 }

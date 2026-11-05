@@ -21,18 +21,22 @@ mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
 # holds the last page's picture (paint holding). A page paints once it has something to draw.
-# Chrome reports the paint only once a frame from then on is presented successfully, and a page
-# that's still makes no more frames, so one whose first frame's presentation isn't reported sits
-# drawn with no paint, for good: the second login page in a tab did, on a GPU's GL in the headless
-# session (#1011). So the page asks for frames until its paint is reported.
+# Chrome reports the paint only once a frame from then on is presented successfully, and in the
+# headless session on a GPU's GL a login page sometimes drew frames, visible and focused, for 6 s
+# with no paint reported (#1011, #1069). So a page that has drawn frames for longer than paint
+# holding lasts counts as painted too.
 printf '%s' 'function painted(then) {
-  let heard = false;
+  let done = false;
+  const call = () => done || (done = true, then());
   new PerformanceObserver((entries, observer) => {
     observer.disconnect();
-    heard = true;
-    then();
+    call();
   }).observe({type: "paint", buffered: true});
-  const frame = () => heard || requestAnimationFrame(frame);
+  let first;
+  const frame = time => {
+    first ??= time;
+    time - first > 600 ? call() : done || requestAnimationFrame(frame);
+  };
   requestAnimationFrame(frame);
 }' > "$out/site/painted.js"
 printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
@@ -87,10 +91,30 @@ const say = () => document.title = "scheme " + (dark.matches ? "dark" : "light")
 say();
 dark.onchange = say;
 </script>' > "$out/site/scheme.html"
-# Its title says "login" once it has painted, "filled" each time Chrome fills a saved password in,
-# and "cleared" when the password filled in is edited. Chrome's preview of a login its dropdown has
-# highlighted fills it too, but only a fill the user chose gives the page its value, with a change
-# event, and then the title says "chosen".
+# Its title says all a page can see of the browser's colours: "seen scheme=… contrast=…
+# forced=…", then each CSS system colour the engine has as name=rrggbb, or name=none, which a
+# Space's theme must never change (#684).
+printf '%s' '<title>loading</title><div id=probe></div><script>
+const q = (m) => matchMedia(m).matches;
+const hex = (c) => (c.match(/[0-9.]+/g) || []).slice(0, 3)
+  .map((n) => Math.round(+n).toString(16).padStart(2, "0")).join("") || "none";
+const names = ["AccentColor", "AccentColorText", "Canvas", "CanvasText", "Highlight",
+  "HighlightText", "LinkText", "SelectedItem", "SelectedItemText", "ButtonFace", "Field", "Mark"];
+const colours = names.map((name) => {
+  probe.style.color = "";
+  probe.style.color = name;
+  return name + "=" + (probe.style.color ? hex(getComputedStyle(probe).color) : "none");
+});
+document.title = "seen scheme=" + (q("(prefers-color-scheme: dark)") ? "dark" : "light") +
+  " contrast=" + (q("(prefers-contrast: more)") ? "more"
+    : q("(prefers-contrast: less)") ? "less" : "no-preference") +
+  " forced=" + (q("(forced-colors: active)") ? "active" : "none") + " " + colours.join(" ");
+</script>' > "$out/site/theme.html"
+# Its title says "login" once it has painted, then "filled" each time Chrome fills a saved password
+# in, and "cleared" when the password filled in is edited. Chrome can fill a saved login before the
+# paint, so the page tells of a fill only after it, or the title would never say "login" (#1069).
+# Chrome's preview of a login its dropdown has highlighted fills it too, but only a fill the user
+# chose gives the page its value, with a change event, and then the title says "chosen".
 printf '%s' '<title>loading</title><script src="painted.js"></script>
 <form method="post" action="login">
 <input id=user name=username autocomplete=username
@@ -100,11 +124,15 @@ printf '%s' '<title>loading</title><script src="painted.js"></script>
 <button style="position:fixed;right:0;bottom:0;width:1px;height:1px"></button>
 </form>
 <script>
-painted(() => document.title == "loading" && (document.title = "login"));
+let shown = false;
+painted(() => {
+  shown = true;
+  document.title = "login";
+});
 let filled = false;
 pass.onchange = () => { if (pass.matches(":autofill") && pass.value) document.title = "chosen"; };
 setInterval(() => {
-  if (pass.matches(":autofill") != filled) {
+  if (shown && pass.matches(":autofill") != filled) {
     filled = !filled;
     document.title = filled ? "filled" : "cleared";
   }
@@ -198,6 +226,35 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/dialogs.html"
+# The devices page asks for a device from each click, whose activation USB's and Bluetooth's
+# requests use up: a HID, a USB device, a serial port and a Bluetooth device, in turn. It puts
+# each answer in its title: HID's empty list as "cancelled", the others' rejection by its error's
+# name and message, and an API the engine doesn't expose, as Linux's Bluetooth, as "unsupported".
+# The click after them says "still here".
+printf '%s' '<title>loading</title>
+<script>
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+const asks = [
+  ["hid", () => navigator.hid.requestDevice({filters: []})
+    .then(devices => devices.length ? "chosen" : "cancelled")],
+  ["usb", () => navigator.usb.requestDevice({filters: []}).then(() => "chosen")],
+  ["serial", () => navigator.serial.requestPort().then(() => "chosen")],
+  ["bluetooth", () => navigator.bluetooth.requestDevice({acceptAllDevices: true})
+    .then(() => "chosen")],
+];
+onclick = () => {
+  const [name, ask] = asks.shift() || [];
+  if (!name) {
+    document.title = "still here";
+    return;
+  }
+  document.title = name + " asking";
+  const answer = navigator[name]
+    ? new Promise(resolve => resolve(ask())).catch(e => e.name + ": " + e.message)
+    : Promise.resolve("unsupported");
+  answer.then(said => document.title = name + " " + said);
+};
+</script>' > "$out/site/devices.html"
 # The cookie page's title says whether it finds its cookie, c, never a value, since the app logs
 # every title, and how many times the server has sent its script, which the cache keeps for an
 # hour, once it has painted. Another run's cookies on the site don't count. "c" in it sets the
@@ -346,8 +403,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-        print("GET", "chromium" if "Chrome/" in agent else "safari",
-              self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none")
+        # In one write: print writes each part on its own, so two requests at once, on their own
+        # threads, ran their lines into each other and a run looking for one found neither.
+        sys.stdout.write(" ".join(["GET", "chromium" if "Chrome/" in agent else "safari",
+            self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none"]) + "\n")
         path, _, query = self.path.partition("?")
         if path == "/bounce":
             self.send_response(302)

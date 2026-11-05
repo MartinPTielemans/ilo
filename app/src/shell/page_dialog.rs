@@ -88,13 +88,24 @@ impl Shell {
         reply: PageReply,
         cx: &mut Context<Self>,
     ) {
-        if self.page_dialogs.get(&tab).is_none_or(|dialog| dialog.id != id) {
+        if self
+            .page_dialogs
+            .get(&tab)
+            .is_none_or(|dialog| dialog.id != id)
+        {
             return;
         }
-        self.page_dialogs.remove(&tab);
+        let stayed = self
+            .page_dialogs
+            .remove(&tab)
+            .is_some_and(|dialog| dialog.kind == DialogKind::Leave && !reply.accept);
         self.page_dialog_shown = None;
         // check.sh reads this line, which never has what was typed.
         log!("browser: page {tab} dialog answered {reply:?}");
+        // A page that asks to stay stops a quit, and so a restart into an update.
+        if stayed {
+            crate::updates::restart_stopped(cx);
+        }
         self.browser.answer_page_dialog(tab, id, reply, cx);
         cx.notify();
     }
@@ -113,7 +124,9 @@ impl Shell {
             (Some(dialog), Some(over)) => Some((self.selected, dialog.clone(), over)),
             _ => None,
         };
-        let key = wanted.as_ref().map(|(tab, dialog, over)| (*tab, dialog.id, *over));
+        let key = wanted
+            .as_ref()
+            .map(|(tab, dialog, over)| (*tab, dialog.id, *over));
         if self.page_dialog_shown == key {
             return;
         }

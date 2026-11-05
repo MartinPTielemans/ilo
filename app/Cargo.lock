@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.2"
+version = "0.1.5"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -684,6 +684,7 @@ dependencies = [
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "unicode-properties",
  "unicode-segmentation",
  "wayland-client",
  "wayland-protocols-misc",
@@ -2149,6 +2150,7 @@ dependencies = [
  "gpui_util",
  "gpui_wgpu",
  "http_client",
+ "image",
  "libc",
  "log",
  "notify-rust",

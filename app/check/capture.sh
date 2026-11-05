@@ -6,7 +6,8 @@
 # in a line that wraps in its list, narrow and wide, light and dark. On Windows the toast's Save
 # saves it where the system's save dialog is told, and the page has the keyboard back after.
 # Escape and a second ⇧⌘2 leave capture mode and give the page the keyboard back. File › Capture
-# Full Page copies a picture of the whole long page, past its view.
+# Full Page copies a picture of the whole long page, past its view. A drag takes the rectangle
+# dragged, and a click outside capture mode and a resize leave it.
 
 # The line saying the PNG was copied to the run's own pasteboard, and the toast's buttons after it.
 # On Linux check.sh runs in a display of its own, whose clipboard is the run's, and there's no share
@@ -59,12 +60,17 @@ capture_mode() {
 in_page() {
   awk -v x="$1" -v y="$2" -v left="$left" -v top="$top" 'BEGIN { print x + left, y + top }'
 }
+# Moves the pointer onto the box, 200 by 100 at 300, 200 in the page, and waits for it to light,
+# else fails with $1. The pointer leaves the box first. wlroots sends no motion to where the pointer
+# is already, and the last click on the box left it there (#1578).
+light_box() {
+  send move $(in_page 100 100)
+  send move $(in_page 400 250)
+  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' "$1"
+}
 
 capture_mode page
-# The box is 200 by 100 at 300, 200 in the page.
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it: $(grep '^browser: capture element' "$log" | tail -1)"
+light_box "the pointer over the box didn't light it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-element.png" || fail "no window to capture"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it"
@@ -126,9 +132,7 @@ fi
 
 # Save to Library, 37 to 61 down, saves the box's picture without a question and says so.
 capture_mode page
-send move $(in_page 400 250)
-expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-  "the pointer over the box didn't light it the second time"
+light_box "the pointer over the box didn't light it the second time"
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a second click on the box didn't take it"
 send click $(in_page 442 245)
@@ -278,9 +282,7 @@ tone() {
 capture_look() {
   capture_mode page
   expect "^browser: capture pill drawn $1\$" "capture mode's pill didn't draw in the $1 look"
-  send move $(in_page 400 250)
-  expect '^browser: capture element at [0-9.]* [0-9.]*: 300 200 200 100$' \
-    "the pointer over the box didn't light it in the $1 look"
+  light_box "the pointer over the box didn't light it in the $1 look"
   ../tools/window-screenshot.sh "$pid" "$out/capture-pill-$1.png" || fail "no window to capture"
   send click $(in_page 400 250)
   expect '^browser: capture chose 300 200 200 100$' \
@@ -315,6 +317,33 @@ expect "$copied" \
 expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
   "Capture Full Page didn't show its toast"
 
+# A drag takes the rectangle dragged, and its menu comes as a click's box's does. A click outside
+# capture mode, on the sidebar, leaves it, and so does a resize of the window.
+capture_mode page
+send press $(in_page 50 300)
+send dragto $(in_page 150 350)
+send dragto $(in_page 250 400)
+send release $(in_page 250 400)
+expect '^browser: capture chose ' "a drag didn't take a rectangle"
+dragged=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: capture chose ' |
+  sed 's/^browser: capture chose //' | awk '{ printf "%.0f %.0f %.0f %.0f", $1, $2, $3, $4 }')
+[ "$dragged" = "50 300 200 100" ] || fail "a drag took $dragged, not the rectangle dragged, 50 300 200 100"
+expect '^browser: capture menu drawn ' "the dragged rectangle's menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/capture-dragged.png" || fail "no window to capture"
+send key escape
+expect '^browser: capture left (escape)$' "escape didn't leave the dragged rectangle's menu"
+capture_mode page
+send click 100 400
+expect '^browser: capture left (dismissed)$' "a click on the sidebar didn't leave capture mode"
+# The click gives the keyboard to the UI, but on Linux the core leaves it in the page (#708).
+if [ "$(uname)" = Linux ]; then
+  capture_mode page
+else
+  capture_mode ui
+fi
+send resize 1200 760
+expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"
+
 exec 3>&-
 quit
 echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to Media's empty line, in" \
@@ -323,4 +352,5 @@ echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to M
   "$out/library-media.png, $out/media-menu.png, $out/media-empty-narrow-light.png," \
   "$out/media-empty-narrow-dark.png, $out/media-empty-wide-light.png," \
   "$out/media-empty-wide-dark.png, $out/capture-pill-light.png, $out/capture-menu-light.png," \
-  "$out/capture-pill-dark.png, $out/capture-menu-dark.png"
+  "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png." \
+  "A drag took a rectangle, and a click outside and a resize left capture mode."

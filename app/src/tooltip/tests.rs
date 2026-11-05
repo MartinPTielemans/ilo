@@ -11,8 +11,14 @@ use super::*;
 struct Recorder(RefCell<Vec<String>>);
 
 impl Host for Recorder {
-    fn show(&self, window: u64, left: f32, top: f32) {
-        self.0.borrow_mut().push(format!("show {left} {top} over {window}"));
+    fn show(&self, over: Over, left: f32, top: f32) {
+        let over = match over {
+            Over::Window(window) => window.to_string(),
+            Over::Overlay(overlay) => format!("overlay {overlay}"),
+        };
+        self.0
+            .borrow_mut()
+            .push(format!("show {left} {top} over {over}"));
     }
 
     fn hide(&self) {
@@ -22,7 +28,8 @@ impl Host for Recorder {
 
 fn open_tooltip(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| open(host.clone(), cx)).expect("no tooltip window");
+    cx.update(|cx| open(host.clone(), cx))
+        .expect("no tooltip window");
     host
 }
 
@@ -70,7 +77,11 @@ fn after(cx: &mut TestAppContext, host: &Recorder, time: Duration) -> Vec<String
 /// Whether the delay's timer is running.
 fn waiting(cx: &mut TestAppContext) -> bool {
     let window = cx.update(|cx| cx.global::<TooltipWindow>().0);
-    cx.update(|cx| window.update(cx, |tooltip, _, _| tooltip.wait.is_some()).unwrap())
+    cx.update(|cx| {
+        window
+            .update(cx, |tooltip, _, _| tooltip.wait.is_some())
+            .unwrap()
+    })
 }
 
 fn window() -> Size<Pixels> {
@@ -128,7 +139,10 @@ fn it_shows_only_once_the_pointer_rests(cx: &mut TestAppContext) {
     }
     assert!(waiting(cx));
     assert!(after(cx, &host, DELAY - Duration::from_millis(1)).is_empty());
-    assert_eq!(after(cx, &host, Duration::from_millis(1)), [placed(cx, "Docs", tile_a())]);
+    assert_eq!(
+        after(cx, &host, Duration::from_millis(1)),
+        [placed(cx, "Docs", tile_a())]
+    );
     // Once it shows, a move keeps it where it is, and starts no timer.
     cx.update(moved);
     assert!(!waiting(cx));
@@ -185,8 +199,12 @@ fn the_next_tile_shows_at_once(cx: &mut TestAppContext) {
 #[gpui::test]
 fn each_tooltip_is_placed_from_its_own_width_whichever_was_before_it(cx: &mut TestAppContext) {
     let host = open_tooltip(cx);
-    let tile =
-        |middle: f32| Anchor::under(frame(middle - 33., 90., 66., 41.), size(px(1400.), px(900.)));
+    let tile = |middle: f32| {
+        Anchor::under(
+            frame(middle - 33., 90., 66., 41.),
+            size(px(1400.), px(900.)),
+        )
+    };
     let titles = [
         ("Creating A World That Doesn't Exist", tile(41.)),
         ("Elon Musk on X: a post / X", tile(114.)),
@@ -214,7 +232,10 @@ fn each_tooltip_is_placed_from_its_own_width_whichever_was_before_it(cx: &mut Te
 fn it_shows_over_the_window_the_pointer_is_in(cx: &mut TestAppContext) {
     let host = open_tooltip(cx);
     hover_in(cx, 2, "Docs", tile_a());
-    assert_eq!(after(cx, &host, DELAY), [placed_in(cx, 2, "Docs", tile_a())]);
+    assert_eq!(
+        after(cx, &host, DELAY),
+        [placed_in(cx, 2, "Docs", tile_a())]
+    );
     cx.update(dismiss);
     host.0.take();
     hover_in(cx, 1, "Mail", tile_b());
@@ -227,7 +248,10 @@ fn it_shows_over_the_window_the_pointer_is_in(cx: &mut TestAppContext) {
     hover_in(cx, 1, "Mail", tile_b());
     after(cx, &host, DELAY / 2);
     hover_in(cx, 2, "Docs", tile_a());
-    assert_eq!(after(cx, &host, DELAY), [placed_in(cx, 2, "Docs", tile_a())]);
+    assert_eq!(
+        after(cx, &host, DELAY),
+        [placed_in(cx, 2, "Docs", tile_a())]
+    );
 }
 
 #[gpui::test]
@@ -322,7 +346,10 @@ fn a_tooltip_goes_above_when_there_is_no_room_below() {
     assert_eq!(top, 670.5 - BUTTON_Y - HEIGHT);
     assert_eq!(near(bottom, 100., HEIGHT), Near::BottomLeft);
     // It fits below with exactly no room to spare.
-    let snug = Anchor::under(frame(8., 700. - HEIGHT - BUTTON_Y - 20., 80., 40.), window());
+    let snug = Anchor::under(
+        frame(8., 700. - HEIGHT - BUTTON_Y - 20., 80., 40.),
+        window(),
+    );
     assert_eq!(place(snug, SIZE).1, 700. - HEIGHT);
     // A folder's row goes above with the gap.
     let low = Anchor::titled(frame(8., 650., 220., 36.), 35., window());
@@ -383,7 +410,12 @@ fn a_header_buttons_tooltip_hangs_off_its_glyphs_bottom_right() {
 #[test]
 fn a_name_alone_has_its_text_11_in_and_10_before_the_end() {
     let layout = layout(60., &[]);
-    let alone = Layout { width: 11. + 60. + 10., text: 60., truncated: false, chips: vec![] };
+    let alone = Layout {
+        width: 11. + 60. + 10.,
+        text: 60.,
+        truncated: false,
+        chips: vec![],
+    };
     assert_eq!(layout, alone);
 }
 
@@ -392,7 +424,10 @@ fn chips_follow_the_text_on_arcs_pitch() {
     // View Library ⇧⌘L: 8 after the text, 18.5 wide on a pitch of 22, and 10 after the last.
     let layout = layout(70., &[CHIP, CHIP, CHIP]);
     let first = 11. + 70. + 8.;
-    assert_eq!(layout.chips, [(first, 18.5), (first + 22., 18.5), (first + 44., 18.5)]);
+    assert_eq!(
+        layout.chips,
+        [(first, 18.5), (first + 22., 18.5), (first + 44., 18.5)]
+    );
     assert_eq!(layout.width, first + 44. + 18.5 + 10.);
     assert!(!layout.truncated);
 }
@@ -402,7 +437,14 @@ fn a_wider_chip_moves_the_next() {
     // A key named in words, as Space is, between two glyphs.
     let layout = layout(50., &[CHIP, 40., CHIP]);
     let first = 11. + 50. + 8.;
-    assert_eq!(layout.chips, [(first, 18.5), (first + 22., 40.), (first + 22. + 43.5, 18.5)]);
+    assert_eq!(
+        layout.chips,
+        [
+            (first, 18.5),
+            (first + 22., 40.),
+            (first + 22. + 43.5, 18.5)
+        ]
+    );
     assert_eq!(layout.width, first + 22. + 43.5 + 18.5 + 10.);
 }
 
@@ -435,7 +477,10 @@ fn a_keys_chip_is_square_unless_its_name_is_wider(cx: &mut TestAppContext) {
 
 #[test]
 fn the_log_names_the_keys_as_a_menu_does() {
-    let tip = Tip { text: "View Library".into(), keys: vec!["⇧".into(), "⌘".into(), "L".into()] };
+    let tip = Tip {
+        text: "View Library".into(),
+        keys: vec!["⇧".into(), "⌘".into(), "L".into()],
+    };
     assert_eq!(label(&tip), "View Library ⇧⌘L");
     assert_eq!(label(&Tip::named("Docs".into())), "Docs");
 }

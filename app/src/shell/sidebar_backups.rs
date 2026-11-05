@@ -24,6 +24,12 @@ impl Shell {
         self.update_menus(cx);
     }
 
+    /// Whether the shown Space's profile has a backup to bring back, which Settings › Tabs &
+    /// Sidebar offers once it has.
+    pub fn has_sidebar_backups(&self) -> bool {
+        !self.shown_backups().is_empty()
+    }
+
     /// The shown Space's profile's backups, newest first; none in an agent's Space.
     pub(super) fn shown_backups(&self) -> &[SidebarBackup] {
         let shown = self.shown_space().filter(|space| space.agent.is_empty());
@@ -100,7 +106,10 @@ mod tests {
     };
 
     fn backup(time: u64, label: &str) -> SidebarBackup {
-        SidebarBackup { time, label: label.to_string().into() }
+        SidebarBackup {
+            time,
+            label: label.to_string().into(),
+        }
     }
 
     /// Help lists the shown Space's profile's backups, and one chosen is restored once the user
@@ -109,39 +118,59 @@ mod tests {
     fn a_backup_chosen_from_help_is_restored_once_confirmed(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
         assert!(host.menu_bar.borrow().sidebar_backups.is_empty());
-        let backups = vec![backup(2000, "Thursday 29 October, 14:32"), backup(1000, "Wednesday")];
-        shell.update(cx, |shell, cx| shell.set_sidebar_backups(0, backups.clone(), cx));
+        let backups = vec![
+            backup(2000, "Thursday 29 October, 14:32"),
+            backup(1000, "Wednesday"),
+        ];
+        shell.update(cx, |shell, cx| {
+            shell.set_sidebar_backups(0, backups.clone(), cx)
+        });
         assert_eq!(host.menu_bar.borrow().sidebar_backups, backups);
         // Another profile's aren't this Space's.
-        shell.update(cx, |shell, cx| shell.set_sidebar_backups(7, vec![backup(5, "x")], cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_sidebar_backups(7, vec![backup(5, "x")], cx)
+        });
         assert_eq!(host.menu_bar.borrow().sidebar_backups, backups);
 
         host.take();
-        shell.update(cx, |shell, cx| shell.run(Command::RestoreSidebar(2000), "ui", cx));
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::RestoreSidebar(2000), "ui", cx)
+        });
         let (message, detail, confirmed) = host.confirming.borrow_mut().take().unwrap();
-        assert_eq!(message, "Restore the sidebar from Thursday 29 October, 14:32?");
+        assert_eq!(
+            message,
+            "Restore the sidebar from Thursday 29 October, 14:32?"
+        );
         assert!(detail.contains("this profile's"), "{detail}");
-        assert!(!host.take().iter().any(|call| call.starts_with("restore sidebar")));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|call| call.starts_with("restore sidebar"))
+        );
         cx.update(confirmed);
         assert!(host.take().contains(&"restore sidebar 2000".to_string()));
 
         // One the core no longer lists asks nothing.
-        shell.update(cx, |shell, cx| shell.run(Command::RestoreSidebar(3000), "ui", cx));
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::RestoreSidebar(3000), "ui", cx)
+        });
         assert!(host.confirming.borrow().is_none());
     }
 
     /// Where there's no menu bar, the command bar offers Restore Earlier Sidebar… once there's a
     /// backup, and lists the profile's by their labels, newest first. One chosen asks first.
     #[gpui::test]
-    fn the_command_bar_lists_the_backups_and_restores_one_once_confirmed(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_command_bar_lists_the_backups_and_restores_one_once_confirmed(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10], Folders::default());
         let offered = |cx: &mut TestAppContext| {
             shell.read_with(cx, |shell, _| shell.offers(Command::RestoreEarlierSidebar))
         };
         assert!(!offered(cx), "nothing to restore yet");
-        let backups = vec![backup(2000, "Thursday 29 October, 14:32"), backup(1000, "Wednesday")];
+        let backups = vec![
+            backup(2000, "Thursday 29 October, 14:32"),
+            backup(1000, "Wednesday"),
+        ];
         shell.update(cx, |shell, cx| shell.set_sidebar_backups(0, backups, cx));
         assert!(offered(cx));
         let keys = Default::default();
@@ -158,7 +187,12 @@ mod tests {
         cx.update(|cx| host.choose("Wednesday", cx));
         let (message, _, confirmed) = host.confirming.borrow_mut().take().unwrap();
         assert_eq!(message, "Restore the sidebar from Wednesday?");
-        assert!(!host.take().iter().any(|call| call.starts_with("restore sidebar")));
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|call| call.starts_with("restore sidebar"))
+        );
         cx.update(confirmed);
         assert!(host.take().contains(&"restore sidebar 1000".to_string()));
     }
@@ -172,8 +206,24 @@ mod tests {
         shell.update(cx, |shell, cx| {
             shell.set_spaces(
                 vec![
-                    (1, "Space 1".into(), None, 0, "".into(), "".into(), "".into()),
-                    (2, "Research".into(), None, 0, "".into(), "Claude Code".into(), "".into()),
+                    (
+                        1,
+                        "Space 1".into(),
+                        None,
+                        0,
+                        "".into(),
+                        "".into(),
+                        "".into(),
+                    ),
+                    (
+                        2,
+                        "Research".into(),
+                        None,
+                        0,
+                        "".into(),
+                        "Claude Code".into(),
+                        "".into(),
+                    ),
                 ],
                 cx,
             );
@@ -188,9 +238,17 @@ mod tests {
         assert!(!offered(cx));
         assert!(host.menu_bar.borrow().sidebar_backups.is_empty());
         let menus = host.menus.borrow().len();
-        shell.update(cx, |shell, cx| shell.run(Command::RestoreEarlierSidebar, "ui", cx));
-        shell.update(cx, |shell, cx| shell.run(Command::RestoreSidebar(2000), "ui", cx));
-        assert_eq!(host.menus.borrow().len(), menus, "no list in the agent's Space");
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::RestoreEarlierSidebar, "ui", cx)
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::RestoreSidebar(2000), "ui", cx)
+        });
+        assert_eq!(
+            host.menus.borrow().len(),
+            menus,
+            "no list in the agent's Space"
+        );
         assert!(host.confirming.borrow().is_none());
 
         shell.update(cx, |shell, cx| shell.set_space(1, cx));

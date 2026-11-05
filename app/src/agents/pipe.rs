@@ -27,8 +27,9 @@ use windows_sys::Win32::Security::{
     SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FlushFileBuffers,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    WriteFile,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::{
@@ -37,8 +38,8 @@ use windows_sys::Win32::System::Pipes::{
     WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, OpenProcessToken, SetEvent, WaitForMultipleObjects,
-    WaitForSingleObject, INFINITE,
+    CreateEventW, GetCurrentProcess, INFINITE, OpenProcessToken, SetEvent, WaitForMultipleObjects,
+    WaitForSingleObject,
 };
 
 /// What each end buffers.
@@ -106,8 +107,15 @@ pub struct Pipe {
 
 impl Pipe {
     fn new(pipe: Handle, server: bool) -> io::Result<Pipe> {
-        let connection = Connection { pipe, closed: event()?, server };
-        Ok(Pipe { connection: Arc::new(connection), event: event()? })
+        let connection = Connection {
+            pipe,
+            closed: event()?,
+            server,
+        };
+        Ok(Pipe {
+            connection: Arc::new(connection),
+            event: event()?,
+        })
     }
 
     /// Connects to the server's pipe at `path`, if it's the user's.
@@ -118,7 +126,15 @@ impl Pipe {
             let flags = FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION;
             let access = GENERIC_READ | GENERIC_WRITE;
             let opened = unsafe {
-                CreateFileW(name.as_ptr(), access, 0, null(), OPEN_EXISTING, flags, null_mut())
+                CreateFileW(
+                    name.as_ptr(),
+                    access,
+                    0,
+                    null(),
+                    OPEN_EXISTING,
+                    flags,
+                    null_mut(),
+                )
             };
             if opened != INVALID_HANDLE_VALUE {
                 let pipe = Handle(opened);
@@ -142,7 +158,10 @@ impl Pipe {
     }
 
     pub fn try_clone(&self) -> io::Result<Pipe> {
-        Ok(Pipe { connection: self.connection.clone(), event: event()? })
+        Ok(Pipe {
+            connection: self.connection.clone(),
+            event: event()?,
+        })
     }
 
     /// Ends the connection: what waits on it here returns, and the server's end disconnects the
@@ -191,8 +210,15 @@ impl Pipe {
 
 /// Whether the error is the connection's end: the other side closed it, or this one did.
 fn ended(error: &io::Error) -> bool {
-    let ends = [ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED, ERROR_NO_DATA, ERROR_OPERATION_ABORTED];
-    error.raw_os_error().is_some_and(|code| ends.contains(&(code as u32)))
+    let ends = [
+        ERROR_BROKEN_PIPE,
+        ERROR_PIPE_NOT_CONNECTED,
+        ERROR_NO_DATA,
+        ERROR_OPERATION_ABORTED,
+    ];
+    error
+        .raw_os_error()
+        .is_some_and(|code| ends.contains(&(code as u32)))
 }
 
 impl Read for Pipe {
@@ -203,8 +229,15 @@ impl Read for Pipe {
         let mut overlapped = self.overlapped();
         let length = buffer.len().min(u32::MAX as usize) as u32;
         let pipe = self.connection.pipe.0;
-        let started =
-            unsafe { ReadFile(pipe, buffer.as_mut_ptr(), length, null_mut(), &mut overlapped) };
+        let started = unsafe {
+            ReadFile(
+                pipe,
+                buffer.as_mut_ptr(),
+                length,
+                null_mut(),
+                &mut overlapped,
+            )
+        };
         match self.finish(&mut overlapped, started) {
             Err(error) if ended(&error) => Ok(0),
             read => read,
@@ -228,7 +261,21 @@ impl Write for Pipe {
         }
     }
 
+    /// On the server's end, waits until the client has read what was written to it: closing
+    /// the connection disconnects it, which throws away what the client hasn't read yet
+    /// (DisconnectNamedPipe), so a stopped agent never heard that the user stopped it. On the
+    /// connection's own threads, never the UI's, as a client that doesn't read keeps it waiting.
     fn flush(&mut self) -> io::Result<()> {
+        if !self.connection.server || self.is_closed() {
+            return Ok(());
+        }
+        if unsafe { FlushFileBuffers(self.connection.pipe.0) } == 0 {
+            let error = io::Error::last_os_error();
+            return Err(match ended(&error) {
+                true => io::ErrorKind::BrokenPipe.into(),
+                false => error,
+            });
+        }
         Ok(())
     }
 }
@@ -246,7 +293,11 @@ impl Listener {
         let name = wide(path);
         let security = Descriptor::users_alone()?;
         let next = instance(&name, &security, true)?;
-        Ok(Listener { name, security, next })
+        Ok(Listener {
+            name,
+            security,
+            next,
+        })
     }
 
     /// The next client's connection, once one connects. An error means no more can.
@@ -265,7 +316,9 @@ impl Listener {
                 return Ok(taken);
             }
         }
-        Err(io::Error::other("clients kept going before they were taken"))
+        Err(io::Error::other(
+            "clients kept going before they were taken",
+        ))
     }
 }
 
@@ -283,7 +336,16 @@ fn instance(name: &[u16], security: &Descriptor, first: bool) -> io::Result<Pipe
     let mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
     let made = unsafe {
         let most = PIPE_UNLIMITED_INSTANCES;
-        CreateNamedPipeW(name.as_ptr(), open, mode, most, BUFFER, BUFFER, 0, &attributes)
+        CreateNamedPipeW(
+            name.as_ptr(),
+            open,
+            mode,
+            most,
+            BUFFER,
+            BUFFER,
+            0,
+            &attributes,
+        )
     };
     match made == INVALID_HANDLE_VALUE {
         true => Err(io::Error::last_os_error()),
@@ -308,7 +370,10 @@ impl Descriptor {
     /// service and no administrator but by taking ownership.
     fn users_alone() -> io::Result<Descriptor> {
         let user = User::current()?.text()?;
-        let text: Vec<u16> = format!("O:{user}D:P(A;;GA;;;{user})").encode_utf16().chain([0]).collect();
+        let text: Vec<u16> = format!("O:{user}D:P(A;;GA;;;{user})")
+            .encode_utf16()
+            .chain([0])
+            .collect();
         let mut made = null_mut();
         let converted = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -339,7 +404,13 @@ impl User {
         unsafe { GetTokenInformation(token.0, TokenUser, null_mut(), 0, &mut length) };
         let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
         let read = unsafe {
-            GetTokenInformation(token.0, TokenUser, buffer.as_mut_ptr().cast(), length, &mut length)
+            GetTokenInformation(
+                token.0,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
         };
         match read == 0 {
             true => Err(io::Error::last_os_error()),
@@ -357,7 +428,9 @@ impl User {
         if unsafe { ConvertSidToStringSidW(self.sid(), &mut text) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let length = (0..).take_while(|&at| unsafe { *text.add(at) } != 0).count();
+        let length = (0..)
+            .take_while(|&at| unsafe { *text.add(at) } != 0)
+            .count();
         let read = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
         unsafe { LocalFree(text.cast()) };
         Ok(read)
@@ -391,4 +464,42 @@ fn owned_by_user(pipe: &Handle) -> io::Result<bool> {
 
 fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::{Listener, Pipe};
+
+    /// What the server writes and flushes before it closes the connection reaches a client that
+    /// reads only after, as the bridge may: the answer to a call the user stopped, written just
+    /// before the stop closes the connection.
+    #[test]
+    fn what_the_server_flushes_before_closing_reaches_a_client_that_reads_after() {
+        let path = std::path::PathBuf::from(format!(
+            r"\\.\pipe\{}-pipe-test-{}",
+            env!("APP_NAME"),
+            std::process::id()
+        ));
+        let mut listener = Listener::bind(&path).unwrap();
+        let client = Pipe::connect(&path).unwrap();
+        let mut server = listener.accept().unwrap();
+        let (closed, heard) = mpsc::channel();
+        let writing = std::thread::spawn(move || {
+            writeln!(server, "the user stopped you").unwrap();
+            server.flush().unwrap();
+            server.close();
+            _ = closed.send(());
+        });
+        // Read once the server has closed, or, while its flush waits for the read, a moment on:
+        // no flush and the line is gone by then.
+        _ = heard.recv_timeout(Duration::from_millis(200));
+        let mut line = String::new();
+        BufReader::new(client).read_line(&mut line).unwrap();
+        assert_eq!(line, "the user stopped you\n");
+        writing.join().unwrap();
+    }
 }

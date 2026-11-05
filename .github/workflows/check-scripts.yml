@@ -1,0 +1,73 @@
+# On the Mac, app/check.sh and the runs it sources run under /bin/sh, which is bash 3.2.57 in POSIX
+# mode, and a file that starts #!/bin/bash under bash 3.2. Linux's dash and bash 5 take what 3.2
+# can't, so the scripts may hold none of:
+# - bash 4 features: declare -A, ${var,,}, mapfile, |&, ;& and so on;
+# - a process substitution, <( ), outside a #!/bin/bash file;
+# - an apostrophe in a comment inside $( ), or inside a single-quoted string.
+# On 2026-10-28 such a comment stopped the Mac's whole run for #415 after it passed sh -n on Linux,
+# and a parse error in a sourced run ends the check (#1267). This job builds bash 3.2 from GNU's
+# source once, caches it, and parses each script as the Mac would. A parse misses the bash 4
+# features that fail only when they run, so a grep finds those.
+name: Check scripts
+
+on:
+  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  push:
+    branches: ['**']
+    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+  pull_request:
+    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bash32:
+    name: bash 3.2
+    # Every pull request too: a push runs this only when its own diff touched a script, so a branch's
+    # head can have no push run at all (#1834).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/bash32
+          key: bash-3.2.57-ubuntu-24.04
+
+      - name: Build bash 3.2.57
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO https://ftp.gnu.org/gnu/bash/bash-3.2.57.tar.gz
+          echo '3fa9daf85ebf35068f090ce51283ddeeb3c75eb5bc70b1a4a7cb05868bfe06a4  bash-3.2.57.tar.gz' | sha256sum -c
+          tar xzf bash-3.2.57.tar.gz
+          cd bash-3.2.57
+          ./configure --without-bash-malloc --disable-nls -q
+          make -j"$(nproc)" -s
+          mkdir -p ~/bash32 && cp bash ~/bash32/
+
+      - name: Parse each script as the Mac would
+        run: |
+          status=0
+          for file in app/check.sh app/check/*.sh; do
+            # Sourced on Windows alone, by Git Bash's bash 5.
+            [ "$file" = app/check/git-bash.sh ] && continue
+            if [ "$(head -n 1 "$file")" = '#!/bin/bash' ]; then mode=; else mode=--posix; fi
+            ~/bash32/bash $mode -n "$file" || { echo "::error file=$file::bash 3.2 can't parse it"; status=1; }
+          done
+          # bash 4 features a parse takes but 3.2 fails on when it runs, outside comments.
+          if grep -nE '^[^#]*(declare -A|local -A|typeset -A|\<mapfile\>|\<readarray\>|\<coproc\>|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^))' app/check.sh app/check/*.sh; then
+            echo "::error::bash 4 features above, which the Mac's bash 3.2 lacks"
+            status=1
+          fi
+          exit $status

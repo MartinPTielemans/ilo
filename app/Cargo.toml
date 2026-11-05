@@ -1,6 +1,6 @@
 [package]
 name = "browser"
-version = "0.1.2"
+version = "0.1.5"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"
@@ -31,6 +31,9 @@ gpui_platform = { path = ".deps/zed/crates/gpui_platform", features = ["font-kit
 image = { version = "0.25", default-features = false, features = ["png"] }
 raw-window-handle = "0.6"
 unicode-segmentation = "1.10"
+# Which characters make a word for a field's word moves, as AppKit's: letters, numbers, marks
+# and symbols. Already in the tree through GPUI's dependencies.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 # The emoji picker's table: names, groups and shortcodes, built in as static data.
 emojis = "0.9"
 # Arc's sidebar and Chromium's Local State, read by the import, and the agents' MCP server's
