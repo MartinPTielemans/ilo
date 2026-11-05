@@ -572,6 +572,9 @@ pub struct Agents {
     asking: Vec<Asking>,
     /// The downloads the user let agents' pages make, by download.
     downloading: HashMap<u64, Downloading>,
+    /// How the downloads that ended while their question waited ended, by download: a small file
+    /// can come whole before the core's pause holds it, and its yes then answers at once.
+    ended: HashMap<u64, DownloadEnd>,
     /// The sites where each agent may (true) or may never (false) do what asks first.
     grants: HashMap<String, HashMap<String, bool>>,
     /// What each agent did last, as the log says it.
@@ -722,6 +725,7 @@ impl Agents {
             had: HashMap::new(),
             asking: Vec::new(),
             downloading: HashMap::new(),
+            ended: HashMap::new(),
             grants: HashMap::new(),
             doing: HashMap::new(),
             pins: HashMap::new(),
@@ -2401,6 +2405,7 @@ impl Agents {
         {
             if asking.act.download != 0 {
                 self.browser.answer_download(asking.act.download, false);
+                self.ended.remove(&asking.act.download);
             }
         }
         self.asking.retain(|asking| asking.act.agent != agent);
@@ -2421,6 +2426,7 @@ impl Agents {
     fn refuse(&mut self, act: Act, site: &str, why: &str, cx: &mut Context<Self>) {
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
+            self.ended.remove(&act.download);
         }
         self.note(&act.agent, act.action, site, why);
         cx.notify();
@@ -2595,6 +2601,10 @@ impl Agents {
         self.note(&agent, "download", &site(&url), "");
         cx.notify();
         self.browser.answer_download(download, true);
+        if let Some(end) = self.ended.remove(&download) {
+            _ = reply.send(download_answer(&name, end));
+            return self.advance(cx);
+        }
         self.downloading
             .insert(download, Downloading { agent, name, reply });
         cx.spawn(async move |agents, cx| {
@@ -2616,25 +2626,17 @@ impl Agents {
     /// How a download the user let an agent's page make ended, which answers its action.
     pub fn download_ended(&mut self, download: u64, end: DownloadEnd, cx: &mut Context<Self>) {
         let Some(Downloading { name, reply, .. }) = self.downloading.remove(&download) else {
+            // Ended before the user answered for it, which the yes answers with.
+            if self
+                .asking
+                .iter()
+                .any(|asking| asking.act.download == download)
+            {
+                self.ended.insert(download, end);
+            }
             return;
         };
-        _ = reply.send(match end {
-            DownloadEnd::Done { name, bytes, path } => {
-                let folder = std::path::Path::new(&path)
-                    .parent()
-                    .and_then(|dir| dir.file_name());
-                let folder = folder.map(|dir| dir.to_string_lossy());
-                let folder = folder.unwrap_or("the user's downloads".into());
-                let size = crate::shell::bytes(bytes);
-                ToolResult::text(format!(
-                    "Downloaded {name} ({size}) to {folder}. {NO_FILES}"
-                ))
-            }
-            DownloadEnd::Failed => ToolResult::error(format!("The download of {name} failed.")),
-            DownloadEnd::Cancelled => {
-                ToolResult::error(format!("The download of {name} was cancelled."))
-            }
-        });
+        _ = reply.send(download_answer(&name, end));
         self.advance(cx);
     }
 
@@ -3323,4 +3325,25 @@ mod tests;
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {
     agent.starts_with("task-")
+}
+
+/// The answer of the download `name` the user let an agent's page make, as it ended.
+fn download_answer(name: &str, end: DownloadEnd) -> ToolResult {
+    match end {
+        DownloadEnd::Done { name, bytes, path } => {
+            let folder = std::path::Path::new(&path)
+                .parent()
+                .and_then(|dir| dir.file_name());
+            let folder = folder.map(|dir| dir.to_string_lossy());
+            let folder = folder.unwrap_or("the user's downloads".into());
+            let size = crate::shell::bytes(bytes);
+            ToolResult::text(format!(
+                "Downloaded {name} ({size}) to {folder}. {NO_FILES}"
+            ))
+        }
+        DownloadEnd::Failed => ToolResult::error(format!("The download of {name} failed.")),
+        DownloadEnd::Cancelled => {
+            ToolResult::error(format!("The download of {name} was cancelled."))
+        }
+    }
 }
