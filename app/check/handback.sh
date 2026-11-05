@@ -29,7 +29,9 @@ case $out in
 esac
 handled="$here/handback-handled.txt"
 : > "$handled"
-rm -f "$saved" "$launch_frame" "$out/handback-local.log"
+rm -f "$saved" "$launch_frame"
+# Where the stand-in app's server logs each request, empty until one comes, so it counts from 0.
+: > "$out/handback-local.log"
 scheme=ilohandback
 # seen <pattern> <seconds> [<step>]: whether a line matching it is logged since the last command,
 # or <step>, within <seconds>, without failing.
