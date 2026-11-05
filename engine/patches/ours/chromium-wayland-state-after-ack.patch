@@ -11,7 +11,10 @@ each request only makes sure the compositor has handled it first; it orders no c
 wlroots answers a sync once it has handled the requests before it and sends the configures they
 bring after, from an idle callback, so a state held until the answer can still go out before
 the configure that answer came with is dispatched. Waiting past the answer for that configure
-instead let sway's answer to the last commit, with the state before, reach a held state.
+instead let sway's answer to the last commit, with the state before, reach a held state. A
+configure that comes while a state is held, or before that answer, was sent before the
+compositor heard the request, so the window keeps the state it has asked for over it: applied,
+sway's answer took a page out of full screen as the window's state went back.
 --- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 +++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
 @@ -219,6 +219,13 @@
@@ -66,7 +69,27 @@ instead let sway's answer to the last commit, with the state before, reach a hel
  #include "base/unguessable_token.h"
  #include "third_party/skia/include/core/SkPath.h"
  #include "ui/base/hit_test.h"
-@@ -662,6 +664,65 @@
+@@ -585,6 +587,19 @@
+   }
+ 
+   pending_configure_state_.tiled_edges = window_states.tiled_edges;
++  // browser_core: one that comes while a state waits to be asked for, or
++  // before the answer to the sync after the last one asked, was sent before
++  // the compositor heard it, as wlroots sends a request's configures after that
++  // answer, so the window keeps the state it has asked for rather than going
++  // back to the one before. Its bounds still apply.
++  const PlatformWindowState asked = applied_state().window_state;
++  if ((held_state_ || state_sync_) &&
++      window_state != PlatformWindowState::kMinimized &&
++      (asked == PlatformWindowState::kNormal ||
++       asked == PlatformWindowState::kMaximized ||
++       asked == PlatformWindowState::kFullScreen)) {
++    window_state = asked;
++  }
+   pending_configure_state_.window_state = window_state;
+ 
+   // Width or height set to 0 means that we should decide on width and height by
+@@ -662,6 +677,65 @@
  
    ProcessSequencePoint(seq);
    MaybeApplyLatestStateRequest(/*force=*/false);
@@ -132,7 +155,7 @@ instead let sway's answer to the last commit, with the state before, reach a hel
  }
  
  bool WaylandToplevelWindow::OnInitialize(
-@@ -907,6 +968,8 @@
+@@ -907,6 +981,8 @@
        return applied_state().window_state == state ||
               GetLatestRequestedState().window_state == state;
      };
@@ -141,7 +164,7 @@ instead let sway's answer to the last commit, with the state before, reach a hel
      // Call UnSetMaximized only if current state is normal. Otherwise, if the
      // current state is fullscreen and the previous is maximized, calling
      // UnSetMaximized may result in wrong restored window position that clients
-@@ -914,6 +977,10 @@
+@@ -914,6 +990,10 @@
      if (window_state == PlatformWindowState::kMinimized) {
        xdg_toplevel_->SetMinimized();
        pending_minimize_ = true;
@@ -152,7 +175,7 @@ instead let sway's answer to the last commit, with the state before, reach a hel
      } else if (window_state == PlatformWindowState::kFullScreen) {
        xdg_toplevel_->SetFullscreen(
            GetWaylandOutputForDisplayId(fullscreen_display_id));
-@@ -929,6 +996,11 @@
+@@ -929,6 +1009,11 @@
          xdg_toplevel_->UnSetMaximized();
        }
      }
