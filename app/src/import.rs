@@ -52,8 +52,9 @@ use crate::tokens::radius;
 use crate::tokens::settings::{
     BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
     CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, ROW_X, STEP,
+    GLYPH_PLATE_GAP, HEADER_GAP, ROW_X, STEP,
 };
+use crate::tokens::shell::import::BADGE;
 use crate::tokens::text;
 use found::{Address, Found, FromProfile, Page, Tab};
 use plan::{Add, Counts, Existing, Plan, ProfileRef, SpaceRef, Target};
@@ -612,6 +613,17 @@ pub struct ImportView {
     import_when_read: bool,
     /// When each browser found last came in, by its name, as the record keeps it.
     last_imports: Vec<(String, SystemTime)>,
+    /// What the import shown came to, as Done's row says it, when something came in.
+    came: Option<Came>,
+}
+
+/// What came in, as Done's row says it at a glance: "Chrome came in", over its counts, "1 Space ·
+/// 3 pinned tabs", and what more there is to say, such as how the passwords file went.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Came {
+    pub(crate) title: SharedString,
+    pub(crate) counts: SharedString,
+    pub(crate) more: Option<SharedString>,
 }
 
 impl EventEmitter<ImportEvent> for ImportView {}
@@ -665,6 +677,16 @@ impl ImportView {
             reads: 0,
             import_when_read: false,
             last_imports,
+            came: None,
+        }
+    }
+
+    /// What Done's row says, when something came in.
+    #[cfg(test)]
+    pub(crate) fn came(&self) -> Option<&Came> {
+        match self.step {
+            Step::Done(_) => self.came.as_ref(),
+            _ => None,
         }
     }
 
@@ -851,17 +873,14 @@ impl ImportView {
         let (title, line, button, corner) = match &self.step {
             Step::List => (
                 "Bring your stuff.".to_string(),
-                format!(
-                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
-                ),
+                format!("From the browser you used. It all stays on {here}."),
                 (!self.sources.is_empty())
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
             ),
             Step::Pick { source, .. } => (
                 format!("What comes from {}.", name(*source)),
-                "All of it, unless you turn something off. Tabs load when you first open them."
-                    .to_string(),
+                "All of it, unless you turn something off.".to_string(),
                 Some("Import".to_string()),
                 Corner::Back,
             ),
@@ -943,9 +962,7 @@ impl ImportView {
             ),
             _ => (
                 "Bring your stuff.".to_string(),
-                format!(
-                    "Spaces, tabs and history from the browser you used. It all stays on {here}."
-                ),
+                format!("From the browser you used. It all stays on {here}."),
                 None,
                 Corner::Skip,
             ),
@@ -1836,14 +1853,31 @@ impl ImportView {
             ..run.counts
         };
         let said = summary(name, counts, run.listed);
+        let came = (!counted_parts(counts).is_empty()).then(|| Came {
+            title: format!("{name} came in").into(),
+            counts: counted_parts(counts).join(" · ").into(),
+            more: run.passwords_said.clone(),
+        });
         let said = match &run.passwords_said {
             Some(passwords) => format!("{said} {passwords}").into(),
             None => said,
         };
-        self.finish(said, cx);
+        self.finish_with(said, came, cx);
     }
 
     fn finish(&mut self, said: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.finish_with(said, None, cx);
+    }
+
+    /// Ends the import with `said`, which the log, the first launch's line and a row without
+    /// `came` say, and `came`, which Done's row says when something came in.
+    fn finish_with(
+        &mut self,
+        said: impl Into<SharedString>,
+        came: Option<Came>,
+        cx: &mut Context<Self>,
+    ) {
+        self.came = came;
         let said = said.into();
         // check.sh waits for this line.
         log!("browser: import done: {said}");
@@ -1964,7 +1998,9 @@ impl ImportView {
         if matches!(passwords, Passwords::Imported { .. }) {
             self.passwords_file = Some(file.to_path_buf());
         }
-        self.finish(passwords_summary(file, passwords, into.as_deref()), cx);
+        let came = passwords_came(passwords, into.as_deref());
+        let said = passwords_summary(file, passwords, into.as_deref());
+        self.finish_with(said, came, cx);
     }
 
     /// Deletes the passwords file the import read, as the user asked.
@@ -1973,20 +2009,30 @@ impl ImportView {
             return;
         };
         let name = file_name(&file);
-        let said = match std::fs::remove_file(&file) {
+        let (said, gone) = match std::fs::remove_file(&file) {
             // check.sh waits for this line.
             Ok(()) => {
                 log!("browser: import deleted the passwords file");
-                format!("{said} {name} is deleted.")
+                (
+                    format!("{said} {name} is deleted."),
+                    format!("{name} is deleted."),
+                )
             }
-            Err(error) => format!("{said} {name} couldn't be deleted: {error}."),
+            Err(error) => (
+                format!("{said} {name} couldn't be deleted: {error}."),
+                format!("{name} couldn't be deleted: {error}."),
+            ),
         };
+        if let Some(came) = &mut self.came {
+            came.more = Some(gone.into());
+        }
         self.step = Step::Done(said.into());
         cx.notify();
     }
 
     pub(crate) fn done(&mut self, cx: &mut Context<Self>) {
         self.passwords_file = None;
+        self.came = None;
         self.step = Step::List;
         self.crumb = None;
         cx.emit(ImportEvent::Done);
@@ -2148,55 +2194,65 @@ impl ImportView {
         let cards = arrival::draw(&mut run.cards, &look, settings, still, now, showing);
         let counts = run.counts;
         let since = run.placed_at.unwrap_or(now);
-        let once = (!stalled.is_empty()).then(|| format!("once {} opens", listed(&stalled)));
-        // What comes after the Spaces, from what was read, and once a profile that hasn't opened
-        // has, as the line under them says.
-        let stage = |left: usize, adding: String, came: usize, read: String| match (
-            run.placed, left, &once,
-        ) {
-            (false, _, Some(once)) => arrival::Stage::Held(format!("{read}, {once}").into()),
-            (false, _, None) => arrival::Stage::Waiting,
-            (true, 0, _) => arrival::Stage::In(grouped(came).into()),
-            (true, _, _) => arrival::Stage::Adding(adding.into()),
+        // Until the Spaces are in, the cards are the progress, and one line says what follows
+        // them; a profile that hasn't opened says so itself (stall). Once they're in, a row each
+        // shows what the core still adds.
+        let following: Vec<&str> = [
+            (counts.favorites > 0).then_some("favorites"),
+            (counts.pages > 0).then_some("history"),
+            (counts.addresses > 0).then_some("addresses"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let follow = (!run.placed && stalled.is_empty() && !following.is_empty()).then(|| {
+            let what = match following.as_slice() {
+                [one] => one.to_string(),
+                [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+                [] => String::new(),
+            };
+            let mut what = what;
+            what[..1].make_ascii_uppercase();
+            line(format!("{what} follow once the Spaces are in."))
+                .text_size(px(text::SMALL))
+                .text_color(look.detail)
+        });
+        let stage = |left: usize, adding: String, came: usize| match left {
+            0 => arrival::Stage::In(grouped(came).into()),
+            _ => arrival::Stage::Adding(adding.into()),
         };
         let mut rows = Vec::new();
-        if counts.favorites > 0 {
-            let read = grouped(counts.favorites);
-            let stage = stage(0, String::new(), counts.favorites, read);
+        if run.placed && counts.favorites > 0 {
+            let stage = stage(0, String::new(), counts.favorites);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Favorites),
                 "Favorites",
-                "At the top of each profile's Spaces",
                 &stage,
                 still,
                 now,
                 since,
             ));
         }
-        if counts.pages > 0 {
+        if run.placed && counts.pages > 0 {
             let adding = format!("Adding {} pages…", grouped(counts.pages));
-            let read = counted(counts.pages, "page", "pages");
-            let stage = stage(run.history_left, adding, run.pages, read);
+            let stage = stage(run.history_left, adding, run.pages);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::History),
                 "History",
-                "It goes on while you carry on, and can't be stopped once it starts",
                 &stage,
                 still,
                 now,
                 since,
             ));
         }
-        if counts.addresses > 0 {
-            let read = grouped(counts.addresses);
-            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses, read);
+        if run.placed && counts.addresses > 0 {
+            let stage = stage(run.addresses_left, "Adding…".into(), run.addresses);
             rows.push(arrival::stage_row(
                 &look,
                 glyph(Kind::Addresses),
                 "Addresses",
-                "Into each profile",
                 &stage,
                 still,
                 now,
@@ -2210,7 +2266,8 @@ impl ImportView {
                 .flex_col()
                 .gap(px(BOX_GAP))
                 .child(cards)
-                .children(rows),
+                .children(rows)
+                .children(follow),
         )
     }
 
@@ -2250,16 +2307,15 @@ impl ImportView {
         list.children(extensions).child(files).into_any_element()
     }
 
-    /// The extensions the last import listed, each with Add…, which opens its Web Store page, and
-    /// a line for another ad blocker, which stays off the list, with Add Anyway; none once each is
-    /// added.
+    /// The extensions the last import listed, under a heading that says where Add… takes each,
+    /// each a row with Add…, which opens its Web Store page; another ad blocker, which stays off
+    /// the list, is a row of its own with Add Anyway. None once each is added.
     fn extensions_box(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let look = &self.look;
         let listed = extensions::listed();
         if listed.extensions.is_empty() {
             return None;
         }
-        let from = &listed.from;
         let (blockers, extensions): (Vec<_>, Vec<_>) =
             listed.extensions.iter().partition(|each| each.blocks_ads());
         let rows = extensions.iter().enumerate().map(|(index, extension)| {
@@ -2274,35 +2330,12 @@ impl ImportView {
                 .child(at)
                 .on_click(cx.listener(move |view, _, _, cx| view.add_extension(&id, cx)))
                 .into_any_element();
-            match extension.pinned {
-                true => {
-                    let pinned = format!("Pinned in {from}, and here once it's added");
-                    detailed_row(look, extension.name.clone(), pinned, Some(add))
-                }
-                false => row(extension.name.clone(), add),
-            }
+            row(extension.name.clone(), add)
         });
-        let rows: Vec<gpui::Div> = rows.collect();
-        let header = (!rows.is_empty()).then(|| {
-            line(format!(
-                "Extensions from {from}. Add… opens each one's page in the Chrome Web Store in a \
-                 tab."
-            ))
-        });
-        let names: Vec<&str> = blockers.iter().map(|each| each.name.as_str()).collect();
+        let mut rows: Vec<gpui::Div> = rows.collect();
+        let names: Vec<String> = blockers.iter().map(|each| each.name.clone()).collect();
         let ids: Vec<String> = blockers.iter().map(|each| each.id.clone()).collect();
-        let blockers = (!blockers.is_empty()).then(|| {
-            let is = if names.len() == 1 { "isn't" } else { "aren't" };
-            let names = match names.split_last() {
-                Some((last, rest)) if !rest.is_empty() => {
-                    format!("{} and {last}", rest.join(", "))
-                }
-                _ => names.concat(),
-            };
-            let said = format!(
-                "{names} from {from} {is} listed, as {} blocks ads itself.",
-                env!("APP_NAME")
-            );
+        if !blockers.is_empty() {
             let anyway = button(look, "import-add-ad-blocker", "Add Anyway").on_click(cx.listener(
                 move |view, _, _, cx| {
                     for id in &ids {
@@ -2310,17 +2343,22 @@ impl ImportView {
                     }
                 },
             ));
-            detailed_line(look, said.into(), anyway.into_any_element())
-        });
-        let group = (!rows.is_empty()).then(|| group(look, rows));
+            let said = format!("{} blocks ads itself", env!("APP_NAME"));
+            rows.push(detailed_row(
+                look,
+                self::listed(&names),
+                said,
+                Some(anyway.into_any_element()),
+            ));
+        }
+        let heading = line("Extensions to add from the Chrome Web Store").text_color(look.heading);
         Some(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(BOX_GAP))
-                .children(header)
-                .children(group)
-                .children(blockers),
+                .gap(px(HEADER_GAP))
+                .child(heading)
+                .child(group(look, rows)),
         )
     }
 
@@ -2400,27 +2438,32 @@ impl ImportView {
             _ => "this computer",
         };
         let tiles = self.favorite_tiles(window, cx)?;
-        let said = format!(
-            "The sites you visit most, from the history it brought, worked out on {here}. \
-             Nothing is sent anywhere."
-        );
+        let said = format!("Worked out on {here}. Nothing is sent anywhere.");
         Some(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(BOX_GAP))
-                .child(line(said).text_color(self.look.detail))
-                .child(tiles),
+                .gap(px(HEADER_GAP))
+                .child(line("Favorites from your history").text_color(self.look.heading))
+                .child(tiles)
+                .child(
+                    line(said)
+                        .text_size(px(text::SMALL))
+                        .text_color(self.look.detail),
+                ),
         )
     }
 
-    /// A row for each browser found, with Import….
-    /// What a browser's row says under its name: its profiles, and once it has come in, when, and
-    /// that again brings only what's new.
+    /// What a browser's row says under its name: its profiles, when it has several, and once it
+    /// has come in, when, and that again brings only what's new.
     pub(crate) fn row_line(&self, source: &Source) -> String {
-        let profiles: Vec<&str> = (source.profiles.iter())
-            .map(|profile| profile.name.as_str())
-            .collect();
+        // One profile's name says nothing the browser's doesn't, as Chrome's "Me".
+        let profiles: Vec<&str> = match source.profiles.len() {
+            0 | 1 => Vec::new(),
+            _ => (source.profiles.iter())
+                .map(|profile| profile.name.as_str())
+                .collect(),
+        };
         let last = (self.last_imports.iter())
             .find(|(name, _)| *name == source.name())
             .map(|(_, at)| *at);
@@ -2566,7 +2609,7 @@ impl ImportView {
     /// link, in the ink, to the system's open panel.
     fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
+        let said = "Or bring a bookmarks file or a passwords file.";
         let range = |part: &str| {
             let start = said.find(part).unwrap_or_default();
             start..start + part.len()
@@ -2602,70 +2645,67 @@ impl ImportView {
             .child(text)
     }
 
-    /// The rows for the files a browser exports, after the browsers: bookmarks, for one that isn't
-    /// on this computer, and passwords, which no browser's files give, with where each browser
-    /// found keeps their export.
+    /// The files a browser exports, after the browsers: one row with Bookmarks… and Passwords…,
+    /// and the line that says passwords come only from a file. Each browser's choices say where
+    /// it exports them; with none found, the line says where the browsers most people use do.
     fn files(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let from = match self.sources.first() {
-            Some(source) => source.browser.name,
-            None => "another browser",
-        };
-        let choose = button(look, "import-passwords", "Choose File…")
-            .relative()
-            .child(drawn("import-passwords".into(), self.drawn_at.clone()))
-            .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
-        let row = detailed_row(
-            look,
-            "Passwords",
-            format!("Export them from {from} as a file, then choose it here."),
-            Some(choose.into_any_element()),
-        );
-        let choose = button(look, "import-bookmarks", "Choose File…")
+        let bookmarks = button(look, "import-bookmarks", "Bookmarks…")
             .relative()
             .child(drawn("import-bookmarks".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.choose_bookmarks(cx)));
-        let bookmarks = detailed_row(
-            look,
-            "Bookmarks",
-            "A bookmarks file, in HTML, which every browser exports.",
-            Some(choose.into_any_element()),
+        let passwords = button(look, "import-passwords", "Passwords…")
+            .relative()
+            .child(drawn("import-passwords".into(), self.drawn_at.clone()))
+            .on_click(cx.listener(|view, _, _, cx| view.choose_passwords(cx)));
+        let row = row(
+            "From a file",
+            div()
+                .flex()
+                .gap(px(CONTROL_GAP))
+                .child(bookmarks)
+                .child(passwords)
+                .into_any_element(),
         );
-        let places = export_places(&self.sources, self.os)
+        let said = match self.sources.is_empty() {
+            false => "Passwords come only from a file you export. Each browser's step says where.",
+            true => "Passwords come only from a file you export:",
+        };
+        let places = (self.sources.is_empty())
+            .then(|| export_places(&self.sources, self.os))
             .into_iter()
-            .map(|place| {
-                line(place)
-                    .text_size(px(text::SMALL))
-                    .text_color(look.detail)
-            });
-        div()
-            .flex()
-            .flex_col()
-            .child(group(look, [bookmarks, row]))
-            .child(div().mt(px(BOX_GAP)).flex().flex_col().children(places))
+            .flatten()
+            .map(line);
+        div().flex().flex_col().child(group(look, [row])).child(
+            div()
+                .mt(px(BOX_GAP))
+                .flex()
+                .flex_col()
+                .text_size(px(text::SMALL))
+                .text_color(look.detail)
+                .child(line(said))
+                .children(places),
+        )
     }
 
-    /// The kinds the browser picked offers, each with what of it comes, once its files are read,
-    /// as the choices say them, with the counts in **.
+    /// The kinds the browser picked has something of, each with how much comes, once its files
+    /// are read; until then, each kind it offers, counting.
     pub(crate) fn choices(&self) -> Vec<(Kind, String)> {
         let Step::Pick { source, read, .. } = &self.step else {
             return Vec::new();
         };
-        let here = match self.os {
-            Os::Mac => "this Mac",
-            _ => "this computer",
-        };
         let kinds = read::kinds(&self.sources[*source]).iter();
         kinds
-            .map(|&kind| match read {
-                Some(read) => (kind, kind_line(kind, &read.tally, here)),
-                None => (kind, "Counting…".to_string()),
+            .filter_map(|&kind| match read {
+                Some(read) => kind_count(kind, &read.tally).map(|count| (kind, count)),
+                None => Some((kind, "Counting…".to_string())),
             })
             .collect()
     }
 
-    /// The line under the choices: the profiles what comes goes into, and that logins don't.
-    pub(crate) fn note(&self) -> Option<String> {
+    /// The one line that names the kinds the browser picked has nothing of, which fold out of
+    /// its choices, so the user sees why they're missing.
+    pub(crate) fn nothing(&self) -> Option<String> {
         let Step::Pick {
             source,
             read: Some(read),
@@ -2674,7 +2714,30 @@ impl ImportView {
         else {
             return None;
         };
-        Some(into_note(&read.into, self.sources[*source].browser.name))
+        let empty: Vec<&str> = (read::kinds(&self.sources[*source]).iter())
+            .filter(|&&kind| kind_count(kind, &read.tally).is_none())
+            .map(|kind| kind.label())
+            .collect();
+        match empty.as_slice() {
+            [] => None,
+            [one] => Some(format!("Nothing to bring from {one}.")),
+            [rest @ .., last] => Some(format!(
+                "Nothing to bring from {} or {last}.",
+                rest.join(", ")
+            )),
+        }
+    }
+
+    /// The line under the choices: the profiles what comes goes into, and that cards and sign-ins
+    /// don't.
+    pub(crate) fn note(&self) -> Option<String> {
+        let Step::Pick {
+            read: Some(read), ..
+        } = &self.step
+        else {
+            return None;
+        };
+        Some(into_note(&read.into))
     }
 
     /// What can come from the browser picked, a row a kind with its count and its switch, then
@@ -2707,6 +2770,12 @@ impl ImportView {
             let chips = (read.as_ref())
                 .filter(|_| kind == Kind::Spaces)
                 .map(|read| chips(look, &read.found.spaces));
+            // How many, at the row's end before its switch, so each row is one line.
+            let count = div()
+                .flex_none()
+                .text_color(look.detail)
+                .child(said)
+                .into_any_element();
             frame()
                 .child(glyph_plate(look, glyph(kind), on))
                 .child(
@@ -2714,10 +2783,9 @@ impl ImportView {
                         .flex_1()
                         .min_w_0()
                         .child(div().truncate().child(kind.label()))
-                        .child(marked(look, &said))
                         .children(chips),
                 )
-                .child(end([toggle.into_any_element()]))
+                .child(end([count, toggle.into_any_element()]))
         });
         // Drawn before Choose folders, which takes the context too.
         let mut rows: Vec<gpui::Div> = rows.collect();
@@ -2736,12 +2804,18 @@ impl ImportView {
         let back = self
             .control("import-back", "Back")
             .on_click(cx.listener(|view, _, _, cx| view.back(cx)));
-        let chooser = picked
-            .contains(&Kind::Bookmarks)
-            .then(|| self.folder_chooser(cx));
+        // Folders to choose only while bookmarks come and there are some.
+        let bookmarks = read.as_ref().is_some_and(|read| read.tally.bookmarks > 0);
+        let chooser =
+            (bookmarks && picked.contains(&Kind::Bookmarks)).then(|| self.folder_chooser(cx));
+        // Under the box, the kinds with nothing to bring, then where it goes and what doesn't.
+        let nothing = self
+            .nothing()
+            .map(|nothing| marked(look, &nothing).mt_0().px(px(ROW_X)));
         let note = self
             .note()
             .map(|note| marked(look, &note).mt_0().px(px(ROW_X)));
+        let lines = div().flex().flex_col().children(nothing).children(note);
         // Its host's heading says where it's from, if it has one.
         let named = (!self.headed && !self.guided).then(|| line(format!("From {}", from.name())));
         div()
@@ -2750,7 +2824,7 @@ impl ImportView {
             .gap(px(BOX_GAP))
             .children(named)
             .child(group(look, rows))
-            .children(note)
+            .child(lines)
             .children(chooser)
             // Guided, the host's Import and Back are the step's.
             .when(!self.guided, |view| {
@@ -2783,8 +2857,7 @@ impl ImportView {
                     .relative()
                     .child(drawn("import-pick-passwords".into(), self.drawn_at.clone()))
                     .on_click(cx.listener(|view, _, _, cx| view.choose_picked_passwords(cx)));
-                let said = format!("Export them from {} first: {place}", from.browser.name);
-                (said, true, choose.into_any_element())
+                (place, true, choose.into_any_element())
             }
             Some((file, on)) => {
                 let toggle = div()
@@ -2795,28 +2868,22 @@ impl ImportView {
                 (said, *on, toggle.into_any_element())
             }
         };
+        // Passwords come only from a file the browser exports: the import never decrypts its own.
+        let name = match passwords {
+            None => "Passwords, from a file",
+            Some(_) => "Passwords",
+        };
         frame()
             .child(glyph_plate(look, "icons/key-round.svg", on))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(div().truncate().child("Passwords"))
+                    .child(div().truncate().child(name))
                     .child(marked(look, &said)),
             )
             .child(end([control]))
     }
-}
-
-/// A line of text between the boxes with a button at its end.
-fn detailed_line(look: &Look, said: SharedString, control: gpui::AnyElement) -> gpui::Div {
-    div()
-        .px(px(ROW_X))
-        .flex()
-        .items_center()
-        .text_color(look.detail)
-        .child(div().flex_1().min_w_0().child(said))
-        .child(end([control]))
 }
 
 /// A line of text over or between the boxes, where the rows' text starts.
@@ -2924,72 +2991,36 @@ fn counted(count: usize, one: &str, many: &str) -> String {
     format!("{} {}", grouped(count), if count == 1 { one } else { many })
 }
 
-/// What of `kind` comes, by `tally`, as its choice says it, the counts in **: history kept on
-/// `here`, this Mac or this computer.
-pub(crate) fn kind_line(kind: Kind, tally: &read::Tally, here: &str) -> String {
-    let days = read::HISTORY_DAYS;
+/// How much of `kind` comes, by `tally`, as its choice says it at the row's end: "3 in 1 folder",
+/// "2 pages". None when there's nothing of it, which folds it out of the choices.
+pub(crate) fn kind_count(kind: Kind, tally: &read::Tally) -> Option<String> {
+    let some = |count: usize, said: String| (count > 0).then_some(said);
     match kind {
-        Kind::Spaces if tally.spaces == 0 => "No Spaces to bring".into(),
+        // Its Spaces are its chips, by name, so the count says what's in them.
         Kind::Spaces => {
-            let mut said = format!(
-                "**{}** with **{}**",
-                counted(tally.spaces, "Space", "Spaces"),
-                counted(tally.pinned, "pinned tab", "pinned tabs")
-            );
-            if tally.folders > 0 {
-                said += &format!(" in {}", counted(tally.folders, "folder", "folders"));
-            }
+            let mut parts = vec![match tally.pinned {
+                0 => counted(tally.spaces, "Space", "Spaces"),
+                pinned => counted(pinned, "pinned tab", "pinned tabs"),
+            }];
             if tally.link_rules > 0 {
-                let rules = counted(tally.link_rules, "link rule", "link rules");
-                said += &format!(", and {rules}");
+                parts.push(counted(tally.link_rules, "link rule", "link rules"));
             }
-            said
+            some(tally.spaces, parts.join(" · "))
         }
-        Kind::Favorites if tally.favorites == 0 => "None to bring".into(),
-        Kind::Favorites => format!(
-            "**{}**, at the top of each profile's Spaces",
-            grouped(tally.favorites)
-        ),
-        Kind::History if tally.pages == 0 => format!("No pages from the last {days} days"),
-        Kind::History => {
-            let pages = if tally.pages == 1 { "page" } else { "pages" };
-            let count = grouped(tally.pages);
-            format!("**{count}** {pages} from the last {days} days, kept on {here}")
-        }
-        Kind::Addresses if tally.addresses == 0 => "No saved addresses. Cards never come.".into(),
-        Kind::Addresses => {
-            let addresses = if tally.addresses == 1 {
-                "address"
-            } else {
-                "addresses"
-            };
-            let count = grouped(tally.addresses);
-            format!("**{count}** saved {addresses}. Cards never come.")
-        }
-        Kind::Extensions if tally.extensions == 0 => "None to add from the Chrome Web Store".into(),
-        Kind::Extensions => format!(
-            "**{}** to add from the Chrome Web Store, one at a time",
-            grouped(tally.extensions)
-        ),
-        Kind::Bookmarks if tally.bookmarks == 0 => "No bookmarks".into(),
+        Kind::Favorites => some(tally.favorites, grouped(tally.favorites)),
+        Kind::History => some(tally.pages, counted(tally.pages, "page", "pages")),
+        Kind::Addresses => some(tally.addresses, grouped(tally.addresses)),
+        Kind::Extensions => some(tally.extensions, grouped(tally.extensions)),
         Kind::Bookmarks => {
-            let mut said = format!("**{}**", counted(tally.bookmarks, "bookmark", "bookmarks"));
+            let mut said = grouped(tally.bookmarks);
             if tally.bookmark_folders > 0 {
                 let folders = counted(tally.bookmark_folders, "folder", "folders");
                 said += &format!(" in {folders}");
             }
-            said + ", as a Space's pinned tabs"
+            some(tally.bookmarks, said)
         }
-        Kind::OpenTabs if tally.open_tabs == 0 => "No tabs open".into(),
-        Kind::OpenTabs => format!(
-            "**{}**, as that Space's Today tabs",
-            counted(tally.open_tabs, "tab", "tabs")
-        ),
-        Kind::ReadingList if tally.reading_list == 0 => "Nothing in the Reading List".into(),
-        Kind::ReadingList => format!(
-            "**{}**, as a folder in that Space",
-            counted(tally.reading_list, "page", "pages")
-        ),
+        Kind::OpenTabs => some(tally.open_tabs, grouped(tally.open_tabs)),
+        Kind::ReadingList => some(tally.reading_list, grouped(tally.reading_list)),
     }
 }
 
@@ -3055,9 +3086,10 @@ fn listed(names: &[String]) -> String {
 }
 
 /// The line under a browser's choices: the profiles here that what comes goes into, by name,
-/// those the import makes as `browser` has them, and that logins don't come.
-pub(crate) fn into_note(into: &[(String, bool)], browser: &str) -> String {
-    let logins = "Logins don't come: you sign in to each site again.";
+/// those the import makes, and that cards and sign-ins don't come, as the import never decrypts
+/// another browser's cookies or cards (#453).
+pub(crate) fn into_note(into: &[(String, bool)]) -> String {
+    let logins = "Cards and sign-ins don't come: you sign in to each site again.";
     let bold = |made: bool| -> Vec<String> {
         (into.iter())
             .filter(|(_, new)| *new == made)
@@ -3070,15 +3102,12 @@ pub(crate) fn into_note(into: &[(String, bool)], browser: &str) -> String {
     ];
     let made = match new.len() {
         0 => None,
-        1 => Some(format!("a new profile, {}, as {browser} has it", new[0])),
+        1 => Some(format!("a new profile, {}", new[0])),
         count => {
             let count = words
                 .get(count)
                 .map_or(count.to_string(), |word| word.to_string());
-            Some(format!(
-                "{count} new profiles, {}, as {browser} has them",
-                listed(&new)
-            ))
+            Some(format!("{count} new profiles, {}", listed(&new)))
         }
     };
     match (here.is_empty(), made) {
@@ -3181,6 +3210,46 @@ fn passwords_summary(file: &Path, passwords: Passwords, into: Option<&str>) -> S
     said.into()
 }
 
+/// What a passwords file brought in, as Done's row says it, when any came in: "2 passwords came in",
+/// and what else there is to know, such as the ones that matched a saved password.
+fn passwords_came(passwords: Passwords, into: Option<&str>) -> Option<Came> {
+    let Passwords::Imported {
+        imported,
+        conflicted,
+        skipped,
+    } = passwords
+    else {
+        return None;
+    };
+    if imported == 0 {
+        return None;
+    }
+    let into = into.map(|into| format!(" to {into}")).unwrap_or_default();
+    let title = format!(
+        "{} came in{into}",
+        counted(imported, "password", "passwords")
+    );
+    let mut parts = Vec::new();
+    if conflicted > 0 {
+        parts.push(match conflicted {
+            1 => "1 matched a saved password, which was kept".to_string(),
+            _ => format!("{conflicted} matched saved passwords, which were kept"),
+        });
+    }
+    if skipped > 0 {
+        parts.push(counted(
+            skipped,
+            "row wasn't a login",
+            "rows weren't logins",
+        ));
+    }
+    Some(Came {
+        title: title.into(),
+        counts: parts.join(" · ").into(),
+        more: None,
+    })
+}
+
 /// The profiles that haven't opened, once the wait for them has ended, whose cards are held.
 fn stalled(run: &Run) -> Vec<String> {
     match run.stalled {
@@ -3214,14 +3283,14 @@ fn progress(name: &str, run: &Run) -> SharedString {
     }
 }
 
-/// How much of each thing came in, such as "1 Space and 3 pinned tabs", or none for nothing.
-fn came(counts: Counts) -> Option<String> {
+/// How much of each thing came in, each a part: "1 Space", "3 pinned tabs".
+fn counted_parts(counts: Counts) -> Vec<String> {
     let count = |count: usize, one: &str, many: &str| match count {
         0 => None,
         1 => Some(format!("1 {one}")),
         count => Some(format!("{count} {many}")),
     };
-    let parts: Vec<String> = [
+    [
         count(counts.spaces, "Space", "Spaces"),
         count(counts.pinned, "pinned tab", "pinned tabs"),
         count(counts.today, "open tab", "open tabs"),
@@ -3232,7 +3301,12 @@ fn came(counts: Counts) -> Option<String> {
     ]
     .into_iter()
     .flatten()
-    .collect();
+    .collect()
+}
+
+/// How much of each thing came in, such as "1 Space and 3 pinned tabs", or none for nothing.
+fn came(counts: Counts) -> Option<String> {
+    let parts = counted_parts(counts);
     match parts.as_slice() {
         [] => None,
         [one] => Some(one.clone()),
@@ -3379,20 +3453,61 @@ impl Render for ImportView {
                     .into_any_element()
             }
             Step::Done(said) => {
-                // The file holds the passwords in plain text, so the end offers to delete it, in
-                // the row under what came in.
+                // What came in, at a glance: a tick, the browser or file, and its counts; or, when
+                // nothing did, what the import said.
+                let came = match &self.came {
+                    Some(came) => {
+                        let tick = div()
+                            .flex_none()
+                            .w(px(GLYPH_PLATE))
+                            .mr(px(GLYPH_PLATE_GAP))
+                            .flex()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .size(px(BADGE))
+                                    .rounded_full()
+                                    .bg(look.accent)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        svg()
+                                            .path("icons/check.svg")
+                                            .size(px(BADGE * 0.75))
+                                            .text_color(gpui::white()),
+                                    ),
+                            );
+                        let counts = (!came.counts.is_empty()).then(|| came.counts.clone());
+                        let row = frame().child(tick).child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(came.title.clone())
+                                .children(counts.map(|counts| marked(&look, &counts))),
+                        );
+                        [Some(row), came.more.clone().map(said_row)]
+                    }
+                    None => [Some(said_row(said.clone())), None],
+                };
+                // The file holds the passwords in plain text, so the end offers to delete it, in a
+                // row of its own that reads as the warning it is.
                 let file = self.passwords_file.as_ref().map(|file| {
                     let delete = self
                         .control("import-delete-passwords", "Delete File")
                         .relative()
                         .child(drawn("import-delete".into(), self.drawn_at.clone()))
                         .on_click(cx.listener(|view, _, _, cx| view.delete_passwords_file(cx)));
-                    let why = format!(
-                        "{} holds your passwords in plain text. Delete it once they're in.",
-                        file_name(file)
-                    );
-                    let why = div().flex_1().min_w_0().text_color(look.detail).child(why);
-                    frame().child(why).child(end([delete.into_any_element()]))
+                    frame()
+                        .child(glyph_plate(&look, "icons/circle-alert.svg", true))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(format!("{} is plain text", file_name(file)))
+                                .child(marked(&look, "Delete it now they're in.")),
+                        )
+                        .child(end([delete.into_any_element()]))
                 });
                 let favorites = favorites.take();
                 let add = self.offered().map(|_| {
@@ -3411,17 +3526,15 @@ impl Render for ImportView {
                     .child(drawn("import-done".into(), self.drawn_at.clone()))
                     .into_any_element();
                 let extensions = self.extensions_box(cx);
+                // Done at the foot, after what's left to do: the favorites, the extensions.
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(BOX_GAP))
-                    .child(group(
-                        &look,
-                        [said_row(said.clone())].into_iter().chain(file),
-                    ))
+                    .child(group(&look, came.into_iter().flatten().chain(file)))
                     .children(favorites)
-                    .child(buttons([done].into_iter().chain(add)))
                     .children(extensions)
+                    .child(buttons([done].into_iter().chain(add)))
                     .into_any_element()
             }
         };

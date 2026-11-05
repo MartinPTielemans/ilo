@@ -47,8 +47,8 @@ use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousCont
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL_LIGHT, DETAIL_LINE, DETAIL_TOP,
+    END_GAP, FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
     GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE, LEDE_LINE, LEDE_TOP,
     MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
     SHORT_ROW, TEXT_X, TITLE, WIDTH,
@@ -1541,16 +1541,20 @@ impl Settings {
         let base = self.base();
         let title =
             shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
-        let lede = div()
-            .mt(px(LEDE_TOP))
-            .line_height(px(LEDE_LINE))
-            .text_color(base.opacity(LEDE))
-            .child(lede);
+        // On a light card the sentence takes the captions' alpha, as 0.55 reads under 4.5:1 there.
+        let lede_alpha = if self.dark { LEDE } else { DETAIL_LIGHT };
+        let lede = (!lede.is_empty()).then(|| {
+            div()
+                .mt(px(LEDE_TOP))
+                .line_height(px(LEDE_LINE))
+                .text_color(base.opacity(lede_alpha))
+                .child(lede)
+        });
         let head = div()
             .px(px(TEXT_X))
             .flex()
             .items_start()
-            .child(div().flex_1().min_w_0().child(title).child(lede))
+            .child(div().flex_1().min_w_0().child(title).children(lede))
             .children(action.map(|action| div().flex_none().ml(px(END_GAP)).child(action)));
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
@@ -3825,11 +3829,12 @@ impl Settings {
         let export = setting(
             look,
             "Spaces as Markdown",
-            Some("Each Space's favorites and pinned tabs, as a list of links.".into()),
+            None,
             vec![export.into_any_element()],
         );
         let import = self.import.as_ref().map(|import| import.read(cx));
         // Inside an import, the heading names the browser it's from, and Export waits for its end.
+        let inside = import.and_then(ImportView::crumb).is_some();
         let heading = match import.and_then(ImportView::crumb) {
             Some(inside) => Block::Crumb("Import".into(), inside),
             None => Block::Heading("Import".into()),
@@ -3845,12 +3850,12 @@ impl Settings {
             blocks.push(Block::Heading("Export".into()));
             blocks.push(Block::Rows(vec![export]));
         }
-        Page::new(
-            Section::ImportExport,
-            "Bring tabs, bookmarks, history and passwords from another browser, or take your \
-             Spaces with you.",
-            blocks,
-        )
+        // Inside an import the crumb says where it is, so the page's sentence gives way.
+        let lede = match inside {
+            true => "",
+            false => "Bring your things from another browser, or take your Spaces with you.",
+        };
+        Page::new(Section::ImportExport, lede, blocks)
     }
 
     /// About: the app's name as the page's heading, its version and its engine's, where its

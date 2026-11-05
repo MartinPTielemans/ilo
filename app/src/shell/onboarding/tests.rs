@@ -958,7 +958,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(list.title, "Bring your stuff.");
     assert_eq!(
         list.line,
-        format!("Spaces, tabs and history from the browser you used. It all stays on {here}.")
+        format!("From the browser you used. It all stays on {here}.")
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
@@ -967,10 +967,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(step(&shell, cx), Some(Step::Import));
     let choose = guide(cx);
     assert_eq!(choose.title, "What comes from Arc.");
-    assert_eq!(
-        choose.line,
-        "All of it, unless you turn something off. Tabs load when you first open them."
-    );
+    assert_eq!(choose.line, "All of it, unless you turn something off.");
     assert_eq!(choose.button.as_deref(), Some("Import"));
     assert_eq!(choose.corner, Corner::Back);
     assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));
