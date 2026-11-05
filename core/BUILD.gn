@@ -427,7 +427,8 @@ source_set("browser_core") {
     "//chrome/browser/resource_coordinator:mojo_bindings",
     "//chrome/browser/autofill",
     "//chrome/browser/search_engines",
-    "//chrome/browser/ui",
+    # Not //chrome/browser/ui, which 157 folds into //chrome/browser; on 156 //chrome/browser links
+    # it, and both pass on its public dependencies.
     "//chrome/browser/ui:browser_tabrestore",
     "//chrome/browser/ui:recently_audible_helper",
     "//chrome/browser/ui/actions:actions_headers",
