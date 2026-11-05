@@ -130,7 +130,10 @@ source_set("window_frames") {
     "window_frames.cc",
     "window_frames.h",
   ]
-  deps = [ "//ui/gfx/geometry" ]
+  deps = [
+    "//base",
+    "//ui/gfx/geometry",
+  ]
 }
 
 source_set("browser_core") {
