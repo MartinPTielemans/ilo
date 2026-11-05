@@ -578,11 +578,12 @@ void Tab::Close() {
   if (web_contents()) {
     return;
   }
-  // Its sessionStorage goes with it, unless it comes back at the next launch.
+  ReportClosed();
+  // Its sessionStorage goes with it, unless it comes back at the next launch, which ReportClosed
+  // has kept the session for if it closes with the quit or the last window.
   if (storage_) {
     storage_->SetShouldPersist(SessionKept());
   }
-  ReportClosed();
   Forget(id_);
 }
 
@@ -1644,11 +1645,13 @@ void Tab::WebContentsDestroyed() {
     return;
   }
   // Closed, as at a quit or with its window. Its page is still there, so the session kept as the
-  // first tab closes saves this one from it too, and its sessionStorage stays on disk for the next
-  // launch, as Chrome's session keeps its tabs'. Closed by the user, it goes.
+  // first tab closes saves this one from it too.
+  ReportClosed();
+  // Its sessionStorage stays on disk for the next launch with the session, which ReportClosed has
+  // kept for the quit or the last window as the first tab closed, as Chrome's session keeps its
+  // tabs'. Closed by the user, it goes.
   web_contents()->GetController().GetDefaultSessionStorageNamespace()->SetShouldPersist(
       SessionKept());
-  ReportClosed();
   // What it posted, such as a report of its renderer ending, would tell the app of a closed tab.
   weak_factory_.InvalidateWeakPtrs();
   Observe(nullptr);
