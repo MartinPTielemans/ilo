@@ -233,7 +233,7 @@ impl Browser for Core {
     fn user_spaces(&self) -> Vec<(u64, String)> {
         (ids(bc::bc_spaces).into_iter())
             .filter(|&space| name(bc::bc_space_agent, space).is_empty())
-            .map(|space| (space, name(bc::bc_space_name, space)))
+            .map(|space| (space, name(bc::bc_space_name, space).to_string()))
             .collect()
     }
 
