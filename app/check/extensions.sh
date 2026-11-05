@@ -604,11 +604,11 @@ fi
 echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, or on Windows only Edge's key, and hears its answer. Window: $out/native-host.png"
 
 # An extension's .crx from the served page, which Chrome installs from off the Web Store with
-# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, which the
-# check starts without, so no other run ever has it. Chrome takes a .crx signed with the key its id
-# comes from.
+# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, new each
+# time, so no other run ever has it. Chrome takes a .crx signed with the key its id comes from.
 serve
 crx="$PWD/$out/install"
+rm -rf "$crx"
 mkdir -p "$crx/source" "$crx/profile/Default"
 cat > "$crx/source/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Install", "version": "1", "permissions": ["tabs"],
