@@ -325,8 +325,21 @@ PICTURE
   await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
   await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
 }
+# A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
+# hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
+# for the page's focus, not to take it, ⌘↩ hands back what one took. $1 is how many presses the log
+# had before them. The press reaches the window a turn after the click, which the state waits for.
+hand_back_pressed() {
+  send state
+  [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$1" ] && return
+  pressed=$(sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' "$log" | tail -1)
+  send key return cmd
+  await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
+}
+presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
 driven=$active
+hand_back_pressed "$presses"
 if [ "$driven" = 1 ]; then
   # A click on the card opens its conversation, its steps in its agent's place.
   read -r px py pw ph <<PLATE
@@ -390,10 +403,12 @@ painted(() => document.title = "fields");
   # A click while the page still loads can land before its field is drawn, and focus no field.
   await_log "^browser: page $agent_tab back 1 forward 0 loading 0 http://localhost:$port/fields\\.html\$" \
     "the fields page didn't finish loading"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
   send click $page_point
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  hand_back_pressed "$presses"
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
@@ -773,8 +788,12 @@ CARD
   await_more "^browser: title $opened_tab login\$" "$before" ||
     fail "the login page didn't load in the agent's tab"
   shown=$(children)
-  # A click in the username field, where Chrome's dropdown would offer the login.
-  send click 600 60
+  # The agent's own click in the username field, where Chrome's dropdown would offer the login. A
+  # user's press there would take the tab over (#1080), and the login would be theirs to fill.
+  outline=$(call snapshot "{\"tab\":$opened_tab}")
+  user_field=$(printf '%s\n' "$outline" | sed -n 's/.*- textbox[^[]*\[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$user_field" ] || fail "the login page's outline had no username field: $outline"
+  call click "{\"tab\":$opened_tab,\"ref\":\"$user_field\"}" > /dev/null
   # Chrome fills and offers a saved login within a moment of the load and the click. Here none
   # may come, so this waits out that moment.
   sleep 1
