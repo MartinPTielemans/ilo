@@ -122,7 +122,12 @@ for change in "${changes[@]}"; do
     series "$uc/patches/series" | sed "s#^#$uc/patches/#"
     series "$dir/patches/series" | sed "s#^#$dir/patches/#"
   } >"$dir.upstream"
-  series "$engine/series" | sed "s#^#$engine/patches/#" >"$dir.ours"
+  # The series' mac/ section is the Mac's alone, as apply_series in tree.sh takes it.
+  if [ "$section" = ungoogled-chromium-macos ]; then
+    series "$engine/series"
+  else
+    series "$engine/series" | grep -v '^mac/' || true
+  fi | sed "s#^#$engine/patches/#" >"$dir.ours"
   # -p1 drops each path's first part, whatever it's called; a patch that adds a file has nothing
   # to extract.
   cat "$dir.upstream" "$dir.ours" | xargs cat | sed -n 's#^[-+]\{3\} [^/]*/\([^[:space:]]*\).*#\1#p' |

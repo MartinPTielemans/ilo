@@ -14,6 +14,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 | `patches/helium/` | Patches taken from Helium, header naming the upstream path and commit |
 | `patches/ardia/` | Patches taken from Ardia, same convention |
 | `patches/ours/` | Our own patches |
+| `patches/mac/` | Our patches for the Mac's tree alone, in `series`' `mac/` section, which every other platform's tree leaves out |
 | `args.gn` | Our GN args, after ungoogled-chromium's `flags.gn` and ungoogled-chromium-macos's `flags.macos.gn` |
 | `args.dev.gn` | The dev build's args, after `args.gn` |
 | `tree.sh` | What `setup.sh` and `linux/prepare.sh` both do to a prepared tree: remove Chromium's agent instructions, link the core and apply `series` |
@@ -119,7 +120,7 @@ ungoogled-chromium cuts the browser's calls to Google. Ardia's patches in `patch
 ## Crash reports
 
 Crashpad writes a minidump of every crash, on every platform, as Chrome's does
-(`patches/ours/chromium-crashpad-start.patch` and, on the Mac, `chromium-crashpad-mac-handler.patch`
+(`patches/ours/chromium-crashpad-start.patch` and, on the Mac, `patches/mac/chromium-crashpad-mac-handler.patch`
 undo ungoogled-chromium's two switches that stopped it). On the Mac the browser doesn't wait for the
 handler to start, which held up launch by about 670 ms (`chromium-crashpad-mac-async-start.patch`),
 so a crash of the browser in its first moments isn't caught. Its handler never uploads one:

@@ -1,5 +1,5 @@
 # Applied in order after ungoogled-chromium's own series. One patch per line, relative to engine/patches/.
-# Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/.
+# Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/, mac/ (the Mac's alone).
 upstream/chromium-xkb-no-state-guard.patch
 upstream/chromium-rust-std-prebuilt-libs.patch
 ardia/chromium-component-updater-security-only.patch
@@ -38,8 +38,6 @@ ours/chromium-core-error-page.patch
 ours/chromium-core-offline-game.patch
 ours/chromium-core-native-host-fallback.patch
 ours/chromium-crashpad-start.patch
-ours/chromium-crashpad-mac-handler.patch
-ours/chromium-crashpad-mac-async-start.patch
 ours/chromium-crash-keys-no-home.patch
 ours/chromium-windows-product-folder.patch
 ours/chromium-windows-app-names.patch
@@ -78,3 +76,6 @@ ours/chromium-core-download-completion-hold.patch
 ours/chromium-session-cookies-window-close.patch
 ours/chromium-core-bluetooth-pair.patch
 ours/chromium-customize-chrome-private.patch
+# mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
+mac/chromium-crashpad-mac-handler.patch
+mac/chromium-crashpad-mac-async-start.patch
