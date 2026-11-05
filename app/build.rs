@@ -138,7 +138,8 @@ fn main() {
         );
         // windowscodecs is WIC, for host_file_preview's thumbnails; uuid carries the COM GUIDs it
         // and host_drag_file name; windowsapp is WinRT, for the share sheet; advapi32 keeps when
-        // updates.cc last checked, which downloads with winhttp and hashes with bcrypt.
+        // updates.cc last checked, which downloads with winhttp and hashes with bcrypt. imm32 has
+        // the keys held for a bar compose in its input context (host.cc's ComposeInBar).
         for lib in [
             "user32",
             "gdi32",
@@ -153,6 +154,7 @@ fn main() {
             "advapi32",
             "winhttp",
             "bcrypt",
+            "imm32",
         ] {
             println!("cargo:rustc-link-lib={lib}");
         }

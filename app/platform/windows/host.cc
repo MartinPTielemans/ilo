@@ -12,6 +12,8 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <imm.h>
+#include <msctf.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -1372,6 +1374,138 @@ HHOOK g_held_hook = nullptr;
 UINT_PTR g_hold_timer = 0;
 constexpr UINT kHoldKeysMs = 1000;
 
+// The UI thread's TSF thread manager, which Chromium's pages, GPUI's IMM32 windows through
+// Windows' bridge, and the IME share, or null.
+ITfThreadMgr* ThreadManager() {
+  static ITfThreadMgr* manager = [] {
+    // CLSID_TF_ThreadMgr, which no library the app links defines.
+    const CLSID thread_manager = {
+        0x529a9e6b, 0x6587, 0x4f23, {0xab, 0x9e, 0x9c, 0x7d, 0x68, 0x3e, 0x3c, 0x50}};
+    ITfThreadMgr* made = nullptr;
+    CoCreateInstance(thread_manager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made));
+    return made;
+  }();
+  return manager;
+}
+
+// Japanese typed while a page answers Ctrl+L late composes in the bar from the first key (#1784).
+// The IME composes where TSF's focus is, not where the keyboard is, and takes a key before any
+// hold of the host's sees it. GPUI's windows take text through IMM32 on the thread's one default
+// input context, which Windows bridges to a TSF document, so the bar and the find bar share it.
+// So while the page keeps the keyboard, the hold makes that context the bar's active one, which
+// points its messages at the bar and TSF's focus at its document, and the bar, taking the
+// keyboard, finds what's composed in its own context. The page's document gets TSF's focus back if
+// it kept the shortcut, and what was composed meanwhile goes.
+struct BarComposition {
+  HWND bar = nullptr;
+  HIMC context = nullptr;
+  // TSF's focus as the hold began, the page's document.
+  ITfDocumentMgr* page = nullptr;
+};
+std::optional<BarComposition> g_bar_composition;
+// The bar's document, as TSF's focus was the last time the bar had the keyboard, for when the
+// bridge doesn't move TSF's focus itself.
+ITfDocumentMgr* g_bar_document = nullptr;
+
+using SetActiveContext = BOOL(WINAPI*)(HWND, HIMC, BOOL);
+// imm32's, which Windows calls as a window gets the keyboard, and which the SDK doesn't declare.
+SetActiveContext ImmSetActiveContextFunction() {
+  static SetActiveContext function = reinterpret_cast<SetActiveContext>(
+      GetProcAddress(LoadLibraryW(L"imm32.dll"), "ImmSetActiveContext"));
+  return function;
+}
+
+// While the window with the keyboard has no input context of its own, as a page doesn't, the keys
+// compose in the command bar's.
+void ComposeInBar() {
+  HWND bar = g_overlays[0].hwnd;
+  HWND focus = GetFocus();
+  ITfThreadMgr* manager = ThreadManager();
+  if (g_bar_composition || !bar || !focus || focus == bar || !manager) {
+    return;
+  }
+  if (HIMC own = ImmGetContext(focus)) {
+    // A GPUI window's: it composes in the bar's context already.
+    ImmReleaseContext(focus, own);
+    return;
+  }
+  HIMC context = ImmGetContext(bar);
+  if (!context) {
+    ImmAssociateContextEx(bar, nullptr, IACE_DEFAULT);
+    context = ImmGetContext(bar);
+  }
+  if (!context) {
+    return;
+  }
+  ImmReleaseContext(bar, context);
+  BarComposition composing{bar, context, nullptr};
+  manager->GetFocus(&composing.page);
+  if (SetActiveContext activate = ImmSetActiveContextFunction()) {
+    activate(bar, context, TRUE);
+  }
+  ITfDocumentMgr* now = nullptr;
+  manager->GetFocus(&now);
+  const char* how = "the bridge";
+  if (now == composing.page) {
+    static ITfDocumentMgr* empty = [manager] {
+      ITfDocumentMgr* made = nullptr;
+      manager->CreateDocumentMgr(&made);
+      return made;
+    }();
+    how = g_bar_document ? "the bar's last document" : "an empty document";
+    manager->SetFocus(g_bar_document ? g_bar_document : empty);
+  }
+  if (now) {
+    now->Release();
+  }
+  g_bar_composition = composing;
+  // check.sh reads this line.
+  fprintf(stderr, "browser: held keys compose in the bar, TSF's focus moved by %s\n", how);
+}
+
+// Ends the hold's composition in the bar: in the bar with the keyboard, which reads it again, as it
+// emptied its field as it opened; or, with the page keeping the shortcut, cancelled, with TSF's
+// focus back on the page's document.
+void EndBarComposition(HWND to, bool to_bar) {
+  std::optional<BarComposition> composing = std::exchange(g_bar_composition, std::nullopt);
+  if (!composing) {
+    return;
+  }
+  const LONG bytes = ImmGetCompositionStringW(composing->context, GCS_COMPSTR, nullptr, 0);
+  if (to_bar) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: held composition %ld characters for the bar\n",
+            std::max<LONG>(bytes, 0) / static_cast<LONG>(sizeof(wchar_t)));
+    if (bytes > 0) {
+      SendMessageW(to, WM_IME_COMPOSITION, 0, GCS_COMPSTR | GCS_COMPATTR | GCS_CURSORPOS);
+    }
+  } else {
+    ImmNotifyIME(composing->context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+    if (SetActiveContext activate = ImmSetActiveContextFunction()) {
+      activate(composing->bar, composing->context, FALSE);
+    }
+    if (composing->page && GetFocus() == to) {
+      ThreadManager()->SetFocus(composing->page);
+    }
+  }
+  if (composing->page) {
+    composing->page->Release();
+  }
+}
+
+// The bar has the keyboard: TSF's focus is on its document, which the next hold may need.
+void RecordBarDocument() {
+  ITfThreadMgr* manager = ThreadManager();
+  ITfDocumentMgr* now = nullptr;
+  if (!manager || FAILED(manager->GetFocus(&now)) || !now) {
+    return;
+  }
+  if (g_bar_document) {
+    g_bar_document->Release();
+  }
+  g_bar_document = now;
+}
+
 // Gives the keys held to the window that now has the keyboard, unless they wait for another bar.
 void ReleaseKeys(HWND from) {
   if ((from && g_keys_for && from != g_keys_for) || !g_holding_keys) {
@@ -1386,12 +1520,26 @@ void ReleaseKeys(HWND from) {
   const bool to_bar = g_keys_for || from;
   HWND to = g_keys_for ? g_keys_for : (from ? from : GetFocus());
   g_keys_for = nullptr;
+  EndBarComposition(to, to_bar);
+  if (to_bar && GetFocus() == to) {
+    RecordBarDocument();
+  }
+  const auto taken = std::count_if(g_held_keys.begin(), g_held_keys.end(),
+                                   [](const MSG& held) { return held.wParam == VK_PROCESSKEY; });
+  if (taken) {
+    // check.sh reads this line.
+    fprintf(stderr, "browser: held %zd key events the IME took\n", static_cast<ptrdiff_t>(taken));
+  }
   if (!g_held_keys.empty()) {
     // check.sh reads this line, which names the window that took them as the Mac's does.
     fprintf(stderr, "browser: held %zu key events for %s\n", g_held_keys.size(),
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
   for (const MSG& held : g_held_keys) {
+    // One the IME took, which composed in the bar's context.
+    if (held.wParam == VK_PROCESSKEY) {
+      continue;
+    }
     PostMessageW(to, held.message, held.wParam, held.lParam);
   }
   g_held_keys.clear();
@@ -1433,6 +1581,7 @@ void HoldKeys(HWND window) {
   g_holding_keys = true;
   g_keys_for = window;
   g_hold_timer = SetTimer(nullptr, 0, kHoldKeysMs, HoldTimedOut);
+  ComposeInBar();
 }
 
 // A held Escape's repeats reach only the window its press went to, as on the Mac (host.mm's
