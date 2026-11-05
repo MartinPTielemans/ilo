@@ -69,14 +69,25 @@ middle=$(grep "^browser: window $little frame " "$log" | tail -1 | awk '{ print 
 grew "the Little ilo window ⌥⌘N opened" "$middle"
 recorded
 send window 2
+# The UI's size, which on Windows is the frame's less its borders, as the bar and the chevron go
+# by the UI: 900 × 640 elsewhere.
+send layout
+content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+  sed 's/^browser: layout content \([0-9]*x[0-9]*\).*/\1/')
+ui_width=${content%x*}
+ui_height=${content#*x}
+[ -n "$ui_width" ] && [ -n "$ui_height" ] || fail "the driver didn't give the Little ilo window's size"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
 expect '^browser: command bar opens inside the window$' \
   "⌘L didn't open the command bar inside the Little ilo window"
-# 500 wide, centred across the 900 × 640 window, its top a third of the way down (Arc).
+# 500 wide, centred across the window's UI, its top a third of the way down (Arc): at 200 213.3 in a
+# 900 × 640 one.
 set -- $(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
-[ "$1" = 200 ] && [ "${2%%.*}" = 213 ] && [ "$3" = 500 ] ||
-  fail "⌘L's command bar in the Little ilo window is at $*, not at 200 213.3 and 500 wide"
+bar_left=$(((ui_width - 500) / 2))
+bar_top=$((ui_height / 3))
+[ "$1" = "$bar_left" ] && [ "${2%%.*}" = "$bar_top" ] && [ "$3" = 500 ] ||
+  fail "⌘L's command bar in the Little ilo window is at $*, not at $bar_left $bar_top and 500 wide in its ${content} UI"
 ../tools/window-screenshot.sh "$pid" "$out/little-bar.png" all || fail "no window to capture"
 send insert "${site}notes.txt"
 send key return
@@ -88,14 +99,15 @@ expect "^browser: window $little shows $moved\$" "the Little ilo window didn't s
 
 # The bar's chevron, its plate ending 4 in from the window's right edge, opens the Spaces menu:
 # the compact command bar 240 wide, its right edge 8 in from the window's as every overlay's, and
-# its top 4 under the button, listing the user's Spaces. Escape closes it and leaves the page where
-# it is.
-send click 882 23
+# its top 4 under the button, listing the user's Spaces: at 652 in a 900-wide UI. Escape closes it
+# and leaves the page where it is.
+send click $((ui_width - 18)) 23
 expect "^browser: command bar lists spaces $home\$" "the chevron didn't list the user's Space $home"
 expect '^browser: command bar shown$' "the chevron didn't open the Spaces menu"
 set -- $(grep '^browser: command bar at ' "$log" | tail -1 | cut -d' ' -f5-)
-[ "$1" = 652 ] && [ "$2" = 43.5 ] && [ "$3" = 240 ] ||
-  fail "the Spaces menu is at $*, not at 652 43.5 and 240 wide"
+menu_left=$((ui_width - 248))
+[ "$1" = "$menu_left" ] && [ "$2" = 43.5 ] && [ "$3" = 240 ] ||
+  fail "the Spaces menu is at $*, not at $menu_left 43.5 and 240 wide in its ${content} UI"
 ../tools/window-screenshot.sh "$pid" "$out/little-spaces.png" all || fail "no window to capture"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the Spaces menu"
