@@ -27,8 +27,8 @@ concurrency:
 jobs:
   bash32:
     name: bash 3.2
-    # A pull request from a branch here already ran on its push.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # Every pull request too: a push runs this only when its own diff touched a script, so a branch's
+    # head can have no push run at all (#1834).
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

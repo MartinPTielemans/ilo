@@ -1,6 +1,6 @@
 # An ilo-server of the run's own, for the runs that sign in: SQLite, DEV_MODE, which logs its
 # sign-in codes, and a throwaway address, never the hosted server or a real account. ILO_SERVER
-# names the server's binary, built from its repo (check-linux.yml builds it); a run checks for it
+# names the server's binary, built from its repo (check-linux.yml and check-windows.yml build it); a run checks for it
 # before it sources this. The server is ilo_server, so cleanup stops it after a failure.
 
 db="$out/$run-server.db"
@@ -19,8 +19,12 @@ s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])')
 # localhost, as passkeys, which the server offers, take no address for their origin.
 server_url="http://localhost:$server_port"
+# The server is a native program on Windows, which reads the database's path as Windows names it:
+# Git Bash converts a path it's given alone, never one inside a URL.
+db_path=$db
+! windows || db_path=$(cygpath -m "$db")
 DEV_MODE=1 HOST=127.0.0.1 PORT=$server_port PUBLIC_URL=$server_url NO_COLOR=1 \
-  DATABASE_URL="sqlite:$db?mode=rwc" "$ILO_SERVER" > "$server_log" 2>&1 3>&- &
+  DATABASE_URL="sqlite:$db_path?mode=rwc" "$ILO_SERVER" > "$server_log" 2>&1 3>&- &
 ilo_server=$!
 for _ in $(seq 100); do
   grep -q 'ilo-server is up' "$server_log" && break
@@ -45,7 +49,7 @@ sign_in_keys() {
     return
   fi
   if [ -z "$sign_in_window" ]; then
-    sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$pid" \
+    sign_in_window=$(timeout 10 xdotool search --sync --all --onlyvisible --pid "$(window_pid)" \
       --name '^localhost$' | head -1)
     [ -n "$sign_in_window" ] || fail "the X server has no sign-in window"
   fi
@@ -92,7 +96,7 @@ sign_in() {
 # gives it.
 settings_keyboard() {
   [ "$(uname)" = Linux ] || return 0
-  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$pid" --name '^Sync$' | head -1)
+  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"

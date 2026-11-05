@@ -66,6 +66,7 @@ pub fn route(url: &str) -> u64 {
     if let Some(rule) = rule {
         let place = match space {
             LITTLE => "little ilo".to_string(),
+            0 => "the space in front".to_string(),
             space => format!("space {space}"),
         };
         // check.sh reads this line.

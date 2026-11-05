@@ -20,13 +20,28 @@ use super::{
     CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE,
     REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT,
     REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
-    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, ShellHandle, Slot, Space, settle_progress, spring,
+    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
 
-/// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long
-/// (ours: Arc's isn't measured).
+/// What the toast says when a tab opens with the sidebar hidden, Arc's words, and for how long,
+/// counted again each time it's asked for (Arc 1.171, measured by an outside reverse-engineering,
+/// *interim*, #1404). The Space toast takes the same time (ours).
 pub(super) const OPENED: &str = "New Tab Created";
-const OPENED_TIME: Duration = Duration::from_secs(4);
+const OPENED_TIME: Duration = Duration::from_millis(4800);
+
+/// Settings › Tabs & Sidebar's "Show the hidden sidebar at the window's edge", on unless the user
+/// turned it off: a display to the left, or a scrollbar against that edge, can set it off by
+/// accident. ⌘S and ⌥ still bring the sidebar out. The user's preference: agents have no call to
+/// change it.
+#[derive(Clone, Copy)]
+pub struct SidebarEdge(pub bool);
+
+impl gpui::Global for SidebarEdge {}
+
+/// Whether the pointer at the window's edge brings the hidden sidebar out.
+pub fn edge_reveals(cx: &gpui::App) -> bool {
+    cx.try_global::<SidebarEdge>().is_none_or(|edge| edge.0)
+}
 
 impl Shell {
     /// The docked sidebar's width as drawn: with the pointer while its edge is dragged, then on its
@@ -292,7 +307,7 @@ impl Shell {
     /// Whether the selected tab's row is scrolled wholly out past the list's top (true) or its
     /// bottom (false), as the list was last drawn. None while any of it shows.
     fn selected_row_past(&self) -> Option<bool> {
-        let Row::Tab(row) = self.selected_row() else {
+        let Some(Row::Tab(row)) = self.selected_row() else {
             return None;
         };
         let top = *self.layout().get(&Slot::Tab(row))? + self.tiles_room() - self.fixed_head();
@@ -561,9 +576,9 @@ impl Shell {
         }
     }
 
-    /// The pointer is at `x` in the browser window: kept at its left edge it brings the hidden
-    /// sidebar out over the page, and more than the hold zone past the panel's edge, and off a
-    /// row's hover card, it sends it away, and the card with it.
+    /// The pointer is at `x` in the browser window: kept at its left edge, unless Settings › Tabs &
+    /// Sidebar has the edge off, it brings the hidden sidebar out over the page, and more than the
+    /// hold zone past the panel's edge, and off a row's hover card, it sends it away, and the card with it.
     pub fn pointer_at(&mut self, x: f32, cx: &mut Context<Self>) {
         self.reveal_x = x;
         if !self.can_reveal() {
@@ -597,6 +612,7 @@ impl Shell {
         } else if !self.revealed
             && self.reveal_wait.is_none()
             && self.reveal_strip.is_some_and(|(_, moved)| moved)
+            && edge_reveals(cx)
             && self.is_key_window(cx)
         {
             // Arc waits a moment, so a pointer passing the edge on its way to another window or
@@ -639,8 +655,7 @@ impl Shell {
     /// Whether this is the window the user last made key, which stays the one while the app is
     /// behind another's.
     fn is_key_window(&self, cx: &Context<Self>) -> bool {
-        cx.try_global::<ShellHandle>()
-            .is_none_or(|key| key.0 == cx.weak_entity())
+        super::commands::key_shell(cx).is_none_or(|key| key == cx.weak_entity())
     }
 
     /// Whether the sidebar is hidden and still, so the reveal can bring it out.
@@ -1352,6 +1367,35 @@ mod tests {
         );
     }
 
+    /// With Settings' edge switch off, the pointer moving along the edge leaves the hidden sidebar
+    /// hidden, and ⌘S still brings it back.
+    #[gpui::test]
+    fn off_the_edge_brings_nothing_out(cx: &mut TestAppContext) {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        cx.update(|cx| cx.set_global(super::SidebarEdge(false)));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.pointer_over(point(px(1.), px(300.)), cx);
+            shell.pointer_over(point(px(1.), px(304.)), cx);
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert!(
+                !shell.revealed,
+                "the edge brought the sidebar out while off"
+            );
+            assert!(shell.reveal_wait.is_none());
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(crate::shell::Command::ToggleSidebar, "key", cx)
+        });
+        assert!(
+            shell.read_with(cx, |shell, _| !shell.sidebar_hidden),
+            "⌘S didn't show it"
+        );
+    }
+
     /// A pointer that jumps into the strip at the window's edge and stays leaves the sidebar
     /// hidden, one moving only across it too, and moving a few points up or down in it brings the
     /// sidebar out, as Arc 1.171's does.
@@ -1396,6 +1440,35 @@ mod tests {
         assert!(
             to(&shell, 2., 196., cx),
             "a few points up the edge didn't bring it out"
+        );
+    }
+
+    /// The same as GPUI tells it, with the sidebar hidden: the window hears the pointer leave its
+    /// own view for the page's, whose moves it doesn't hear, so the wait at the edge ends.
+    #[gpui::test]
+    fn the_hidden_sidebars_window_hears_the_pointer_leave_for_the_page(cx: &mut TestAppContext) {
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(Rc::new(Recorder::default()), cx));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(1.), px(300.)), None, Modifiers::none());
+        cx.simulate_mouse_move(point(px(1.), px(306.)), None, Modifiers::none());
+        assert!(
+            shell.read_with(cx, |shell, _| shell.reveal_wait.is_some()),
+            "the pointer moving down the edge didn't start the wait"
+        );
+        cx.simulate_event(gpui::MouseExitEvent {
+            position: point(px(-1.), px(-1.)),
+            pressed_button: None,
+            modifiers: Modifiers::none(),
+        });
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer gone onto the page brought the sidebar out"
         );
     }
 

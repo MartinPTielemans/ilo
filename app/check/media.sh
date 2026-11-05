@@ -47,7 +47,9 @@ onkeydown = async e => {
       for (let i = 0; i < n; i++) {
         wav.setUint8(44 + i, 128);
       }
-      const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
+      // Kept by the window: a paused element nothing refers to is garbage, and its player goes
+      // with it, so Chrome ends the session, and the sidebar loses its player.
+      const music = window.music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
       music.loop = true;
       music.onplaying = () => document.title = "playing";
       music.onpause = () => document.title = "paused";
@@ -410,6 +412,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $private\$" "the private window didn't open"
+new_window_bar
 send window 2
 # private_page <name>: opens the call page named <name> in the private window, as $p.
 private_page() {

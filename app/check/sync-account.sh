@@ -50,7 +50,7 @@ key_window() {
 
 scratch=$(mktemp -d)
 start_with_cdp 'data:text/html,<title>account check</title>' "$profile_dir" "" \
-  --sync-url="$server_url" --log-net-log="$netlog"
+  --sync-url="$server_url" --log-net-log="$(app_path "$PWD/$netlog")"
 await_load
 await 'browser: sync service disabled, not signed in$' ||
   fail "signed out, sync isn't disabled for want of an account"
@@ -59,7 +59,7 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 send clickkey $(drawn "toolbar Sync")
 expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
 at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out.png" || fail "no window to capture"
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In didn't start signing in"
 await 'browser: sync sign-in loaded /authorize$' ||
@@ -82,7 +82,7 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
 fi
-../tools/window-screenshot.sh "$pid" "$out/sync-passkey-dialog.png" all ||
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-passkey-dialog.png" all ||
   fail "no window to capture"
 if [ "$(uname)" = Darwin ] && { [ "$keyed" = "$sign_in_key" ] || [ "$keyed" = none ]; }; then
   fail "Chrome's passkey dialog didn't take the keyboard from the sign-in window, $keyed:" \
@@ -140,7 +140,7 @@ await '^browser: account FirstDevice None$' ||
 await '^browser: account On None$' || fail "the first device's recovery words didn't turn sync on"
 settings_keyboard
 at=$(drawn "sync done") || fail "Settings › Sync didn't show the recovery words with Done"
-../tools/window-screenshot.sh "$pid" "$out/sync-words.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
   send clickkey $(drawn "sync copy")
   copied_at=$(date +%s)
@@ -285,7 +285,7 @@ fi
 # Not send: the alert runs its own loop until it closes, so the driver may only finish after.
 post key return
 await '^browser: account SignedOut None$' || fail "Sign Out didn't sign out"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out-again.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out-again.png" || fail "no window to capture"
 for _ in $(seq 50); do
   left=$(stored "SELECT count(*) FROM devices")
   [ "$left" = 0 ] && break

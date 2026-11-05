@@ -52,8 +52,8 @@ impl AgentPointer {
 
 impl Shell {
     /// The agent at work in `tab` is about to click or type in the element it named `tag`, whose
-    /// box is `element`, in points from the top left of the tab's page. Only a page the window
-    /// shows in the agent's Space has the pointer.
+    /// box is `element`, in points from the top left of the tab's page. Only an agent's page the
+    /// window shows, a task's watched, has the pointer.
     pub fn agent_pointing(
         &mut self,
         tab: u64,
@@ -117,13 +117,15 @@ impl Shell {
     }
 
     /// What the window over the page draws: Add Split View's targets while a tab or a link is
-    /// dragged over it, and the agent's pointer.
+    /// dragged over it, the agent's pointer, and a new download's icon on its way to the Library
+    /// button.
     pub fn over_page(&self, window: &mut Window, cx: &App) -> AnyElement {
         div()
             .size_full()
             .relative()
             .child(self.drop_targets(window))
             .children(self.agent_pointer_drawn(window, cx))
+            .children(self.download_flight_drawn(window, cx))
             .into_any_element()
     }
 
@@ -147,10 +149,7 @@ impl Shell {
         }
         let pointer = self.agent_pointer.as_ref()?;
         let pane = self.pane_of(pointer.tab)?;
-        let name = self
-            .agent_page()
-            .map(|(space, _)| space.agent.clone())
-            .unwrap_or_default();
+        let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = cx.reduce_motion();
         // Frames only while it moves: the glide, the ring coming in and the fade.
