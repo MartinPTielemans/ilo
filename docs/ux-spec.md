@@ -605,7 +605,7 @@ Arc shows Space icons in place of dots when a Space has one: measure both looks.
 
 - A Space is the user's or one agent's, by the id and name the agent's client gives, from when it's made. New Space always makes the user's, and no tab of the user's moves into an agent's: an agent never takes the user's tabs, and the user keeps its work with its card's Open.
 - Agent actions never change the user's selected Space or tab, the keyboard focus or the cursor. Agent tabs never come to the front.
-- **Confirmations.** The card offers Allow, Deny or Always allow on <site>. Settings › Agents lists each agent's always-allowed sites, each with Revoke, and Revoke All. A confirmation times out after 5 minutes (prototype).
+- **Confirmations.** The card offers Allow, Deny or Always allow on <site>. Settings › Agents lists each agent's answers for good, Always Allow and Never, each with Revoke, and Revoke All; a ⌘T task's are its CLI's, under What Claude may do from ⌘T, as each task is new (#1913). A confirmation times out after 5 minutes (prototype).
 - **Handoff.** At a sign-in, 2FA prompt or CAPTCHA, the tab pauses and the card reads "<agent> needs you", with Show tab and Hand back. It times out after 15 minutes (prototype).
 - **Take over / Hand back.** The strip under an agent's page watched has the chips; while the user drives, the agent's actions pause. ⌘↩ is Take Over or Hand Back, and ⌘. is Stop while the agent works, with focus in the page too (#365). Escape, Stop Loading's other key, never stops an agent, as a stray one would end its work.
 - **Status and activity.** The status reads "Waiting for you" or "Waiting for your OK". Settings › Agents lists each agent's actions newest first.

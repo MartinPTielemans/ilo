@@ -2308,7 +2308,8 @@ mod tasks {
 
     /// A ⌘T task's answer for good is its CLI's (#1913), as a task's own id is new each task and
     /// numbered from 1 again each run: the next run's first task, Codex's, still asks where Claude's
-    /// was told Always, and that run's Claude task doesn't.
+    /// was told Always, and that run's Claude task doesn't. It's listed as Claude's tasks' to revoke,
+    /// and an earlier build's answer kept under a task's own id is gone.
     #[gpui::test]
     fn a_tasks_answer_for_good_is_its_clis_from_run_to_run(cx: &mut TestAppContext) {
         let dir = std::env::temp_dir().join(format!("ilo-task-answers-{}", std::process::id()));
@@ -2331,6 +2332,22 @@ mod tasks {
             asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
             "Always didn't hold in the task that was told it"
         );
+        let listed = |agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                agents.grants(&crate::agents::task_answers(cli))
+            })
+        };
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(listed(&agents, Cli::Codex, cx).is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.grants(&claude).is_empty()));
+        // As an earlier build left it, under the task's own id.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let mut saved: Value = serde_json::from_str(&saved).unwrap();
+        saved["grants"]["task-7"] = json!({ "chase.com": "always" });
+        std::fs::write(&path, saved.to_string()).unwrap();
 
         // The next run, from the same settings.
         let (agents, browser) = run_at(&path, cx);
@@ -2352,6 +2369,26 @@ mod tasks {
         assert!(
             asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
             "Claude's Always didn't carry to its next task"
+        );
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(
+            agents.read_with(cx, |agents, _| agents.grants("task-7").is_empty()),
+            "an answer kept under a task's own id came back"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.revoke(
+                &crate::agents::task_answers(Cli::Claude),
+                Some("chase.com"),
+                cx,
+            )
+        });
+        assert!(listed(&agents, Cli::Claude, cx).is_empty());
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_some(),
+            "Revoke didn't have Claude's task ask again"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -1830,6 +1830,10 @@ crossfade = 0.2
 column = 640.0
 inset = 24.0
 top = 16.0
+# The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
+# 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
+# the toast's 0.6 read 3.75:1 (#1080).
+chip-key = 0.68
 title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
