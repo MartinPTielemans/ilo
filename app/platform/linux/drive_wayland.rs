@@ -254,10 +254,6 @@ struct Node {
 }
 
 impl Node {
-    fn contains(&self, x: f64, y: f64) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-
     fn is_settings(&self) -> bool {
         self.app_id.is_empty()
     }
@@ -546,20 +542,47 @@ fn held() -> u16 {
     FLAGS.get() | KEY_FLAGS.get() & CONTROL
 }
 
-/// The pointer to (`x`, `y`) in sway's layout, if that's in one of the app's windows.
+/// The pointer to (`x`, `y`) in sway's layout, unless that's in another app's window or off the
+/// screen. Just outside one of the app's, it's sway's to take, as a press at the border it resizes
+/// windows by (#1572).
 fn motion(x: f64, y: f64) -> Option<()> {
-    if !ours().iter().any(|node| node.contains(x, y)) {
-        log!("browser: drive won't put the pointer at {x:.0},{y:.0}, outside the app's windows");
+    if others_at(x, y) {
+        log!("browser: drive won't put the pointer at {x:.0},{y:.0}, in another app's window");
         return None;
     }
     with_session(|session, time| {
         let (width, height) = session.extent;
+        if !(0. ..width).contains(&x) || !(0. ..height).contains(&y) {
+            log!("browser: drive won't put the pointer at {x:.0},{y:.0}, off the screen");
+            return None;
+        }
         let at = |each: f64| (each * SUBPOINTS).round() as u32;
         let extent = |each: f64| (each * SUBPOINTS) as u32;
         (session.pointer).motion_absolute(time, at(x), at(y), extent(width), extent(height));
         session.pointer.frame();
         POINTER.set(Some((x, y)));
-    })
+        Some(())
+    })?
+}
+
+/// Whether (`x`, `y`) in sway's layout is in a window of another app's.
+fn others_at(x: f64, y: f64) -> bool {
+    fn walk(node: &Value, x: f64, y: f64) -> bool {
+        let own = u64::from(std::process::id());
+        let other =
+            node["pid"].as_u64().is_some_and(|pid| pid != own) && !browser::flatpak::in_flatpak();
+        let rect = &node["rect"];
+        let (left, top) = (number(&rect["x"]), number(&rect["y"]));
+        let inside = (left..left + number(&rect["width"])).contains(&x)
+            && (top..top + number(&rect["height"])).contains(&y);
+        (other && inside)
+            || ["nodes", "floating_nodes"]
+                .iter()
+                .filter_map(|key| node[*key].as_array())
+                .flatten()
+                .any(|child| walk(child, x, y))
+    }
+    sway(GET_TREE, "").is_some_and(|tree| walk(&tree, x, y))
 }
 
 fn button(which: u32, press: bool) -> Option<()> {
