@@ -10,7 +10,8 @@
 //! and the core hands them on to the UI or an overlay as it does a real keyboard's. The done line's
 //! key window is sway's focused window, and in a browser window the overlay that has the keys, else
 //! whose the core says they are. Every window floats (tools/headless.sh), so sway stacks them as a
-//! desktop does, and moves and sizes them as it's told. Drags from another app aren't here yet.
+//! desktop does, and moves and sizes them as it's told. Drags from another app come from a client
+//! of the driver's own, as another app's do (drive_drags.rs).
 
 use std::{
     cell::{Cell, RefCell},
@@ -782,6 +783,37 @@ fn in_driven(x: f64, y: f64) -> Option<(f64, f64)> {
     Some((node.x + x, node.y + y))
 }
 
+/// The driven browser window, and (`x`, `y`) in its content in sway's layout, for a drag.
+pub(crate) fn in_driven_window(x: f64, y: f64) -> Option<(bc::bc_id, (f64, f64))> {
+    let (id, node) = driven()?;
+    Some((id, (node.x + x, node.y + y)))
+}
+
+/// The pointer to (`x`, `y`) in sway's layout, as `motion` puts it, for a drag.
+pub(crate) fn pointer_to(x: f64, y: f64) -> Option<()> {
+    motion(x, y)
+}
+
+/// The left button down or up where the pointer is, with no modifiers, for a drag.
+pub(crate) fn left_button(press: bool) -> Option<()> {
+    with_modifiers(0, || button(BTN_LEFT, press))
+}
+
+/// The middle of a square `size` across in the bottom right corner of the output with sway's
+/// focus, where the compositor puts a layer surface anchored there that names no output, in sway's
+/// layout.
+pub(crate) fn output_corner(size: f64) -> Option<(f64, f64)> {
+    let outputs = sway(GET_OUTPUTS, "")?;
+    let outputs = outputs.as_array()?;
+    let output = (outputs.iter())
+        .find(|output| output["focused"].as_bool() == Some(true))
+        .or(outputs.first())?;
+    let rect = &output["rect"];
+    let right = number(&rect["x"]) + number(&rect["width"]);
+    let bottom = number(&rect["y"]) + number(&rect["height"]);
+    Some((right - size / 2., bottom - size / 2.))
+}
+
 /// The key that types `keysym`, as evdev numbers it, and whether with shift.
 fn keycode(keysym: u32) -> Option<(u32, bool)> {
     SESSION.with_borrow(|session| {
@@ -1259,7 +1291,36 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             crate::swiped(surface, x, y, back);
             Some(())
         })(),
-        "dragover" | "dragdrop" | "dragleave" => None,
+        // As drive.rs's: what it carries, its kind, then the rest of the line, which can hold
+        // spaces.
+        "dragover" | "dragdrop" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let carried = words.next().map(|kind| {
+                let value = line.splitn(5, ' ').nth(4).unwrap_or("");
+                (kind, value)
+            });
+            crate::drive_drags::over(x, y, carried, action == "dragdrop")
+        })(),
+        "dragleave" => {
+            crate::drive_drags::leave();
+            Some(())
+        }
+        // A drag in the window with the keyboard, halfway first, so the view sees the drag start
+        // before it ends, as drive.rs's.
+        "dragkey" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let (x2, y2) = drive::point(&mut words)?;
+            let (left, top) = key_origin()?;
+            let (x, y, x2, y2) = (left + x, top + y, left + x2, top + y2);
+            first_press(x, y, BTN_LEFT, false);
+            motion(x, y)?;
+            with_modifiers(0, || {
+                button(BTN_LEFT, true)?;
+                motion((x + x2) / 2., (y + y2) / 2.)?;
+                motion(x2, y2)?;
+                button(BTN_LEFT, false)
+            })
+        })(),
         "layout" => layout(),
         _ => return None,
     })

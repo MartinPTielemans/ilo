@@ -52,6 +52,9 @@ mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
 mod drive;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/drive_drags.rs"]
+mod drive_drags;
 #[cfg(target_os = "windows")]
 #[path = "../platform/windows/drive_menus.rs"]
 mod drive_menus;
