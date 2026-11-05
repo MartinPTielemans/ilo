@@ -9,10 +9,10 @@
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
-# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
-# real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
-# pages on the internet, so it runs only when named too.
+# Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
+# which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
+# keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
+# the Store's pictures from pages on the internet, so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -71,7 +71,7 @@ runs="load keys tabs window popup history spaces agents profiles restore relaunc
 runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts"
-named="store adblock-live widevine updates nightly keychain shots"
+named="store adblock-live widevine updates nightly update-checks keychain shots"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;

@@ -395,6 +395,8 @@ unsafe extern "C" {
     #[cfg(not(target_os = "linux"))]
     pub fn host_check_for_updates_quietly();
     #[cfg(not(target_os = "linux"))]
+    pub fn host_set_automatic_update_checks(on: bool);
+    #[cfg(not(target_os = "linux"))]
     pub fn host_install_update();
     #[cfg(not(target_os = "linux"))]
     pub fn host_relaunch_into_update() -> bool;

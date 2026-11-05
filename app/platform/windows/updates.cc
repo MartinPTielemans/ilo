@@ -91,6 +91,12 @@ std::atomic<bool> g_ready{false};
 std::wstring g_installer;
 // Whether the checks read the nightly feed (host_follow_nightly).
 std::atomic<bool> g_nightly{false};
+// Whether the timer checks when one is due (host_set_automatic_update_checks), and whether the
+// thread was woken to time its wait again rather than to check.
+std::atomic<bool> g_automatic{true};
+std::atomic<bool> g_rewait{false};
+// Check for Updates… asked, which a wake to time the wait again doesn't swallow.
+std::atomic<bool> g_asked{false};
 ULONGLONG g_build = 0;
 std::string g_notes;
 HANDLE g_held = INVALID_HANDLE_VALUE;
@@ -500,12 +506,18 @@ void Check() {
 DWORD WINAPI Watch(void*) {
   for (;;) {
     DWORD wait = INFINITE;
-    if (!g_ready) {
+    // Off, it waits until it's asked: Check for Updates…, or turned on again.
+    if (!g_ready && g_automatic) {
       const ULONGLONG due = LastCheck() + kInterval, now = Now();
       // Never past one interval, should the clock have gone back since the last check.
       wait = due <= now ? 0 : static_cast<DWORD>((std::min)(due - now, kInterval) / 10'000);
+      fprintf(stderr, "browser: update check in %lu s\n", static_cast<unsigned long>(wait / 1000));
     }
     WaitForSingleObject(g_wake, wait);
+    const bool asked = g_asked.exchange(false);
+    if (g_rewait.exchange(false) && !asked) {
+      continue;
+    }
     if (!g_ready) {
       Check();
     }
@@ -581,12 +593,23 @@ void host_take_install(bool (*installed)(uint64_t build, uint64_t own)) {
 // Check for Updates…, whose stages the app shows in Settings › About.
 void host_check_for_updates(void) {
   if (g_wake && !g_ready) {
+    g_asked = true;
     SetEvent(g_wake);
   }
 }
 
 void host_check_for_updates_quietly(void) {
   host_check_for_updates();
+}
+
+void host_set_automatic_update_checks(bool on) {
+  g_automatic = on;
+  fprintf(stderr, "browser: update checks automatic %s\n", on ? "on" : "off");
+  // The thread times its wait again, from the last check, without checking now.
+  if (g_wake) {
+    g_rewait = true;
+    SetEvent(g_wake);
+  }
 }
 
 // Restart to Update: the restart's quit runs the installer, which relaunches ilo once it's in.
