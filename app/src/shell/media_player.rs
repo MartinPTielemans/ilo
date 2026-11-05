@@ -271,7 +271,7 @@ impl Shell {
                     .into_any_element()
             })
             .collect();
-        let bottom = FOOTER_HEIGHT + self.update_sign_room();
+        let bottom = FOOTER_HEIGHT + self.update_banner_room();
         Some(
             div()
                 .id("media-stack")

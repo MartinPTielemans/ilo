@@ -111,15 +111,42 @@ pub(crate) extern "C" fn key_window_changed(ui_view: *mut c_void) {
         (index > 0).then(|| {
             let window = windows.remove(index);
             windows.insert(0, window.clone());
-            window.id
+            window
         })
     });
-    if let Some(id) = moved {
-        log!("browser: key window {id}");
-        update_app_later(move |cx| {
-            update_window_in(id, cx, |shell, cx| shell.became_key(cx));
-        });
+    if let Some(window) = moved {
+        log!("browser: key window {}", window.id);
+        update_app_later(shell::window_became_key(window.shell));
     }
+}
+
+/// The browser window drawn in `ui_view` became the one the user is in, or stopped being, which
+/// its header's glyphs show (host_watch_window_main). The host can tell from inside the update that
+/// opened or closed a window, so the shell hears once that's over.
+pub(crate) extern "C" fn window_main_changed(ui_view: *mut c_void, main: bool) {
+    update_app_later(move |cx| {
+        let id = window_with_view(ui_view);
+        if id == 0 {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: window {id} main {main}");
+        _ = shell_with_view(ui_view).update(cx, |shell, cx| shell.set_window_main(main, cx));
+        let handle = WINDOWS.with_borrow(|windows| {
+            let window = windows.iter().find(|window| window.ui_view == ui_view)?;
+            Some(window.handle)
+        });
+        // Once the frame that drew it is on screen, which the next frame's start says, for
+        // check.sh's capture.
+        if let Some(handle) = handle {
+            _ = handle.update(cx, |_, window, _| {
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, _| log!("browser: window {id} drew main {main}"));
+                    window.refresh();
+                });
+            });
+        }
+    });
 }
 
 /// The UI of the window drawn in `ui_view` lost the keyboard to its page, or an overlay took it,

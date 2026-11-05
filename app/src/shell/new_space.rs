@@ -68,9 +68,15 @@ enum Look {
 impl Shell {
     /// Whether `swipe` has pulled the last Space's page far enough to ready a new Space.
     fn pull_ready(&self, swipe: &Swipe) -> bool {
-        // A private window makes none.
-        let last = !self.private && self.spaces.last().is_some_and(|last| last.id == swipe.from);
-        last && !swipe.library && self.form.is_none() && self.swiped_to(swipe) <= -NEW_SPACE_READY
+        let beside = self.new_space_beside(swipe.from);
+        beside && !swipe.library && self.swiped_to(swipe) <= -NEW_SPACE_READY
+    }
+
+    /// Whether a new Space comes after `space`: the last, while no form is naming one. A private
+    /// window makes none.
+    pub(super) fn new_space_beside(&self, space: u64) -> bool {
+        let last = self.spaces.last().is_some_and(|last| last.id == space);
+        last && !self.private && self.form.is_none()
     }
 
     /// Readies a new Space as the fingers' pull reaches it and lets it go as they go back, with a

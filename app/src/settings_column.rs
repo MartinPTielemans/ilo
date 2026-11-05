@@ -5,15 +5,19 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{App, BoxShadow, MouseButton, Rgba, Window, div, point, prelude::*, px, rgb, rgba, svg};
+use gpui::{
+    AnyElement, App, BoxShadow, MouseButton, Rgba, Window, div, point, prelude::*, px, rgb, rgba,
+    svg,
+};
 
 use crate::palette::{INK, PAPER};
 use crate::settings_rows::drawn;
 use crate::tokens::radius;
 use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
-    SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_GROUP_GAP, SECTION_HOVERED,
-    SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW, SECTION_TEXT, SECTION_X,
+    SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP,
+    SECTION_GROUP_GAP, SECTION_HOVERED, SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW,
+    SECTION_TEXT, SECTION_X,
 };
 use crate::tokens::shell::{PLATE_HEIGHT, PLATE_INSET};
 
@@ -98,13 +102,17 @@ impl Section {
 pub type Pick = Rc<dyn Fn(Section, &mut Window, &mut App)>;
 pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The column, 208 wide, `shown`'s plate lit, light or dark as the window is. Each section logs
-/// where it's drawn as "toolbar {name}", as the toolbar's tabs did, for check.sh to click, with
-/// `logged`. A press on the column's ground moves the window, as a title bar does.
+/// The column, 208 wide, the search `field` at its top and `shown`'s plate lit, light or dark as
+/// the window is. While a search shows what it `found`, no plate is lit and the sections with
+/// nothing found dim. Each section logs where it's drawn as "toolbar {name}", as the toolbar's
+/// tabs did, for check.sh to click, with `logged`. A press on the column's ground moves the
+/// window, as a title bar does.
 pub fn column(
     shown: Section,
     dark: bool,
     logged: Rc<RefCell<Vec<String>>>,
+    field: AnyElement,
+    found: Option<&[Section]>,
     pick: Pick,
     foot: Foot,
 ) -> gpui::Div {
@@ -114,10 +122,12 @@ pub fn column(
         .enumerate()
         .map(|(index, sections)| {
             let plates = sections.iter().map(|&section| {
-                let selected = section == shown;
+                let selected = found.is_none() && section == shown;
+                let dimmed = found.is_some_and(|found| !found.contains(&section));
                 let pick = pick.clone();
                 plate(base, selected, dark)
                     .id(section.name())
+                    .when(dimmed, |plate| plate.opacity(SEARCH_DIMMED))
                     .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
                     // A press on a plate is its click's, not the window's move.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -161,6 +171,7 @@ pub fn column(
         .flex()
         .flex_col()
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+        .child(div().flex_none().mb(px(SEARCH_GAP)).child(field))
         // At the window's least height the sections scroll above the foot, not under it.
         .child(
             div()

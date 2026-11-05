@@ -48,14 +48,18 @@
 //   pageswipe <x> <y> back|forward        a swipe between pages at (x, y), as three fingers or
 //                                         a mouse's swipe send one, handed to the host's monitor
 //   wheel <x> <y> <dx>                    a mouse wheel's tick across at (x, y), <dx> lines right
-//   dragover <x> <y> [url|file|text <s>]  a drag from another app at (x, y), carrying the URL,
-//                                         the file at the path or the text <s>, handed to the view
+//   dragover <x> <y> [url|file|text|tab <s>]
+//                                         a drag from another app at (x, y), carrying the URL,
+//                                         the file at the path or the text <s>, or tab <s>, as a
+//                                         tab's row dragged from another of the app's windows
+//                                         carries it (host_drag_tab), handed to the view
 //                                         AppKit would hand it to, which it logs with whether it
 //                                         takes it, as "browser: drag over <view class> taken"
 //   dragdrop <x> <y> [url|file|text <s>]  lets go of that drag there, as dragover, then logs
 //                                         "browser: drag dropped" or "browser: drag refused"
 //   dragleave                             takes the drag away, as cancelled
 //   resize <width> <height>               resizes the window, keeping its top-left corner
+//   resizekey <width> <height>            as resize, the key window's content, such as Settings
 //   fullscreen                            enters or leaves full screen, like the green button
 //   display add <width> <height> [main]   plugs in a second display of that size in points, a
 //                                         virtual one, the main one with the menu bar if main
@@ -267,6 +271,10 @@ NSStatusBarButton* HostLittleStatusButton();
 - (BOOL)applySettings:(CGVirtualDisplaySettings*)settings;
 @end
 
+// host.mm's: where this driver's pointer last was, which host_pointer answers.
+extern NSPoint g_driven_pointer;
+extern bool g_driven_pointer_known;
+
 namespace {
 
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
@@ -459,12 +467,20 @@ NSWindow* MainWindow() {
   return window.visible ? window : nil;
 }
 
+// Where the driver's pointer last was, on screen, AppKit's way up, which host_pointer answers in a
+// driven run: its events move no real pointer, which stays wherever the desktop's is.
+void Pointed(NSWindow* window, NSPoint location) {
+  g_driven_pointer = [window convertPointToScreen:location];
+  g_driven_pointer_known = true;
+}
+
 void PostMouse(NSWindow* window,
                NSEventType type,
                double x,
                double y,
                int count,
                NSEventModifierFlags flags = 0) {
+  Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
                                  modifierFlags:flags
@@ -661,6 +677,10 @@ bool DragOver(NSWindow* window, double x, double y, std::istringstream& words) {
       [pasteboard writeObjects:@[ url ]];
     } else if (kind == "text") {
       [pasteboard setString:value forType:NSPasteboardTypeString];
+    } else if (kind == "tab") {
+      // As host_drag_tab carries one from another of the app's windows.
+      [pasteboard setString:[NSString stringWithFormat:@"%d %@", getpid(), value]
+                    forType:@"dev.ilo.browser.tab"];
     } else {
       [pasteboard releaseGlobally];
       return false;
@@ -1390,6 +1410,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     NSView* content = target.contentView;
     NSView* hit = [content hitTest:[content.superview convertPoint:move.locationInWindow
                                                           fromView:nil]];
+    Pointed(target, move.locationInWindow);
     [hit mouseMoved:move];
     TrackMove(content, move, hit);
     [NSApp postEvent:move atStart:NO];
@@ -1816,6 +1837,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   NSWindow* key_window = NSApp.keyWindow ?: window;
+  if (action == "resizekey") {
+    double width, height;
+    if (!(words >> width >> height)) {
+      return false;
+    }
+    NSRect frame = key_window.frame;
+    NSSize size = [key_window frameRectForContentRect:NSMakeRect(0, 0, width, height)].size;
+    [key_window setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - size.height, size.width,
+                                    size.height)
+                 display:YES];
+    done();
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;

@@ -24,6 +24,12 @@ impl Shell {
         self.update_menus(cx);
     }
 
+    /// Whether the shown Space's profile has a backup to bring back, which Settings › Tabs &
+    /// Sidebar offers once it has.
+    pub fn has_sidebar_backups(&self) -> bool {
+        !self.shown_backups().is_empty()
+    }
+
     /// The shown Space's profile's backups, newest first; none in an agent's Space.
     pub(super) fn shown_backups(&self) -> &[SidebarBackup] {
         let shown = self.shown_space().filter(|space| space.agent.is_empty());
