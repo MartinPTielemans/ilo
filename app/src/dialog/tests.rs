@@ -7,8 +7,9 @@ use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px, size};
 use super::*;
 use crate::settling::SETTLING;
 
+/// What the dialog asks of its window, and apart, in order, its holds of the keys around its hide.
 #[derive(Default)]
-struct Recorder(RefCell<Vec<String>>);
+struct Recorder(RefCell<Vec<String>>, RefCell<Vec<&'static str>>);
 
 impl Host for Recorder {
     fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>) {
@@ -24,6 +25,15 @@ impl Host for Recorder {
 
     fn hide(&self) {
         self.0.borrow_mut().push("hide".into());
+        self.1.borrow_mut().push("hide");
+    }
+
+    fn hold_keys(&self) {
+        self.1.borrow_mut().push("hold");
+    }
+
+    fn give_held_keys(&self) {
+        self.1.borrow_mut().push("give");
     }
 }
 
@@ -71,6 +81,22 @@ impl Asking {
         self.cx.run_until_parked();
         self.host.0.take()
     }
+}
+
+/// The keys typed as the dialog leaves, such as ⌥⌘N right after Esc, are held from the answer
+/// until it has hidden, then given to the browser window, which has the keyboard back by then,
+/// rather than lost to the dialog going (#1930). A click's answer holds them the same way.
+#[gpui::test]
+fn the_keys_typed_as_it_leaves_wait_for_the_window(cx: &mut TestAppContext) {
+    let mut dialog = Asking::new(cx);
+    dialog.keys("escape");
+    assert_eq!(
+        *dialog.host.1.borrow(),
+        ["hold"],
+        "it didn't hold the keys as it left"
+    );
+    dialog.calls();
+    assert_eq!(*dialog.host.1.borrow(), ["hold", "hide", "give"]);
 }
 
 #[gpui::test]
