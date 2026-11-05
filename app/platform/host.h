@@ -615,7 +615,7 @@ bool host_window_maximized(void* ui_view);
 // otherwise.
 bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
-// the first window comes back when it quit maximized.
+// a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
 #endif
 

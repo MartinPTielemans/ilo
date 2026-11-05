@@ -57,6 +57,21 @@ pub(crate) fn open_browser_window(
     (window != 0).then_some(window)
 }
 
+/// Maximizes the browser window `id` of `ui_view`, which then un-maximizes to the frame it has, as
+/// Windows' title bar and Linux's third window button do. The Mac's zoom is a frame, which the core
+/// saves (bc_saved_window_maximized).
+#[allow(unused_variables)]
+fn maximize(id: bc::bc_id, ui_view: *mut c_void) {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        platform::host_maximize_window(ui_view)
+    };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        bc::bc_window_toggle_maximized(id)
+    };
+}
+
 /// The frames of the windows open when the browser last quit, front to back.
 pub(crate) fn saved_frames() -> Vec<bc::bc_rect> {
     let count = unsafe { bc::bc_saved_window_frames(std::ptr::null_mut(), 0) };
@@ -169,13 +184,13 @@ pub(crate) fn open_window_as(
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved, at)?;
-    // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
-    // UI opens, so that starts at the maximized size.
-    if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
-        #[cfg(target_os = "windows")]
-        unsafe {
-            platform::host_maximize_window(ui_view)
-        };
+    // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
+    // Before its UI opens, so that starts at the maximized size.
+    if let Some(index) =
+        window_frames::saved_at(from.is_none(), own.is_none() && at.is_none(), saved)
+        && unsafe { bc::bc_saved_window_maximized(index) }
+    {
+        maximize(id, ui_view);
     }
     // Under Wayland, the window's surface, which GPUI's goes in as a subsurface, is the view, and
     // GPUI's window starts at its size.
