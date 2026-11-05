@@ -785,6 +785,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         window_selected: Some(window_selected),
         window_page_elsewhere: Some(window_page_elsewhere),
         tab_opened: Some(tab_opened),
+        tab_popup: Some(tab_popup),
         tab_closed: Some(tab_closed),
         tab_loaded: Some(tab_loaded),
         tab_state_changed: Some(tab_state_changed),

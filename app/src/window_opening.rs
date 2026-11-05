@@ -24,7 +24,8 @@ pub(crate) fn open_browser_window(
         Vec::new()
     };
     let frame = match own {
-        Some(Own::Little { .. }) => Some(little_frame()),
+        // A page's pop-up's Little ilo window is where its page asked, else Little ilo's own.
+        Some(Own::Little { .. }) => Some(at.unwrap_or_else(little_frame)),
         _ if at.is_some() => at.map(|at| placed(at).unwrap_or(at)),
         _ => frames.get(saved.unwrap_or(0)).copied().and_then(placed),
     };

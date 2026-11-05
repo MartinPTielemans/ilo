@@ -4,7 +4,10 @@
 # closes it. ⌥⌘-click on a link opens the link in one, not
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
-# outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one, and one left unused
+# outlives it, but for a pop-up its page asks for with window.open(), as a sign-in's: that opens
+# as a Little ilo window of its own over it at the size it asked, whose field takes typing, and
+# which goes once its page closes itself, the window under it taking the keyboard back (#1919).
+# Closing one archives its tab, and ⇧⌘T reopens it in a new one, and one left unused
 # past its time closes into the archive by itself. The first opens 900 × 640, and each after at the
 # size the last one closed at. On the Mac one grows in, from its middle when a key opened it, else
 # from under the pointer, and is recorded doing so. It opens over a full-screen window, and the
@@ -618,6 +621,57 @@ if [ "$active" = 1 ]; then
 else
   echo "skip: the unused Little ilo window. Browser wasn't the active app."
 fi
+
+# A sign-in pop-up its page opens with window.open() opens as a Little ilo window of its own, over
+# it, at the size it asked for, under its bar (#1919): its field takes the typing, and once it
+# closes itself, as a sign-in's does when it's done, its window goes and the Little ilo window
+# that opened it has the keyboard back. The page asks 480 by 560.
+printf '<title>loading</title><p style="font:16px system-ui">Continue with Example ID</p>
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+addEventListener("click", () => open("little-signin.html", "signin", "width=480,height=560"));
+</script>' > "$out/site/little-opener.html"
+printf '<title>loading</title>
+<input id="email" autofocus style="position:absolute;inset:0;width:100%%;font:16px system-ui">
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "signin ready"));
+email.addEventListener("input", () => document.title = "typed " + email.value);
+email.addEventListener("keydown", e => e.key == "Enter" && setTimeout(() => close(), 300));
+</script>' > "$out/site/little-signin.html"
+if [ "$active" = 1 ]; then
+  send window 1
+  send key n cmd alt
+  expect "^browser: little window opened [0-9]* profile [0-9]* home [0-9]*\$" \
+    "⌥⌘N didn't open a Little ilo window for the sign-in"
+  opener=$(opened)
+  expect "^browser: window opened $opener\$" "the sign-in's Little ilo window didn't open"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+  send insert "${site}little-opener.html"
+  send key return
+  expect '^browser: title [0-9]* ready$' "the sign-in's opener didn't draw"
+  send click $page_point
+  expect "^browser: tab [0-9]* popup of [0-9]* in window $opener asks 480 560\$" \
+    "the opener's window.open() didn't tell the app of a pop-up of 480 by 560"
+  popup_tab=$(sed -n 's/^browser: tab \([0-9]*\) popup of .*/\1/p' "$log" | tail -1)
+  expect "^browser: little window $opener popup $popup_tab in window [0-9]* at " \
+    "the pop-up didn't open in a window of its own: $(grep "^browser: little window $opener " "$log" | tail -1)"
+  popped=$(sed -n "s/^browser: little window $opener popup $popup_tab in window \([0-9]*\) at \(.*\)\$/\1 \2/p" "$log" | tail -1)
+  set -- $popped
+  popup_window=$1
+  [ "$4 $5" = "500 616" ] || fail "the pop-up's window is $4 by $5, not its page's 480 by 560 under its bar"
+  expect "^browser: title $popup_tab signin ready\$" "the sign-in pop-up didn't draw"
+  ../tools/window-screenshot.sh "$pid" "$out/little-popup.png" all || fail "no window to capture"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send type ada
+  expect "^browser: title $popup_tab typed ada\$" "the pop-up's field didn't take the typing"
+  send key return
+  expect "^browser: window closed $popup_window\$" "the pop-up's window didn't close with its page"
+  expect "^browser: little window $opener has the keyboard back from $popup_window\$" \
+    "the Little ilo window didn't get the keyboard back from its pop-up"
+  await "^browser: key window $opener\$" || fail "the Little ilo window isn't the key window again"
+else
+  echo "skip: the Little ilo window's sign-in pop-up. Browser wasn't the active app."
+fi
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4"
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A sign-in pop-up its page opens is a window of its own over it, at the 480 by 560 it asked, whose field takes typing, and which goes when it closes itself, the Little ilo window taking the keyboard back. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-popup.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4"

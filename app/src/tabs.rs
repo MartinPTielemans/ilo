@@ -374,9 +374,16 @@ pub(crate) unsafe extern "C" fn tab_opened(
             .and_then(|each| each.little)
     });
     if let Some(home) = little.filter(|_| opener != 0) {
-        update_app_later(move |_| little_tab_opened(window, tab, home));
+        match take_popup(tab) {
+            Some(asked) => {
+                update_app_later(move |cx| little_popup_opened(window, tab, home, asked, cx))
+            }
+            None => update_app_later(move |_| little_tab_opened(window, tab, home)),
+        }
         return;
     }
+    // A pop-up elsewhere is a tab of its window, as decision 3 has it.
+    take_popup(tab);
     // A link ⌥⌘-clicked, or opened in a split view from the page's menu, joined its page's split,
     // which ⌘Z takes back as it does the user's other ways in.
     let mut split = [0; 3];
@@ -397,6 +404,7 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
         executor
             .spawn(async move {
                 cx.update(|cx| {
+                    popup_closed(tab);
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);
