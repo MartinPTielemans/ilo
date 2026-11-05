@@ -13,6 +13,7 @@
 #include <commdlg.h>
 #include <dwmapi.h>
 #include <imm.h>
+#include <msctf.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
@@ -1374,19 +1375,96 @@ UINT_PTR g_hold_timer = 0;
 constexpr UINT kHoldKeysMs = 1000;
 
 // Japanese typed while a page answers Ctrl+L late composes in the bar from the first key (#1784).
-// Chromium's windows and GPUI's take text through IMM32 on the thread's one default input context,
-// which Windows bridges to Microsoft's IME, so the page and the bar share it. What the IME makes of
-// a key goes to the window its key message is translated for, and to the window the context is
-// active for. So while the page keeps the keyboard, the hold translates the keys the IME takes for
-// the command bar, with the context active for it, and the bar, taking the keyboard, reads what
-// the context holds composed. A page that keeps the shortcut gets the context back, composition
-// and all, as it would have had it.
+// Microsoft's IME composes in the document TSF's focus is on, which follows the keyboard, and takes
+// a key before any hold of the host's sees it. Chromium's pages have TSF documents of their own,
+// and GPUI's windows take text through IMM32 on the thread's one default input context, which
+// Windows bridges to a document too, so the bar and the find bar share one. So while the page keeps
+// the keyboard, the hold gives TSF's focus to that document, with the context active for the
+// command bar, where its messages go, and the bar, taking the keyboard, reads what the context
+// holds composed. A page that keeps the shortcut gets TSF's focus back, and what was composed for
+// the bar meanwhile goes.
+
+// The UI thread's TSF thread manager, which Chromium, the bridge and the IME share, or null.
+ITfThreadMgr* ThreadManager() {
+  static ITfThreadMgr* manager = nullptr;
+  if (!manager) {
+    // CLSID_TF_ThreadMgr, which no library the app links defines.
+    const CLSID thread_manager = {
+        0x529a9e6b, 0x6587, 0x4f23, {0xab, 0x9e, 0x9c, 0x7d, 0x68, 0x3e, 0x3c, 0x50}};
+    CoCreateInstance(thread_manager, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&manager));
+  }
+  return manager;
+}
+
+// The document the bridge gives GPUI's windows, as TSF's focus was on it while one of them had the
+// keyboard, which no call hands over otherwise.
+ITfDocumentMgr* g_gpui_document = nullptr;
+
+// Whether |window| is one of GPUI's, as the bar is.
+bool IsGpuiWindow(HWND window) {
+  HWND bar = g_overlays[0].hwnd;
+  return window && bar && GetClassLongPtrW(window, GCW_ATOM) == GetClassLongPtrW(bar, GCW_ATOM);
+}
+
+// Hears TSF's focus move, and keeps the document it's on while a GPUI window has the keyboard.
+class FocusSink : public ITfThreadMgrEventSink {
+ public:
+  STDMETHODIMP QueryInterface(REFIID id, void** out) override {
+    if (id == IID_IUnknown || id == IID_ITfThreadMgrEventSink) {
+      *out = static_cast<ITfThreadMgrEventSink*>(this);
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return 2; }
+  STDMETHODIMP_(ULONG) Release() override { return 1; }
+  STDMETHODIMP OnInitDocumentMgr(ITfDocumentMgr*) override { return S_OK; }
+  STDMETHODIMP OnUninitDocumentMgr(ITfDocumentMgr* document) override {
+    if (document == g_gpui_document) {
+      g_gpui_document->Release();
+      g_gpui_document = nullptr;
+    }
+    return S_OK;
+  }
+  STDMETHODIMP OnSetFocus(ITfDocumentMgr* focused, ITfDocumentMgr*) override {
+    if (focused && focused != g_gpui_document && IsGpuiWindow(GetFocus())) {
+      if (g_gpui_document) {
+        g_gpui_document->Release();
+      }
+      focused->AddRef();
+      g_gpui_document = focused;
+      // check.sh reads none of this: it says the hold has a document for the bar.
+      fprintf(stderr, "browser: TSF's document for GPUI's windows found\n");
+    }
+    return S_OK;
+  }
+  STDMETHODIMP OnPushContext(ITfContext*) override { return S_OK; }
+  STDMETHODIMP OnPopContext(ITfContext*) override { return S_OK; }
+};
+
+// Listens for TSF's focus moving, from the UI thread's start.
+void WatchDocuments() {
+  static FocusSink sink;
+  static bool watching = false;
+  ITfSource* source = nullptr;
+  ITfThreadMgr* manager = ThreadManager();
+  if (watching || !manager || FAILED(manager->QueryInterface(IID_PPV_ARGS(&source)))) {
+    return;
+  }
+  DWORD cookie = 0;
+  watching = SUCCEEDED(source->AdviseSink(IID_ITfThreadMgrEventSink, &sink, &cookie));
+  source->Release();
+  // check.sh reads none of this.
+  fprintf(stderr, "browser: watching TSF's focus %d\n", watching ? 1 : 0);
+}
+
 struct BarComposition {
   HWND bar = nullptr;
   HWND page = nullptr;
   HIMC context = nullptr;
-  // The key events the IME took, translated for the bar.
-  int keys = 0;
+  // TSF's focus as the hold began, the page's document.
+  ITfDocumentMgr* document = nullptr;
 };
 std::optional<BarComposition> g_bar_composition;
 
@@ -1398,18 +1476,15 @@ SetActiveContext ImmSetActiveContextFunction() {
   return function;
 }
 
-// While a page has the keyboard, the keys the IME takes compose in the command bar.
+// While a page has the keyboard, the keys the IME takes compose in the command bar's document.
 void ComposeInBar() {
+  WatchDocuments();
   HWND bar = g_overlays[0].hwnd;
   HWND page = GetFocus();
-  if (g_bar_composition || !bar || !page || page == bar ||
-      GetClassLongPtrW(page, GCW_ATOM) == GetClassLongPtrW(bar, GCW_ATOM)) {
-    // From one of GPUI's windows, which hands the bar its composition as it takes the keyboard.
+  ITfThreadMgr* manager = ThreadManager();
+  // From one of GPUI's windows, the composition is in the bar's document already.
+  if (g_bar_composition || !bar || !page || !manager || IsGpuiWindow(page)) {
     return;
-  }
-  HIMC own = ImmGetContext(page);
-  if (own) {
-    ImmReleaseContext(page, own);
   }
   HIMC context = ImmGetContext(bar);
   if (!context) {
@@ -1419,38 +1494,70 @@ void ComposeInBar() {
   if (context) {
     ImmReleaseContext(bar, context);
   }
-  const bool shared = context && own == context;
-  SetActiveContext activate = ImmSetActiveContextFunction();
-  const bool active = shared && activate && activate(bar, context, TRUE);
-  // check.sh reads none of this: it says how a hold composes.
-  fprintf(stderr, "browser: hold %s the bar's input context, active for the bar %d\n",
-          shared ? "shares" : "doesn't share", active ? 1 : 0);
-  if (shared) {
-    g_bar_composition = BarComposition{bar, page, context, 0};
+  BarComposition composing{bar, page, context, nullptr};
+  manager->GetFocus(&composing.document);
+  // The document the bridge keeps for the bar, if it associates one with its window.
+  ITfDocumentMgr* associated = nullptr;
+  if (SUCCEEDED(manager->AssociateFocus(bar, nullptr, &associated)) && associated) {
+    ITfDocumentMgr* none = nullptr;
+    manager->AssociateFocus(bar, associated, &none);
+    if (none) {
+      none->Release();
+    }
   }
+  ITfDocumentMgr* document = g_gpui_document ? g_gpui_document : associated;
+  const char* found = g_gpui_document ? "GPUI's" : associated ? "the bar's associated" : "none";
+  if (document && document != composing.document) {
+    manager->SetFocus(document);
+    if (context) {
+      if (SetActiveContext activate = ImmSetActiveContextFunction()) {
+        activate(bar, context, TRUE);
+      }
+    }
+  }
+  ITfDocumentMgr* now = nullptr;
+  manager->GetFocus(&now);
+  // check.sh reads none of this: it says where a hold composes.
+  fprintf(stderr, "browser: hold gives TSF's focus %s document, %s\n", found,
+          now && now != composing.document ? "moved" : "not moved");
+  if (now) {
+    now->Release();
+  }
+  if (associated) {
+    associated->Release();
+  }
+  g_bar_composition = composing;
 }
 
-// Ends the hold's composition: |to| has the keyboard, the bar or the page that kept the shortcut,
-// and reads what's composed, as the bar emptied its field as it opened.
+// Ends the hold's composition: in the bar, which reads it again, as it emptied its field as it
+// opened; or with the page keeping the shortcut, which gets TSF's focus back.
 void EndBarComposition(HWND to, bool to_bar) {
   std::optional<BarComposition> composing = std::exchange(g_bar_composition, std::nullopt);
   if (!composing) {
     return;
   }
-  if (!to_bar && IsWindow(composing->page)) {
-    if (SetActiveContext activate = ImmSetActiveContextFunction()) {
-      activate(composing->page, composing->context, TRUE);
-    }
-    to = composing->page;
-  }
-  const LONG bytes = ImmGetCompositionStringW(composing->context, GCS_COMPSTR, nullptr, 0);
+  const LONG bytes =
+      composing->context ? ImmGetCompositionStringW(composing->context, GCS_COMPSTR, nullptr, 0)
+                         : 0;
   // check.sh reads this line.
-  fprintf(stderr, "browser: held composition %ld characters for %s, from %d key events\n",
+  fprintf(stderr, "browser: held composition %ld characters for %s\n",
           std::max<LONG>(bytes, 0) / static_cast<LONG>(sizeof(wchar_t)),
-          to_bar ? "the bar" : "the page", composing->keys);
-  if (bytes > 0 && IsWindow(to)) {
-    SendMessageW(to, WM_IME_STARTCOMPOSITION, 0, 0);
-    SendMessageW(to, WM_IME_COMPOSITION, 0, GCS_COMPSTR | GCS_COMPATTR | GCS_CURSORPOS);
+          to_bar ? "the bar" : "the page");
+  if (to_bar) {
+    if (bytes > 0) {
+      SendMessageW(to, WM_IME_STARTCOMPOSITION, 0, 0);
+      SendMessageW(to, WM_IME_COMPOSITION, 0, GCS_COMPSTR | GCS_COMPATTR | GCS_CURSORPOS);
+    }
+  } else {
+    if (bytes > 0) {
+      ImmNotifyIME(composing->context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+    }
+    if (composing->document && GetFocus() == composing->page) {
+      ThreadManager()->SetFocus(composing->document);
+    }
+  }
+  if (composing->document) {
+    composing->document->Release();
   }
 }
 
@@ -1503,7 +1610,6 @@ LRESULT CALLBACK HeldKeys(int code, WPARAM wparam, LPARAM lparam) {
           MSG translated = *msg;
           translated.hwnd = g_bar_composition->bar;
           TranslateMessage(&translated);
-          ++g_bar_composition->keys;
         } else {
           g_held_keys.push_back(*msg);
         }
@@ -2839,6 +2945,7 @@ void* host_ui_view(void) {
   }();
   WatchForeground();
   WatchHeldEscape();
+  WatchDocuments();
   // A window of its own until the core makes it a child of the browser window.
   HWND holder = CreateWindowExW(0, holder_class, L"", WS_POPUP | WS_CLIPCHILDREN, 0, 0, 0, 0,
                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
