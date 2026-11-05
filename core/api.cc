@@ -58,6 +58,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -1406,6 +1407,16 @@ bool bc_ad_blocking(void) {
 void bc_set_ad_blocking(bool on) {
   browser_core::UserSettings().ad_blocking = on;
   browser_core::ApplyAdBlocking();
+  browser_core::SessionChanged();
+}
+
+bool bc_relay_calls(void) {
+  return browser_core::UserSettings().relay_calls;
+}
+
+void bc_set_relay_calls(bool on) {
+  browser_core::UserSettings().relay_calls = on;
+  browser_core::ApplyWebRtc();
   browser_core::SessionChanged();
 }
 
