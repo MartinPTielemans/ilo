@@ -1,5 +1,5 @@
 //! Where ilo's update stands, as the system's updater says (docs/ux-spec.md › Updates): Sparkle on
-//! the Mac, WinSparkle on Windows, Flatpak's portal on Linux. Settings › About's version row says
+//! the Mac, ilo's own on Windows (platform/windows/updates.cc), Flatpak's portal on Linux. Settings › About's version row says
 //! it in plain words and finishes it, and Check for Updates… reads Restart to Update once one is
 //! ready. There's no updater here: each OS's own says what happened, through its delegate or
 //! callbacks, and this keeps what it last said and asks it to check or to restart. Where the build
@@ -28,7 +28,7 @@ pub enum Updater {
     None,
     /// The Microsoft Store, which updates a copy installed from it.
     Store,
-    /// ilo's own: Sparkle, WinSparkle or Flatpak's portal.
+    /// ilo's own: Sparkle, Windows' (platform/windows/updates.cc) or Flatpak's portal.
     Own,
 }
 

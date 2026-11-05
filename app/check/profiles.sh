@@ -446,7 +446,7 @@ settings_drew 'Tabs & Sidebar'
 send clickkey $(drawn "toolbar General")
 expect '^browser: settings tab General$' "a click on General didn't show its section"
 settings_drew 'General'
-at=$(drawn "download folder $work") || fail "Settings didn't draw the second profile's Change…"
+in_sight "download folder $work" || fail "Settings didn't draw the second profile's Change…"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profile-boxes.png" || fail "no window to capture"
 send clickkey $at
 expect "^browser: download folder of profile $work $(printf '%s\n' "$work_downloads" | sed 's/[][\\.*^$]/\\&/g') set\$" \

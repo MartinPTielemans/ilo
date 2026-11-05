@@ -47,9 +47,9 @@ use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousCont
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL_LIGHT, DETAIL_LINE, DETAIL_TOP,
-    END_GAP, FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE, LEDE_LINE, LEDE_TOP,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
+    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
+    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
     MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
     SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
@@ -1501,8 +1501,10 @@ impl Settings {
             links.update(cx, |links, cx| links.set_look(look, cx));
         }
         let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
+        // The field's "Search" is the rows' grey over the field's own plate, not over a group's.
+        let placeholder = self.base().opacity(DETAIL);
         self.search.update(cx, |search, cx| {
-            search.set_colors(look.detail.into(), look.ink.into(), selection);
+            search.set_colors(placeholder.into(), look.ink.into(), selection);
             cx.notify();
         });
         // check.sh waits for this line.
@@ -1541,13 +1543,11 @@ impl Settings {
         let base = self.base();
         let title =
             shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
-        // On a light card the sentence takes the captions' alpha, as 0.55 reads under 4.5:1 there.
-        let lede_alpha = if self.dark { LEDE } else { DETAIL_LIGHT };
         let lede = (!lede.is_empty()).then(|| {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(lede_alpha))
+                .text_color(base.opacity(DETAIL))
                 .child(lede)
         });
         let head = div()

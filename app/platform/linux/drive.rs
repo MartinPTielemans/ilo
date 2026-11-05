@@ -2172,11 +2172,16 @@ fn run_command(line: &str) -> Option<()> {
             motion(target_at(x, y)?, none)
         }
         // Each event moves the content up by <dy> points, as drive.mm's trackpad events do.
-        "scroll" => {
+        // scrollkey scrolls in the window with the keyboard, such as Settings', as clickkey
+        // clicks there.
+        "scroll" | "scrollkey" => {
             let (x, y) = point(&mut words)?;
             let dy: f64 = words.next()?.parse().ok()?;
             let count: usize = words.next()?.parse().ok()?;
-            let at = target_at(x, y)?;
+            let at = match action {
+                "scrollkey" => target_in_key(x, y)?,
+                _ => target_at(x, y)?,
+            };
             // A page, Chromium's, scrolls a notch of the wheel an event, the notches alone: with a
             // move before them, the window run's page stopped short of its 3000 points under Xvfb.
             if at.window == driven()?.window {

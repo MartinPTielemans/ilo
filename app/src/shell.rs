@@ -70,6 +70,7 @@ mod help_tests;
 mod history;
 mod hover_cards;
 mod keys;
+mod launch_room;
 mod library;
 mod link;
 #[cfg(test)]
