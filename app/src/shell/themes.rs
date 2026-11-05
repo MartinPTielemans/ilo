@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ColorSpace, Context, Global, Hsla, Point, Rgba, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, size,
+    App, ColorSpace, Context, Global, Hsla, Rgba, canvas, div, linear_color_stop, linear_gradient,
+    point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -161,12 +161,12 @@ impl Shell {
         }
     }
 
-    /// Shows the theme picker for `space` pointing at `anchor`, the middle of a row's right end
-    /// in the window, with the Space's theme, or its colour alone if it has no theme.
+    /// Shows the theme picker for `space` `at` its place in the window, with the Space's theme, or
+    /// its colour alone if it has no theme.
     pub(super) fn show_theme_picker(
         &mut self,
         space: u64,
-        anchor: Point<f32>,
+        at: theme_picker::At,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter().find(|each| each.id == space) else {
@@ -187,15 +187,7 @@ impl Shell {
         let height = f32::from(self.viewport.height);
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        theme_picker::show(
-            self.browser.window(),
-            space,
-            theme,
-            anchor,
-            height,
-            changed,
-            cx,
-        );
+        theme_picker::show(self.browser.window(), space, theme, at, height, changed, cx);
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is

@@ -1043,6 +1043,10 @@ impl Browser for Engine {
         give_host_appearance(appearance);
     }
 
+    fn keep_lone_header(&self, kept: bool, _: &mut App) {
+        settings::save_lone_header(kept);
+    }
+
     fn page_moving(&self, moving: bool, _: &mut App) {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
     }

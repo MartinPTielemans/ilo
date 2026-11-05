@@ -850,6 +850,10 @@ media-glyph = 14.0
 tall-favorites = 0.4
 # The Space's name, over its tabs.
 name-height = 44.0
+# With one Space, unnamed and with no icon, the name row hides (Arc 1.171), and what's under it
+# rises as Arc's does, 39 under the URL field or 36 under the favorites, leaving this much of it.
+name-hidden = 5.0
+name-hidden-under-favorites = 8.0
 name-x = 41.0
 space-icon-slot = 20.0
 # The sidebar's icon takes clicks on Arc's frame, which lights with the header's plate (ours).
@@ -2046,6 +2050,9 @@ radius = 20.0
 gap = 2.5
 # Kept off the browser window's top and bottom, when the card can't centre on its arrow (ours).
 margin = 8.0
+# From the Space's menu, Arc 1.171's picker has no arrow, its card this far inside a window 382 × 534
+# against the sidebar's edge at the browser window's top.
+edge-inset = 14.0
 # The square field, 8.5 inside the card's top and sides.
 field-inset = 8.5
 field = 340.0

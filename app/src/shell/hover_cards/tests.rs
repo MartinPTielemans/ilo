@@ -289,9 +289,8 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
         host.take().iter().any(|call| call.starts_with("card rest"))
     };
     rest_on(&shell, cx, &host, 3);
-    shell.update(cx, |shell, cx| {
-        shell.show_theme_picker(1, point(200., 100.), cx)
-    });
+    let at = theme_picker::At::Row(point(200., 100.));
+    shell.update(cx, |shell, cx| shell.show_theme_picker(1, at, cx));
     assert!(host.take().contains(&"card close".to_string()));
     assert!(!rests(cx, 4), "the theme picker shows");
     cx.update(|_, cx| theme_picker::dismissed(cx));
