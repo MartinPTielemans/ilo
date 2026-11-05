@@ -4896,24 +4896,33 @@ void host_set_little_status_item(void (*clicked)(void)) {
 
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
+  // check.sh reads these lines: which step refused, and why.
+  const auto refused = [](const char* step, HRESULT result) {
+    fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
+            static_cast<unsigned long>(result));
+  };
   ComPtr<ICustomDestinationList> list;
   ComPtr<IObjectCollection> tasks;
   ComPtr<IShellLinkW> link;
   ComPtr<IPropertyStore> store;
-  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&list))) ||
-      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&tasks))) ||
-      FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&link))) ||
-      FAILED(link.As(&store))) {
-    fprintf(stderr, "browser: jump list refused\n");
-    return;
+  HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&list));
+  if (FAILED(result)) {
+    return refused("the list", result);
+  }
+  result = CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                            IID_PPV_ARGS(&tasks));
+  if (FAILED(result)) {
+    return refused("the tasks", result);
+  }
+  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+  if (FAILED(result) || FAILED(result = link.As(&store))) {
+    return refused("the task", result);
   }
   // The windows' own, so the list is their taskbar button's.
   const std::wstring id = BrowserModelId();
-  if (!id.empty()) {
-    list->SetAppID(id.c_str());
+  if (!id.empty() && FAILED(result = list->SetAppID(id.c_str()))) {
+    return refused("its app id", result);
   }
   const std::wstring exe = ExePath();
   link->SetPath(exe.c_str());
@@ -4928,22 +4937,22 @@ void host_set_little_task(const char* title, const char* arguments) {
   if (value.pwszVal) {
     memcpy(value.pwszVal, g_little_title.c_str(), bytes);
   }
-  const bool titled = value.pwszVal && SUCCEEDED(store->SetValue(kTitle, value)) &&
-                      SUCCEEDED(store->Commit());
+  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
   PropVariantClear(&value);
+  if (FAILED(result) || FAILED(result = store->Commit())) {
+    return refused("its title", result);
+  }
   UINT slots = 0;
   ComPtr<IObjectArray> removed;
   ComPtr<IObjectArray> array;
-  const bool made = titled && SUCCEEDED(tasks->AddObject(link.Get())) &&
-                    SUCCEEDED(tasks.As(&array)) &&
-                    SUCCEEDED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) &&
-                    SUCCEEDED(list->AddUserTasks(array.Get())) && SUCCEEDED(list->CommitList());
-  // check.sh reads this line.
-  if (made) {
-    fprintf(stderr, "browser: jump list task %s: %s\n", title, arguments);
-  } else {
-    fprintf(stderr, "browser: jump list refused\n");
+  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+      FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
+      FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
+    return refused("the commit", result);
   }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: jump list task %s: %s%s\n", title, arguments,
+          id.empty() ? ", with no app id" : "");
 }
 
 // The notification area's icon's window, for drive.cc's statusitem: null while it's off.

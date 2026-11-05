@@ -514,6 +514,14 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
+        // once Chromium's thread has COM; it's under the windows' AppUserModelID.
+        if let (Ok(title), Ok(switch)) = (
+            CString::new(little_launch::NEW_LITTLE_WINDOW),
+            CString::new(little_launch::NEW_LITTLE_SWITCH),
+        ) {
+            unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
+        }
         needs_you_host::start(cx);
         open_window(None, None, cx);
         // A launch for a new Little ilo window, from the jump list or the launcher, once there's a
@@ -544,13 +552,6 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
-    // The jump list's task off the Mac, which runs the browser for a new Little ilo window.
-    if let (Ok(title), Ok(switch)) = (
-        CString::new(little_launch::NEW_LITTLE_WINDOW),
-        CString::new(little_launch::NEW_LITTLE_SWITCH),
-    ) {
-        unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
-    }
     // AppleScript, once the windows it reads can be there.
     scripting_host::answer_scripts();
     if little_in_menu_bar() {

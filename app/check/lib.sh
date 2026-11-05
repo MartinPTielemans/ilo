@@ -112,7 +112,7 @@ gone() {
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
   local commit
-  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" HEAD -- "$@"
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
