@@ -2839,6 +2839,40 @@ fn a_read_that_needs_access_shows_full_disk_access(cx: &mut TestAppContext) {
     fs::remove_dir_all(home).unwrap();
 }
 
+/// Safari's row says it imports from Safari, as every browser's does, though the system keeps its
+/// files from the app until it has Full Disk Access: a screen reader hears "Import from Safari…",
+/// and once it's picked, the access it waits for has Open System Settings by its title (#1911).
+#[cfg(unix)]
+#[gpui::test]
+fn safaris_row_says_it_imports_from_safari(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, unnamed};
+    let Some(home) = safari("safari-named") else {
+        return;
+    };
+    let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Mac))));
+    let host: Rc<dyn Host> = browser.clone();
+    let (view, cx) = cx.add_window_view(|_, _| ImportView::new(host, false).headed());
+    cx.run_until_parked();
+    let names = |cx: &mut gpui::VisualTestContext| -> Vec<String> {
+        let said = pressable(cx);
+        assert_eq!(unnamed(&said), [], "a control without a name: {said:?}");
+        said.into_iter().map(|(_, name, _)| name).collect()
+    };
+    let list = names(cx);
+    assert!(
+        list.contains(&"Import from Safari…".to_string()),
+        "Safari's row in {list:?}"
+    );
+    view.update(cx, |view, cx| view.pick(0, cx));
+    cx.run_until_parked();
+    let waiting = names(cx);
+    assert!(
+        waiting.contains(&"Open System Settings".to_string()),
+        "the access Safari waits for in {waiting:?}"
+    );
+    fs::remove_dir_all(home).unwrap();
+}
+
 /// Back in the app with access still off, the wait says so and what to do; once access is on,
 /// coming back shows Safari's choices with their counts, and Import brings them in.
 #[cfg(unix)]
