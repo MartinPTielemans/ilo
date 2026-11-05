@@ -515,7 +515,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
-        // once Chromium's thread has COM; it's under the windows' AppUserModelID.
+        // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
             CString::new(little_launch::NEW_LITTLE_WINDOW),
             CString::new(little_launch::NEW_LITTLE_SWITCH),

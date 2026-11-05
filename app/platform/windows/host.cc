@@ -2893,8 +2893,13 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
+// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
+static void WriteLittleTask();
+
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
+  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
+  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -4802,8 +4807,11 @@ constexpr UINT kTrayId = 1;
 HWND g_tray = nullptr;
 void (*g_tray_clicked)(void) = nullptr;
 UINT g_taskbar_created = 0;
-// The task's title, which the icon's tooltip says too.
+// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
+// written under the windows' AppUserModelID, which the first window has.
 std::wstring g_little_title;
+std::wstring g_little_arguments;
+bool g_little_task_waits = false;
 
 // PKEY_Title, named here as kAppId is, rather than linked from propsys.
 constexpr PROPERTYKEY kTitle = {
@@ -4896,6 +4904,21 @@ void host_set_little_status_item(void (*clicked)(void)) {
 
 void host_set_little_task(const char* title, const char* arguments) {
   g_little_title = Wide(title);
+  g_little_arguments = Wide(arguments);
+  g_little_task_waits = true;
+  WriteLittleTask();
+}
+
+}  // extern "C"
+
+static void WriteLittleTask() {
+  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
+  // before the first opens.
+  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
+  if (id.empty()) {
+    return;
+  }
+  g_little_task_waits = false;
   // check.sh reads these lines: which step refused, and why.
   const auto refused = [](const char* step, HRESULT result) {
     fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
@@ -4919,14 +4942,12 @@ void host_set_little_task(const char* title, const char* arguments) {
   if (FAILED(result) || FAILED(result = link.As(&store))) {
     return refused("the task", result);
   }
-  // The windows' own, so the list is their taskbar button's.
-  const std::wstring id = BrowserModelId();
-  if (!id.empty() && FAILED(result = list->SetAppID(id.c_str()))) {
+  if (FAILED(result = list->SetAppID(id.c_str()))) {
     return refused("its app id", result);
   }
   const std::wstring exe = ExePath();
   link->SetPath(exe.c_str());
-  link->SetArguments(Wide(arguments).c_str());
+  link->SetArguments(g_little_arguments.c_str());
   link->SetIconLocation(exe.c_str(), 0);
   link->SetDescription(g_little_title.c_str());
   PROPVARIANT value;
@@ -4951,9 +4972,11 @@ void host_set_little_task(const char* title, const char* arguments) {
     return refused("the commit", result);
   }
   // check.sh reads this line.
-  fprintf(stderr, "browser: jump list task %s: %s%s\n", title, arguments,
-          id.empty() ? ", with no app id" : "");
+  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
+          g_little_arguments.c_str());
 }
+
+extern "C" {
 
 // The notification area's icon's window, for drive.cc's statusitem: null while it's off.
 void* host_drive_little_tray(void) {
