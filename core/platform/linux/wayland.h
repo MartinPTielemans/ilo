@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -26,6 +27,10 @@ bool OnWayland();
 // (bc_wayland_display). Null off Wayland.
 void* JoinWaylandDisplay(void (*dispatched)());
 
+// Runs |done| once the compositor has answered all Chromium has sent it, after Chromium has handled
+// what it sent before the answer, such as the configure a full screen asked for brings. At once off
+// Wayland.
+void AfterRoundTrip(base::OnceClosure done);
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
 

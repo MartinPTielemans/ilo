@@ -115,6 +115,32 @@ void* JoinWaylandDisplay(void (*dispatched)()) {
   return wl_proxy_get_display(reinterpret_cast<wl_proxy*>(proxy->GetRegistry()));
 }
 
+void AfterRoundTrip(base::OnceClosure done) {
+  wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
+  if (!proxy) {
+    std::move(done).Run();
+    return;
+  }
+  // The sync's answer on Chromium's own queue, whose events are dispatched in the order they came,
+  // so the compositor's earlier ones, a configure's bounds too, have been handled when it lands.
+  auto* registry = reinterpret_cast<wl_proxy*>(proxy->GetRegistry());
+  wl_display* display = wl_proxy_get_display(registry);
+  auto* wrapped = static_cast<wl_display*>(wl_proxy_create_wrapper(display));
+  wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wrapped), wl_proxy_get_queue(registry));
+  wl_callback* callback = wl_display_sync(wrapped);
+  wl_proxy_wrapper_destroy(wrapped);
+  static const wl_callback_listener listener = {
+      .done =
+          [](void* data, wl_callback* callback, uint32_t) {
+            wl_callback_destroy(callback);
+            std::unique_ptr<base::OnceClosure> done(static_cast<base::OnceClosure*>(data));
+            std::move(*done).Run();
+          },
+  };
+  wl_callback_add_listener(callback, &listener, new base::OnceClosure(std::move(done)));
+  wl_display_flush(display);
+}
+
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {
   wl::WaylandProxy* proxy = wl::WaylandProxy::GetInstance();
   if (!proxy) {
