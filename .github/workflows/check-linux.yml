@@ -219,7 +219,7 @@ jobs:
           esac
           failed=0
           for session in $sessions; do
-            unset BROWSER_XVFB BROWSER_WAYLAND
+            unset BROWSER_XVFB BROWSER_WAYLAND BROWSER_PROFILE_DIR
             where=
             passing=$LINUX_RUNS
             case $session in
@@ -227,6 +227,9 @@ jobs:
             sway) title="In a headless sway session, on its Xwayland." ;;
             wayland)
               export BROWSER_WAYLAND=1
+              # A profile of its own, as what X11's runs left in theirs, such as a site's DRM note
+              # closed by clear, would change these.
+              export BROWSER_PROFILE_DIR=$RUNNER_TEMP/profile-wayland
               where=wayland/
               passing=$WAYLAND_RUNS
               title="In a headless sway session, on Wayland. The runs not listed aren't driven there yet."
