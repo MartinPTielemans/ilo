@@ -1,0 +1,63 @@
+# Fails a branch or pull request with a commit that has no Signed-off-by line, the Developer
+# Certificate of Origin's sign-off (CONTRIBUTING.md#sign-off). It reads commit messages through the
+# API, so it never checks out or runs the pull request's code.
+name: DCO
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions: {}
+
+jobs:
+  sign-off:
+    name: Sign-off
+    # A pull request from a branch here already ran on its push.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            let commits;
+            if (context.eventName === "pull_request") {
+              commits = await github.paginate(github.rest.pulls.listCommits, {
+                ...repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+            } else {
+              // The commits on the branch that main doesn't have.
+              const basehead = `${context.payload.repository.default_branch}...${context.sha}`;
+              commits = [];
+              for (let page = 1; ; page++) {
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({
+                  ...repo, basehead, per_page: 100, page,
+                });
+                commits.push(...data.commits);
+                if (data.commits.length < 100 || commits.length >= data.total_commits) break;
+              }
+            }
+
+            // A merge commit, such as GitHub's Update branch makes, brings in commits checked on
+            // their own.
+            const signedOff = /^Signed-off-by: \S.* <[^<>\s]+@[^<>\s]+>\s*$/m;
+            const missing = commits.filter(
+              (c) => c.parents.length < 2 && !signedOff.test(c.commit.message),
+            );
+            core.info(`${commits.length} commits, ${missing.length} without a sign-off.`);
+            if (missing.length > 0) {
+              for (const c of missing) {
+                core.error(`${c.sha.slice(0, 10)} ${c.commit.message.split("\n")[0]}`);
+              }
+              core.setFailed(
+                "Each commit needs a Signed-off-by line (CONTRIBUTING.md#sign-off). " +
+                  "`git rebase --signoff <base>` adds yours to every commit; then push the branch again.",
+              );
+            }

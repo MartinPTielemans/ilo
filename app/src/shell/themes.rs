@@ -156,10 +156,7 @@ impl Shell {
             self.capture_look = Some(look);
             self.browser.capture_look(self.selected, look, cx);
         }
-        if cx
-            .try_global::<super::commands::ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity())
-        {
+        if super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             palette::set_current(palette, cx);
         }
     }

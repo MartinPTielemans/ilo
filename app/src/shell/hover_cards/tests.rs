@@ -2,6 +2,7 @@
 //! tabs' pictures are taken, on a host that records what the shell asks.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
     Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
@@ -9,9 +10,9 @@ use gpui::{
 };
 
 use crate::{
-    dock_dot::QUIET,
     hover_card::{Action, Event},
     icon_picker::{self, Picked, Recents, Subject},
+    shell::hover_cards::PICTURE_HIDDEN,
     shell::{Folders, Page, Row, Shell, recorder::Recorder},
     theme_picker,
 };
@@ -59,7 +60,7 @@ fn with_tabs(
         shell.set_selected(2, cx);
     });
     cx.run_until_parked();
-    cx.executor().advance_clock(QUIET * 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN * 2);
     cx.run_until_parked();
     host.take();
     (shell, cx, host)
@@ -392,12 +393,20 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
             .collect()
     };
     assert!(pictured(&host).is_empty(), "nothing on the switch");
-    cx.executor().advance_clock(QUIET / 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.executor().advance_clock(QUIET / 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    cx.executor().advance_clock(QUIET);
+    // Not while the core may still keep the page the switch left on screen, up to a second.
+    cx.executor()
+        .advance_clock(Duration::from_secs(1) - PICTURE_HIDDEN / 2);
+    cx.run_until_parked();
+    assert!(
+        pictured(&host).is_empty(),
+        "pictured while the switch may still show it"
+    );
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert_eq!(pictured(&host), ["card picture 2", "card picture 4"]);
 }

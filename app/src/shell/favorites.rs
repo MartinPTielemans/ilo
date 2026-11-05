@@ -118,7 +118,7 @@ impl Shell {
     /// turn, and the favicon goes to the middle. A turn the other way reverses it.
     pub(super) fn turning_drag(&self) -> Option<impl IntoElement + use<>> {
         let (tab, [left, top, width, height, radius], turned) = self.turning_shape()?;
-        let selected = tab == self.selected && !self.new_tab;
+        let selected = tab == self.selected && self.shown_has_plate();
         let row_fill = if selected {
             self.palette.selected(0.)
         } else {
@@ -457,7 +457,7 @@ impl Shell {
     /// icon (tile_theme.rs). A click shows it, a double-click takes it back to its URL (Dia), and a
     /// right-click shows its menu.
     fn tile(&self, tab: u64, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let selected = tab == self.selected && !self.new_tab;
+        let selected = tab == self.selected && self.shown_has_plate();
         // Full for a dragged tile, which covers what it passes, and none for the others then.
         let dragging = self.dragging();
         let hover = match dragging {
