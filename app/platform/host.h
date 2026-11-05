@@ -184,6 +184,12 @@ void host_watch_option_taps(void (*tapped)(void* ui_view));
 // else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
 void host_watch_ui_keyboard(void (*left)(void* ui_view));
 
+// Calls |pressed| with the UI's view of a browser window whose page the user presses a mouse
+// button in, as the press goes on to the page: a click in an agent's page takes it over (#1080).
+// Never for a press in the UI or the window's frame, nor for the wheel. On Linux the app hears
+// them itself, from GPUI under Wayland and from the X server while an agent works (page_presses.rs).
+void host_watch_page_presses(void (*pressed)(void* ui_view));
+
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
 // replaced while it tracks one, and the core's callbacks still come in while it does.

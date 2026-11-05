@@ -94,6 +94,8 @@ unsafe extern "C" {
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_ui_keyboard(left: extern "C" fn(*mut c_void));
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_page_presses(pressed: extern "C" fn(*mut c_void));
     pub fn host_after_menus(apply: extern "C" fn()) -> bool;
     pub fn host_watch_resigning_active(resigning: extern "C" fn());
     pub fn host_watch_active(became_active: extern "C" fn());

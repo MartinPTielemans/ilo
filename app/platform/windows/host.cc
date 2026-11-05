@@ -2916,6 +2916,46 @@ void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
 }
 
+// The UI's, which hears a press in a page (host_watch_page_presses).
+void (*g_page_pressed)(void* ui_view) = nullptr;
+
+bool IsButtonDown(UINT message) {
+  return message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN ||
+         message == WM_XBUTTONDOWN;
+}
+
+// A mouse button going down in |hwnd| at |screen| in a page: in a browser window, but not GPUI's
+// window over it nor where the window's frame answers. Chromium takes a page's input in the
+// browser window itself, or a child of it; the wheel's messages aren't presses.
+void PagePressedAt(HWND hwnd, POINT screen) {
+  const HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
+  void* ui_view = g_page_pressed ? UiViewOf(root) : nullptr;
+  if (!ui_view) {
+    return;
+  }
+  const HWND ui = Hwnd(ui_view);
+  if (hwnd == ui || IsChild(ui, hwnd) || (hwnd == root && FrameHit(root, screen))) {
+    return;
+  }
+  g_page_pressed(ui_view);
+}
+
+// The thread's hook sees each press of the pointer before the window it goes to does.
+LRESULT CALLBACK PagePressHook(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HC_ACTION && IsButtonDown(static_cast<UINT>(wparam))) {
+    const auto* press = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam);
+    PagePressedAt(press->hwnd, press->pt);
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+void host_watch_page_presses(void (*pressed)(void* ui_view)) {
+  g_page_pressed = pressed;
+  static const HHOOK hook =
+      SetWindowsHookExW(WH_MOUSE, PagePressHook, nullptr, GetCurrentThreadId());
+  (void)hook;
+}
+
 // A window's menu bar isn't replaced while it's open on Windows: it's modal and runs no tasks.
 bool host_after_menus(void (*)(void)) { return false; }
 
@@ -4750,6 +4790,10 @@ bool host_drive_pointer(unsigned message, long x, long y) {
   const POINT point{x, y};
   if (message == WM_MOUSEMOVE && g_mouse_hook) {
     PointerMoved(point);
+  }
+  // The driver posts its presses, which the thread's hook never sees.
+  if (IsButtonDown(message)) {
+    PagePressedAt(WindowFromPoint(point), point);
   }
   return g_menu_mouse_hook && MenuTakesPointer(message, point);
 }

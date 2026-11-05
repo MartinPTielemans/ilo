@@ -318,6 +318,8 @@ std::vector<std::unique_ptr<Browser>> g_browsers;
 
 // Told of a press in a browser window's page, which takes the keyboard from its UI.
 void (*g_ui_keyboard_left)(void* ui_view);
+// The UI's, which hears a press in a page (host_watch_page_presses).
+void (*g_page_pressed)(void* ui_view);
 
 // The browser whose UI draws in |ui_view|, or null.
 Browser* BrowserWithView(void* ui_view) {
@@ -1873,11 +1875,16 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 NSView* content = each->window.contentView;
                                                 NSView* hit = [content.superview
                                                     hitTest:event.locationInWindow];
-                                                if (g_ui_keyboard_left && hit &&
-                                                    [hit isDescendantOf:content] &&
+                                                if (hit && [hit isDescendantOf:content] &&
                                                     ![hit isDescendantOf:each->ui_view]) {
-                                                  g_ui_keyboard_left(
-                                                      (__bridge void*)each->ui_view);
+                                                  if (g_ui_keyboard_left) {
+                                                    g_ui_keyboard_left(
+                                                        (__bridge void*)each->ui_view);
+                                                  }
+                                                  if (g_page_pressed) {
+                                                    g_page_pressed(
+                                                        (__bridge void*)each->ui_view);
+                                                  }
                                                 }
                                               } else if (event.window == each->find_bar) {
                                                 each->find_bar_keyboard = true;
@@ -2312,6 +2319,11 @@ void host_watch_swipes(bool (*swiped)(void* ui_view, double x, double y, bool ba
 
 void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
   g_ui_keyboard_left = left;
+}
+
+// The monitor of presses in the browser windows (host_show_window_behind) tells a page's apart.
+void host_watch_page_presses(void (*pressed)(void* ui_view)) {
+  g_page_pressed = pressed;
 }
 
 void host_watch_option_taps(void (*tapped)(void* ui_view)) {

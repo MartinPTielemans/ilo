@@ -701,6 +701,9 @@ pub trait Browser {
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
     /// The user hands `tab` back to its agent.
     fn hand_back(&self, tab: u64, cx: &mut App);
+    /// Whether the host hears presses in the pages for Shell::page_pressed, `on` while an agent
+    /// works: on X11 it listens to the screen's presses for that, and the other hosts always hear.
+    fn hear_page_presses(&self, _on: bool, _cx: &mut App) {}
     /// The user does `action` to the task whose agent is `agent` (Agent task).
     fn task(&self, agent: SharedString, action: crate::agents::task::TaskAction, cx: &mut App);
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it

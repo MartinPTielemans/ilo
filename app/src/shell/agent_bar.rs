@@ -79,9 +79,29 @@ impl Shell {
     /// What the agents do and what the user holds from them, as the Agents tell every window.
     pub fn set_agent_status(&mut self, status: Vec<Status>, cx: &mut Context<Self>) {
         if self.agent_status != status {
+            // While an agent works, a press in its page takes it over, which X11's host hears only
+            // while it's asked to.
+            if self.agent_status.is_empty() != status.is_empty() {
+                self.browser.hear_page_presses(!status.is_empty(), cx);
+            }
             self.agent_status = status;
             cx.notify();
         }
+    }
+
+    /// A press in the window's page (host_watch_page_presses). In an agent's page while it works
+    /// there, the user takes the page over, as Take Over did, and the press goes on to the page
+    /// (#1080). In a page the user holds, or one of the user's own, it's a press like any other.
+    pub fn page_pressed(&mut self, cx: &mut Context<Self>) {
+        let Some((_, shown)) = self.agent_page() else {
+            return;
+        };
+        let Some(Bar::Working { agent, .. }) = self.agent_bar() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agent page pressed in {shown}");
+        self.browser.take_over(agent, shown, cx);
     }
 
     /// The bar of the agent's page the window shows (`agent_page`), if the agent is at work in its
@@ -143,8 +163,8 @@ pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {
             name, doing, tab, ..
         } => (format!("{name} is at work"), doing.to_string(), *tab),
         Bar::Held { name, why, tab } if why.is_empty() => (
-            "You have this tab".to_string(),
-            format!("{name} can't act in it until you hand it back."),
+            "You're driving".to_string(),
+            format!("{name} can't act here"),
             *tab,
         ),
         Bar::Held { name, why, tab } => (format!("{name} needs you"), why.to_string(), *tab),

@@ -1455,6 +1455,8 @@ impl Agents {
         // Each goes to the top, so the last goes first.
         for &tab in open.iter().rev() {
             self.browser.move_tab(tab, home, cx);
+            // Kept, it's the user's tab, with its sound (#1080).
+            self.browser.set_muted(tab, false);
             // check.sh reads this line.
             log!("browser: task {agent} opens {tab} in space {home}");
         }
