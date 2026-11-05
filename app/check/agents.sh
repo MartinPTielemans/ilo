@@ -19,9 +19,10 @@ log="$out/agents.log"
 step=0
 rm -f "$saved" "$launch_frame"
 # Library › Agents keeps the profile's past tasks on this computer, 30 days from their end (#1080):
-# the run's, a task that ended an hour ago and one that ended 30 days ago, under the profile's
-# name, as the browser keeps them.
-history_file="$profile_dir/Agent sessions"
+# the run's, a task that ended an hour ago and one that ended 30 days ago, in the first profile's
+# own folder, as the browser keeps them.
+history_file="$profile_dir/Default/Agent sessions"
+mkdir -p "$profile_dir/Default"
 python3 -I - "$history_file" << 'PY'
 import json, sys, time
 now = int(time.time())
@@ -32,7 +33,7 @@ def past(id, title, ago, orders):
 with open(sys.argv[1], "w", encoding="utf-8") as file:
     for entry in (past("check-new", "Book a table for four", 3600, 1),
                   past("check-old", "Compare the museum passes", 30 * 24 * 3600, 0)):
-        file.write("Default\t" + json.dumps(entry) + "\n")
+        file.write(json.dumps(entry) + "\n")
 PY
 # The user's tab, as the first run opens none.
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
@@ -114,7 +115,6 @@ await '^browser: library shown$' || fail "the Library didn't settle open on Agen
 ../tools/window-screenshot.sh "$pid" "$out/library-agents.png" || fail "no window to capture"
 grep -q 'check-new' "$history_file" || fail "the hour-old past task went: $(cat "$history_file")"
 grep -q 'check-old' "$history_file" && fail "the 30-day-old past task stayed: $(cat "$history_file")"
-grep -q "^Default$(printf '\t')" "$history_file" || fail "the past tasks aren't the profile's: $(cat "$history_file")"
 send menu 'View Agents…'
 expect '^browser: library hidden$' "View Agents… didn't close the Library"
 rm -f "$history_file"
