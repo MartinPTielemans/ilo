@@ -492,7 +492,8 @@ saved["windows"][0]["bounds"][3] -= 3
 with open(sys.argv[1], "w") as file:
     json.dump(saved, file)
 ' "$saved" || fail "the window kept in $saved has no frame to make shorter"
-  capture="$out/links-launch-shorter.png"
+  # Whole: `open` starts the app in /.
+  capture="$PWD/$out/links-launch-shorter.png"
 fi
 
 # Launched as the system launches the default browser, by `open` on the Mac and by the command
