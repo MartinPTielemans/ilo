@@ -56,6 +56,7 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use browser::log;
@@ -123,22 +124,47 @@ pub fn start() {
                     await_key_title(n, text.to_owned(), 100);
                     return;
                 }
-                if !run(&line) {
-                    log!("browser: drive {n}: can't do that");
-                }
-                if let Some(rest) = LATER.take() {
-                    rest(Box::new(move || settle(n)));
-                    return;
-                }
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                match (ACTIVATING.take(), RESIZING.take()) {
-                    (Some(window), _) => await_focus(n, window, until),
-                    (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
-                    (None, None) => settle(n),
-                }
+                attempt(n, line, None);
             }));
         }
     });
+}
+
+/// Runs command `n`, `line`, and again 10 ms on while it asks to be (`again`), until `until`.
+fn attempt(n: u64, line: String, until: Option<Instant>) {
+    RETRY_UNTIL.set(until);
+    let done = run(&line);
+    RETRY_UNTIL.set(None);
+    if !done {
+        if let Some(until) = AGAIN.take() {
+            after(10, Box::new(move || attempt(n, line, Some(until))));
+            return;
+        }
+        log!("browser: drive {n}: can't do that");
+    }
+    if let Some(rest) = LATER.take() {
+        rest(Box::new(move || settle(n)));
+        return;
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    match (ACTIVATING.take(), RESIZING.take()) {
+        (Some(window), _) => await_focus(n, window, until),
+        (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
+        (None, None) => settle(n),
+    }
+}
+
+/// Has the command running, which can't yet, run again soon, as one naming a window the window
+/// manager hasn't listed yet. False once it has been trying for 2 s, when it can't.
+pub(super) fn again() -> bool {
+    let until = RETRY_UNTIL
+        .get()
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(2));
+    let trying = Instant::now() < until;
+    if trying {
+        AGAIN.set(Some(until));
+    }
+    trying
 }
 
 /// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
@@ -273,6 +299,10 @@ thread_local! {
     /// The rest of a command that goes on after it returns, as a swipe that rests before the
     /// fingers lift (drive_wayland.rs), which reports it done (go_on).
     static LATER: Cell<Option<Box<dyn FnOnce(Box<dyn FnOnce()>)>>> = const { Cell::new(None) };
+    /// Until when the command running may run again, once it has asked to (`again`).
+    static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// That the command running asked to run again, and until when.
+    static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
