@@ -1535,6 +1535,7 @@ pub struct Shell {
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
+    media_stack: media_player::MediaStack,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What the update banner at the foot offers, whether it's open under the pointer or says a
     /// restart is under way, its opening or closing from a height, and what the log said last
@@ -1868,6 +1869,7 @@ impl Shell {
             task_strip_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
+            media_stack: Default::default(),
             media_drawn: Rc::default(),
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
@@ -3219,6 +3221,8 @@ impl Shell {
         self.tab_changed(tab, changed, cx);
         // A player is for a tab out of sight, whose row may not be drawn.
         if media_changed && self.lists(tab) {
+            // So the stack's order is when each player came, not when it was next drawn.
+            self.media_players();
             cx.notify();
         }
         if let Some(trouble) = trouble {
@@ -3916,6 +3920,7 @@ impl Render for Shell {
         self.step_foot(window, cx);
         self.step_picture(window);
         self.step_recent_downloads(window, cx);
+        self.step_media_stack(window, cx);
         self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
@@ -4226,8 +4231,9 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
-                    .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which its open grows over.
+                    .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
                     .children(self.task_ghosts())

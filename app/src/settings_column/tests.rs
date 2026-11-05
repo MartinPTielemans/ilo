@@ -3,7 +3,9 @@
 
 use std::cell::{Cell, RefCell};
 
-use gpui::{Context, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size};
+use gpui::{
+    Context, Focusable, InputEvent as _, Modifiers, TestAppContext, VisualTestContext, point, size,
+};
 
 use super::*;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
@@ -164,5 +166,297 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     assert!(
         view.read_with(cx, |view, _| view.picked.borrow().is_empty()),
         "the click picked a section"
+    );
+}
+
+/// Settings in small for the keyboard: the column with the search field, and the card with a
+/// button, under Settings' key context, as the window has them.
+struct Keyed {
+    focus: gpui::FocusHandle,
+    input: gpui::Entity<crate::text_input::TextInput>,
+    card: crate::settings_card::Card,
+    shown: Section,
+    pressed: Rc<Cell<usize>>,
+}
+
+impl Render for Keyed {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::settings_search::{NextControl, PreviousControl, field};
+        let view = cx.weak_entity();
+        let pick: Pick = Rc::new(move |section, _, cx| {
+            view.update(cx, |view, cx| {
+                view.shown = section;
+                cx.notify();
+            })
+            .ok();
+        });
+        let field = field(
+            &self.input,
+            rgb(PAPER),
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let pressed = self.pressed.clone();
+        let look = crate::settings_rows::Look::settings(true);
+        let button = crate::settings_rows::button(&look, "restore", "Restore…")
+            .on_click(move |_, _, _| pressed.set(pressed.get() + 1));
+        let colors = crate::settings_card::Colors {
+            line: look.line,
+            name: look.ink,
+            heading: look.heading,
+        };
+        let card = self.card.draw("General", div().child(button), true, colors);
+        div()
+            .key_context("Settings")
+            .track_focus(&self.focus)
+            .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
+            .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
+            .size_full()
+            .flex()
+            .child(column(
+                self.shown,
+                true,
+                Rc::default(),
+                field.into_any_element(),
+                None,
+                pick,
+                Rc::new(|_, _| {}),
+            ))
+            .child(card)
+    }
+}
+
+/// A key pressed and let go, as a keyboard sends it: Space and Return click on the release.
+fn press(key: &'static str, cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes(key);
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.update(|window, cx| {
+        window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+    });
+    cx.run_until_parked();
+}
+
+/// From the search field, where Settings opens, ⇥ goes to the card's button and Space or Return
+/// clicks it; ⇧⇥ goes back through the field to the sections, the last first; ↑ and ↓ move in the
+/// list without leaving it at its ends; Return shows the section that has the keyboard.
+#[gpui::test]
+fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        crate::text_input::bind_keys(cx);
+        crate::settings_search::bind_keys(cx);
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let input = cx.new(|cx| crate::text_input::TextInput::new("Search", cx));
+        let _ = input.read(cx).focus_handle(cx).tab_stop(true);
+        Keyed {
+            focus: cx.focus_handle(),
+            input,
+            card: Default::default(),
+            shown: Section::General,
+            pressed: Rc::default(),
+        }
+    });
+    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let field = view.read(cx).input.read(cx).focus_handle(cx);
+        window.focus(&field, cx);
+    });
+    cx.run_until_parked();
+    let pressed = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.pressed.get());
+    let shown = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.shown);
+
+    cx.simulate_keystrokes("tab");
+    press("enter", cx);
+    assert_eq!(
+        pressed(cx),
+        1,
+        "⇥ from the field didn't reach the card's button"
+    );
+    press("space", cx);
+    assert_eq!(pressed(cx), 2, "Space didn't click the button");
+
+    // Back through the field to the list's last section, About.
+    cx.simulate_keystrokes("shift-tab shift-tab");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::About);
+    // ↓ at the list's end stays there; ↑ goes to the section above.
+    cx.simulate_keystrokes("down");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::About, "↓ left the list at its end");
+    cx.simulate_keystrokes("up up");
+    press("enter", cx);
+    assert_eq!(shown(cx), Section::Sync);
+    // ⇥ from the list goes on to the field, where typing searches.
+    for _ in 0..3 {
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("pip");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.input.read(cx).text().to_string()),
+        "pip"
+    );
+    assert_eq!(pressed(cx), 2);
+}
+
+gpui::actions!(settings_routes, [RoutedUndo, RoutedClose, RoutedEscape]);
+
+/// Settings in small for the keys' routes, as the window nests them: Settings holding the
+/// keyboard, as it opens; a row whose press doesn't reach Settings, as a link rule's with its
+/// trash; the import, a view with the keyboard of its own and its Esc, whose Import… gives way to
+/// what comes next; and a control that goes once pressed, as an ad-free site's row.
+struct Routes {
+    focus: gpui::FocusHandle,
+    import: gpui::FocusHandle,
+    logged: Rc<RefCell<Vec<String>>>,
+    trashed: Rc<Cell<bool>>,
+    imported: Rc<Cell<bool>>,
+    gone: Rc<Cell<bool>>,
+    undone: Rc<Cell<usize>>,
+    closed: Rc<Cell<usize>>,
+    escaped: Rc<Cell<usize>>,
+}
+
+impl Render for Routes {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let look = crate::settings_rows::Look::settings(true);
+        let control =
+            |id: &'static str, flag: &Rc<Cell<bool>>, logged: &Rc<RefCell<Vec<String>>>| {
+                let flag = flag.clone();
+                crate::settings_rows::button(&look, id, id)
+                    .relative()
+                    .child(drawn(id.to_string(), logged.clone()))
+                    .on_click(move |_, _, _| flag.set(true))
+            };
+        let (undone, closed, escaped) = (
+            self.undone.clone(),
+            self.closed.clone(),
+            self.escaped.clone(),
+        );
+        let rule = div()
+            .h(px(40.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .when(!self.trashed.get(), |row| {
+                row.child(control("trash", &self.trashed, &self.logged))
+            });
+        let import = div()
+            .h(px(40.))
+            .track_focus(&self.import)
+            .key_context("Import")
+            .on_action(move |_: &RoutedEscape, _, _| escaped.set(escaped.get() + 1))
+            .child(match self.imported.get() {
+                false => control("import", &self.imported, &self.logged).into_any_element(),
+                true => div().child("Chrome's choices").into_any_element(),
+            });
+        let site = div().h(px(40.)).when(!self.gone.get(), |row| {
+            row.child(control("show ads", &self.gone, &self.logged))
+        });
+        div()
+            .key_context("Settings")
+            .track_focus(&self.focus)
+            .on_action(move |_: &RoutedUndo, _, _| undone.set(undone.get() + 1))
+            .on_action(move |_: &RoutedClose, _, _| closed.set(closed.get() + 1))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _, _, cx| cx.notify()))
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(rule)
+            .child(import)
+            .child(site)
+    }
+}
+
+/// Settings holding the keyboard as it opens, with the keys bound as the app binds them.
+fn routes(cx: &mut TestAppContext) -> (gpui::Entity<Routes>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        cx.bind_keys([
+            gpui::KeyBinding::new("cmd-z", RoutedUndo, Some("Settings")),
+            gpui::KeyBinding::new("cmd-w", RoutedClose, Some("Settings")),
+            gpui::KeyBinding::new("escape", RoutedEscape, Some("Import")),
+        ])
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| Routes {
+        focus: cx.focus_handle(),
+        import: cx.focus_handle(),
+        logged: Rc::default(),
+        trashed: Rc::default(),
+        imported: Rc::default(),
+        gone: Rc::default(),
+        undone: Rc::default(),
+        closed: Rc::default(),
+        escaped: Rc::default(),
+    });
+    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.update(|window, cx| {
+        window.activate_window();
+        let focus = view.read(cx).focus.clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    (view, cx)
+}
+
+/// A press on the control `what`, where it was drawn, and the frame after it.
+fn press_on(view: &gpui::Entity<Routes>, what: &str, cx: &mut VisualTestContext) {
+    let at = view.read_with(cx, |view, _| {
+        let logged = view.logged.borrow();
+        let line = logged
+            .iter()
+            .find(|line| line.contains(&format!(" {what} at ")))
+            .cloned();
+        let line = line.unwrap_or_else(|| panic!("{what} wasn't drawn"));
+        let mut parts = line.rsplit(' ');
+        let y: f32 = parts.next().unwrap().parse().unwrap();
+        let x: f32 = parts.next().unwrap().parse().unwrap();
+        point(px(x), px(y))
+    });
+    cx.simulate_click(at, Modifiers::none());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+}
+
+/// A link rule's trash takes its row with it, and ⌘Z then reaches Settings, which brings the rule
+/// back: the press left the keyboard with Settings, not with the trash that went.
+#[gpui::test]
+fn after_the_trash_cmd_z_reaches_settings(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "trash", cx);
+    assert!(view.read_with(cx, |view, _| view.trashed.get()));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.undone.get()),
+        1,
+        "⌘Z didn't reach Settings"
+    );
+}
+
+/// A press on Import… gives the import the keyboard, as before, so Esc in what replaces it
+/// reaches the import.
+#[gpui::test]
+fn after_import_esc_reaches_the_import(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "import", cx);
+    assert!(view.read_with(cx, |view, _| view.imported.get()));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.escaped.get()),
+        1,
+        "Esc didn't reach the import"
+    );
+}
+
+/// A control that goes once pressed leaves the keyboard with Settings, so ⌘W still hides it.
+#[gpui::test]
+fn after_a_control_goes_cmd_w_reaches_settings(cx: &mut TestAppContext) {
+    let (view, cx) = routes(cx);
+    press_on(&view, "show ads", cx);
+    assert!(view.read_with(cx, |view, _| view.gone.get()));
+    cx.simulate_keystrokes("cmd-w");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.closed.get()),
+        1,
+        "⌘W didn't reach Settings"
     );
 }

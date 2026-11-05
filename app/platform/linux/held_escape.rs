@@ -5,10 +5,14 @@
 //!
 //! An Escape press GPUI gets marks the key held, until this connection of the host's own hears it
 //! let go in the browser windows or the window the press went to. Until then the page's Escape
-//! presses are the held key's repeats, and the app keeps them. X11 only: a Wayland compositor
-//! sends no repeats, and each client makes its own from the keys it got.
+//! presses are the held key's repeats, and the app keeps them.
+//!
+//! A Wayland compositor sends no repeats: each client makes its own from the keys it got, and
+//! every key reaches both Chromium and GPUI. So there the page's Escape presses are the held key's
+//! while GPUI still repeats the press the UI got (`gpui_linux::held_key`), which a release or
+//! another press ends.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use gpui::App;
 use x11rb::{
@@ -27,26 +31,47 @@ use crate::{WINDOWS, bc};
 const ESCAPE: xproto::Keysym = 0xff1b;
 
 thread_local! {
+    /// Whether the app is on Wayland, where GPUI says what's held.
+    static WAYLAND: Cell<bool> = const { Cell::new(false) };
+    /// Under Wayland, GPUI's number for the Escape press the UI got, while it may be held.
+    static WAYLAND_PRESS: Cell<Option<u64>> = const { Cell::new(None) };
     static X: RefCell<Option<(RustConnection, xproto::Keycode)>> = const { RefCell::new(None) };
     /// The windows that tell this connection their key releases while Escape is held.
     static HELD: RefCell<Option<Vec<xproto::Window>>> = const { RefCell::new(None) };
 }
 
-/// Watches the UI's keys for Escape going down.
-pub(crate) fn watch(cx: &mut App) {
-    cx.intercept_keystrokes(|event, _, _| {
+/// Watches the UI's keys for Escape going down, on Wayland if `wayland`.
+pub(crate) fn watch(wayland: bool, cx: &mut App) {
+    WAYLAND.set(wayland);
+    cx.intercept_keystrokes(move |event, _, _| {
         let keystroke = &event.keystroke;
+        let escape = keystroke.key == "escape" && !keystroke.modifiers.modified();
+        if wayland {
+            WAYLAND_PRESS.set(escape.then(repeating_escape).flatten());
+            return;
+        }
         let_go();
-        if keystroke.key == "escape" && !keystroke.modifiers.modified() {
+        if escape {
             pressed();
         }
     })
     .detach();
 }
 
+/// GPUI's number for the press of the Escape it repeats, if it's Escape it's repeating.
+fn repeating_escape() -> Option<u64> {
+    gpui_linux::held_key().and_then(|(keysym, press)| (keysym == ESCAPE).then_some(press))
+}
+
 /// Whether `key`, going to a page, is the repeat of an Escape held since the UI got its press.
 pub(crate) fn keeps_from_page(key: &bc::bc_key) -> bool {
     let escape = unsafe { std::ffi::CStr::from_ptr(key.key) }.to_bytes() == b"Escape";
+    if WAYLAND.get() {
+        let press = WAYLAND_PRESS.take();
+        let held = escape && key.modifiers == 0 && press.is_some() && press == repeating_escape();
+        WAYLAND_PRESS.set(press.filter(|_| held));
+        return held;
+    }
     if !escape || key.modifiers != 0 || HELD.with_borrow(Option::is_none) || released() {
         let_go();
         return false;

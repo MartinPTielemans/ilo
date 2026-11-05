@@ -375,33 +375,63 @@ expect "^browser: page $a media 1 playing 1 next 1 pip 1 Quiet\$" "the page's mu
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
-expect "^browser: media player $a at " "the player wasn't drawn"
-read -r mx my mw mh <<EOF
-$(grep "^browser: media player $a at " "$log" | tail -1 | cut -d' ' -f6-)
+# player_at <height> <failure> [<step>]: waits for the front card drawn <height> tall, 33 at rest
+# and 66 open, since the last command or <step>, and reads where it is into mx, my, mw and mh.
+player_at() {
+  expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2" "${3:-}"
+  read -r mx my mw mh <<EOF
+$(grep "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$log" | tail -1 | cut -d' ' -f6-)
 EOF
+}
+# open_stack: rests the pointer on the front card, which opens the stack.
+open_stack() {
+  send move $((mx + mw / 2)) $((my + mh - 16))
+  expect '^browser: media stack open$' "the stack didn't open under the pointer"
+  player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+}
+player_at 33 "the player wasn't drawn 33 tall at rest"
+expect '^browser: media stack rest$' "the stack didn't rest"
 ../tools/window-screenshot.sh "$pid" "$out/media-player.png" || fail "no window to capture"
-# Its buttons from the right, 8 in, 24 wide and 6 apart: ×, the next track, pause, then Picture in
-# Picture, as Arc's Back to PiP, there while the page can float and doesn't.
-button_x() { echo $((mx + mw - 8 - 12 - $1 * 30)); }
-send click "$(button_x 2)" $((my + mh / 2))
+# At rest its controls are thirds of the card: the favicon, pause and the next track.
+send click $((mx + mw / 2)) $((my + mh / 2))
 expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
 expect "^browser: page $a media 1 playing 0 next 1 pip 1 Quiet\$" "the player didn't show it paused"
-send click "$(button_x 3)" $((my + mh / 2))
+# The pointer resting there opens it: the title row's buttons from the right, 4.5 in, 24 wide and
+# 2 apart: ×, then Picture in Picture, as Arc's Back to PiP, there while the page can float and
+# doesn't.
+expect '^browser: media stack open$' "the stack didn't open under the pointer"
+player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+../tools/window-screenshot.sh "$pid" "$out/media-player-open.png" || fail "no window to capture"
+button_x() { echo $((mx + mw - 5 - 12 - $1 * 26)); }
+title_y=$((my + 19))
+send click "$(button_x 1)" $title_y
 expect '^browser: command media-picture-in-picture via player$' \
   "the player's Picture in Picture didn't take the click"
 expect "^browser: title $a floating\$" "the player's Picture in Picture didn't float the page"
 expect "^browser: page $a media 1 playing 0 next 1 pip 0 Quiet\$" \
   "the player kept Picture in Picture while the page floated"
-send click $((mx + 60)) $((my + mh / 2))
+# On the Mac the floating window takes the keyboard, and GPUI then reads the pointer from AppKit,
+# whose real one the driver's events never move: off the stack, which closes as it's left. On
+# Linux and Windows the driver's pointer stays on the open stack. The pointer leaves it here too,
+# and the card is pressed once it rests, wherever that is.
+floated=$step
+send move $page_point
+expect '^browser: media stack rest$' "the stack didn't rest once the pointer left it" "$floated"
+player_at 33 "the player wasn't drawn at rest once the page floated" "$floated"
+send click $((mx + 40)) $((my + mh / 2))
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the player didn't show its tab"
 expect "^browser: title $a landed\$" "the floating page didn't land as its tab showed"
 expect '^browser: media players $' "the tab shown kept its player"
+send move $page_point
 shown "$b"
 expect "^browser: media players $a\$" "the paused tab out of sight had no player"
-send click "$(button_x 0)" $((my + mh / 2))
+player_at 33 "the paused tab's player wasn't drawn at rest"
+open_stack
+send click "$(button_x 0)" $title_y
 expect '^browser: command media-dismiss via player$' "the player's × didn't take the click"
 expect '^browser: media players $' "× didn't put the player away"
+send move $page_point
 
 # A private window's music out of sight has a player there alone. Every window hears every tab,
 # but the regular window's players are its Spaces' tabs, so its music, playing again, is its one.
@@ -444,12 +474,15 @@ send key m
 expect "^browser: title $a playing\$" "m in the page didn't play its silence again"
 switch "$key_b cmd" "$b"
 expect "^browser: media players $a\$" "the regular window's players weren't its music alone"
-expect "^browser: media player $a at " "the regular window's player wasn't drawn again"
+player_at 33 "the regular window's player wasn't drawn again"
 ../tools/window-screenshot.sh "$pid" "$out/media-player-own.png" || fail "no window to capture"
-send click "$(button_x 2)" $((my + mh / 2))
+send click $((mx + mw / 2)) $((my + mh / 2))
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
-send click "$(button_x 0)" $((my + mh / 2))
+expect '^browser: media stack open$' "the stack didn't open under the pointer"
+player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+send click "$(button_x 0)" $title_y
 expect '^browser: media players $' "× didn't put the player away"
+send move $page_point
 send window 2
 send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"

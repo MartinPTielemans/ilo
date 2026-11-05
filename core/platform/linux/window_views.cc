@@ -415,6 +415,13 @@ class WindowViews : public views::WidgetObserver,
         region.emplace_back();
       }
       PlatformWindowOf(widget_)->SetInputRegion(region);
+      // Chromium applies the region with its next frame, until which the pointer over where a
+      // page was still goes to it, as when the hidden sidebar comes back (#1629), so it applies
+      // now, as X11's shape does. Not before the window shows, whose first commit is Chromium's.
+      if (widget_->IsVisible() && region != input_region_) {
+        input_region_ = region;
+        SetInputRegionNow(widget_, region, scale);
+      }
       return;
     }
     if (ui_ == x11::Window::None) {
@@ -922,6 +929,8 @@ class WindowViews : public views::WidgetObserver,
   double corner_radius_ = 0;
   // The pages stay where they are as the window resizes, until ShowPages (HoldPagesForResize).
   bool held_ = false;
+  // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
+  std::vector<gfx::Rect> input_region_;
   // Whether the window manager's state for the window last said full screen.
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;

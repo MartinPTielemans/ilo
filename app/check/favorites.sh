@@ -545,25 +545,15 @@ send resize 1000 220
 expect '^browser: tiles scroll with the list$' \
   "two rows of tiles in a window 220 tall didn't scroll with the list"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-tall.png" || fail "no window to capture"
-# Scrolls the list $1 points down, twice, at 100, 150, as the Mac's and X11's scroll does in GPUI.
-# Wayland's driver makes each scroll a notch of the wheel, which takes the list past the tiles, so
-# there two fingers on the touchpad move it, by the points given (#1577).
-scroll_tiles() {
-  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    send swipe 100 150 0 $((0 - $1)) 2
-  else
-    send scroll 100 150 "$1" 2
-  fi
-}
 # Scrolled 40, the tiles went up 40 with the rows, and the first tile's place holds the third's.
-scroll_tiles 20
+send scroll 100 150 20 2
 expect '^browser: scroll edge shown$' "the list scrolled with the tiles didn't show its edge"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-scrolled.png" || fail "no window to capture"
 send click 40 117
 expect '^browser: command select via favorite$' "a click on the scrolled tiles didn't reach one"
 expect "^browser: selected $y\( in .*\)\{0,1\}\$" \
   "the third tile isn't 40 up with the list: a click there didn't show its favorite"
-scroll_tiles -20
+send scroll 100 150 -20 2
 expect '^browser: scroll edge hidden$' "the list back at its top didn't hide its edge"
 send resize $size
 expect '^browser: tiles stay put$' "the tiles in a window back at its height still scroll"

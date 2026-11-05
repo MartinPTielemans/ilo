@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..e6062aa0da 100644
+index a5390e77f8..ee4eedc021 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,25 @@
@@ -58,11 +58,11 @@ index a5390e77f8..e6062aa0da 100644
 +};
 +#[cfg(feature = "wayland")]
 +pub use linux::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..0c786e2a77 100644
+index e4da54b52b..cca540937f 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -117,7 +117,7 @@ index e4da54b52b..0c786e2a77 100644
  pub(crate) use wayland::*;
 +#[cfg(feature = "wayland")]
 +pub use wayland::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 +#[cfg(feature = "x11")]
@@ -227,10 +227,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..696efa705a
+index 0000000000..1468608003
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1051 @@
+@@ -0,0 +1,1091 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -327,6 +327,9 @@ index 0000000000..696efa705a
 +    static SHOWN: RefCell<Vec<Shown>> = const { RefCell::new(Vec::new()) };
 +    static SHOWINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 +    static OPS: RefCell<VecDeque<Op>> = const { RefCell::new(VecDeque::new()) };
++    /// Under Wayland, the overlays the last press left, until the ops it led to have run
++    /// (`left_by_press`).
++    static LEFT_BY_PRESS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 +    static PING: RefCell<Option<Ping>> = const { RefCell::new(None) };
 +    /// On X11, the window that had the input focus before each overlay with the keyboard took it.
 +    static FOCUS_FROM: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
@@ -812,6 +815,7 @@ index 0000000000..696efa705a
 +            .filter(|&view| Some(view) != on)
 +            .collect()
 +    });
++    LEFT_BY_PRESS.set(views.clone());
 +    views.into_iter().for_each(left);
 +}
 +
@@ -960,8 +964,16 @@ index 0000000000..696efa705a
 +    #[allow(unused_variables, unused_mut)]
 +    let mut applied = false;
 +    while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++        let gives_keys = matches!(
++            op,
++            Op::Hide { keyboard: true, .. } | Op::Keyboard { keyboard: false, .. }
++        );
 +        applied |= run_op(op);
++        if gives_keys {
++            left_by_press();
++        }
 +    }
++    LEFT_BY_PRESS.with_borrow_mut(Vec::clear);
 +    // The events the display sends for what the ops asked, such as an overlay's new size.
 +    if applied {
 +        sync_display();
@@ -1067,6 +1079,34 @@ index 0000000000..696efa705a
 +            }
 +            true
 +        }
++    }
++}
++
++/// An overlay that had the keys let them go, as the ops a press led to ran: the overlay that has them
++/// back, such as a find bar under the command bar a press on the page hid, is left too if that
++/// press left it, as X11's hide says when the input focus went elsewhere than either. It kept the
++/// keys while the overlay over it had them, to be given them back, and the press was outside both.
++/// Under Wayland only, where the compositor never moves the keys between overlays.
++fn left_by_press() {
++    let wayland = super::platform::with_embedded_connection(|connection| {
++        #[cfg(feature = "wayland")]
++        if let DisplayConnection::Wayland(_) = connection {
++            return true;
++        }
++        false
++    });
++    if wayland != Some(true) {
++        return;
++    }
++    let Some(next) = keyboard_overlay_asked() else {
++        return;
++    };
++    let pressed = LEFT_BY_PRESS.with_borrow_mut(|all| {
++        let at = all.iter().position(|&each| each == next)?;
++        Some(all.remove(at))
++    });
++    if pressed.is_some() {
++        left(next);
 +    }
 +}
 +
@@ -1681,7 +1721,7 @@ index 0c5370db6c..9d0a77223e 100644
      let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
      let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962bcff..bfbb357677 100644
+index cbc962bcff..46c3b3e249 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
 @@ -9,7 +9,13 @@ mod window;
@@ -1690,7 +1730,7 @@ index cbc962bcff..bfbb357677 100644
  
 +pub(crate) use client::dispatch_embedded_queue;
 +pub use client::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    resize_embedded,
 +};
  pub(crate) use client::*;
@@ -1699,7 +1739,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..cd0d763f59 100644
+index 2d40cf7fa9..b1982f7c9d 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2798,7 +2838,7 @@ index 2d40cf7fa9..cd0d763f59 100644
              }
              _ => {}
          }
-@@ -3479,3 +4027,620 @@ mod tests {
+@@ -3479,3 +4027,631 @@ mod tests {
          );
      }
  }
@@ -3298,6 +3338,17 @@ index 2d40cf7fa9..cd0d763f59 100644
 +    if let Some(backend) = window.surface().backend().upgrade() {
 +        backend.flush().ok();
 +    }
++}
++
++/// The key GPUI repeats while it's held in the embedder's surfaces, as its keysym and a number
++/// that changes with each press: None once it's let go. Every key reaches both the embedder and
++/// GPUI, so the embedder's own repeats of a key GPUI had the press of are the held key's.
++pub fn held_key() -> Option<(u32, u64)> {
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    let state = client.borrow();
++    let keycode = state.repeat.current_keycode?;
++    let keysym = state.keymap_state.as_ref()?.key_get_one_sym(keycode);
++    Some((keysym.raw(), state.repeat.current_id))
 +}
 +
 +/// Whether the compositor has given the keyboard to one of GPUI's windows or the embedder's.
