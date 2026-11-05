@@ -68,6 +68,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
+#include "chrome/browser/ui/startup/features.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
@@ -82,6 +83,7 @@
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -378,6 +380,27 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     return parts;
   }
 
+  // Chrome's, but a profile's session cookies, those with no expiry a sign-in often lives in, come
+  // back at every launch, as Chrome brings them back only when it restores the last session or
+  // after a crash (ProfileImpl::ShouldRestoreOldSessionCookies). ilo always brings its tabs back
+  // itself, with no startup preference for Chrome to read, so it keeps what they were signed in
+  // with too (#1934). Only where Chrome keeps them on disk at all: a profile's main partition, not
+  // an off-the-record profile's or an app's partition.
+  void ConfigureNetworkContextParams(
+      content::BrowserContext* context,
+      bool in_memory,
+      const base::FilePath& relative_partition_path,
+      network::mojom::NetworkContextParams* network_context_params,
+      cert_verifier::mojom::CertVerifierCreationParams* cert_verifier_creation_params) override {
+    ChromeContentBrowserClient::ConfigureNetworkContextParams(
+        context, in_memory, relative_partition_path, network_context_params,
+        cert_verifier_creation_params);
+    if (!in_memory && relative_partition_path.empty() &&
+        network_context_params->persist_session_cookies) {
+      network_context_params->restore_old_session_cookies = true;
+    }
+  }
+
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
     ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
     system_engine::CreateThrottlesForNavigation(registry);
@@ -586,6 +609,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     features += features.empty() ? "" : ",";
     command_line->AppendSwitchASCII(switches::kEnableFeatures,
                                     features + features::kWebContentsDiscard.name);
+    // A profile's sessionStorage stays on disk across a launch, as Chrome keeps it when it restores
+    // the last session, for the tabs the Spaces bring back to find theirs again; the core deletes
+    // what no tab came back for once they're back (RestoreSession). Chrome otherwise clears it all
+    // as the profile starts, ilo having no startup preference for it to read (#1934).
+    std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
+    disabled += disabled.empty() ? "" : ",";
+    command_line->AppendSwitchASCII(
+        switches::kDisableFeatures,
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the

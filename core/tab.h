@@ -9,6 +9,7 @@
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/function_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -21,6 +22,7 @@
 #include "components/favicon/core/favicon_driver_observer.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
@@ -114,6 +116,9 @@ class Tab : public content::WebContentsObserver,
   GURL Url() const;
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
+  // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps
+  // for the next launch (SavedTab::session_storage), or empty.
+  std::string SessionStorageId() const;
 
   // Lets go of the tab's page, keeping its history, name and icon, and its place: it's a tab without
   // its page (Wake). Chrome's tab strip deletes the page, so none of its unload handlers run.
@@ -349,6 +354,10 @@ class Tab : public content::WebContentsObserver,
   base::WeakPtr<Profile> profile_;
   // Without its page, its history and mute.
   std::optional<SavedTab> unloaded_;
+  // Without its page, its page's sessionStorage, kept for its next page, where a site may keep its
+  // sign-in, as Chrome's discarded tabs keep theirs (#1934): the one its last page had, or the one
+  // the last launch saved it with.
+  scoped_refptr<content::SessionStorageNamespaceHandle> storage_;
   bool unloading_ = false;
   std::string name_;
   std::string icon_;

@@ -1456,7 +1456,55 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+# A tab that let go of its page, unseen 2 hours, gets its page back once shown with its
+# sessionStorage, where a site keeps its sign-in, as Chrome's discarded tabs keep theirs (#1934).
+# Its cookies are its profile's, so only the storage could go.
+log="$out/tabs-sign-in.log"
+step=0
+rm -f "$saved" "$launch_frame"
+BROWSER_DRIVE=1 BROWSER_URL="${site}session-sign-in.html?tabs" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+signed=$(today)
+await "^browser: title $signed sign-in cookie none storage none, drawn\$" ||
+  fail "the session sign-in page didn't draw, or found a sign-in before it signed in"
+send click $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: an unloaded tab's sessionStorage. Browser wasn't the active app, so the page ignored the click."
+else
+  send key s
+  expect "^browser: title $signed sign-in cookie kept storage kept, set\$" \
+    "s in the session sign-in page didn't set its session cookie and sessionStorage"
+  # Another of the site's pages in front, then the driver makes the tabs 2 hours older, and a third
+  # shown checks for tabs unseen that long.
+  for page in notes.txt notes.txt?again; do
+    send key t cmd
+    expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+    send type "${site}$page"
+    send key return
+    expect "^browser: loaded [0-9]* ${site}$page\$" "${site}$page didn't load in a tab"
+    [ "$page" != notes.txt ] || send age 7200
+  done
+  expect 'browser: idle tabs checked$' "showing a tab didn't check for tabs unseen 2 hours"
+  await "browser: tab $signed without its page\$" || fail "the sign-in's tab, unseen 2 hours, kept its page"
+  switch "3 cmd" "$signed"
+  expect "browser: tab $signed has its page\$" "the sign-in's tab didn't get its page back once shown"
+  expect "^browser: title $signed sign-in cookie [a-z]* storage [a-z]*, drawn\$" \
+    "the sign-in's tab didn't draw its page once shown"
+  found=$(grep "^browser: title $signed sign-in cookie " "$log" | tail -1)
+  case "$found" in
+    *"cookie kept storage kept, drawn") ;;
+    *"storage none, drawn") fail "the tab that let go of its page came back without its sessionStorage, signed out" ;;
+    *) fail "the tab that let go of its page came back without its session cookie: $found" ;;
+  esac
+  ../tools/window-screenshot.sh "$pid" "$out/unloaded-sign-in.png" || fail "no window to capture"
+  exec 3>&-
+  quit
+fi
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, which Chrome then says left the history, and the button's tooltip names it and its key over the bar, ⌘Z puts the page back and ⇧⌘Z takes it out again, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row searches with its engine alone until ⌫ leaves, a space after the keyword is only a space, \"yout\" hints YouTube and Tab searches it, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history and its sessionStorage once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \

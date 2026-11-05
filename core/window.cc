@@ -1444,7 +1444,8 @@ BrowserWindowInterface* Window::BrowserFor(Profile* profile) {
 content::WebContents* Window::RestoreTab(
     Profile* profile,
     base::span<const sessions::SerializedNavigationEntry> history,
-    int current) {
+    int current,
+    content::SessionStorageNamespaceHandle* storage) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
@@ -1453,7 +1454,7 @@ content::WebContents* Window::RestoreTab(
   return chrome::AddRestoredTab(
       browser, history, browser->GetTabStripModel()->count(), current, /*extension_app_id=*/"",
       /*group=*/std::nullopt, /*select=*/false, /*pin=*/false, base::TimeTicks(), base::Time(),
-      /*storage_namespace=*/nullptr, sessions::SerializedUserAgentOverride(),
+      /*storage_namespace=*/storage, sessions::SerializedUserAgentOverride(),
       /*extra_data=*/{}, /*from_session_restore=*/true, /*is_active_browser=*/std::nullopt);
 }
 
