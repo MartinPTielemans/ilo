@@ -254,8 +254,6 @@ pub fn open(
         is_minimizable: false,
         // The toast and its shadow are drawn.
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {

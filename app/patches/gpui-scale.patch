@@ -1,3 +1,22 @@
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index 2fc922724f..8718225a23 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1559,6 +1559,14 @@ impl App {
+         self.platform.active_window()
+     }
+ 
++    /// Whether the app is the active one: one of its windows has the keyboard. Every platform
++    /// reports a window's focus, while an app's own activation only some do.
++    pub(crate) fn is_active(&self) -> bool {
++        self.windows
++            .values()
++            .any(|window| window.as_ref().is_some_and(|window| window.active.get()))
++    }
++
+     /// Opens a new window with the given option and the root view returned by the given function.
+     /// The function is invoked with a `Window`, which can be used to interact with window-specific
+     /// functionality.
 diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
 index 54b72a63ec..cf7cd404f3 100644
 --- a/crates/gpui/src/app/test_context.rs
@@ -75,7 +94,7 @@ index 11f0b72406..ea39b6a547 100644
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..129db9afc3 100644
+index a875ee0f37..1dd824ce0a 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -1415,8 +1415,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
@@ -94,6 +113,19 @@ index a875ee0f37..129db9afc3 100644
          anyhow::bail!("render_to_image not implemented for this platform")
      }
  }
+@@ -2596,9 +2601,10 @@ pub struct WindowOptions {
+     /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
+     pub app_owns_titlebar_drag: bool,
+ 
+-    /// The minimum interval between animation frames while the window is inactive.
++    /// The minimum interval between animation frames while the app is inactive: none of its
++    /// windows has the keyboard.
+     ///
+-    /// Set to `None` to disable inactive-window animation frame throttling.
++    /// Set to `None` to disable inactive-app animation frame throttling.
+     pub inactive_frame_interval: Option<Duration>,
+ 
+     /// Whether the window should be resizable by the user
 diff --git a/crates/gpui/src/platform/app_menu.rs b/crates/gpui/src/platform/app_menu.rs
 index 27c20c00ba..2835e76b38 100644
 --- a/crates/gpui/src/platform/app_menu.rs
@@ -305,9 +337,18 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..f9733eb4c8 100644
+index c559412e56..102cf167f1 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
+@@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
+ /// Why GPUI capped a window's frame rate.
+ #[derive(Clone, Copy)]
+ enum FrameRateLimit {
+-    /// The window isn't focused.
++    /// No window of the app is focused.
+     Inactive,
+     /// The system is under thermal pressure.
+     Thermal,
 @@ -360,6 +360,50 @@ thread_local! {
  /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
  /// message pumping in the Windows window procedure), instead of running a
@@ -390,6 +431,15 @@ index c559412e56..f9733eb4c8 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
+@@ -1275,7 +1336,7 @@ pub struct Window {
+     appearance: WindowAppearance,
+     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
+     pub(crate) button_layout_observers: SubscriberSet<(), AnyObserver>,
+-    active: Rc<Cell<bool>>,
++    pub(crate) active: Rc<Cell<bool>>,
+     visibility: WindowVisibility,
+     pub(crate) visibility_observers:
+         SubscriberSet<(), Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
 @@ -1664,6 +1725,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
@@ -406,7 +456,16 @@ index c559412e56..f9733eb4c8 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1830,7 +1893,10 @@ impl Window {
+@@ -1824,13 +1887,19 @@ impl Window {
+ 
+                 // Throttle frame rate based on conditions:
+                 // - Thermal pressure (Serious/Critical): cap to ~60fps
+-                // - Inactive window (not focused): cap to ~30fps to save energy
++                // - Inactive app (no window of it focused): cap to ~30fps to save energy. Only
++                //   the app's, so an overlay closing as its parent takes the keyboard back, or
++                //   a window animating behind one that has it, draws at the full rate.
+                 let min_frame_interval = if request_frame_options.require_presentation
+                     || (!request_frame_options.force_render
                          && next_frame_callbacks.borrow().is_empty())
                  {
                      None
@@ -414,11 +473,12 @@ index c559412e56..f9733eb4c8 100644
 +                } else if !active.get()
 +                    && !root_moving.get()
 +                    && !input_rate_tracker.borrow_mut().is_high_rate()
++                    && !cx.update(|cx| cx.is_active())
 +                {
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2030,16 @@ impl Window {
+@@ -1964,21 +2033,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -445,7 +505,7 @@ index c559412e56..f9733eb4c8 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2114,31 @@ impl Window {
+@@ -2053,10 +2117,31 @@ impl Window {
          platform_window.on_input({
              let mut cx = cx.to_async();
              Box::new(move |event| {
@@ -481,7 +541,7 @@ index c559412e56..f9733eb4c8 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2238,9 @@ impl Window {
+@@ -2156,6 +2241,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -491,7 +551,7 @@ index c559412e56..f9733eb4c8 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +2969,14 @@ impl Window {
+@@ -2884,7 +2972,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -507,7 +567,7 @@ index c559412e56..f9733eb4c8 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3761,7 +3853,23 @@ impl Window {
+@@ -3761,7 +3856,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -532,7 +592,7 @@ index c559412e56..f9733eb4c8 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4335,40 @@ impl Window {
+@@ -4227,6 +4338,40 @@ impl Window {
          result
      }
  
@@ -573,7 +633,7 @@ index c559412e56..f9733eb4c8 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5720,8 @@ impl Window {
+@@ -5578,9 +5723,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -585,7 +645,7 @@ index c559412e56..f9733eb4c8 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7238,24 @@ impl Window {
+@@ -7097,18 +7241,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -613,6 +673,97 @@ index c559412e56..f9733eb4c8 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
+@@ -8179,6 +8329,90 @@ mod tests {
+         }
+     }
+ 
++    /// A window without the keyboard animates at the full rate while another window of its app
++    /// has it, and is capped once none has.
++    #[cfg(feature = "profiler")]
++    #[gpui::test]
++    fn test_only_an_inactive_app_is_throttled(cx: &mut TestAppContext) {
++        use crate::profiler::journal::{
++            self, ForegroundJournalEntry, FrameSkipReason, IntervalBoundary,
++        };
++        use scheduler::Instant;
++
++        // Test mode draws during effect flushing, bypassing platform frame throttling.
++        cx.app.borrow_mut().mode = crate::app::GpuiMode::Production;
++        let (journal, _guard) = journal::install_test_foreground_journal(256, 4);
++        let mut collector = journal.collector();
++        let open = |cx: &mut TestAppContext| {
++            let window = cx
++                .app
++                .borrow_mut()
++                .open_window(
++                    WindowOptions {
++                        // Keep the throttle closed without depending on short wall-clock deadlines.
++                        inactive_frame_interval: Some(Duration::from_secs(3600)),
++                        ..Default::default()
++                    },
++                    |_, cx| cx.new(|_| EmptyView),
++                )
++                .expect("open test window");
++            (window, cx.test_window(window.into()))
++        };
++        let (_, key) = open(cx);
++        let (window, other) = open(cx);
++        other.simulate_active_status_change(false);
++        // Whether an animation frame of `other`, right after one it drew, draws or is capped.
++        let mut animates = |cx: &mut TestAppContext| {
++            other.simulate_frame_request(RequestFrameOptions::default());
++            let draws_before = window
++                .update(cx, |_, window, _| {
++                    window.on_next_frame(|window, _| window.refresh());
++                    window
++                        .frame_duration_snapshot()
++                        .draw_duration_histogram
++                        .len()
++                })
++                .expect("schedule animation frame");
++            // Skips only seal retained work, so give a throttled skip some.
++            let input_at = Instant::now();
++            journal::record_input(journal::InputTiming {
++                kind: "test",
++                start: input_at,
++                end: input_at,
++                caused_invalidation: false,
++            });
++            collector.collect_unseen();
++            other.simulate_frame_request(RequestFrameOptions {
++                signal_at: Some(Instant::now()),
++                ..Default::default()
++            });
++            let drew = window
++                .update(cx, |_, window, _| {
++                    window
++                        .frame_duration_snapshot()
++                        .draw_duration_histogram
++                        .len()
++                        > draws_before
++                })
++                .expect("inspect animation frame");
++            let capped = collector.collect_unseen().entries.iter().any(|entry| {
++                matches!(
++                    entry,
++                    ForegroundJournalEntry::Boundary(IntervalBoundary::FrameSkipped(skipped))
++                        if skipped.window_id == window.window_id()
++                            && skipped.reason == FrameSkipReason::InactiveFrameRateLimit
++                )
++            });
++            assert_ne!(drew, capped);
++            drew
++        };
++
++        key.simulate_active_status_change(true);
++        assert!(animates(cx), "another window of the app has the keyboard");
++        key.simulate_active_status_change(false);
++        assert!(!animates(cx), "no window of the app has the keyboard");
++    }
++
+     /// Visibility transitions reach observers exactly once each, with the new
+     /// state already stored on the window, and never wake the platform for a
+     /// frame: the platform requests one itself when it resumes presenting.
 diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
 index 5b63821232..cb7d8413de 100644
 --- a/crates/gpui/src/window/a11y.rs
