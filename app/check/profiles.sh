@@ -464,7 +464,9 @@ for _ in 1 2 3; do
     "⌘← didn't bring Clear browsing data back"
 done
 [ -n "$deleted" ] || fail "Delete in Clear browsing data didn't delete the history"
-expect "^browser: command bar picks none in $picks\$" "deleting the history kept the bar's picks"
+# A pattern of the path, whose backslashes on Windows grep would read as its own, \b in \browser-app.
+expect "^browser: command bar picks none in $(printf '%s\n' "$picks" | sed 's/[][\\.*^$]/\\&/g')\$" \
+  "deleting the history kept the bar's picks"
 [ ! -e "$picks" ] || fail "deleting the history left the bar's picks: $picks"
 ../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"
 send key w cmd
