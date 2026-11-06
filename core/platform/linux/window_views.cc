@@ -57,6 +57,7 @@
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -1288,6 +1289,38 @@ std::u16string ChildTitle(views::Widget* widget) {
     }
   }
   return {};
+}
+
+std::vector<gfx::Rect> PopupFrames(views::Widget* widget) {
+  // A popup, as autofill's dropdown, is a window of its own, on Wayland an xdg_popup that no other
+  // client sees. Its tree host keeps the window it was opened over as its parent, which the owned
+  // widgets of Chromium's that DialogFrame walks leave out on Linux.
+  using Host = views::DesktopWindowTreeHostPlatform;
+  Host* browser =
+      Host::GetHostForWidget(widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+  std::vector<gfx::Rect> frames;
+  if (!browser) {
+    return frames;
+  }
+  // The topmost comes first.
+  const aura::Window::Windows open = Host::GetAllOpenWindows();
+  for (auto window = open.rbegin(); window != open.rend(); ++window) {
+    views::Widget* popup = *window ? views::Widget::GetWidgetForNativeView(*window) : nullptr;
+    if (!popup || popup == widget || !popup->IsVisible() || !(*window)->GetHost()) {
+      continue;
+    }
+    // Over the window, or over one of its popups, as a submenu is.
+    Host* parent = Host::GetHostForWidget((*window)->GetHost()->GetAcceleratedWidget());
+    while (parent && parent != browser) {
+      parent = parent->window_parent();
+    }
+    if (parent) {
+      gfx::Rect frame = popup->GetWindowBoundsInScreen();
+      frame.Offset(-widget->GetClientAreaBoundsInScreen().OffsetFromOrigin());
+      frames.push_back(frame);
+    }
+  }
+  return frames;
 }
 
 void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
