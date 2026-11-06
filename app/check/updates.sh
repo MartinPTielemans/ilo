@@ -7,7 +7,8 @@
 # as an informational update, is the sidebar's banner, Update available, whose click opens
 # Sparkle's window on it with the keyboard.
 # Settings › About's row checks without a window of Sparkle's own and says where the update
-# stands: with the feed gone the check fails, Try Again checks again once it's back, and Sparkle
+# stands: with nothing newer in the feed it says ilo is up to date within 5 s, with the feed gone
+# the check fails, Try Again checks again once it's back, and Sparkle
 # downloads the update, here the check build one build on, in the background. Once it's ready,
 # the banner at the sidebar's foot says so, collapsed, and opens under the pointer, in light and
 # dark, and its click says Restarting…, installs the update and relaunches into it.
@@ -232,7 +233,8 @@ EOF
       "hours after the last check, in $interval s here. Check for Updates… found the run's" \
       "signed update and showed it with its Markdown notes. A scheduled check in full screen" \
       "showed no alert, then or after, and left its update to the banner, Update available," \
-      "whose click showed Sparkle's window with the keyboard. About's check failed with no feed," \
+      "whose click showed Sparkle's window with the keyboard. About's check said it was up to" \
+      "date in $current_in s with nothing newer in the feed, failed with no feed, and" \
       "Try Again downloaded build $next, the banner showed collapsed and opened under the" \
       "pointer, and its click said Restarting… and relaunched into build $next." \
       "Interval: $out/updates-interval.txt." \
@@ -288,8 +290,29 @@ about_updates() {
   expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings' About tab"
   expect '^browser: settings update check at ' "About's row had no Check for Updates"
   ../tools/window-screenshot.sh "$pid" "$out/updates-about-idle.png" all || fail "no window to capture"
-  # With the feed gone, the check fails, and Try Again finds the update once it's back.
+  # With nothing newer in the feed, the check says so within 5 s, as one against the live feed
+  # does in under one (#1976).
   mv "$out/site/updates/appcast.xml" "$scratch/appcast.xml"
+  python3 -I ../tools/appcast.py local "$out/site/updates/appcast.xml" \
+    "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" \
+    "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" "$scratch/notes.md" \
+    > /dev/null || fail "appcast.py local didn't make a feed of the build running"
+  about_click check
+  expect '^browser: update check asked$' "About's Check for Updates didn't ask the updater"
+  local tenths=0
+  while [ $tenths -lt 50 ] && ! grep -q '^browser: update stage current$' "$log"; do
+    kill -0 "$pid" 2> /dev/null || fail "the app exited"
+    sleep 0.1
+    tenths=$((tenths + 1))
+  done
+  grep -q '^browser: update stage current$' "$log" ||
+    fail "with nothing newer in the feed, About's check didn't say $app_name is up to date in 5 s: \
+$(grep '^browser: update' "$log" | tr '\n' ';')"
+  current_in=$((tenths / 10)).$((tenths % 10))
+  ../tools/window-screenshot.sh "$pid" "$out/updates-about-current.png" all ||
+    fail "no window to capture"
+  # With the feed gone, the check fails, and Try Again finds the update once it's back.
+  rm "$out/site/updates/appcast.xml"
   about_click check
   expect '^browser: update check asked$' "About's Check for Updates didn't ask the updater"
   stage 'failed to check' "with no feed, About's check didn't fail"
