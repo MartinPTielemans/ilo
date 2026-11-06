@@ -349,7 +349,10 @@ pub(crate) unsafe extern "C" fn window_resized(
     width: f64,
     height: f64,
 ) {
-    let Some(ui_view) = ui_view_of(window) else {
+    // A window the launch puts back full screen can be told its state before it has a size, 0x0,
+    // and GPUI's viewport at 0x0 is a protocol error, which ends the Wayland connection. Its size
+    // comes with its bounds.
+    let Some(ui_view) = ui_view_of(window).filter(|_| width >= 1. && height >= 1.) else {
         return;
     };
     let again = frames::size_of(ui_view) == Some([width, height]);
