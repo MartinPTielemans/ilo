@@ -91,7 +91,9 @@ expect '^browser: notification prompts on$' "a click didn't turn notification pr
 everyday_key d
 expect '^browser: download [0-9]* done everyday.txt$' "with Ask off, the page's download didn't save"
 everyday_section General
-send clickkey $(drawn "switch ask where to save")
+# Under the card's edge where the screen is short, as on the Mac's check VMs: in_sight scrolls it up.
+in_sight "switch ask where to save" || fail "Settings didn't draw Ask where to save each file"
+send clickkey $at
 expect '^browser: ask where to save on$' "a click didn't turn Ask where to save each file on"
 everyday_key d
 from=$step
@@ -102,7 +104,8 @@ sleep 3
 ../tools/window-screenshot.sh "$pid" "$out/everyday-ask.png" all || fail "no window to capture"
 send key escape
 everyday_section General
-send clickkey $(drawn "switch ask where to save")
+in_sight "switch ask where to save" || fail "Settings didn't draw Ask where to save each file"
+send clickkey $at
 expect '^browser: ask where to save off$' "a click didn't turn Ask where to save each file off again"
 exec 3>&-
 quit
