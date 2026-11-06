@@ -1190,6 +1190,15 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
             wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
         })(),
+        // In the window with the keyboard, as clickkey's point is: Settings, which is GPUI's.
+        "scrollkey" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let dy: f64 = words.next()?.parse().ok()?;
+            let count: i32 = words.next()?.parse().ok()?;
+            await_settings_focus();
+            let (left, top) = key_origin()?;
+            swipe(left + x, top + y, (0., -dy), count.max(1).unsigned_abs(), 0)
+        })(),
         "swipe" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
             let dx: f64 = words.next()?.parse().ok()?;
