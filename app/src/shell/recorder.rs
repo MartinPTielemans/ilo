@@ -557,6 +557,20 @@ impl Browser for Recorder {
         self.record(format!("open preview over {over} {url} from {x},{y}"));
     }
 
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        _: Point<Pixels>,
+        _: (Bounds<Pixels>, f32),
+        _: &mut App,
+    ) {
+        self.record(format!(
+            "open archived {archived} in preview over {over} {url}"
+        ));
+    }
+
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
     }
@@ -607,7 +621,9 @@ impl Browser for Recorder {
         removals.remove(at).1
     }
 
-    fn restore_archived(&self, _: u64, _: &mut App) {}
+    fn restore_archived(&self, archived: u64, _: &mut App) {
+        self.record(format!("restore archived {archived}"))
+    }
 
     fn remove_archived(&self, archived: u64, _: &mut App) -> u64 {
         let id = self.core.removed(1);
