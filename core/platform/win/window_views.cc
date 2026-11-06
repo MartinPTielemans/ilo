@@ -382,6 +382,21 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
+// What runs once the window in front changes, while an overlay that has a window's keyboard is
+// (WhenOverlayLetsGo), and the hook that hears it, set only then.
+std::vector<base::OnceClosure>& OverlayLetGo() {
+  static base::NoDestructor<std::vector<base::OnceClosure>> let_go;
+  return *let_go;
+}
+HWINEVENTHOOK g_front_changes = nullptr;
+
+void CALLBACK FrontChanged(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+  UnhookWinEvent(std::exchange(g_front_changes, nullptr));
+  for (base::OnceClosure& each : std::exchange(OverlayLetGo(), {})) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+  }
+}
+
 // A child widget, one HWND, holding one pane's page and its docked DevTools, or the side panel.
 struct Slot {
   std::unique_ptr<views::Widget> widget;
@@ -1067,6 +1082,15 @@ bool OverlayHasKeyboard(views::Widget* widget) {
     }
   }
   return false;
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  OverlayLetGo().push_back(std::move(let_go));
+  // Out of context, so it's heard on this thread, from its message loop.
+  if (!g_front_changes) {
+    g_front_changes = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                      &FrontChanged, 0, 0, WINEVENT_OUTOFCONTEXT);
+  }
 }
 
 void UITakesKeyboard(views::Widget* widget, bool until_page) {

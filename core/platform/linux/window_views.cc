@@ -520,9 +520,26 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
+    if (takes) {
+      return;
+    }
+    const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
+    if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
     }
+    // Back in the window on X11, which the window hears only after this, or elsewhere: as the user
+    // went to another app or window with the overlay open.
+    std::vector<base::OnceClosure> let_go = std::exchange(overlay_let_go_, {});
+    if (!OnWayland() && IsWithin(focus, window())) {
+      return;
+    }
+    for (base::OnceClosure& each : let_go) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+    }
+  }
+
+  void WhenOverlayLetsGo(base::OnceClosure let_go) {
+    overlay_let_go_.push_back(std::move(let_go));
   }
 
   // The UI lets the keyboard go to the window, which KeyboardForPage counts as the page's, and on
@@ -1036,6 +1053,8 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
+  std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
@@ -1326,6 +1345,12 @@ void ReleaseKeyboard(views::Widget* widget) {
 bool OverlayHasKeyboard(views::Widget* widget) {
   WindowViews* views = widget ? ViewsOf(widget) : nullptr;
   return views && views->overlay_has_keyboard();
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->WhenOverlayLetsGo(std::move(let_go));
+  }
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {

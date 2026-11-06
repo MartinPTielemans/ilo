@@ -467,6 +467,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Tells Chrome the shown page's Browser is active while the window is key, and the others
   // aren't, as Chrome's browser view does for its one Browser.
   void ReportActiveBrowser();
+  // Once the window has let the keyboard go: marks it left unless an overlay of the app's or the
+  // Mini Player has it, and asks again once an overlay that has it lets it go, as to another app.
+  void CheckLeft();
   // While the window is key and shows no page: its Space's profile's Browser is the active one,
   // made if it had none.
   void ActivateSpaceBrowser();
