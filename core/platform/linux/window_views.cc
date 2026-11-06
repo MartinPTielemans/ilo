@@ -77,8 +77,8 @@
 // keyboard (bc_window_ui_takes_keyboard) and asks whose it is.
 // The app's overlays, such as the command bar, show over the pages: on Wayland as subsurfaces over
 // the window's, on X11 as X windows of their own over it, which GPUI places.
-// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard), and the page or UI that
-// had it has it back as the overlay closes. The page is told it lost it meanwhile, as on the Mac.
+// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard): the page or UI that had
+// it keeps its focus, and has it back as the overlay closes.
 
 namespace browser_core::platform {
 
@@ -474,36 +474,8 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (OnWayland()) {
-      PageLendsFocusToOverlay(takes);
-    }
     if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
       UITakesKeyboard();
-    }
-  }
-
-  // On Wayland an overlay is a subsurface of the window, which keeps the compositor's keyboard, so
-  // a page with the focus would never be told it lost it, as a game that pauses on blur keeps going
-  // under the command bar (#1608). The page gives its focus to the window while the overlay has the
-  // keyboard, as the window no longer being key or having the input focus does on the Mac and X11,
-  // and has it back as the overlay lets go, unless a page or the UI took it meanwhile.
-  void PageLendsFocusToOverlay(bool takes) {
-    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
-    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
-    if (takes) {
-      overlay_lent_.RemoveAll();
-      if (focused && InSlot(focused)) {
-        overlay_lent_.Add(focused);
-        client->ResetFocusWithinActiveWindow(content());
-      }
-      return;
-    }
-    if (overlay_lent_.windows().empty()) {
-      return;
-    }
-    aura::Window* page = overlay_lent_.Pop();
-    if (client && !ui_has_keyboard_ && focused == content() && InSlot(page)) {
-      client->FocusWindow(page);
     }
   }
 
@@ -942,8 +914,6 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
-  // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
-  aura::WindowTracker overlay_lent_;
   // The keys typed while the overlay with the keyboard didn't have the input focus yet.
   std::vector<x11::KeyEvent> early_keys_;
   // Whether the core took the input focus back down to the UI's window since the focus last left or
