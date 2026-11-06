@@ -205,6 +205,21 @@ EOF
   done
   fail "$2"
 }
+# kept_keys: waits for the browser window to have the keyboard once the call has floated as its
+# tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
+# keyboard as it maps, and the core gives it back (#1961).
+kept_keys() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    expect '^browser: mini player gave the keyboard back$' \
+      "the call floating as its tab hid didn't give the browser window the keyboard back"
+  fi
+  for _ in $(seq 100); do
+    send state
+    [ "$key" = BrowserCoreNSWindow ] && return 0
+    sleep 0.1
+  done
+  fail "the call floating as its tab hid kept the keyboard in $key"
+}
 # A call floats once its tab is hidden, as Arc's does: Chrome's automatic Picture in Picture for a
 # page using the camera that asks for it with its media session, on https or a file alone. So a
 # page from the https server, from the command bar, whose "c" calls and which says when Chrome
@@ -255,6 +270,7 @@ send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
 expect "^browser: title $f in a call\$" "Allow didn't give the floating call the camera"
 shown "$b"
 expect "^browser: title $f floating\$" "the call didn't float with its tab hidden"
+kept_keys
 # It lands as its tab is shown, so before the click that gives its page the keyboard.
 shown "$f"
 expect "^browser: title $f landed\$" "the floating call didn't come back with its tab"
@@ -316,6 +332,7 @@ expect "^browser: title $f asked 1\$" "blocked in its Site Controls, the call st
 floats Allow
 shown "$b"
 expect "^browser: title $f floating\$" "allowed in its Site Controls, the call didn't float"
+kept_keys
 # Allowed, it floats without Chrome's prompt, which on X11 is a window of its own over the
 # call's bottom right corner while it shows (#1263).
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
@@ -361,6 +378,7 @@ send click $page_point
 mini_player on
 shown "$b"
 expect "^browser: title $f floating\$" "with the Mini Player on again, the call didn't float"
+kept_keys
 shown "$f"
 expect "^browser: title $f landed\$" "the call floating again didn't come back with its tab"
 send click $page_point
