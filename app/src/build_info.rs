@@ -99,20 +99,28 @@ pub static ENGINE_VERSION: LazyLock<Option<String>> = LazyLock::new(|| {
 
 /// The version of the engine in `dir`: Windows's build names a manifest after it, such as
 /// "156.0.8078.47.manifest", and the Linux engine's package writes it in VERSION
-/// (engine/linux/package.sh). An engine packaged before that has neither.
+/// (engine/linux/package.sh). An engine packaged before that has neither. Windows's engine also
+/// carries the manifests of the versions its runner built before (#1983), so the newest is its own.
 fn engine_beside(dir: &std::path::Path) -> Option<String> {
-    let version = |text: &str| {
-        let number = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
-        let parts: Vec<&str> = text.split('.').collect();
-        (parts.len() == 4 && parts.into_iter().all(number)).then(|| text.to_owned())
+    // Its four numbers, for comparing, with the text.
+    let version = |text: &str| -> Option<(Vec<u64>, String)> {
+        let number = |part: &str| {
+            part.bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| part.parse().ok())?
+        };
+        let parts: Vec<u64> = text.split('.').map(number).collect::<Option<_>>()?;
+        (parts.len() == 4).then(|| (parts, text.to_owned()))
     };
     if let Ok(text) = std::fs::read_to_string(dir.join("VERSION")) {
-        return version(text.trim());
+        return version(text.trim()).map(|(_, text)| text);
     }
     std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .find_map(|entry| version(entry.file_name().to_str()?.strip_suffix(".manifest")?))
+        .filter_map(|entry| version(entry.file_name().to_str()?.strip_suffix(".manifest")?))
+        .max()
+        .map(|(_, text)| text)
 }
 
 /// `text` for a URL's query: what isn't a letter, a digit or `-._~` as UTF-8 bytes in %XX.
@@ -229,8 +237,8 @@ mod tests {
         assert_eq!(escape("a&b=c/d é"), "a%26b%3Dc%2Fd%20%C3%A9");
     }
 
-    /// The Linux engine's VERSION and Windows's manifest each name the engine's version; a file
-    /// that isn't one, or an engine with neither, names none.
+    /// The Linux engine's VERSION and Windows's newest manifest each name the engine's version; a
+    /// file that isn't one, or an engine with neither, names none.
     #[test]
     fn reads_the_engines_version_beside_chrome() {
         let dir = std::env::temp_dir().join(format!("ilo-engine-version-{}", std::process::id()));
@@ -241,6 +249,11 @@ mod tests {
         assert_eq!(engine_beside(&dir), None);
         file("156.0.8078.47.manifest", "");
         assert_eq!(engine_beside(&dir).as_deref(), Some("156.0.8078.47"));
+        // Older builds' manifests beside the newest, one of them after it as text.
+        file("156.0.8078.9.manifest", "");
+        file("156.0.8078.79.manifest", "");
+        file("155.0.9999.99.manifest", "");
+        assert_eq!(engine_beside(&dir).as_deref(), Some("156.0.8078.79"));
         file("VERSION", "156.0.8078.48\n");
         assert_eq!(engine_beside(&dir).as_deref(), Some("156.0.8078.48"));
         file("VERSION", "MAJOR=156\n");
