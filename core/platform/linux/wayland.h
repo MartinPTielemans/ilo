@@ -67,6 +67,10 @@ std::optional<gfx::Rect> KeyboardPageFrame(views::Widget* widget);
 // a tab's dialog, or an empty one. In window_views.cc.
 std::u16string ChildTitle(views::Widget* widget);
 
+// The frames of Chromium's own popups that show over |widget|'s window, such as autofill's
+// dropdown, in its content and from the bottom up (bc_window_popups). In window_views.cc.
+std::vector<gfx::Rect> PopupFrames(views::Widget* widget);
+
 // Lends the keyboard in |widget|'s window to an overlay of the app's, or takes it back
 // (bc_window_overlay_takes_keyboard).
 void OverlayTakesKeyboard(views::Widget* widget, bool takes);

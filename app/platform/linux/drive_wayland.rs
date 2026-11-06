@@ -1014,6 +1014,23 @@ fn fingers((dx, dy): (f64, f64)) -> Option<()> {
     })
 }
 
+/// The frames of Chromium's popups over `id`, from the content's top-left corner, bottom up.
+fn popups(id: bc::bc_id) -> Vec<bc::bc_rect> {
+    let count = unsafe { bc::bc_window_popups(id, std::ptr::null_mut(), 0) };
+    let mut frames = vec![
+        bc::bc_rect {
+            x: 0.,
+            y: 0.,
+            width: 0.,
+            height: 0.,
+        };
+        count
+    ];
+    let count = unsafe { bc::bc_window_popups(id, frames.as_mut_ptr(), frames.len()) };
+    frames.truncate(count);
+    frames
+}
+
 fn layout() -> Option<()> {
     let (id, node) = driven()?;
     let (mut width, mut height) = (0., 0.);
@@ -1028,6 +1045,17 @@ fn layout() -> Option<()> {
     );
     if let Some(dialog) = drive::dialog(id) {
         log!("browser: layout child {dialog}");
+    }
+    // Chromium's popups, such as autofill's dropdown, are xdg_popups no other client sees, which
+    // the X11 driver finds on the X server.
+    for bc::bc_rect {
+        x,
+        y,
+        width,
+        height,
+    } in popups(id)
+    {
+        log!("browser: layout child {x:.0},{y:.0} {width:.0}x{height:.0}");
     }
     for (each, bounds) in drive::overlay_views().into_iter().filter_map(overlay_frame) {
         if each == id {

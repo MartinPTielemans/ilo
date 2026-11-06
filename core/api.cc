@@ -306,6 +306,21 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 #endif
 }
 
+size_t bc_window_popups(bc_id id, bc_rect* frames, size_t count) {
+#if BUILDFLAG(IS_LINUX)
+  views::Widget* widget = OpenWidget(id);
+  const std::vector<gfx::Rect> popups =
+      widget ? browser_core::platform::PopupFrames(widget) : std::vector<gfx::Rect>();
+  for (size_t i = 0; i < std::min(count, popups.size()); ++i) {
+    frames[i] = {static_cast<double>(popups[i].x()), static_cast<double>(popups[i].y()),
+                 static_cast<double>(popups[i].width()), static_cast<double>(popups[i].height())};
+  }
+  return popups.size();
+#else
+  return 0;
+#endif
+}
+
 size_t bc_window_child_title(bc_id id, char* title, size_t capacity) {
 #if BUILDFLAG(IS_LINUX)
   views::Widget* widget = OpenWidget(id);
