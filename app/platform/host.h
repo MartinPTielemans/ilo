@@ -20,12 +20,16 @@ void drive_start(void);
 void host_centered(double width, double height, double* x, double* y);
 
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
-// first browser window will open, with the window's material and the sidebar as it was when the
-// app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
-// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
+// first browser window will open, with the window's material and, unless |picture_width| is 0,
+// the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took
+// (host_save_launch_picture). Its part above |foot_top| points from the window's top shows at the
+// window's top and the rest at its bottom, the room just above |foot_top| cropped or repeated to
+// fit (launch_picture.rs says when that draws the sidebar as the UI will). For the moment between
+// NSApp being made and the browser starting. With |maximized|, Windows' alone, it's maximized on
+// that frame's screen, as the first browser window will be (host_maximize_window), with no picture.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool maximized);
+                             double height, bool maximized, double picture_width,
+                             double picture_height, double foot_top);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin

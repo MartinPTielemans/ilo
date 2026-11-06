@@ -156,8 +156,23 @@ pub trait Browser {
         page: (Bounds<Pixels>, f32),
         cx: &mut App,
     );
+    /// Opens the archived tab `archived`, at `url`, in a link preview over the tab `over`, as
+    /// open_preview does, growing from its row at `link` in the Library: keeping it restores the
+    /// tab, which leaves the archive, and closing it leaves it there.
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        link: Point<Pixels>,
+        page: (Bounds<Pixels>, f32),
+        cx: &mut App,
+    );
     /// Whether the user has link previews on, and the platform can show one.
     fn link_previews(&self) -> bool;
+    /// The part of the window's page the window shows is at `page` now (Shell::preview_page), for
+    /// a link preview over it to follow.
+    fn preview_page_moved(&self, _page: (Bounds<Pixels>, f32), _: &mut App) {}
     /// Closes the link preview over `over`, if one shows, as Redo does. Returns whether it did.
     fn close_preview(&self, over: u64, cx: &mut App) -> bool;
     /// Reopens the Today tab that had the id `closed` when it closed, at its place, and returns its

@@ -47,8 +47,8 @@ jobs:
       # xkbcommon, and loads Wayland's, fontconfig and Vulkan at run time.
       - name: Install tools
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev
           rustup update stable --no-self-update
 
@@ -76,7 +76,7 @@ jobs:
       - name: Capture the parity screens
         continue-on-error: true
         run: |
-          sudo apt-get install -yq --no-install-recommends sway grim xwayland imagemagick mesa-vulkan-drivers
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq --no-install-recommends sway grim xwayland imagemagick mesa-vulkan-drivers
           export XDG_RUNTIME_DIR=$(mktemp -d)
           ../tools/parity.sh target/release/preview ../parity
 

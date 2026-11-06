@@ -32,6 +32,30 @@ impl Drop for Engine {
     }
 }
 
+/// Opens `url` in a link preview over the tab `over` in the browser window `window`, of the
+/// archived tab `archived` if it's one (Browser::open_preview, open_archived_preview).
+fn open_preview_in(
+    window: u64,
+    over: u64,
+    url: SharedString,
+    link: Point<Pixels>,
+    page: (Bounds<Pixels>, f32),
+    archived: Option<u64>,
+) {
+    // Outside the shell's update, as the core tells the shell of the tab it opens.
+    update_app_later(move |cx| {
+        let Ok(text) = CString::new(url.as_ref()) else {
+            return;
+        };
+        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
+        if preview == 0 {
+            log!("browser: link preview over {over} not opened");
+            return;
+        }
+        link_preview::show(window, preview, over, url, page, link, archived, cx);
+    });
+}
+
 impl Browser for Engine {
     fn select(&self, tab: u64, _: &mut App) {
         browser::handover_clicked();
@@ -332,19 +356,19 @@ impl Browser for Engine {
         page: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        let window = self.window;
-        // Outside the shell's update, as the core tells the shell of the tab it opens.
-        update_app_later(move |cx| {
-            let Ok(text) = CString::new(url.as_ref()) else {
-                return;
-            };
-            let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
-            if preview == 0 {
-                log!("browser: link preview over {over} not opened");
-                return;
-            }
-            link_preview::show(window, preview, over, url, page, link, cx);
-        });
+        open_preview_in(self.window, over, url, link, page, None);
+    }
+
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        link: Point<Pixels>,
+        page: (Bounds<Pixels>, f32),
+        _: &mut App,
+    ) {
+        open_preview_in(self.window, over, url, link, page, Some(archived));
     }
 
     fn link_previews(&self) -> bool {
@@ -1093,11 +1117,14 @@ impl Browser for Engine {
         unsafe { bc::bc_window_focus_page(self.window) };
     }
 
-    fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App) {
+    fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, _: &mut App) {
         set_page_frame(self.window, (frame, radius));
+    }
+
+    fn preview_page_moved(&self, page: (Bounds<Pixels>, f32), cx: &mut App) {
         // After the shell's update, which may be drawing its window.
         let window = self.window;
-        cx.defer(move |cx| link_preview::page_moved(window, (frame, radius), cx));
+        cx.defer(move |cx| link_preview::page_moved(window, page, cx));
     }
 
     fn set_focus_color(&self, color: u32, _: &mut App) {

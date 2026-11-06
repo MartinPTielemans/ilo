@@ -14,7 +14,7 @@
 # Duplicate, Archive Tabs Below and Unpin Tab work. ⌘W archives a Today tab. ⇧⌘L, Window › Open
 # Library… and the footer's button open the Library, which pushes the page right at its width, and
 # its back button closes it. A right-click on an archived tab shows its menu, whose Copy URL copies
-# its URL and Delete from Archive takes it out. A click on one reopens it at the top of Today with
+# its URL and Delete from Archive takes it out. A ⌘-click on one reopens it at the top of Today with
 # its history, and Clear Archive, from the Archive menu and a right-click on the Archived Tabs
 # section, asks, then empties the archive, which ⌘Z brings back. A page's question about a
 # permission shows under the URL field while its tab is shown, bringing out a hidden sidebar, and
@@ -502,8 +502,9 @@ expect "^browser: menu shown $(cased 'Restore Tab, Copy URL, Delete from Archive
 ../tools/window-screenshot.sh "$pid" "$out/archived-menu.png" || fail "no window to capture"
 send choose Copy URL
 expect "^browser: copied $url\$" "Copy URL in the archived tab's menu didn't copy its URL"
-send click 300 111
-expect '^browser: restore archived [0-9][0-9]*$' "a click on the archived tab didn't restore it"
+# ⌘-click, Ctrl off the Mac, restores it at once, with its history, where a click previews it.
+send click 300 111 cmd
+expect '^browser: restore archived [0-9][0-9]*$' "a ⌘-click on the archived tab didn't restore it"
 expect "^browser: today [0-9][0-9]* $left\$" \
   "the archived tab didn't come back at the top of Today: Today is \"$(today)\""
 r=$(today | cut -d' ' -f1)

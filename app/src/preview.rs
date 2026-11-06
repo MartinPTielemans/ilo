@@ -689,6 +689,24 @@ impl Browser for Fake {
     ) {
     }
 
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        link: Point<Pixels>,
+        page: (Bounds<Pixels>, f32),
+        cx: &mut App,
+    ) {
+        // As PREVIEW_PEEK's, once the shell's update is done, with the shell's page showing
+        // through the card.
+        cx.defer(move |cx| {
+            let bounds = Bounds::new(PREVIEW_ORIGIN.get(), PREVIEW_AREA.get());
+            link_preview::open_at(Rc::new(PreviewPeek), bounds, true, cx);
+            link_preview::show(1, 99, over, url, page, link, Some(archived), cx);
+        });
+    }
+
     fn link_previews(&self) -> bool {
         true
     }
@@ -2617,7 +2635,7 @@ fn main() {
                         link_preview::open_at(Rc::new(PreviewPeek), peek_bounds, true, cx);
                         let url = "https://en.wikipedia.org/wiki/Hyperlink".into();
                         let link = laid.0.origin + point(px(160.), px(120.));
-                        link_preview::show(1, 99, 1, url, laid, link, cx);
+                        link_preview::show(1, 99, 1, url, laid, link, None, cx);
                     });
                 })
                 .detach();
@@ -2626,7 +2644,13 @@ fn main() {
             // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
             if let Ok(what) = std::env::var("PREVIEW_MENU") {
                 if let Some(shell) = shell_window {
-                    preview_menu(shell.into(), bounds, &what, cx);
+                    preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Right, cx);
+                }
+            }
+            // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
+            if let Ok(what) = std::env::var("PREVIEW_CLICK") {
+                if let Some(shell) = shell_window {
+                    preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Left, cx);
                 }
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
@@ -2642,7 +2666,13 @@ fn main() {
         });
 }
 
-fn preview_menu(shell: gpui::AnyWindowHandle, bounds: Bounds<Pixels>, what: &str, cx: &mut App) {
+fn preview_menu(
+    shell: gpui::AnyWindowHandle,
+    bounds: Bounds<Pixels>,
+    what: &str,
+    button: gpui::MouseButton,
+    cx: &mut App,
+) {
     let mut parts = what.split(',');
     let mut number = || {
         parts
@@ -2670,14 +2700,14 @@ fn preview_menu(shell: gpui::AnyWindowHandle, bounds: Bounds<Pixels>, what: &str
         let position = point(px(x), px(y));
         let modifiers = gpui::Modifiers::default();
         let down = gpui::MouseDownEvent {
-            button: gpui::MouseButton::Right,
+            button,
             position,
             modifiers,
             click_count: 1,
             first_mouse: false,
         };
         let up = gpui::MouseUpEvent {
-            button: gpui::MouseButton::Right,
+            button,
             position,
             modifiers,
             click_count: 1,

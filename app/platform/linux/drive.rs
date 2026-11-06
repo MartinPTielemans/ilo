@@ -30,7 +30,7 @@
 //! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
 //! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer. swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
+//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
 //! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
 //! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
 //! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
@@ -224,7 +224,7 @@ fn settle(n: u64) {
     sync();
     crate::drive_wayland::sync();
     // Until the drag's target has answered, which it does from the loop.
-    if drag_waits() {
+    if drag_waits() || crate::drive_drags::waits() {
         after(10, Box::new(move || settle(n)));
         return;
     }
@@ -1846,7 +1846,7 @@ fn paste_waits() -> bool {
 }
 
 /// `path` as a file: URL's path, its bytes outside the unreserved ones escaped.
-fn file_url(path: &str) -> String {
+pub(super) fn file_url(path: &str) -> String {
     let mut url = String::from("file://");
     for byte in path.bytes() {
         match byte {

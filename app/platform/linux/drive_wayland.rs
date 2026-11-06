@@ -10,7 +10,8 @@
 //! and the core hands them on to the UI or an overlay as it does a real keyboard's. The done line's
 //! key window is sway's focused window, and in a browser window the overlay that has the keys, else
 //! whose the core says they are. Every window floats (tools/headless.sh), so sway stacks them as a
-//! desktop does, and moves and sizes them as it's told. Drags from another app aren't here yet.
+//! desktop does, and moves and sizes them as it's told. Drags from another app come from a client
+//! of the driver's own, as another app's do (drive_drags.rs).
 
 use std::{
     cell::{Cell, RefCell},
@@ -297,6 +298,79 @@ fn ours() -> Vec<Node> {
         walk(&tree, &mut out);
     }
     out
+}
+
+/// Every window in sway's tree, the app's and other apps', with its process, in the order `stacked`
+/// reads: sway's floating windows go up its list as they're focused.
+fn every_window() -> Vec<(Node, Option<u64>)> {
+    fn walk(node: &Value, out: &mut Vec<(Node, Option<u64>)>) {
+        if let Some(pid) = node["pid"].as_u64() {
+            let (rect, window) = (&node["rect"], &node["window_rect"]);
+            out.push((
+                Node {
+                    id: node["id"].as_i64().unwrap_or(-1),
+                    app_id: node["app_id"].as_str().unwrap_or_default().to_string(),
+                    name: node["name"].as_str().unwrap_or_default().to_string(),
+                    x: number(&rect["x"]) + number(&window["x"]),
+                    y: number(&rect["y"]) + number(&window["y"]),
+                    width: number(&window["width"]),
+                    height: number(&window["height"]),
+                    focused: node["focused"].as_bool() == Some(true),
+                    full_screen: node["fullscreen_mode"]
+                        .as_u64()
+                        .is_some_and(|mode| mode != 0),
+                },
+                Some(pid),
+            ));
+        }
+        for child in ["nodes", "floating_nodes"]
+            .iter()
+            .filter_map(|key| node[*key].as_array())
+        {
+            child.iter().for_each(|each| walk(each, out));
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(tree) = sway(GET_TREE, "") {
+        walk(&tree, &mut out);
+    }
+    out
+}
+
+/// drive.rs's stack, from sway's tree: the windows over the driven browser window, front to back,
+/// where they overlap it, then "driven". A browser window is named as order names it, another of
+/// the app's "ilo <title>" and another app's "other <title>", an X11 one through Xwayland too.
+fn stack() -> Option<()> {
+    let (_, driven) = driven()?;
+    let own = u64::from(std::process::id());
+    let open = browsers(&ours());
+    let mut front: Vec<(Node, Option<u64>)> = every_window().into_iter().rev().collect();
+    // A window in full screen is over them all, as `stacked` has it.
+    front.sort_by_key(|(node, _)| !node.full_screen);
+    let overlaps = |node: &Node| {
+        node.x < driven.x + driven.width
+            && driven.x < node.x + node.width
+            && node.y < driven.y + driven.height
+            && driven.y < node.y + node.height
+    };
+    let mut stack = Vec::new();
+    for (node, pid) in &front {
+        if node.id == driven.id {
+            stack.push("driven".to_string());
+            break;
+        }
+        if !overlaps(node) {
+            continue;
+        }
+        let ours = pid.is_some_and(|pid| pid == own || browser::flatpak::in_flatpak());
+        stack.push(match open.iter().find(|(_, each)| each.id == node.id) {
+            Some(&(id, _)) => name_of(id),
+            None if ours => format!("ilo {}", node.name),
+            None => format!("other {}", node.name),
+        });
+    }
+    log!("browser: stack {}", stack.join(", "));
+    Some(())
 }
 
 /// Logs the app's windows as sway has them, for a run that fails to find one.
@@ -636,24 +710,22 @@ fn motion(x: f64, y: f64) -> Option<()> {
     })?
 }
 
-/// Whether (`x`, `y`) in sway's layout is in a window of another app's.
+/// Whether (`x`, `y`) in sway's layout is in a window of another app's that's in front there,
+/// which would take the pointer's events: not one of the app's windows covers.
 fn others_at(x: f64, y: f64) -> bool {
-    fn walk(node: &Value, x: f64, y: f64) -> bool {
-        let own = u64::from(std::process::id());
-        let other =
-            node["pid"].as_u64().is_some_and(|pid| pid != own) && !browser::flatpak::in_flatpak();
-        let rect = &node["rect"];
-        let (left, top) = (number(&rect["x"]), number(&rect["y"]));
-        let inside = (left..left + number(&rect["width"])).contains(&x)
-            && (top..top + number(&rect["height"])).contains(&y);
-        (other && inside)
-            || ["nodes", "floating_nodes"]
-                .iter()
-                .filter_map(|key| node[*key].as_array())
-                .flatten()
-                .any(|child| walk(child, x, y))
-    }
-    sway(GET_TREE, "").is_some_and(|tree| walk(&tree, x, y))
+    let own = u64::from(std::process::id());
+    let mut front: Vec<(Node, Option<u64>)> = every_window().into_iter().rev().collect();
+    // A window in full screen is over them all, as `stacked` has it.
+    front.sort_by_key(|(node, _)| !node.full_screen);
+    front
+        .iter()
+        .find(|(node, _)| {
+            (node.x..node.x + node.width).contains(&x)
+                && (node.y..node.y + node.height).contains(&y)
+        })
+        .is_some_and(|(_, pid)| {
+            pid.is_some_and(|pid| pid != own) && !browser::flatpak::in_flatpak()
+        })
 }
 
 fn button(which: u32, press: bool) -> Option<()> {
@@ -709,6 +781,37 @@ fn click(x: f64, y: f64, which: u32, state: u16, again: bool) -> Option<()> {
 fn in_driven(x: f64, y: f64) -> Option<(f64, f64)> {
     let (_, node) = driven()?;
     Some((node.x + x, node.y + y))
+}
+
+/// The driven browser window, and (`x`, `y`) in its content in sway's layout, for a drag.
+pub(crate) fn in_driven_window(x: f64, y: f64) -> Option<(bc::bc_id, (f64, f64))> {
+    let (id, node) = driven()?;
+    Some((id, (node.x + x, node.y + y)))
+}
+
+/// The pointer to (`x`, `y`) in sway's layout, as `motion` puts it, for a drag.
+pub(crate) fn pointer_to(x: f64, y: f64) -> Option<()> {
+    motion(x, y)
+}
+
+/// The left button down or up where the pointer is, with no modifiers, for a drag.
+pub(crate) fn left_button(press: bool) -> Option<()> {
+    with_modifiers(0, || button(BTN_LEFT, press))
+}
+
+/// The middle of a square `size` across in the bottom right corner of the output with sway's
+/// focus, where the compositor puts a layer surface anchored there that names no output, in sway's
+/// layout.
+pub(crate) fn output_corner(size: f64) -> Option<(f64, f64)> {
+    let outputs = sway(GET_OUTPUTS, "")?;
+    let outputs = outputs.as_array()?;
+    let output = (outputs.iter())
+        .find(|output| output["focused"].as_bool() == Some(true))
+        .or(outputs.first())?;
+    let rect = &output["rect"];
+    let right = number(&rect["x"]) + number(&rect["width"]);
+    let bottom = number(&rect["y"]) + number(&rect["height"]);
+    Some((right - size / 2., bottom - size / 2.))
 }
 
 /// The key that types `keysym`, as evdev numbers it, and whether with shift.
@@ -964,9 +1067,21 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 }
                 return None;
             };
+            let behind = match words.next() {
+                None => false,
+                Some("behind") => true,
+                Some(_) => return None,
+            };
             DRIVEN.set(index);
-            log!("browser: drive window {number}");
-            // To the front with the keyboard, as a click on it does.
+            log!(
+                "browser: drive window {number}{}",
+                if behind { " behind" } else { "" }
+            );
+            // With behind, it stays where it is, as drive.rs's does, for another app's window over
+            // it. Otherwise to the front with the keyboard, as a click on it does.
+            if behind {
+                return Some(());
+            }
             sway_command(&format!("[con_id={}] focus", node.id))
         })(),
         "click" | "rightclick" | "middleclick" | "doubleclick" => (|| {
@@ -1124,6 +1239,19 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 _ => None,
             }
         })(),
+        "stack" => stack(),
+        // Settings, with the keyboard, sized as resize sizes the driven browser window.
+        "resizekey" => (|| {
+            let numbers: Vec<f64> = words.map(|w| w.parse().ok()).collect::<Option<_>>()?;
+            let &[width, height] = numbers.as_slice() else {
+                return None;
+            };
+            let settings = focused_settings(&ours())?;
+            sway_command(&format!(
+                "[con_id={}] resize set width {width} px height {height} px",
+                settings.id
+            ))
+        })(),
         "order" => {
             let mut order = String::new();
             for (id, node) in stacked() {
@@ -1163,7 +1291,36 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             crate::swiped(surface, x, y, back);
             Some(())
         })(),
-        "dragover" | "dragdrop" | "dragleave" => None,
+        // As drive.rs's: what it carries, its kind, then the rest of the line, which can hold
+        // spaces.
+        "dragover" | "dragdrop" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let carried = words.next().map(|kind| {
+                let value = line.splitn(5, ' ').nth(4).unwrap_or("");
+                (kind, value)
+            });
+            crate::drive_drags::over(x, y, carried, action == "dragdrop")
+        })(),
+        "dragleave" => {
+            crate::drive_drags::leave();
+            Some(())
+        }
+        // A drag in the window with the keyboard, halfway first, so the view sees the drag start
+        // before it ends, as drive.rs's.
+        "dragkey" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let (x2, y2) = drive::point(&mut words)?;
+            let (left, top) = key_origin()?;
+            let (x, y, x2, y2) = (left + x, top + y, left + x2, top + y2);
+            first_press(x, y, BTN_LEFT, false);
+            motion(x, y)?;
+            with_modifiers(0, || {
+                button(BTN_LEFT, true)?;
+                motion((x + x2) / 2., (y + y2) / 2.)?;
+                motion(x2, y2)?;
+                button(BTN_LEFT, false)
+            })
+        })(),
         "layout" => layout(),
         _ => return None,
     })

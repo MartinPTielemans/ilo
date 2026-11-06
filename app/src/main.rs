@@ -33,8 +33,8 @@ use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
     account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, link_preview, link_target, log, log_in, menu, offer, passwords,
-    site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
+    icon_picker, launch, launch_picture, link_preview, link_target, log, log_in, menu, offer,
+    passwords, site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -53,6 +53,9 @@ mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
 mod drive;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/drive_drags.rs"]
+mod drive_drags;
 #[cfg(target_os = "windows")]
 #[path = "../platform/windows/drive_menus.rs"]
 mod drive_menus;
@@ -699,7 +702,36 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             false,
         )
     });
-    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height, maximized) };
+    // The sidebar's picture, taken in a window near enough this one's size to show in it. A
+    // maximized one is another size, kept by none.
+    let taken = std::fs::read_to_string(launch_layout_path())
+        .ok()
+        .and_then(|line| launch_picture::read(&line));
+    if let Some(taken) = taken {
+        // check.sh reads this line.
+        log!(
+            "browser: launch picture taken at {:.0}x{:.0}",
+            taken.width,
+            taken.height
+        );
+    }
+    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
+        (taken.width, taken.height, taken.foot_top)
+    });
+    unsafe {
+        platform::host_show_launch_window(
+            profile.as_ptr(),
+            x,
+            y,
+            width,
+            height,
+            maximized,
+            taken_width,
+            taken_height,
+            foot_top,
+        )
+    };
     // check.sh reads this line.
     let state = if maximized { " maximized" } else { "" };
     log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}{state}");

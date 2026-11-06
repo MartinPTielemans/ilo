@@ -7,7 +7,8 @@
 # emoji picked in the icon picker that Change Icon… hangs under its favicon takes the favicon's
 # place until Remove Icon, and a Japanese conversion in the picker's search isn't a pick. A Space's
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
-# in the archive, from which the Library reopens it at its page. A page's downloads go in the
+# in the archive, from which the Library opens it in a link preview: ⌘W closes that and leaves it
+# archived, and ⌘↩ keeps it at its page, out of the archive. A page's downloads go in the
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
 # from the pointer into a bin on the Library button, recorded with the recent downloads coming and
 # going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
@@ -374,20 +375,50 @@ expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't off
 choose_drawn "$(cased 'Remove Icon')"
 expect "^browser: page $c icon none\$" "Remove Icon didn't give the tab back its favicon"
 send click $page_point
-# The tab closed before the quit reopens from the Library at the top of Today, at its page. ⌘W
-# archives it again.
+# The tab closed before the quit opens from the Library in a link preview beside it, at its page
+# (#696), shown dark, then light. ⌘W closes the preview and leaves the tab in the archive, the
+# Library staying; ⌘↩ keeps it at the top of Today, out of the archive, and the Library closes.
+# ⌘W archives it again.
 send key l cmd shift
 expect '^browser: command view-library via page$' "⇧⌘L with the page focused didn't reach the UI"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
-send click 300 111
-expect '^browser: restore archived [0-9][0-9]*$' "a click on the archived tab didn't restore it"
-expect "^browser: today [0-9][0-9]* $c $a\$" \
+# Opens the archived tab in a preview, in the appearance $1, and sets $p to the preview's tab.
+archived_preview() {
+  item=Dark
+  [ "$1" = dark ] || item=Light
+  send menu "Appearance › $item"
+  expect "^browser: appearance $1\$" "View › Appearance › $item didn't change the appearance"
+  send click 300 111
+  expect '^browser: archived [0-9][0-9]* in preview$' "a click on the archived tab didn't preview it"
+  none_since '^browser: restore archived' || fail "a click on the archived tab restored it at once"
+  expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
+    "the archived tab's preview didn't open at its page"
+  p=$(grep '^browser: link preview [1-9][0-9]* https://example.org/$' "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: link preview settled$' "the archived tab's preview didn't settle"
+  expect "^browser: loaded $p https://example.org/\$" "the archived tab's preview didn't load its page"
+  ../tools/window-screenshot.sh "$pid" "$out/archive-preview-$1.png" || fail "no window to capture"
+}
+archived_preview dark
+send key w cmd
+expect '^browser: link preview closing (cmd-w)$' "⌘W in the archived tab's preview didn't close it"
+expect "^browser: tab $p closed\$" "⌘W didn't close the archived tab's preview's page"
+none_since '^browser: restore archived' || fail "⌘W on the archived tab's preview restored it"
+none_since '^browser: archive 0 tabs$' || fail "⌘W on the archived tab's preview took it out of the archive"
+none_since '^browser: library hidden$' || fail "⌘W on the archived tab's preview closed the Library"
+none_since '^browser: command close-tab' || fail "⌘W in the archived tab's preview closed a tab"
+archived_preview light
+send key return cmd
+expect "^browser: link preview kept $p\$" "⌘↩ didn't keep the archived tab's preview"
+expect '^browser: restore archived [0-9][0-9]* from preview$' \
+  "keeping the archived tab's preview didn't restore it"
+expect "^browser: today $p $c $a\$" \
   "the archived tab didn't come back at the top of Today: Today is \"$(today)\""
-r=$(today | cut -d' ' -f1)
-expect "^browser: selected $r\$" "the tab from the archive isn't shown"
-expect "^browser: loaded $r https://example.org/\$" "the tab from the archive didn't load its page"
-expect '^browser: archive 0 tabs$' "the tab reopened stayed in the archive"
-expect '^browser: library hidden$' "reopening a tab didn't close the Library"
+expect "^browser: selected $p\$" "the tab from the archive isn't shown"
+expect '^browser: archive 0 tabs$' "the tab kept from the preview stayed in the archive"
+expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
+grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+  fail "the tab from the archive isn't at its page"
+send menu "Appearance › Automatic"
 send click $page_point
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab from the archive"

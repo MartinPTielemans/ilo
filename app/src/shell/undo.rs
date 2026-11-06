@@ -827,7 +827,7 @@ impl Shell {
         if !self.has_tab(closed.over) {
             return false;
         }
-        let Some(page) = self.page_laid() else {
+        let Some(page) = self.preview_page() else {
             return false;
         };
         if !self.shows(closed.over) {

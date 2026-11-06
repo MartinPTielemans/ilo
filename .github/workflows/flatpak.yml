@@ -63,8 +63,8 @@ jobs:
       - name: Install tools
         if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev flatpak flatpak-builder xvfb imagemagick
           rustup update stable --no-self-update
           # Ubuntu's AppArmor keeps bubblewrap, which flatpak builds and runs in, from making
@@ -148,7 +148,7 @@ jobs:
           LANG: en_US.UTF-8
         run: |
           (cd .deps/ilo-server && cargo build --release --locked)
-          sudo apt-get install -yq xdotool openbox xauth
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq xdotool openbox xauth
           XDG_RUNTIME_DIR=$(mktemp -d) ILO_SERVER=$PWD/.deps/ilo-server/target/release/ilo-server \
             BROWSER_FLATPAK=1 BROWSER_XVFB=1 dbus-run-session -- ./check.sh sync-account
 

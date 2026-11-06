@@ -480,9 +480,10 @@ fi
 mac=
 [ "$(uname)" = Darwin ] && mac=1
 if [ -n "$mac" ]; then
-  # A window the screen has less room for at the next launch opens smaller, with no picture of
-  # that size. One filling the hosted Mac's 1024 by 768 screen opened 2 or 3 points shorter
-  # whenever the Dock had grown since (#1528), so the window quits well inside the screen.
+  # A window the screen has less room for at the next launch opens smaller, and past
+  # launch_picture.rs's tolerance with no picture. One filling the hosted Mac's 1024 by 768 screen
+  # opened 2 or 3 points shorter whenever the Dock had grown since (#1528), so the window quits
+  # well inside the screen, and the launch below is made 3 points shorter on purpose (#1450).
   send screen
   corner=$(grep '^browser: screen at ' "$log" | tail -1 | cut -d' ' -f4,5)
   send place $((${corner% *} + 40)) $((${corner#* } + 60)) 900 560
@@ -494,6 +495,24 @@ quit_by_key
 exited
 [ -z "$mac" ] || ls "$(dirname "$saved")"/launch-picture-*.png > /dev/null 2>&1 ||
   fail "the sidebar's picture ⌘Q took wasn't on disk once the app quit"
+# The next launch opens 3 points shorter than the picture, as when the Dock or the menu bar has
+# grown since the quit (#1450), and still shows it, its foot at the window's bottom: the launch
+# window's frame and the browser window's, which the screen would have clamped alike.
+capture=
+if [ -n "$mac" ]; then
+  shorter=$(awk '{ printf "%.0f %.0f %.0f %.0f", $1, $2, $3, $4 - 3 }' "$launch_frame")
+  echo "$shorter" > "$launch_frame"
+  python3 -I -c '
+import json, sys
+with open(sys.argv[1]) as file:
+    saved = json.load(file)
+saved["windows"][0]["bounds"][3] -= 3
+with open(sys.argv[1], "w") as file:
+    json.dump(saved, file)
+' "$saved" || fail "the window kept in $saved has no frame to make shorter"
+  # Whole: `open` starts the app in /.
+  capture="$PWD/$out/links-launch-shorter.png"
+fi
 
 # Launched as the system launches the default browser, by `open` on the Mac and by the command
 # registered for links on Windows, the app logs to $1 and is $pid once it runs. Then $2, if given, is
@@ -502,7 +521,10 @@ launch() {
   log=$1
   rm -f "$log"
   if [ -n "$mac" ]; then
-    open -a "$app" --env BROWSER_DISPLAY="$BROWSER_DISPLAY" --stdout "$log" --stderr "$log" ${2:+"$2"}
+    # The first launch's window is captured as it was, $capture.
+    open -a "$app" --env BROWSER_DISPLAY="$BROWSER_DISPLAY" \
+      ${capture:+--env "BROWSER_LAUNCH_CAPTURE=$capture"} --stdout "$log" --stderr "$log" ${2:+"$2"}
+    capture=
     pid=
     for _ in $(seq 100); do
       pid=$(pgrep -nf "$browser" || true)
@@ -553,6 +575,8 @@ if [ "$driven" = 1 ]; then
   await '^browser: link rules read 1$' || fail "the link rule didn't come back with the launch"
 fi
 pictured "the launch without a link didn't show the sidebar's picture"
+[ -z "$mac" ] || grep -q "^browser: launch window frame $shorter\$" "$log" ||
+  fail "the launch opened at $(grep -m1 '^browser: launch window frame ' "$log" | cut -d' ' -f5-), not 3 points shorter at $shorter"
 plain="launch window $(at 'launch window') ms, started $(at 'started') ms, first frame $(at 'first frame') ms, UI shown $(at 'UI shown') ms"
 quit_launched
 
@@ -688,7 +712,7 @@ else
 fi
 [ -z "$msix" ] || echo "ok: a link sent to the Store's MSIX, which Windows activates for it, opens" \
   "once, in Little ilo, and loads there, the package's chrome.exe handing it over and ending."
-echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png"
+echo "ok: a link that launches the browser opens once, over the Spaces it brings back, before the UI comes out from under the launch picture, and loads, and both launches show the sidebar's picture; with no rules, it opens in Little ilo. Windows: $out/links-cold.png $out/links-little-launch.png${mac:+, the launch window 3 points shorter than its picture: $out/links-launch-shorter.png}"
 [ -z "$toasted" ] || echo "ok: a click on a site's notification, which notification_helper.exe hands" \
   "chrome.exe as a launch with the toast's id, reaches the page, in the browser running."
 [ -z "$mac" ] || echo "ok: an update's notes open as a tab in the window at its first launch, with links from other apps going to Little ilo, and only then."

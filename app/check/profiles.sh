@@ -616,6 +616,9 @@ send type d
 expect '^browser: download [0-9]* done profile.txt$' "the second profile's page didn't download"
 [ -f "$work_downloads/profile.txt" ] ||
   fail "the second profile's download isn't in the folder Change… gave it"
+# Its icon flies to the Library button first, over the sidebar the drag below starts in.
+flight=$(grep '^browser: download [0-9]* done profile.txt$' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: download landed $flight\$" "the second profile's download didn't land"
 # Its tab made the profile's favorite, the Space is empty, and deleted at once it leaves the
 # profile with a favorite no Space shows. The first Space's menu then deletes the profile, favorite
 # and all, once the user confirms (#1524).

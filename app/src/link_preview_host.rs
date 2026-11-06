@@ -66,6 +66,23 @@ impl link_preview::Host for LinkPreviewHost {
         unsafe { bc::bc_window_keep_preview(window, tab) };
     }
 
+    fn kept_archived(&self, window: u64, archived: u64, cx: &mut App) {
+        unsafe { bc::bc_archive_remove(archived) };
+        // check.sh waits for this line.
+        log!("browser: restore archived {archived} from preview");
+        let shell = WINDOWS.with_borrow(|windows| {
+            windows
+                .iter()
+                .find(|each| each.id == window)
+                .map(|each| each.shell.clone())
+        });
+        if let Some(shell) = shell {
+            shell
+                .update(cx, |shell, cx| shell.restored_from_preview(cx))
+                .ok();
+        }
+    }
+
     fn closed(&self, window: u64, closed: link_preview::Closed, undone: bool, cx: &mut App) {
         let shell = WINDOWS.with_borrow(|windows| {
             windows
@@ -199,7 +216,7 @@ pub(crate) unsafe extern "C" fn tab_link_to_site(
         }
         let link = page.0.origin + point(px(x as f32), px(y as f32));
         let url = url.to_string_lossy().into_owned().into();
-        link_preview::show(window, preview, tab, url, page, link, cx);
+        link_preview::show(window, preview, tab, url, page, link, None, cx);
     });
     true
 }

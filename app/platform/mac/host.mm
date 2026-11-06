@@ -1356,7 +1356,7 @@ bool SystemIsLight() {
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts, and the sidebar's picture in it, which the browser window takes over.
 NSWindow* g_launch_window;
-NSImageView* g_launch_picture;
+NSView* g_launch_picture;
 
 // The picture of a |width| by |height| window's sidebar, named for the size, as a window opens at
 // another size than the one it quit at.
@@ -1364,11 +1364,43 @@ NSString* LaunchPicturePath(const char* profile_dir, double width, double height
   return [NSString stringWithFormat:@"%s/launch-picture-%.0fx%.0f.png", profile_dir, width, height];
 }
 
+// With BROWSER_LAUNCH_CAPTURE, writes the launch window as it has been on screen to that PNG, for
+// check.sh: its first frame is up for only a moment before the browser window takes its place.
+void CaptureLaunchWindow() {
+  const char* path = getenv("BROWSER_LAUNCH_CAPTURE");
+  if (!path || !g_launch_window) {
+    return;
+  }
+  // As host_save_launch_picture takes the browser window's.
+  using CreateImage = CGImageRef (*)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
+  static const auto create_image =
+      reinterpret_cast<CreateImage>(dlsym(RTLD_DEFAULT, "CGWindowListCreateImage"));
+  CGImageRef image =
+      create_image ? create_image(CGRectNull, kCGWindowListOptionIncludingWindow,
+                                  (CGWindowID)g_launch_window.windowNumber,
+                                  kCGWindowImageBoundsIgnoreFraming)
+                   : nullptr;
+  NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+  CGImageDestinationRef png =
+      image ? CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1,
+                                              nullptr)
+            : nullptr;
+  if (png) {
+    CGImageDestinationAddImage(png, image, nullptr);
+    CGImageDestinationFinalize(png);
+    CFRelease(png);
+  }
+  if (image) {
+    CGImageRelease(image);
+  }
+}
+
 }  // namespace
 
 // Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool) {
+                             double height, bool, double picture_width, double picture_height,
+                             double foot_top) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1392,20 +1424,43 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // light composite over grey 20, as the dark is near its dark one.
   window.backgroundColor = [NSColor colorWithWhite:SystemIsLight() ? 0.91 : 0.15 alpha:1];
   NSView* content = window.contentView;
-  NSImage* picture = [[NSImage alloc] initWithContentsOfFile:LaunchPicturePath(profile_dir, width, height)];
-  NSImageRep* pixels = picture.representations.firstObject;
+  NSString* path = LaunchPicturePath(profile_dir, picture_width, picture_height);
+  NSImage* picture = picture_width > 0 ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
+  NSBitmapImageRep* pixels = (NSBitmapImageRep*)picture.representations.firstObject;
   const CGFloat scale = window.backingScaleFactor;
   // A picture taken on a screen of another scale is left out.
-  if (pixels && pixels.pixelsHigh == lround(height * scale)) {
-    if ([pixels isKindOfClass:NSBitmapImageRep.class]) {
-      // The sidebar's right edge, halfway down, is the material with nothing on it.
-      NSColor* edge = [(NSBitmapImageRep*)pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
-      window.backgroundColor = [edge colorWithAlphaComponent:1];
+  if ([pixels isKindOfClass:NSBitmapImageRep.class] && pixels.CGImage &&
+      pixels.pixelsHigh == lround(picture_height * scale)) {
+    // The sidebar's right edge, halfway down, is the material with nothing on it.
+    NSColor* edge = [pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
+    window.backgroundColor = [edge colorWithAlphaComponent:1];
+    const long rows = pixels.pixelsHigh;
+    const long columns = pixels.pixelsWide;
+    const long foot = std::clamp(lround(foot_top * scale), 0L, rows);
+    const long grows = lround(height * scale) - rows;
+    NSView* shown = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, columns / scale, height)];
+    // Puts the picture's rows |from| to |to| |at| rows down from the window's top.
+    auto place = [&](long from, long to, long at) {
+      if (to <= from) {
+        return;
+      }
+      CGImageRef rows_of = CGImageCreateWithImageInRect(pixels.CGImage,
+                                                        CGRectMake(0, from, columns, to - from));
+      const NSSize size = NSMakeSize(columns / scale, (to - from) / scale);
+      NSImageView* part =
+          [NSImageView imageViewWithImage:[[NSImage alloc] initWithCGImage:rows_of size:size]];
+      CGImageRelease(rows_of);
+      part.imageScaling = NSImageScaleNone;
+      part.frame = NSMakeRect(0, height - (at + to - from) / scale, size.width, size.height);
+      [shown addSubview:part];
+    };
+    // The top at the window's top and the foot at its bottom: a shorter window loses the room
+    // just above the foot, and a taller one repeats it (launch_picture.rs).
+    place(0, foot + std::min(grows, 0L), 0);
+    place(foot, rows, foot + grows);
+    if (grows > 0) {
+      place(foot - grows, foot, foot);
     }
-    picture.size = NSMakeSize(pixels.pixelsWide / scale, height);
-    NSImageView* shown = [NSImageView imageViewWithImage:picture];
-    shown.frame = NSMakeRect(0, 0, picture.size.width, height);
-    shown.imageScaling = NSImageScaleNone;
     [content addSubview:shown];
     g_launch_picture = shown;
     // check.sh reads this line.
@@ -1823,6 +1878,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     // drawn. The launch window itself can't stay over it: Chromium counts a covered window's
     // pages as hidden, and they don't paint.
     window.animationBehavior = NSWindowAnimationBehaviorNone;
+    CaptureLaunchWindow();
     if (g_launch_picture) {
       [view addSubview:g_launch_picture];
     }

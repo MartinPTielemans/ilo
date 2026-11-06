@@ -871,7 +871,7 @@ impl Shell {
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
-    fn foot_cap(&self) -> Option<f32> {
+    pub(super) fn foot_cap(&self) -> Option<f32> {
         self.foot
             .all
             .then(|| FOOT_SHARE * f32::from(self.viewport.height))
