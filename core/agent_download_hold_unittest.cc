@@ -58,38 +58,49 @@ TEST(AgentDownloadHoldTest, ANoCancelsAFileThatCameWhileItAsked) {
 }
 
 // Chrome lets no download be paused before it's put where it goes: it must enter IN_PROGRESS
-// unpaused. So an agent's waits, unpaused, until its file has a path, and is then paused once.
-TEST(AgentDownloadHoldTest, PausesOnlyOnceItsTargetIsResolved) {
+// unpaused. So an agent's waits, unpaused, until its file has a path, and then asks to pause once.
+// The update itself never pauses it, as a pause inside an update tells the observers again.
+TEST(AgentDownloadHoldTest, AsksToPauseOnlyOnceItsTargetIsResolved) {
   NiceMock<download::MockDownloadItem> item;
   MarkAgentDownload(&item, "claude-code", 20);
+  EXPECT_CALL(item, Pause()).Times(0);
   ON_CALL(item, GetState()).WillByDefault(Return(download::DownloadItem::IN_PROGRESS));
   ON_CALL(item, GetFullPath()).WillByDefault(ReturnRefOfCopy(base::FilePath()));
-  EXPECT_CALL(item, Pause()).Times(0);
-  PauseOnceResolved(&item);
+  EXPECT_FALSE(ResolvedToPause(&item));
+  ON_CALL(item, GetFullPath()).WillByDefault(ReturnRefOfCopy(base::FilePath(kHalfway)));
+  EXPECT_TRUE(ResolvedToPause(&item));
+  EXPECT_FALSE(ResolvedToPause(&item));
   ::testing::Mock::VerifyAndClearExpectations(&item);
 
   ON_CALL(item, GetState()).WillByDefault(Return(download::DownloadItem::IN_PROGRESS));
-  ON_CALL(item, GetFullPath()).WillByDefault(ReturnRefOfCopy(base::FilePath(kHalfway)));
   EXPECT_CALL(item, Pause()).Times(1);
-  PauseOnceResolved(&item);
-  PauseOnceResolved(&item);
+  PauseHeld(&item);
 }
 
-// A download the user starts is never paused, nor one the user allowed before Chrome resolved it.
-TEST(AgentDownloadHoldTest, NeverPausesTheUsersOrOneAllowed) {
+// A download the user starts is never paused, nor one the user allowed, nor one that has ended by
+// the time its pause comes.
+TEST(AgentDownloadHoldTest, NeverPausesTheUsersOneAllowedOrOneEnded) {
   NiceMock<download::MockDownloadItem> users;
   ON_CALL(users, GetState()).WillByDefault(Return(download::DownloadItem::IN_PROGRESS));
   ON_CALL(users, GetFullPath()).WillByDefault(ReturnRefOfCopy(base::FilePath(kHalfway)));
   EXPECT_CALL(users, Pause()).Times(0);
-  PauseOnceResolved(&users);
+  EXPECT_FALSE(ResolvedToPause(&users));
+  PauseHeld(&users);
 
   NiceMock<download::MockDownloadItem> allowed;
   MarkAgentDownload(&allowed, "claude-code", 20);
   ON_CALL(allowed, GetState()).WillByDefault(Return(download::DownloadItem::IN_PROGRESS));
   ON_CALL(allowed, GetFullPath()).WillByDefault(ReturnRefOfCopy(base::FilePath(kHalfway)));
+  EXPECT_TRUE(ResolvedToPause(&allowed));
   AllowAgentDownload(&allowed);
   EXPECT_CALL(allowed, Pause()).Times(0);
-  PauseOnceResolved(&allowed);
+  PauseHeld(&allowed);
+
+  NiceMock<download::MockDownloadItem> ended;
+  MarkAgentDownload(&ended, "claude-code", 20);
+  ON_CALL(ended, GetState()).WillByDefault(Return(download::DownloadItem::CANCELLED));
+  EXPECT_CALL(ended, Pause()).Times(0);
+  PauseHeld(&ended);
 }
 
 // Its agent and tab, for its report, until it ends.

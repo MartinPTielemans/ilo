@@ -166,7 +166,19 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
-    PauseOnceResolved(item);
+    if (ResolvedToPause(item)) {
+      // After the update, as Chrome lets no observer change the download it's telling of.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<Downloads> downloads, bc_id id) {
+                           download::DownloadItem* item =
+                               downloads ? downloads->FindAny(id) : nullptr;
+                           if (item) {
+                             PauseHeld(item);
+                           }
+                         },
+                         weak_factory_.GetWeakPtr(), IdOf(item)));
+    }
     std::string agent;
     bc_id tab = 0;
     const int state = StateOf(*item);
@@ -216,7 +228,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
       return;
     }
     // Paused once Chrome has resolved where it goes, it takes nothing more while it asks
-    // (PauseOnceResolved, from OnDownloadUpdated), and a file that comes whole before then isn't
+    // (ResolvedToPause, from OnDownloadUpdated), and a file that comes whole before then isn't
     // put in place until the user says yes (HoldCompletion).
     MarkAgentDownload(item, space->agent()->id, tab);
     // Its file isn't named until Chrome picks where it goes: the name the server gives, as Chrome

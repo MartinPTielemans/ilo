@@ -51,14 +51,21 @@ void ForgetAgentDownload(download::DownloadItem* item) {
   item->RemoveUserData(AgentDownload::kKey);
 }
 
-void PauseOnceResolved(download::DownloadItem* item) {
+bool ResolvedToPause(download::DownloadItem* item) {
   AgentDownload* held = Of(item);
   if (!held || held->allowed || held->paused ||
       item->GetState() != download::DownloadItem::IN_PROGRESS || item->GetFullPath().empty()) {
-    return;
+    return false;
   }
   held->paused = true;
-  item->Pause();
+  return true;
+}
+
+void PauseHeld(download::DownloadItem* item) {
+  AgentDownload* held = Of(item);
+  if (held && !held->allowed && item->GetState() == download::DownloadItem::IN_PROGRESS) {
+    item->Pause();
+  }
 }
 
 bool HoldCompletion(download::DownloadItem* item, base::OnceClosure again) {
