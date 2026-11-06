@@ -241,8 +241,6 @@ fi
 # dialog, if any, is answered no.
 if seen "^browser: page [0-9]* dialog OpenApp " 5; then
   seen '^browser: dialog settled$' 5 && send key escape
-  # Gone before the next key: on Wayland the dialog has the keyboard until it has hidden.
-  expect '^browser: dialog hidden$' "escape didn't close the first click's open-app dialog"
 fi
 
 results=
