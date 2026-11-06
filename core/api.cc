@@ -1,6 +1,7 @@
 // The C API in public/browser_core.h, over the core's C++.
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -26,6 +27,7 @@
 #include "browser_core/cast_dialog.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
+#include "browser_core/daily_count.h"
 #include "browser_core/developer_mode.h"
 #include "browser_core/downloads.h"
 #include "browser_core/drm_request.h"
@@ -1433,6 +1435,25 @@ void bc_set_send_crash_reports(bool send) {
 
 void bc_answer_crash_report(bool send) {
   browser_core::crash_reports::Answer(send);
+}
+
+void bc_send_daily_count(const char* version,
+                         const char* channel,
+                         bool first,
+                         bool weekly,
+                         bool monthly,
+                         void (*sent)(void* context, bool ok),
+                         void* context) {
+  // The context as a number, as the core never reads what it points to.
+  browser_core::daily_count::Send(
+      version ? version : "", channel ? channel : "", first, weekly, monthly,
+      base::BindOnce(
+          [](void (*sent)(void* context, bool ok), uintptr_t context, bool ok) {
+            if (sent) {
+              sent(reinterpret_cast<void*>(context), ok);
+            }
+          },
+          sent, reinterpret_cast<uintptr_t>(context)));
 }
 
 void bc_page_favicon(const char* url) {

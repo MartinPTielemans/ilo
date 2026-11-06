@@ -39,7 +39,7 @@ publicsuffix.org           ad and tracker blocking lists
 wpad                       automatic proxy discovery, on the local network
 
 # Named by the page for what the user does or turns on, or that only the prod build asks.
-!sync.ilobrowser.com                     sync, only signed in (the run points sync elsewhere too)
+!sync.ilobrowser.com                     sync, only signed in, and the daily count, prod build only
 !*.ingest.de.sentry.io                   crash reports, only those sent, prod build only
 !chromewebstore.google.com               the Chrome Web Store, on a visit
 !clients2.google.com                     store extensions' downloads and update checks

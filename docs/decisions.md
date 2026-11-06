@@ -121,3 +121,13 @@ Consequences now:
 No crash report leaves the device without the user's yes, in Send Crash Reports (off) or the offer after a crash. A report can hold a URL or page text but no user folder, and it asks Sentry to infer no IP. Official builds send them to ilo's Sentry in the EU, which takes minidumps. The collector is a default service URL: a fork names its own or none.
 
 Revisit if Sentry stops taking minidumps or keeping them in the EU.
+
+## 10. A daily usage count: anonymous, on, with a switch
+
+Once a UTC day a copy sends one count, unless Settings › Privacy › Send a Daily Usage Count is off (owner, 2026-11-06, #1977). It's how we know how many use ilo; crash reports count only copies that crash and opt in.
+
+- **Sent:** version, channel, OS and its major version, chip, and the flags daily, first run, first this ISO week and first this month.
+- **Never sent:** an ID, a cookie, the time of day, or anything about pages, tabs, Spaces, profiles, agents, accounts or settings. The copy keeps only its last count's date; the server keeps each day's totals, never the address or user agent.
+- **How:** about 30 s after launch or on coming back on a new day, with no timer after; through the core and Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only), never a general fetch. A build naming none sends nothing.
+
+Revisit if the totals stop telling releases apart without telling copies apart.
