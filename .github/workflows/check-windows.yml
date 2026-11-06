@@ -106,7 +106,7 @@ jobs:
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
         private blank links capture spaces pinned profiles devices history appearance adblock-live find
-        mcp keys sync-account trouble window clear handback
+        mcp keys sync-account trouble window clear handback restore
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false

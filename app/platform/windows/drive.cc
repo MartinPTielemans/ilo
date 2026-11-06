@@ -26,10 +26,10 @@
 // holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
 // wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
 // scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
-// precision touchpad's, with their touch and lift. choose and dismiss work on ilo's menu and the
-// alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
-// drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
-// save panel" if none shows. tabpicture writes the picture a tab's drag shows for part of the window
+// precision touchpad's, with their touch and lift. choose works on ilo's menu, ilo's dialog and the
+// alerts host_ask shows, as Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks
+// <path> in the dialog host_save_png shows, as drive.mm's does in the Mac's save panel, logging
+// "browser: save panel answered", or "browser: no save panel" if none shows. tabpicture writes the picture a tab's drag shows for part of the window
 // to a file and logs its size. dragover, dragdrop and dragleave hand a drag from another app, a shell
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
@@ -151,6 +151,8 @@ struct Click {
 // The app's menus, for menu and menubar: chooses the item titled |title| in the browser window
 // whose UI view is |ui_view|, or with |bar| logs the menu so titled.
 bool (*g_menus)(void* ui_view, const char* title, bool bar) = nullptr;
+// The app's dialog, for choose: answers with the button |label| names in the one that shows.
+bool (*g_dialog)(const char* label) = nullptr;
 
 std::wstring ClassOf(HWND hwnd) {
   wchar_t name[64] = L"";
@@ -1612,7 +1614,8 @@ bool Run(const std::string& line) {
     return g_menus && ui_view && g_menus(ui_view, rest.c_str(), action == "menubar");
   }
   if (action == "choose") {
-    return host_menu_window_choose(rest.c_str()) || host_choose(rest.c_str());
+    return host_menu_window_choose(rest.c_str()) || (g_dialog && g_dialog(rest.c_str())) ||
+           host_choose(rest.c_str());
   }
   if (action == "dismiss") {
     return host_menu_window_dismiss();
@@ -1929,8 +1932,10 @@ LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
 
 extern "C" {
 
-void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar)) {
+void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar),
+                       bool (*dialog)(const char* label)) {
   g_menus = menus;
+  g_dialog = dialog;
 }
 
 void drive_start(void) {
