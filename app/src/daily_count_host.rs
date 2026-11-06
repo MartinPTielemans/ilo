@@ -18,9 +18,9 @@ struct Count {
     /// The launch's count has had its time, so becoming active may send one.
     ready: bool,
     /// The day this launch last tried, so a failed count waits for the next launch.
-    tried: Option<chrono::NaiveDate>,
+    tried: Option<daily_count::NaiveDate>,
     /// The day of the count on its way.
-    sending: Option<chrono::NaiveDate>,
+    sending: Option<daily_count::NaiveDate>,
 }
 
 thread_local! {
@@ -78,7 +78,7 @@ pub(crate) fn became_active(cx: &mut App) {
 }
 
 fn send_if_due(cx: &mut App) {
-    let today = chrono::Utc::now().date_naive();
+    let today = daily_count::today();
     let skip = COUNT.with_borrow(|count| {
         count.endpoint.is_none() || count.sending.is_some() || count.tried == Some(today)
     });

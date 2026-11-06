@@ -2,7 +2,9 @@
 //! count, the only thing it keeps for it. The core posts it (bc_send_daily_count) to the endpoint
 //! the build names; this decides only whether one is due today and its flags.
 
-use chrono::{Datelike, NaiveDate};
+use chrono::Datelike;
+// The app's crates on Linux and Windows have no chrono of their own, so the host takes it here.
+pub use chrono::NaiveDate;
 
 /// The file in the app's data, beside the profiles, with the UTC date of the copy's last count.
 pub const LAST: &str = "daily-count";
@@ -36,6 +38,11 @@ pub fn due(last: Option<NaiveDate>, today: NaiveDate, first_run: bool) -> Option
         monthly: last
             .is_none_or(|last| (last.year(), last.month()) != (today.year(), today.month())),
     })
+}
+
+/// Today, the UTC day, which a count is for.
+pub fn today() -> NaiveDate {
+    chrono::Utc::now().date_naive()
 }
 
 /// The date `LAST` holds, as `date` writes it.
