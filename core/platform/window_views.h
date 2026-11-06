@@ -101,6 +101,11 @@ void ShowPageIn(views::Widget* widget,
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();
 
+// Whether a window's focus has settled by the time the window hears it's active, so the page can
+// take the keyboard then, before the next key the window reads. Where it hasn't, the page takes it
+// from a task posted then.
+bool FocusSettledOnActivation();
+
 // Whether the keyboard in |widget|'s window is the page's: in a page shown, or in nothing, as when
 // the window opens or the page view that had it left the window. Not in DevTools or the side
 // panel.
@@ -109,6 +114,16 @@ bool KeyboardForPage(views::Widget* widget);
 // Gives the keyboard in |widget|'s window to the window itself, which KeyboardForPage counts as
 // the page's.
 void ReleaseKeyboard(views::Widget* widget);
+
+// Whether an overlay of the app's over |widget|'s window, such as the command bar or a menu, has
+// the keyboard, which takes it from the window on every platform: on the Mac a child window, key;
+// on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
+bool OverlayHasKeyboard(views::Widget* widget);
+
+// Runs |let_go|, posted, once the overlay that has the keyboard of |widget|'s window lets it go: on
+// the Mac as the overlay's window stops being key, on Windows as another window comes in front, on
+// Linux as the app takes it back, unless X11's focus came back into the window.
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go);
 
 // On Linux and Windows: the app's UI takes the keyboard in |widget|'s window, to keep
 // (bc_window_ui_takes_keyboard) or until a page shows (bc_window_ui_holds_keyboard), which

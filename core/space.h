@@ -10,6 +10,7 @@
 #include "base/functional/function_ref.h"
 #include "base/uuid.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/split_view.h"
 #include "components/sync/base/unique_position.h"
 #include "url/gurl.h"
 
@@ -65,6 +66,8 @@ class Space {
     kPrivate,
     // A Little ilo window's (Arc's Little Arc): its tabs in the profile itself.
     kLittle,
+    // A Blank Window's (Arc's): its tabs in the profile itself, and in no other window.
+    kBlank,
   };
   // A window's own Space, its tabs in the profile in the directory |profile|, or for a private
   // window in its off-the-record profile. It holds Today tabs alone, and isn't among All(), so
@@ -72,6 +75,8 @@ class Space {
   static Space* CreateOwn(std::string profile, Own own);
   // Deletes the Space, which windows no longer show.
   static void Delete(bc_id id);
+  // Moves the listed Space |id| to right after the listed Space |after|, or first if it's 0.
+  static void MoveAfter(bc_id id, bc_id after);
   static Space* FromId(bc_id id);
   // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
@@ -110,6 +115,8 @@ class Space {
   bool off_the_record() const { return own_ == Own::kPrivate; }
   // Whether it's a Little ilo window's.
   bool little() const { return own_ == Own::kLittle; }
+  // Whether it's a Blank Window's.
+  bool blank() const { return own_ == Own::kBlank; }
   // The Space's node. A window's own has none.
   const Node& node() const { return node_; }
   // The pinned tab's or folder's |id|'s node, or null if it isn't one of the Space's.
@@ -234,6 +241,15 @@ class Space {
   // is false ends that, leaving the pages even. False, doing nothing, if it's in no split.
   bool SetExpanded(bc_id tab, bool expanded);
 
+  // The name and the icon, an emoji, the user gave |tab|'s split, which its row shows in place of
+  // its pages' titles and favicons, else empty.
+  std::string SplitName(bc_id tab) const;
+  std::string SplitIcon(bc_id tab) const;
+  // Gives |tab|'s split |name| or |icon|, or none if empty. False, doing nothing, if it's in no
+  // split.
+  bool SetSplitName(bc_id tab, std::string name);
+  bool SetSplitIcon(bc_id tab, std::string icon);
+
   // The lowest pinned tab still |loaded|, else 0: the one to show once no Today tab is left.
   bc_id LastLoadedPinned(base::FunctionRef<bool(bc_id)> loaded) const;
   // The tab to show once |leaving| closes or, pinned, unloads. For a Today tab it's Chrome's order:
@@ -252,16 +268,6 @@ class Space {
   void ForgetOpener(bc_id tab);
   // The first tab below |index| opened by |opener|, else the nearest above it. 0 if none.
   bc_id NearestOpenedBy(bc_id opener, size_t index) const;
-  struct SplitView {
-    // In their order, as they are in their list.
-    std::vector<bc_id> tabs;
-    bool stacked = false;
-    // Each tab's share of its length, or none while they're even.
-    std::vector<double> shares;
-    // The tab that took the card, else 0, while the others are kept at 220 pt.
-    bc_id expanded = 0;
-  };
-
   // The split holding |tab|, or splits_.end().
   std::vector<SplitView>::iterator SplitOf(bc_id tab);
   std::vector<SplitView>::const_iterator SplitOf(bc_id tab) const;

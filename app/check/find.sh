@@ -305,13 +305,13 @@ fi
 # of it, from the frame's left, through a resize. Each tab has its own. Sets $views to the frames
 # of the views shown, DevTools' first, once there are $1 of them. DevTools fill the frame at once,
 # and the page moves aside once they've loaded, as in Arc, so with two it waits for that too.
-# Off the Mac the drivers list the pages the UI lays out, and DevTools are an aura window in the
-# same Chromium window as the page, which neither the X server (drive.rs) nor Windows sees, so
-# there neither checks the views; devtools.png shows them.
+# Windows' driver lists the pages the UI lays out, and DevTools are an aura window in the same
+# Chromium window as the page, which Windows doesn't see, so there it doesn't check the views;
+# devtools.png shows them. Linux's driver lists docked DevTools too (drive.rs).
 sees_devtools=1
-if [ "$(uname)" != Darwin ]; then
+if [ "$(uname)" != Darwin ] && [ "$(uname)" != Linux ]; then
   sees_devtools=
-  echo "skip: where DevTools dock beside the page: off the Mac the driver can't see aura windows."
+  echo "skip: where DevTools dock beside the page: Windows' driver can't see aura windows."
 fi
 await_views() {
   [ -n "$sees_devtools" ] || return 0

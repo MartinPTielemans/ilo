@@ -1,0 +1,30 @@
+Brings the tab that sent a page's notification forward when the user clicks the notification,
+before the page's click handler runs, as the page's own window.focus() does (#685). Chrome only
+dispatches the click, so a page that doesn't call focus() got its click with its tab still out of
+sight. WebContentsImpl::Activate goes to the Browser's ActivateContents, which
+chromium-core-activate-tab.patch hands the core, which shows the tab's Space and the tab in its
+window and brings the window forward. A notification from a shared worker has no document, and a
+service worker's notificationclick is its own to handle, as in Chrome.
+
+--- a/content/browser/notifications/notification_event_dispatcher_impl.cc
++++ b/content/browser/notifications/notification_event_dispatcher_impl.cc
+@@ -15,6 +15,7 @@
+ #include "content/browser/notifications/platform_notification_context_impl.h"
+ #include "content/browser/service_worker/service_worker_context_wrapper.h"
+ #include "content/browser/service_worker/service_worker_registration.h"
++#include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -563,6 +564,11 @@
+     NotificationClickEventCallback callback) {
+   auto listener = GetListenerIfNotifiable(notification_id);
+   if (listener.has_value()) {
++    // browser_core: the click brings the tab that sent the notification forward, as the page's
++    // window.focus() does, before the page hears it, so a page that doesn't focus itself shows too.
++    if (RenderFrameHost* document = listener->document.AsRenderFrameHostIfValid()) {
++      static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(document))->Activate();
++    }
+     listener->remote->OnClick(
+         base::BindOnce(std::move(callback), true /* success */));
+   } else {

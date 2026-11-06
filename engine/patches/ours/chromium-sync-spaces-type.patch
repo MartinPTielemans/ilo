@@ -130,15 +130,17 @@ Google adds a type about once a milestone, and each new type changes the three c
                  "disable syncing of that data. Today you must also update the "
 --- a/components/sync/engine/cycle/data_type_tracker.cc
 +++ b/components/sync/engine/cycle/data_type_tracker.cc
-@@ -57,6 +57,7 @@
-       // and freshness.
-       return kDefaultLocalChangeNudgeDelayForSessions;
-     case SAVED_TAB_GROUP:
-+    case ILO_SPACE:  // browser_core: a Space's pins, as a tab group's tabs.
-       return kDefaultLocalChangeNudgeDelayForSavedTabGroup;
-     case BOOKMARKS:
-     case PREFERENCES:
-@@ -145,6 +146,7 @@
+@@ -120,6 +120,9 @@
+     case NOTEBOOK:
+     case JOURNEY:
+     case AUTOFILL_ENTITY_SUPPRESSION:
++    // browser_core: a Space's change commits 200 ms after the bridge settles it, as most types'
++    // do, so a device added soon after finds it in the account; a tab group's 11 s left it out.
++    case ILO_SPACE:
+       return kMediumLocalChangeNudgeDelay;
+     case UNSPECIFIED:
+       NOTREACHED();
+@@ -145,6 +148,7 @@
      case AUTOFILL_PROFILE:  // chrome.browsingData API.
      case CONTACT_INFO:      // chrome.browsingData API.
      // All the remaining types are not affected by any extension js API.

@@ -917,6 +917,7 @@ fn only_what_needs_the_user_has_a_primary() {
         why: "It's a bank's site.".into(),
         handoff,
         back,
+        ..Default::default()
     };
     for (asked, primary) in [
         (question(None, false), "Allow Once"),

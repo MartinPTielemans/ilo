@@ -147,9 +147,12 @@ bool host_window_shown(void* ui_view);
 // Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
-// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// window open, 1 with one on screen, 2 with all hidden, and -1 with Little ilo off in Settings,
+// which leaves out all of Little ilo's items. |chosen| gets the item picked: 0 New, 1
 // Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
-// Off the Mac, which has no Dock menu, nothing.
+// Off the Mac, which has no Dock menu: on Windows the taskbar's jump list gets New window and New
+// incognito window, which launch ilo again with --new-window and --incognito (bc_host's
+// app_new_window), once a window is shown; on Linux nothing, as the desktop file has them.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
 // Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
@@ -157,6 +160,13 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 // Settings › General. It draws once and then waits for a click, so an idle browser stays asleep.
 // Off the Mac, nothing, and Settings offers no switch there.
 void host_set_little_status_item(void (*clicked)(void));
+
+// Puts a task called |title| in the taskbar's jump list, which runs the browser with |arguments|,
+// as Windows' jump lists hold an app's tasks: New Little ilo Window, which the core hands the app.
+// Windows keeps the list, so it's written once a launch, as the first window opens with the
+// AppUserModelID the list goes under, and nothing waits for it. Off Windows,
+// whose Dock menu and launcher have their own, nothing.
+void host_set_little_task(const char* title, const char* arguments);
 
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
@@ -273,6 +283,11 @@ void host_set_overlay_growth(int overlay, double x, double y);
 // Makes the overlay, once it grows in, shrink back to where it grew from as it hides, fading.
 void host_set_overlay_shrink(int overlay);
 
+// Makes the overlay that grows in (host_set_overlay_growth) grow from |from| of its size, rather
+// than near nothing, over |seconds|, fading in alongside, and fade out over |out| seconds as it
+// hides, shrinking back to |from| only if host_set_overlay_shrink asked: a folder's preview. Each
+// show takes the motion last set.
+void host_set_overlay_motion(int overlay, double from, double seconds, double out);
 // Under Reduce Motion the overlays that grow in and shrink back only fade, at their size. The UI
 // says so as its own Reduce Motion changes (main.rs, set_reduce_motion).
 void host_set_overlays_still(bool still);
@@ -619,7 +634,7 @@ bool host_window_maximized(void* ui_view);
 // otherwise.
 bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
-// the first window comes back when it quit maximized.
+// a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
 #endif
 

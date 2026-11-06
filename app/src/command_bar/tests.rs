@@ -59,8 +59,13 @@ impl Host for Recorder {
         }
     }
 
-    fn remove_suggestion(&self, url: &str) {
+    fn remove_suggestion(&self, url: &str, _: &mut App) {
         self.record(format!("remove {url}"));
+    }
+
+    fn step_removal(&self, redo: bool, _: &mut App) -> bool {
+        self.record(format!("{} removal", if redo { "redo" } else { "undo" }));
+        true
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {
@@ -358,6 +363,13 @@ impl Bar {
                 let input = bar.input.read(cx);
                 (input.text().to_string(), input.selection())
             })
+            .unwrap()
+    }
+
+    /// The selected row's fill and its label.
+    fn accent(&mut self) -> (Hsla, Hsla) {
+        self.window
+            .read_with(&self.cx.cx, |bar, cx| bar.accent(&palette::current(cx)))
             .unwrap()
     }
 
@@ -947,6 +959,21 @@ fn the_pointer_shows_a_trash_that_takes_a_suggestion_out(cx: &mut TestAppContext
     );
 }
 
+/// ⌘Z and ⇧⌘Z in the field, which has no undo of its own, go to the window's history, which
+/// undoes or redoes a row taken out of history while that's its next step (shell's undo tests).
+#[gpui::test]
+fn cmd_z_in_the_field_goes_to_the_windows_removal_from_history(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.suggest("ex", vec![searching("ex"), page("https://a.test/")]);
+    bar.click_remove(1);
+    assert_eq!(bar.calls(), ["remove https://a.test/"]);
+    bar.keys("cmd-z");
+    assert_eq!(bar.calls(), ["undo removal"]);
+    bar.keys("shift-cmd-z");
+    assert_eq!(bar.calls(), ["redo removal"]);
+}
+
 /// A history row's remove button names itself and its key in a tooltip, Arc's ⌥⌘⌫ on the Mac and
 /// ⇧⌦ off it, which hangs from the button in the bar's window and stays inside it. The tooltip goes
 /// as the pointer leaves the button, as another row takes the row's place, and as it's clicked.
@@ -1079,41 +1106,91 @@ fn tab_on_a_row_without_a_hint_selects_the_next(cx: &mut TestAppContext) {
     assert_eq!(bar.input(), ("cats".into(), 4..4));
 }
 
+/// Only Tab enters a site search, as in Arc: a space after the keyword is only a space, Japanese
+/// input's too, so the words after it are a plain search (#1397).
 #[gpui::test]
-fn a_space_after_the_hinted_keyword_searches_its_site(cx: &mut TestAppContext) {
+fn a_space_after_the_hinted_keyword_is_only_a_space(cx: &mut TestAppContext) {
+    for space in [" ", "\u{3000}"] {
+        let mut bar = Bar::new(cx);
+        bar.type_text("duck.test");
+        bar.suggest("duck.test", vec![hinting("duck.test")]);
+        bar.type_text(space);
+        let typed = format!("duck.test{space}");
+        assert_eq!(
+            bar.input(),
+            (typed.clone(), typed.len()..typed.len()),
+            "{space:?}"
+        );
+    }
+
     let mut bar = Bar::new(cx);
-    bar.type_text("duck.test");
-    bar.suggest("duck.test", vec![hinting("duck.test")]);
-    bar.type_text(" ");
-    assert_eq!(bar.input(), (String::new(), 0..0));
-    // The site's searches only, from the core, which names them by the keyword and the words.
-    bar.type_text("cats");
+    bar.type_text("duck");
     bar.suggest(
-        "duck.test cats",
-        vec![page("https://duck.test/?q=cats&ia=web")],
+        "duck",
+        vec![Suggestion {
+            completion: ".test".into(),
+            ..hinting("duck.test")
+        }],
     );
+    bar.type_text(" cats");
+    assert_eq!(bar.input(), ("duck cats".into(), 9..9));
+    bar.suggest("duck cats", vec![searching("duck cats")]);
     bar.keys("enter");
     assert_eq!(
         bar.calls(),
-        ["open https://duck.test/?q=cats&ia=web", "hide"]
+        [format!("open {}", search("duck cats")), "hide".into()]
     );
+}
 
-    // So does Japanese input's space.
-    let mut bar = Bar::new(cx);
-    bar.type_text("duck.test");
-    bar.suggest("duck.test", vec![hinting("duck.test")]);
-    bar.type_text("\u{3000}");
-    assert_eq!(bar.input(), (String::new(), 0..0));
+/// A site search a new profile has is in its site's colour, which reads on the bar with its label
+/// in both tones; one whose site has none, as GitHub's, or one the user added, keeps the Space's
+/// accent (#1397).
+#[gpui::test]
+fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
+    for tone in [palette::Tone::Dark, palette::Tone::Light] {
+        let palette = palette::Palette::of(None, tone);
+        for (site, color) in SITE_COLORS {
+            let (fill, label) = palette.site_accent(gpui::rgb(color));
+            let (on_bar, on_fill) = (
+                palette::contrast(fill, palette.overlay),
+                palette::contrast(label, fill),
+            );
+            assert!(
+                on_bar >= palette::GLYPH && on_fill >= palette::TEXT,
+                "{site} {tone:?}"
+            );
+        }
+    }
 
-    // Esc leaves, keeping the space, and then closes the bar.
     let mut bar = Bar::new(cx);
-    bar.type_text("duck.test");
-    bar.suggest("duck.test", vec![hinting("duck.test")]);
-    bar.type_text(" cats");
-    bar.keys("escape");
-    assert_eq!(bar.input(), ("duck.test cats".into(), 10..10));
-    bar.keys("escape");
-    assert_eq!(bar.calls(), ["dismiss"]);
+    let space = bar.accent();
+    let youtube = Suggestion {
+        site: "YouTube".into(),
+        ..hinting("youtube.com")
+    };
+    bar.type_text("yout");
+    bar.suggest("yout", vec![youtube]);
+    assert_eq!(bar.accent(), space);
+    bar.keys("tab");
+    let palette = bar
+        .window
+        .read_with(&bar.cx.cx, |_, cx| palette::current(cx))
+        .unwrap();
+    let (fill, label) = palette.site_accent(gpui::rgb(site_colors::YOUTUBE));
+    assert_eq!(bar.accent(), (fill.into(), label.into()));
+    assert_ne!(bar.accent(), space);
+
+    let mut bar = Bar::new(cx);
+    bar.type_text("gith");
+    bar.suggest(
+        "gith",
+        vec![Suggestion {
+            site: "GitHub".into(),
+            ..hinting("github.com")
+        }],
+    );
+    bar.keys("tab");
+    assert_eq!(bar.accent(), space);
 }
 
 /// Japanese input, as Windows' input method and AppKit's give it to the field: what it composes is
@@ -1159,26 +1236,6 @@ fn esc_cancels_the_composition_before_it_closes_the_bar(cx: &mut TestAppContext)
     bar.compose("");
     assert!(!bar.composing());
     assert_eq!(bar.input(), ("cats ".into(), 5..5));
-}
-
-#[gpui::test]
-fn a_space_after_other_text_stays_in_it(cx: &mut TestAppContext) {
-    let mut bar = Bar::new(cx);
-    bar.type_text("duck");
-    bar.suggest(
-        "duck",
-        vec![Suggestion {
-            completion: ".test".into(),
-            ..hinting("duck.test")
-        }],
-    );
-    bar.type_text(" ");
-    assert_eq!(bar.input(), ("duck ".into(), 5..5));
-    bar.keys("enter");
-    assert_eq!(
-        bar.calls(),
-        [format!("open {}", search("duck")), "hide".into()]
-    );
 }
 
 #[gpui::test]
@@ -1504,21 +1561,36 @@ fn typing_that_reads_as_a_url_keeps_chromes_first_row(cx: &mut TestAppContext) {
     }
 }
 
+/// The open tab goes first though the first row hints a site search, and takes the hint, which
+/// follows what's typed rather than the row (#1397): ↩ switches to it, and Tab enters the search.
 #[gpui::test]
-fn a_hinted_site_search_or_a_completion_to_another_page_keeps_chromes_first_row(
-    cx: &mut TestAppContext,
-) {
+fn an_open_tab_first_takes_the_site_search_the_first_row_hints(cx: &mut TestAppContext) {
     let tabs = vec![titled(4, "Convex", CONVEX)];
     let mut bar = Bar::with_tabs(cx, tabs.clone());
     bar.type_text("conv");
-    let hint = Suggestion {
+    let hint = || Suggestion {
         keyword: "conv.test".into(),
+        site: "Conv".into(),
         ..searching("conv")
     };
-    bar.suggest("conv", vec![hint, page("https://conv.test/")]);
-    assert_eq!(bar.rows()[0], (search("conv"), 0));
+    bar.suggest("conv", vec![hint(), page("https://conv.test/")]);
+    assert_eq!(bar.rows()[0], (CONVEX.to_string(), 4));
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["select 4", "hide"]);
 
     let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("conv");
+    bar.suggest("conv", vec![hint(), page("https://conv.test/")]);
+    bar.keys("tab");
+    assert_eq!(bar.input(), (String::new(), 0..0));
+    bar.type_text("cats");
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["open https://conv.test/?q=cats", "hide"]);
+}
+
+#[gpui::test]
+fn a_completion_to_another_page_keeps_chromes_first_row(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_tabs(cx, vec![titled(4, "Convex", CONVEX)]);
     bar.type_text("conv");
     bar.suggest(
         "conv",

@@ -4,7 +4,10 @@
 # closes it. ⌥⌘-click on a link opens the link in one, not
 # beside the page as ⌥-click does, and ⌘W closes that window, its page with it. An escape the page
 # doesn't use closes one. A tab its page opens goes behind, to the top of its Space's Today, and
-# outlives it. Closing one archives its tab, and ⇧⌘T reopens it in a new one, and one left unused
+# outlives it, but for a pop-up its page asks for with window.open(), as a sign-in's: that opens
+# as a Little ilo window of its own over it at the size it asked, whose field takes typing, and
+# which goes once its page closes itself, the window under it taking the keyboard back (#1919).
+# Closing one archives its tab, and ⇧⌘T reopens it in a new one, and one left unused
 # past its time closes into the archive by itself. The first opens 900 × 640, and each after at the
 # size the last one closed at. On the Mac one grows in, from its middle when a key opened it, else
 # from under the pointer, and is recorded doing so. It opens over a full-screen window, and the
@@ -13,7 +16,8 @@
 # goes full screen in it, as a video's button takes it, and its escape leaves full screen without
 # closing the window. Closed over
 # another app's window, one leaves that window in front and its app active, with a stand-in for the
-# app that the run opens itself.
+# app that the run opens itself. Turned off in Settings ›
+# Features, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind.
 
 serve
 log="$out/little.log"
@@ -289,9 +293,13 @@ if [ "$(uname)" = Darwin ]; then
   send window 1
 fi
 
-# The menu bar's button, the Mac's alone: none until Settings › Features turns it on, a click on it
-# opens a Little ilo window for the Space shown, and turned off it's gone.
-if [ "$(uname)" = Darwin ]; then
+# The menu bar's button, and on Windows the notification area's icon: none until Settings ›
+# Features turns it on, a click on it opens a Little ilo window for the Space shown, and turned off
+# it's gone. Windows' driver can't reach Explorer's area or its flyout, so its click is the message
+# Explorer sends the icon's window for one.
+if [ "$(uname)" = Darwin ] || windows; then
+  place="menu bar"
+  ! windows || place="notification area"
   send statusitem
   expect '^browser: status item none$' "the menu bar has Little ilo's button before it was turned on"
   send menu Settings…
@@ -303,30 +311,56 @@ if [ "$(uname)" = Darwin ]; then
     settings_drew Features
   fi
   menu_bar_switch=$(drawn "switch little in the menu bar") ||
-    fail "Settings didn't draw Show Little ilo in the menu bar's switch"
+    fail "Settings didn't draw Show in the $place's switch"
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
-  expect '^browser: status item shown$' "turning the switch on didn't put the button in the menu bar"
+  expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
   send statusitem click
-  expect '^browser: menu bar opened little window [0-9]*$' "the menu bar's button didn't open a Little ilo window"
+  expect "^browser: $place opened little window [0-9]*\$" "the $place's button didn't open a Little ilo window"
   little=$(opened)
   expect "^browser: little window opened $little profile [0-9]* home $home\$" \
-    "the menu bar's Little ilo window isn't for Space $home"
+    "the $place's Little ilo window isn't for Space $home"
   # A new window goes in front of the others, so it logs no "key window"; ⌘W closing it shows it's key.
   send key w cmd
-  expect "^browser: window closed $little\$" "the menu bar's Little ilo window didn't come to the front: ⌘W didn't close it"
+  expect "^browser: window closed $little\$" "the $place's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
   expect '^browser: settings shown Features$' "Settings… didn't show Features again"
   settings_drew Features
   send clickkey $menu_bar_switch
   expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
   send statusitem
-  expect '^browser: status item none$' "turning the switch off left the button in the menu bar"
+  expect '^browser: status item none$' "turning the switch off left the button in the $place"
   settings_close
   post clickkey $close
   expect '^browser: settings hidden$' "the close button didn't hide Settings"
   send window 1
+fi
+
+# The taskbar's jump list, Windows' alone: ilo writes its task, New Little ilo Window, which runs
+# the browser with --new-little-window, as its first window opens, and that command opens a Little
+# ilo window for the Space shown. The driver can't open Explorer's jump list, so the run reads the task ilo wrote
+# and runs its command, as Windows runs it. A launch the browser hands on reaches the core, so that
+# part needs an engine built with core/main_delegate.cc as it is here.
+if windows; then
+  await '^browser: jump list task New Little [^ ]* Window: --new-little-window$' ||
+    fail "the jump list didn't get New Little ilo Window: $(grep '^browser: jump list' "$log" | tail -1)"
+  if engine_has ../core/main_delegate.cc; then
+    send window 1
+    ("$browser" --new-little-window < /dev/null) >> "$out/little-launch.log" 2>&1 ||
+      fail "the jump list's command didn't reach the browser"
+    expect_late '^browser: command line opened little window [0-9]*$' \
+      "the jump list's command didn't open a Little ilo window"
+    little=$(opened)
+    expect "^browser: little window opened $little profile [0-9]* home $home\$" \
+      "the jump list's Little ilo window isn't for Space $home"
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key w cmd
+    expect "^browser: window closed $little\$" "⌘W didn't close the jump list's Little ilo window"
+    send window 1
+  else
+    echo "skip: the jump list's command opening Little ilo: the engine's core predates the switch (core/main_delegate.cc), until an engine is built with it."
+  fi
 fi
 
 # ⌥⌘-click on a Today tab's row moves the tab, its page live, into a Little ilo window for its
@@ -622,6 +656,43 @@ if [ "$active" = 1 ]; then
 else
   echo "skip: the unused Little ilo window. Browser wasn't the active app."
 fi
+# Little ilo off in Settings › Features (#1636): ⌥⌘N opens nothing, and ⌥⌘-click on a link opens
+# it behind, as ⌘-click does. On again after.
+send window 1
+send menu Settings…
+expect '^browser: settings shown ' "Settings… didn't show Settings"
+settings_drew
+send clickkey $(drawn "toolbar Features")
+settings_drew Features
+send clickkey $(drawn "switch little windows")
+expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off"
+../tools/window-screenshot.sh "$pid" "$out/little-off.png" || fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send insert "$site"
+send key return
+expect '^browser: title [0-9]* ready$' "the test page didn't draw again"
+off_from=$((step + 1))
+send key n cmd alt
+send layout
+frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  grep -o 'WebContentsViewCocoa [0-9,]*' | head -1 | cut -d' ' -f2)
+x=${frame%%,*}
+y=${frame#*,}
+send click $page_point
+send click $((x + 20)) $((y + 20)) alt cmd
+expect '^browser: tab [0-9]* opened by [0-9]* in the background$' \
+  "with Little ilo off, ⌥⌘-click on a link didn't open it behind"
+! sed -n "/^browser: drive $off_from: /,\$p" "$log" | grep -q '^browser: little window opened ' ||
+  fail "with Little ilo off, ⌥⌘N or ⌥⌘-click opened a Little ilo window"
+send menu Settings…
+expect '^browser: settings shown Features$' "Settings… didn't show Features again"
+settings_drew Features
+send clickkey $(drawn "switch little windows")
+expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"
+send key w cmd
 
 # A page in a Little ilo window goes full screen there, as a video's full-screen button takes it,
 # not into the main window: its window takes the page full screen, and the page's escape brings it
@@ -632,6 +703,20 @@ addEventListener("keydown", e => e.key == "f" && document.documentElement.reques
 document.addEventListener("fullscreenchange",
   () => document.title = "fullscreen " + (document.fullscreenElement ? 1 : 0));
 </script>' > "$out/site/little-video.html"
+# A sign-in pop-up its page opens with window.open() opens as a Little ilo window of its own, over
+# it, at the size it asked for, under its bar (#1919): its field takes the typing, and once it
+# closes itself, as a sign-in's does when it's done, its window goes and the Little ilo window
+# that opened it has the keyboard back. The page asks 480 by 560.
+printf '<title>loading</title><p style="font:16px system-ui">Continue with Example ID</p>
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+addEventListener("click", () => open("little-signin.html", "signin", "width=480,height=560"));
+</script>' > "$out/site/little-opener.html"
+printf '<title>loading</title>
+<input id="email" autofocus style="position:absolute;inset:0;width:100%%;font:16px system-ui">
+<script>requestAnimationFrame(() => setTimeout(() => document.title = "signin ready"));
+email.addEventListener("input", () => document.title = "typed " + email.value);
+email.addEventListener("keydown", e => e.key == "Enter" && setTimeout(() => close(), 300));
+</script>' > "$out/site/little-signin.html"
 if [ "$active" = 1 ]; then
   send window 1
   send key n cmd alt
@@ -661,9 +746,89 @@ if [ "$active" = 1 ]; then
     fail "the escape that left full screen closed the Little ilo window too"
   send key w cmd
   expect "^browser: window closed $video_window\$" "⌘W didn't close the video's Little ilo window"
+  # The sign-in pop-up, in a Little ilo window of its own.
+  send window 1
+  send key n cmd alt
+  expect "^browser: little window opened [0-9]* profile [0-9]* home [0-9]*\$" \
+    "⌥⌘N didn't open a Little ilo window for the sign-in"
+  opener=$(opened)
+  expect "^browser: window opened $opener\$" "the sign-in's Little ilo window didn't open"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+  send insert "${site}little-opener.html"
+  send key return
+  expect '^browser: title [0-9]* ready$' "the sign-in's opener didn't draw"
+  send click $page_point
+  expect "^browser: tab [0-9]* popup of [0-9]* in window $opener asks 480 560\$" \
+    "the opener's window.open() didn't tell the app of a pop-up of 480 by 560"
+  popup_tab=$(sed -n 's/^browser: tab \([0-9]*\) popup of .*/\1/p' "$log" | tail -1)
+  expect "^browser: little window $opener popup $popup_tab in window [0-9]* at " \
+    "the pop-up didn't open in a window of its own: $(grep "^browser: little window $opener " "$log" | tail -1)"
+  popped=$(sed -n "s/^browser: little window $opener popup $popup_tab in window \([0-9]*\) at \(.*\)\$/\1 \2/p" "$log" | tail -1)
+  set -- $popped
+  popup_window=$1
+  [ "$4 $5" = "500 616" ] || fail "the pop-up's window is $4 by $5, not its page's 480 by 560 under its bar"
+  expect "^browser: title $popup_tab signin ready\$" "the sign-in pop-up didn't draw"
+  ../tools/window-screenshot.sh "$pid" "$out/little-popup.png" all || fail "no window to capture"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  # The driver's window gives the window the keyboard, which its UI takes on X11 as GPUI does a
+  # window's first focus, so a click in the page gives the field its autofocus asked for.
+  send click 250 300
+  send type ada
+  expect "^browser: title $popup_tab typed ada\$" "the pop-up's field didn't take the typing"
+  send key return
+  expect "^browser: window closed $popup_window\$" "the pop-up's window didn't close with its page"
+  expect "^browser: little window $opener has the keyboard back from $popup_window\$" \
+    "the Little ilo window didn't get the keyboard back from its pop-up"
+  # The pop-up's window can close before the Little ilo window takes the keyboard back, which then
+  # is first among the windows already and logs no key window, so its header saying it's the one
+  # the user is in again counts too.
+  expect "^browser: \(key window $opener\|window $opener main true\)\$" \
+    "the Little ilo window isn't the key window again"
 else
-  echo "skip: a page's full screen in Little ilo. Browser wasn't the active app."
+  echo "skip: a page's full screen in Little ilo and the Little ilo window's sign-in pop-up. Browser wasn't the active app."
 fi
 exec 3>&-
 quit
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4"
+
+# The launcher's action, Linux's: the desktop entry's New Little ilo Window runs the browser with
+# --new-little-window (#693), which opens a Little ilo window for the Space shown, launching the
+# browser if it isn't running, else handed on to the one that is, which needs an engine built with
+# core/main_delegate.cc as it is here. The run takes the action's command from the entry itself.
+if [ "$(uname)" = Linux ]; then
+  entry=platform/linux/flatpak/app.ilo.browser.desktop
+  grep -q '^Actions=.*new-little-window;' "$entry" || fail "the desktop entry lists no new-little-window action"
+  action=$(sed -n '/^\[Desktop Action new-little-window\]$/,/^\[/p' "$entry")
+  echo "$action" | grep -qx 'Name=New Little ilo Window' || fail "the action isn't called New Little ilo Window"
+  command=$(echo "$action" | sed -n 's/^Exec=//p')
+  [ "${command%% *}" = ilo ] || fail "the action doesn't run ilo: $command"
+  # As the launcher runs it, with the check's browser for the Flatpak's ilo.
+  arguments=${command#* }
+  log="$out/little-action.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" $arguments < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: command line opened little window [0-9]*$' ||
+    fail "the launcher's action, launching the browser, didn't open a Little ilo window"
+  launched=$(sed -n 's/^browser: command line opened little window //p' "$log" | tail -1)
+  await "^browser: little window opened $launched profile [0-9]* home [0-9]*\$" ||
+    fail "the action's Little ilo window didn't open"
+  if engine_has ../core/main_delegate.cc; then
+    "$browser" $arguments >> "$out/little-launch.log" 2>&1 || fail "the action's command didn't reach the browser"
+    # The first launch's line is in the log already, so it waits for a second.
+    for _ in $(seq 100); do
+      [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] && break
+      sleep 0.1
+    done
+    [ "$(grep -c '^browser: command line opened little window ' "$log")" = 2 ] ||
+      fail "the launcher's action, with the browser running, didn't open a second Little ilo window"
+  else
+    echo "skip: the launcher's action handed to the browser running: the engine's core predates the switch (core/main_delegate.cc), until an engine is built with it."
+  fi
+  exec 3>&-
+  quit
+fi
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."

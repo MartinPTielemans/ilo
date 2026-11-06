@@ -4,10 +4,14 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_list.h"
+#include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/supports_user_data.h"
 #include "browser_core/search_default.h"
+#include "browser_core/site_searches.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
@@ -27,6 +31,12 @@ namespace {
 // ungoogled-chromium's engine in Google's place, which "searches" by going to http://<the words>.
 constexpr char16_t kNoSearch[] = u"nosearch";
 
+// A profile's wait for its engines to load, held on the profile.
+struct SeedOnLoad : base::SupportsUserData::Data {
+  base::CallbackListSubscription loaded;
+};
+constexpr char kSeedOnLoad[] = "browser_core.seed_site_searches";
+
 // Builds no service: Chrome registers a profile's prefs through its factories.
 class PrefsFactory : public ProfileKeyedServiceFactory {
  public:
@@ -45,6 +55,7 @@ class PrefsFactory : public ProfileKeyedServiceFactory {
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
     RegisterSearchDefaultPrefs(registry);
+    RegisterSiteSearchesPrefs(registry);
   }
 };
 
@@ -65,6 +76,13 @@ bool IsChoice(TemplateURLService* engines, const TemplateURL* engine) {
              : engines->CanMakeDefault(engine);
 }
 
+// Gives |profile| its site searches once its engines have loaded (site_searches.h).
+void SeedOnceLoaded(Profile* profile) {
+  if (TemplateURLService* engines = LoadedEngines(profile)) {
+    SeedSiteSearches(profile->GetPrefs(), engines);
+  }
+}
+
 }  // namespace
 
 void RegisterSearchPrefs() {
@@ -73,9 +91,23 @@ void RegisterSearchPrefs() {
 
 void SetUpSearch(Profile* profile) {
   ForgetPickedDefault(profile->GetPrefs());
-  if (TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile)) {
-    engines->Load();
+  TemplateURLService* engines = TemplateURLServiceFactory::GetForProfile(profile);
+  if (!engines) {
+    return;
   }
+  engines->Load();
+  // A private profile's engines are its original's, which keeps its own pref.
+  if (profile->IsOffTheRecord()) {
+    return;
+  }
+  if (engines->loaded()) {
+    SeedOnceLoaded(profile);
+    return;
+  }
+  auto wait = std::make_unique<SeedOnLoad>();
+  wait->loaded =
+      engines->RegisterOnLoadedCallback(base::BindOnce(&SeedOnceLoaded, base::Unretained(profile)));
+  profile->SetUserData(kSeedOnLoad, std::move(wait));
 }
 
 GURL TypedUrl(Profile* profile, std::string_view text) {

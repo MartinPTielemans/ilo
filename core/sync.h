@@ -8,6 +8,8 @@
 
 #include <string>
 
+struct bc_sync_activity;
+
 namespace browser_core::sync {
 
 // Sets the sync hooks, before any profile is made.
@@ -32,6 +34,8 @@ void RequestPairing();
 void AnswerPairing(const std::string& id, bool add);
 void ReadDevices();
 void RemoveDevice(const std::string& id);
+void ReadActivity(bc_sync_activity* activity);
+void DeleteAccount();
 
 }  // namespace browser_core::sync
 

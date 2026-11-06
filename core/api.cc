@@ -18,12 +18,17 @@
 #include "browser_core/address_import.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/battery_saver.h"
 #include "browser_core/autofill_data.h"
+#include "browser_core/autofill_offer.h"
+#include "browser_core/autofill_menu.h"
 #include "browser_core/capture.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/device_chooser.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/developer_mode.h"
@@ -40,12 +45,11 @@
 #include "browser_core/install_question.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
+#include "browser_core/page_dialog.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
-#include "browser_core/autofill_offer.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
-#include "browser_core/page_dialog.h"
 #include "browser_core/permission_question.h"
 #include "browser_core/platform/playready.h"
 #include "browser_core/platform/window_views.h"
@@ -58,6 +62,7 @@
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -306,6 +311,25 @@ bool bc_window_dialog(bc_id id, bc_rect* frame) {
 #endif
 }
 
+bool bc_window_devtools(bc_id id, bc_rect* devtools, bc_rect* page) {
+#if BUILDFLAG(IS_LINUX)
+  views::Widget* widget = OpenWidget(id);
+  const auto frames = widget ? browser_core::platform::DevToolsFrames(widget) : std::nullopt;
+  if (!frames) {
+    return false;
+  }
+  const auto put = [](const gfx::Rect& rect, bc_rect* out) {
+    *out = {static_cast<double>(rect.x()), static_cast<double>(rect.y()),
+            static_cast<double>(rect.width()), static_cast<double>(rect.height())};
+  };
+  put(frames->first, devtools);
+  put(frames->second, page);
+  return true;
+#else
+  return false;
+#endif
+}
+
 size_t bc_window_child_title(bc_id id, char* title, size_t capacity) {
 #if BUILDFLAG(IS_LINUX)
   views::Widget* widget = OpenWidget(id);
@@ -391,6 +415,10 @@ size_t bc_saved_window_frames(bc_rect* frames, size_t count) {
   return saved.size();
 }
 
+bool bc_saved_window_maximized(size_t index) {
+  return browser_core::SavedWindowMaximized(index);
+}
+
 bc_id bc_window_open_saved(size_t index, bc_rect bounds, void* ui_view) {
   if (index == 0 || index >= browser_core::SavedWindowFrames().size()) {
     return 0;
@@ -440,6 +468,10 @@ bc_id bc_space_create(const char* name, bc_id after) {
   return space->id();
 }
 
+void bc_space_move(bc_id space, bc_id after) {
+  browser_core::Space::MoveAfter(space, after);
+}
+
 bc_id bc_space_create_for_agent(const char* name, const char* agent, const char* agent_name) {
   if (!agent || !*agent || !agent_name || !*agent_name) {
     return 0;
@@ -469,6 +501,11 @@ bool bc_agent_may_act(const char* agent,
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   // An action no agent may do is refused whatever the tab, so that's the reason given.
   std::string refused = browser_core::RefusedAction(action ? action : "");
+  if (refused.empty() && tab && !browser_core::Tab::Get(tab) &&
+      browser_core::FromEarlierLaunch(tab)) {
+    // Its id is from before ilo last started, and names no tab now (#1449).
+    refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
+  }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
     refused = "The tab isn't in the agent's own Space.";
   }
@@ -504,6 +541,24 @@ bool bc_agent_release_tab(const char* agent, bc_id tab) {
 
 size_t bc_agent_disconnected(const char* agent) {
   return agent ? browser_core::EndAgentSessions(agent, BC_AGENT_SESSION_DISCONNECTED) : 0;
+}
+
+int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
+  const browser_core::Tab* closing = browser_core::Tab::Get(tab);
+  if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
+      browser_core::IsHeld(tab)) {
+    return BC_AGENT_CLOSE_REFUSED;
+  }
+  if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
+    return BC_AGENT_CLOSE_PINNED;
+  }
+  if (!discard && closing->AsksBeforeLeaving()) {
+    return BC_AGENT_CLOSE_ASKS;
+  }
+  // Without its unload handlers either way: no frame asks before it's left, or the agent said to
+  // lose what it holds, and the tab is gone before the agent hears it closed (#1447, #1449).
+  browser_core::Window::CloseTab(tab, /*discard=*/true);
+  return BC_AGENT_CLOSED;
 }
 
 bool bc_tab_take_back(bc_id tab) {
@@ -635,6 +690,26 @@ void bc_agent_page(const char* agent,
                                                           text ? text : "");
 }
 
+void bc_agent_request(const char* agent,
+                      bc_id tab,
+                      uint64_t request,
+                      const char* method,
+                      const char* url,
+                      const char* headers,
+                      const char* body,
+                      size_t size) {
+  const bool may =
+      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
+  content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
+  if (!contents) {
+    browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.");
+    return;
+  }
+  browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
+                                 headers ? headers : "",
+                                 body && size ? std::string(body, size) : std::string());
+}
+
 bc_id bc_space_profile(bc_id id) {
   browser_core::Space* space = browser_core::Space::FromId(id);
   return space ? browser_core::ProfileId(space->profile()) : 0;
@@ -680,6 +755,10 @@ size_t bc_profile_download_folder(bc_id profile_id, char* path, size_t capacity)
   return CopyString(
       profile ? DownloadPrefs::FromBrowserContext(profile)->DownloadPath().AsUTF8Unsafe() : "",
       path, capacity);
+}
+
+size_t bc_profile_dir(bc_id profile, char* path, size_t capacity) {
+  return CopyString(browser_core::ProfileFolder(profile).AsUTF8Unsafe(), path, capacity);
 }
 
 bool bc_profile_set_download_folder(bc_id profile_id, const char* path) {
@@ -749,12 +828,20 @@ bool bc_profile_set_search_engine(bc_id profile, const char* keyword) {
 
 double bc_profile_archive_after(bc_id profile_id) {
   Profile* profile = browser_core::ProfileOrLoad(profile_id);
-  return profile ? browser_core::ProfileArchiveAfter(profile).InSecondsF() : 0;
+  if (!profile) {
+    return 0;
+  }
+  const std::optional<base::TimeDelta> after = browser_core::ProfileArchiveAfter(profile);
+  return after ? after->InSecondsF() : BC_ARCHIVE_NEVER;
 }
 
 bool bc_profile_set_archive_after(bc_id profile, double seconds) {
-  return seconds > 0 && browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile),
-                                                              base::Seconds(seconds));
+  if (seconds != BC_ARCHIVE_NEVER && !(seconds > 0)) {
+    return false;
+  }
+  const std::optional<base::TimeDelta> after =
+      seconds == BC_ARCHIVE_NEVER ? std::nullopt : std::optional(base::Seconds(seconds));
+  return browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile), after);
 }
 
 size_t bc_profile_notes_service(bc_id profile_id, char* service, size_t capacity) {
@@ -1002,6 +1089,15 @@ bc_id bc_tab_profile(bc_id id) {
   return profile ? browser_core::ProfileId(browser_core::DirOf(profile)) : 0;
 }
 
+double bc_tab_last_seen(bc_id id) {
+  const browser_core::Tab* tab = browser_core::Tab::Get(id);
+  if (!tab) {
+    return 0;
+  }
+  const base::Time seen = browser_core::Window::Showing(id) ? base::Time::Now() : tab->last_seen();
+  return seen.InMillisecondsFSinceUnixEpoch();
+}
+
 size_t bc_favorites(bc_id* tabs, size_t capacity) {
   const std::vector<bc_id> favorites = browser_core::Favorites::All();
   std::copy_n(favorites.begin(), std::min(capacity, favorites.size()), tabs);
@@ -1024,12 +1120,17 @@ void bc_set_favorites_scope(int scope) {
 
 size_t bc_tab_split(bc_id id, bc_id* tabs, size_t capacity) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space) {
-    return 0;
-  }
-  const std::vector<bc_id> panes = space->Panes(id);
+  const std::vector<bc_id> panes =
+      space ? space->Panes(id) : browser_core::Favorites::Panes(id);
   std::copy_n(panes.begin(), std::min(capacity, panes.size()), tabs);
   return panes.size();
+}
+
+bc_id bc_tab_split_focused(bc_id id) {
+  if (browser_core::Favorites::Has(id)) {
+    return browser_core::Favorites::Focused(id);
+  }
+  return browser_core::Space::Holding(id) ? id : 0;
 }
 
 bool bc_tab_split_with(bc_id id, bc_id with, bool left) {
@@ -1046,13 +1147,16 @@ bool bc_tab_split_with(bc_id id, bc_id with, bool left) {
 void bc_tab_separate(bc_id id) {
   if (browser_core::Space* space = browser_core::Space::Holding(id)) {
     space->Separate(id);
-    browser_core::Window::PanesChanged();
+  } else {
+    browser_core::Favorites::Separate(id);
   }
+  browser_core::Window::PanesChanged();
 }
 
 bool bc_tab_move_in_split(bc_id id, size_t index) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->MoveInSplit(id, index)) {
+  if (!(space ? space->MoveInSplit(id, index)
+              : browser_core::Favorites::MoveInSplit(id, index))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1060,25 +1164,33 @@ bool bc_tab_move_in_split(bc_id id, size_t index) {
 }
 
 bool bc_tab_split_stacked(bc_id id) {
-  browser_core::Space* space = browser_core::Space::Holding(id);
-  return space && space->Stacked(id);
+  if (browser_core::Space* space = browser_core::Space::Holding(id)) {
+    return space->Stacked(id);
+  }
+  const browser_core::SplitView* split = browser_core::Favorites::SplitOf(id);
+  return split && split->stacked;
 }
 
 double bc_tab_split_share(bc_id id) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  std::vector<bc_id> panes = space ? space->Panes(id) : std::vector<bc_id>();
+  const browser_core::SplitView* favorite =
+      space ? nullptr : browser_core::Favorites::SplitOf(id);
+  std::vector<bc_id> panes = space      ? space->Panes(id)
+                             : favorite ? favorite->tabs
+                                        : std::vector<bc_id>();
   if (panes.size() < 2) {
     return 0;
   }
-  std::vector<double> shares = space->Shares(id);
+  std::vector<double> shares = space ? space->Shares(id) : favorite->shares;
   return shares.empty() ? 1.0 / panes.size() : shares[std::ranges::find(panes, id) - panes.begin()];
 }
 
 bool bc_tab_set_split_shares(bc_id id, const double* shares, size_t count) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space ||
-      !space->SetShares(id, shares ? std::vector<double>(shares, shares + count)
-                                   : std::vector<double>())) {
+  std::vector<double> given =
+      shares ? std::vector<double>(shares, shares + count) : std::vector<double>();
+  if (!(space ? space->SetShares(id, std::move(given))
+              : browser_core::Favorites::SetShares(id, std::move(given)))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1086,22 +1198,47 @@ bool bc_tab_set_split_shares(bc_id id, const double* shares, size_t count) {
 }
 
 bc_id bc_tab_split_expanded(bc_id id) {
-  browser_core::Space* space = browser_core::Space::Holding(id);
-  return space ? space->Expanded(id) : 0;
+  if (browser_core::Space* space = browser_core::Space::Holding(id)) {
+    return space->Expanded(id);
+  }
+  const browser_core::SplitView* split = browser_core::Favorites::SplitOf(id);
+  return split ? split->expanded : 0;
 }
 
 bool bc_tab_set_split_expanded(bc_id id, bool expanded) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->SetExpanded(id, expanded)) {
+  if (!(space ? space->SetExpanded(id, expanded)
+              : browser_core::Favorites::SetExpanded(id, expanded))) {
     return false;
   }
   browser_core::Window::PanesChanged();
   return true;
 }
 
+size_t bc_tab_split_name(bc_id id, char* name, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitName(id) : std::string(), name, capacity);
+}
+
+bool bc_tab_set_split_name(bc_id id, const char* name) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitName(id, name ? name : "");
+}
+
+size_t bc_tab_split_icon(bc_id id, char* icon, size_t capacity) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return CopyString(space ? space->SplitIcon(id) : std::string(), icon, capacity);
+}
+
+bool bc_tab_set_split_icon(bc_id id, const char* icon) {
+  browser_core::Space* space = browser_core::Space::Holding(id);
+  return space && space->SetSplitIcon(id, icon ? icon : "");
+}
+
 bool bc_tab_set_split_stacked(bc_id id, bool stacked) {
   browser_core::Space* space = browser_core::Space::Holding(id);
-  if (!space || !space->SetStacked(id, stacked)) {
+  if (!(space ? space->SetStacked(id, stacked)
+              : browser_core::Favorites::SetStacked(id, stacked))) {
     return false;
   }
   browser_core::Window::PanesChanged();
@@ -1305,6 +1442,15 @@ void bc_set_little_archive_after(double seconds) {
   browser_core::SessionChanged();
 }
 
+bool bc_little_windows(void) {
+  return browser_core::UserSettings().little_windows;
+}
+
+void bc_set_little_windows(bool on) {
+  browser_core::UserSettings().little_windows = on;
+  browser_core::SessionChanged();
+}
+
 bool bc_haptics(void) {
   return browser_core::UserSettings().haptics;
 }
@@ -1399,6 +1545,59 @@ void bc_age_tabs_for_testing(double seconds) {
   browser_core::AgeTabsForTesting(base::Seconds(seconds));
 }
 
+bool bc_battery_saver_active(void) {
+  return browser_core::BatterySaverActive();
+}
+
+void bc_battery_saver_off_for_now(void) {
+  browser_core::TurnOffBatterySaverForNow();
+}
+
+bool bc_battery_saver_enabled(void) {
+  return browser_core::BatterySaverEnabled();
+}
+
+void bc_set_battery_saver_enabled(bool enabled) {
+  browser_core::SetBatterySaverEnabled(enabled);
+}
+
+void bc_battery_for_testing(int percent, bool plugged) {
+  browser_core::SetBatteryForTesting(percent, plugged);
+}
+
+bool bc_ask_where_to_save(void) {
+  return browser_core::UserSettings().ask_where_to_save;
+}
+
+void bc_set_ask_where_to_save(bool ask) {
+  browser_core::UserSettings().ask_where_to_save = ask;
+  browser_core::ApplyEveryday(browser_core::Everyday::kAskWhereToSave);
+  browser_core::SessionChanged();
+}
+
+double bc_page_zoom(void) {
+  return browser_core::UserSettings().page_zoom;
+}
+
+void bc_set_page_zoom(double factor) {
+  if (!(factor > 0)) {
+    return;
+  }
+  browser_core::UserSettings().page_zoom = factor;
+  browser_core::ApplyEveryday(browser_core::Everyday::kPageZoom);
+  browser_core::SessionChanged();
+}
+
+bool bc_notification_prompts(void) {
+  return browser_core::UserSettings().notification_prompts;
+}
+
+void bc_set_notification_prompts(bool on) {
+  browser_core::UserSettings().notification_prompts = on;
+  browser_core::ApplyEveryday(browser_core::Everyday::kNotificationPrompts);
+  browser_core::SessionChanged();
+}
+
 bool bc_ad_blocking(void) {
   return browser_core::UserSettings().ad_blocking;
 }
@@ -1406,6 +1605,16 @@ bool bc_ad_blocking(void) {
 void bc_set_ad_blocking(bool on) {
   browser_core::UserSettings().ad_blocking = on;
   browser_core::ApplyAdBlocking();
+  browser_core::SessionChanged();
+}
+
+bool bc_relay_calls(void) {
+  return browser_core::UserSettings().relay_calls;
+}
+
+void bc_set_relay_calls(bool on) {
+  browser_core::UserSettings().relay_calls = on;
+  browser_core::ApplyWebRtc();
   browser_core::SessionChanged();
 }
 
@@ -1450,11 +1659,19 @@ void bc_window_suggest(bc_id window_id, const char* keyword, const char* text, b
   }
 }
 
-void bc_window_remove_suggestion(bc_id window_id, const char* url) {
+bc_id bc_window_remove_suggestion(bc_id window_id, const char* url) {
   browser_core::Window* window = browser_core::Window::FromId(window_id);
-  if (window && url) {
-    window->RemoveSuggestion(GURL(url));
-  }
+  return window && url ? window->RemoveSuggestion(GURL(url)) : 0;
+}
+
+bool bc_window_undo_remove_suggestion(bc_id window_id, bc_id removal) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->UndoRemoveSuggestion(removal);
+}
+
+bool bc_window_redo_remove_suggestion(bc_id window_id, bc_id removal) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  return window && window->RedoRemoveSuggestion(removal);
 }
 
 bc_id bc_tab_open(bc_id window_id, const char* url, bool when_shown) {
@@ -1607,7 +1824,13 @@ void bc_tab_wait(bc_id id) {
 }
 
 void bc_tab_clear_site(bc_id id, bool cookies) {
-  browser_core::ClearSiteAndReload(id, cookies);
+  browser_core::ClearSiteAndReload(
+      id, cookies ? browser_core::platform::SiteData::kCookies
+                  : browser_core::platform::SiteData::kCache);
+}
+
+void bc_tab_clear_site_data(bc_id id) {
+  browser_core::ClearSiteAndReload(id, browser_core::platform::SiteData::kAll);
 }
 
 bool bc_system_engine_available(void) {
@@ -1770,6 +1993,26 @@ void bc_tab_cast_to(bc_id id, const char* device) {
   browser_core::CastDialog::To(id, device);
 }
 
+void bc_tab_choose_device(bc_id id, const char* device) {
+  browser_core::DeviceChooser::Choose(id, device);
+}
+
+void bc_tab_cancel_chooser(bc_id id) {
+  browser_core::DeviceChooser::Cancel(id);
+}
+
+void bc_tab_scan_devices(bc_id id) {
+  browser_core::DeviceChooser::Scan(id);
+}
+
+void bc_tab_device_settings(bc_id id) {
+  browser_core::DeviceChooser::Settings(id);
+}
+
+void bc_tab_remove_site_device(bc_id id, size_t index) {
+  browser_core::SiteControls::RemoveDevice(id, index);
+}
+
 void bc_tab_set_site_permission(bc_id id, int type, int value) {
   browser_core::SiteControls::SetPermission(id, type, value);
 }
@@ -1823,6 +2066,10 @@ void bc_tab_show_offer(bc_id id) {
   browser_core::PasswordOffer::ShowAgain(id);
 }
 
+bool bc_tab_show_autofill(bc_id id, bool logins) {
+  return browser_core::AutofillMenu::Show(id, logins);
+}
+
 void bc_tab_close_page_menu(bc_id id, int command) {
   browser_core::PageMenu::Close(id, command);
 }
@@ -1868,6 +2115,10 @@ void bc_tab_set_pinned(bc_id id, bool pinned) {
 
 void bc_tab_move_to_favorites(bc_id id, size_t index) {
   browser_core::Window::MoveToFavorites(id, index);
+}
+
+void bc_tab_move_split_to_favorites(bc_id id, size_t index) {
+  browser_core::Window::MoveSplitToFavorites(id, index);
 }
 
 void bc_tab_move(bc_id id, bool pinned, bc_id folder, size_t index) {
@@ -1960,8 +2211,12 @@ void bc_download_act(bc_id download, int action) {
   browser_core::ActOnDownload(download, action);
 }
 
-void bc_downloads_clear() {
-  browser_core::ClearDownloads();
+void bc_agent_download_answer(bc_id download, bool keep) {
+  browser_core::AnswerAgentDownload(download, keep);
+}
+
+void bc_downloads_clear(bc_id profile, bool off_the_record) {
+  browser_core::ClearDownloads(profile, off_the_record);
 }
 
 void bc_download_icon(bc_id download) {
@@ -2086,10 +2341,23 @@ bc_id bc_window_open_private(bc_rect bounds, void* ui_view, bc_id profile_id) {
 }
 
 bc_id bc_window_open_little(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  // Off in Settings › Features, nothing opens one.
+  if (!browser_core::UserSettings().little_windows) {
+    return 0;
+  }
   Profile* profile = LoadedProfile(profile_id);
   browser_core::Window* window =
       profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
                                               browser_core::Space::Own::kLittle)
+              : nullptr;
+  return window ? window->id() : 0;
+}
+
+bc_id bc_window_open_blank(bc_rect bounds, void* ui_view, bc_id profile_id) {
+  Profile* profile = LoadedProfile(profile_id);
+  browser_core::Window* window =
+      profile ? browser_core::Window::OpenOwn(ToRect(bounds), ui_view, profile,
+                                              browser_core::Space::Own::kBlank)
               : nullptr;
   return window ? window->id() : 0;
 }
@@ -2214,4 +2482,14 @@ void bc_sync_remove_device(const char* id) {
   if (id) {
     browser_core::sync::RemoveDevice(id);
   }
+}
+
+void bc_sync_read_activity(bc_sync_activity* activity) {
+  if (activity) {
+    browser_core::sync::ReadActivity(activity);
+  }
+}
+
+void bc_sync_delete_account(void) {
+  browser_core::sync::DeleteAccount();
 }

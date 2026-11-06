@@ -36,6 +36,7 @@ class VideoOverlayWindowViews;
 class RenderViewContextMenuBase;
 class GURL;
 class LoginHandler;
+class PrefRegistrySimple;
 class Profile;
 struct NavigateParams;
 
@@ -62,6 +63,10 @@ namespace net {
 class AuthChallengeInfo;
 }
 
+namespace permissions {
+class ChooserController;
+}
+
 namespace policy {
 class ConfigurationPolicyProvider;
 }
@@ -76,6 +81,10 @@ class DataTypeController;
 struct SyncAccountInfo;
 class SyncInvalidationsService;
 class SyncService;
+}
+
+namespace gfx {
+class Rect;
 }
 
 namespace ui {
@@ -125,6 +134,14 @@ extern std::unique_ptr<RenderViewContextMenuBase> (*g_browser_core_show_page_men
 extern std::unique_ptr<permissions::PermissionPrompt> (*g_browser_core_permission_prompt)(
     content::WebContents* contents,
     permissions::PermissionPrompt::Delegate* delegate);
+
+// chrome/browser/ui/views/permissions/chooser_bubble_ui.cc: shows a page's request for a device in
+// a tab of the core's windows, in place of Chrome's chooser bubble, which hangs from a toolbar they
+// don't have. |controller| still finds the devices and answers the page. Returns what closes it
+// without an answer.
+extern base::OnceClosure (*g_browser_core_device_chooser)(
+    content::RenderFrameHost* owner,
+    std::unique_ptr<permissions::ChooserController> controller);
 
 // chrome/browser/ui/views/extensions/extension_install_dialog_view.cc: asks the user to confirm an
 // extension's install, re-enable or new permissions, in place of Chrome's dialog. |done_callback|
@@ -248,6 +265,11 @@ extern bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
 extern void (*g_browser_core_sync_commit)(syncer::DataType type,
                                           syncer::CommitRequestDataList& commit);
 
+// chrome/browser/ui/sync/tab_contents_synced_tab_delegate.cc: whether the account's other devices
+// may get |contents| as one of this device's open tabs, as session sync would give them every tab:
+// never a tab of an agent's Space, which stays on its device (#1796). On the UI thread.
+extern bool (*g_browser_core_sync_tab)(content::WebContents* contents);
+
 // components/password_manager/core/browser/sync/password_proto_utils.cc: a password's client tag,
 // from Chromium's, on the password store's sequence.
 extern std::string (*g_browser_core_sync_password_tag)(const std::string& tag);
@@ -286,9 +308,22 @@ extern bool (*g_browser_core_passkey_normal_wording)(content::WebContents* conte
 // once the core has handled it. While it's set, the window's background isn't a draggable caption,
 // which would keep a double-click from it, and the core moves the window itself.
 extern bool (*g_browser_core_mini_player_event)(VideoOverlayWindowViews* window, ui::Event* event);
+// The same file: where the Mini Player |window| goes, given |bounds|, Chrome's size for it at its
+// present place, whether it's been |shown| yet, and the |work_area| of the screen Chrome puts it on.
+// And the Mini Player |window| as it closes or hides, where it is still.
+extern gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* window,
+                                                     const gfx::Rect& bounds,
+                                                     bool shown,
+                                                     const gfx::Rect& work_area);
+extern void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window);
+
+// chrome/browser/prefs/browser_prefs.cc: registers the core's local state prefs, app-wide ones,
+// such as where the Mini Player was left, with Chrome's.
+extern void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry);
 
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: |contents|
-// asked to be the tab shown, as Picture in Picture's way back to its tab does, once Chrome has made
+// asked to be the tab shown, as Picture in Picture's way back to its tab, a page's window.focus()
+// and a click on its notification (chromium-core-notification-click.patch) do, once Chrome has made
 // it its Browser's active tab, before it activates the window.
 extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
 

@@ -67,6 +67,8 @@ fn rule_name(index: usize, part: &str) -> SharedString {
 
 /// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
 const LITTLE_NAME: &str = "Little ilo";
+/// What a rule to Little ilo's pop-up says while Little ilo is off.
+const LITTLE_OFF: &str = "Little ilo is off";
 
 /// Where a rule sends a link in place of a Space: the Space the regular window in front shows, as
 /// Arc's Most Recent Space. No Space of the core's has this id.
@@ -173,14 +175,21 @@ impl Rules {
     /// whose Space is still there, or Little ilo, with that rule, else everything else's, 0 being
     /// the Space in front.
     pub fn route(&self, url: &str, spaces: &[u64]) -> (u64, Option<usize>) {
-        let there = |space: u64| space == LITTLE || spaces.contains(&space);
-        let rule = self
-            .rules
-            .iter()
-            .position(|rule| (rule.space == FRONT || there(rule.space)) && rule.matches(url));
+        self.route_with(url, spaces, true)
+    }
+
+    /// As `route`, with Little ilo on or off in Settings › Features: off, a rule or everything
+    /// else that sends a link there sends it to the Space in front, and the choice stays for when
+    /// it's on again.
+    pub fn route_with(&self, url: &str, spaces: &[u64], little: bool) -> (u64, Option<usize>) {
+        let there = |space: u64| (space == LITTLE && little) || spaces.contains(&space);
+        let rule = self.rules.iter().position(|rule| {
+            (rule.space == FRONT || rule.space == LITTLE || there(rule.space)) && rule.matches(url)
+        });
         match rule {
             Some(index) => match self.rules[index].space {
                 FRONT => (0, Some(index)),
+                LITTLE if !little => (0, Some(index)),
                 space => (space, Some(index)),
             },
             None => (
@@ -343,6 +352,10 @@ pub trait Host {
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     );
+    /// Whether Little ilo is on in Settings › Features: off, the pop-ups don't offer it.
+    fn little_windows(&self) -> bool {
+        true
+    }
 }
 
 /// A pop-up button of the tab's: a rule's condition or Space, by the rule's place, or everything
@@ -564,7 +577,7 @@ impl LinkRulesView {
         let targets: Vec<u64> = spaces
             .iter()
             .map(|(space, _)| *space)
-            .chain(std::iter::once(LITTLE))
+            .chain(self.host.little_windows().then_some(LITTLE))
             .collect();
         let items: Vec<MenuEntry> = match which {
             Popup::Condition(index) => {
@@ -712,13 +725,12 @@ impl LinkRulesView {
             .bg(look.control)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(self.fields[index].clone());
-        let space = self.popup(
-            Popup::Space(index),
-            space_name(rule.space, spaces),
-            RULE_SPACE,
-            a11y,
-            cx,
-        );
+        // A rule to Little ilo, while it's off, sends its links to the Space in front, as it says.
+        let name = match rule.space == LITTLE && !self.host.little_windows() {
+            true => LITTLE_OFF.into(),
+            false => space_name(rule.space, spaces),
+        };
+        let space = self.popup(Popup::Space(index), name, RULE_SPACE, a11y, cx);
         let remove = icon_button(&look, ("remove-link-rule", index), "icons/trash.svg")
             .when(a11y, |remove| {
                 named_button(remove, format!("Remove Rule {}", index + 1))
@@ -796,7 +808,11 @@ impl Render for LinkRulesView {
             .relative()
             .child(drawn("link add".into(), self.drawn_at.clone()))
             .on_click(cx.listener(|view, _, _, cx| view.add(cx)));
-        let otherwise = otherwise_name(self.rules.otherwise, &spaces);
+        // Everything else to Little ilo, while it's off, goes to the Space in front.
+        let otherwise = match self.rules.otherwise == LITTLE && !self.host.little_windows() {
+            true => otherwise_name(0, &spaces),
+            false => otherwise_name(self.rules.otherwise, &spaces),
+        };
         let otherwise = self.popup(Popup::Otherwise, otherwise, RULE_SPACE, a11y, cx);
         let otherwise = detailed_row(
             &look,

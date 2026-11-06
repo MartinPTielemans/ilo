@@ -4,8 +4,8 @@
 //! window's keyboard while it shows.
 //!
 //! Each casts its shadow from a window under it (shadows.rs). The icon and theme pickers grow in
-//! from their arrows, and the theme picker shrinks back to it, as on the Mac, drawn by GPUI
-//! (motion.rs).
+//! from their arrows, the theme picker shrinks back to it, and the folder preview grows a little
+//! and fades, as on the Mac, drawn by GPUI (motion.rs).
 //!
 //! shortcut: no blur under them.
 
@@ -42,10 +42,29 @@ struct Overlay {
     /// The point it grows in from, in it, and whether it shrinks back there as it goes.
     growth: Option<Point<Pixels>>,
     shrinks: bool,
+    /// From host_set_overlay_motion, else a popover's.
+    motion: Growth,
     /// When it started shrinking away, while it's still on screen.
     shrinking: Option<Instant>,
     shown: Option<Shown>,
 }
+
+/// The size an overlay grows from, over how long, how long its fade in takes, and how long it fades
+/// out as it hides, or None for a popover's shrink.
+#[derive(Clone, Copy)]
+struct Growth {
+    from: f32,
+    seconds: f32,
+    fade: f32,
+    out: Option<f32>,
+}
+
+const POPOVER: Growth = Growth {
+    from: SHRUNK,
+    seconds: GROW,
+    fade: GROW_FADE,
+    out: None,
+};
 
 struct Shown {
     window: bc::bc_id,
@@ -61,9 +80,9 @@ thread_local! {
     static STILL: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The size an overlay grows from and shrinks to: its own under Reduce Motion.
-fn shrunk() -> f32 {
-    if STILL.get() { 1. } else { SHRUNK }
+/// The size an overlay grows from and shrinks to, `from` unless Reduce Motion keeps it its own.
+fn shrunk(from: f32) -> f32 {
+    if STILL.get() { 1. } else { from }
 }
 
 #[unsafe(no_mangle)]
@@ -130,6 +149,7 @@ pub extern "C" fn host_add_overlay(
                 height: None,
                 growth: None,
                 shrinks: false,
+                motion: POPOVER,
                 shrinking: None,
                 shown: None,
             });
@@ -170,6 +190,20 @@ pub extern "C" fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_set_overlay_shrink(overlay: c_int) {
     with_overlay(overlay, |o| o.shrinks = true);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_overlay_motion(overlay: c_int, from: f64, seconds: f64, out: f64) {
+    let (from, seconds, out) = (from as f32, seconds as f32, out as f32);
+    let out = (out > 0.).then_some(out);
+    with_overlay(overlay, |o| {
+        o.motion = Growth {
+            from,
+            seconds,
+            fade: seconds,
+            out,
+        }
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -221,9 +255,10 @@ pub extern "C" fn host_show_overlay(
             was_shown,
             grows,
             shrinking,
+            o.motion,
         )
     });
-    let Some((view, radius, bounds, was_shown, grows, shrinking)) = shown else {
+    let Some((view, radius, bounds, was_shown, grows, shrinking, growth)) = shown else {
         return;
     };
     if !was_shown {
@@ -232,17 +267,23 @@ pub extern "C" fn host_show_overlay(
     if shrinking {
         gpui_linux::set_overlay_pointer(view, None);
     }
+    let Growth {
+        from,
+        seconds,
+        fade,
+        ..
+    } = growth;
     let scale = Track {
-        from: shrunk(),
+        from: shrunk(from),
         to: 1.,
-        seconds: GROW,
+        seconds,
         curve: GROW_CURVE,
     };
     if let Some(origin) = grows {
         let opacity = Track {
             from: 0.,
             to: 1.,
-            seconds: GROW_FADE,
+            seconds: fade,
             curve: LINEAR,
         };
         motion::start(
@@ -259,7 +300,7 @@ pub extern "C" fn host_show_overlay(
         let opacity = Track {
             from: 0.,
             to: 1.,
-            seconds: GROW,
+            seconds,
             curve: LINEAR,
         };
         shadows::follow(
@@ -393,13 +434,17 @@ pub(crate) fn restack(overlay: c_int) {
 fn hide(overlay: c_int) -> bool {
     // A tooltip over it goes with it, at once, not left over the page as it fades.
     crate::floats::overlay_hiding(overlay);
-    let Some(Some((view, window, shrinks))) = with_overlay(overlay, |o| {
+    let Some(Some((view, window, shrinks, growth))) = with_overlay(overlay, |o| {
         let shown = o.shown.take()?;
-        let shrinks = o
-            .growth
-            .filter(|_| o.shrinks && gpui_linux::overlays_blend());
+        let goes = o.shrinks || o.motion.out.is_some();
+        let shrinks = o.growth.filter(|_| goes && gpui_linux::overlays_blend());
         o.shrinking = shrinks.map(|_| Instant::now());
-        Some((o.view, shown.window, shrinks.zip(o.shrinking)))
+        Some((
+            o.view,
+            shown.window,
+            shrinks.zip(o.shrinking),
+            (o.shrinks, o.motion),
+        ))
     }) else {
         return false;
     };
@@ -413,16 +458,22 @@ fn hide(overlay: c_int) -> bool {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_overlay);
     lend_keyboard(window, view, false);
+    // It fades where it is, unless it shrinks back.
+    let (shrinks, Growth { from, out, .. }) = growth;
+    let (to, seconds) = (
+        if shrinks { shrunk(from) } else { 1. },
+        out.unwrap_or(SHRINK),
+    );
     let scale = Track {
         from: 1.,
-        to: shrunk(),
-        seconds: SHRINK,
+        to,
+        seconds,
         curve: motion::EASE_IN,
     };
     let opacity = Track {
         from: 1.,
         to: 0.,
-        seconds: SHRINK,
+        seconds,
         curve: motion::EASE_IN,
     };
     motion::start(
@@ -436,7 +487,7 @@ fn hide(overlay: c_int) -> bool {
     let opacity = Track {
         from: 1.,
         to: 0.,
-        seconds: SHRINK,
+        seconds,
         curve: LINEAR,
     };
     shadows::follow(
@@ -447,7 +498,7 @@ fn hide(overlay: c_int) -> bool {
             opacity,
         },
     );
-    motion::after(SHRINK, move || {
+    motion::after(seconds, move || {
         // Unless it showed again as it shrank.
         let gone = with_overlay(overlay, |o| {
             o.shrinking

@@ -295,6 +295,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/grip.svg"),
     ),
     (
+        "icons/grip-vertical.svg",
+        include_bytes!("../../assets/icons/grip-vertical.svg"),
+    ),
+    (
         "icons/hand.svg",
         include_bytes!("../../assets/icons/hand.svg"),
     ),
@@ -501,6 +505,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/receipt.svg",
         include_bytes!("../../assets/icons/receipt.svg"),
+    ),
+    (
+        "icons/rows-2.svg",
+        include_bytes!("../../assets/icons/rows-2.svg"),
     ),
     (
         "icons/rotate-ccw-clock.svg",

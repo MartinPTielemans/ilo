@@ -78,11 +78,11 @@ jobs:
     env:
       # The runs that pass on X11 so far.
       LINUX_RUNS: >-
-        tabs window find agents spaces crash profiles private quit mcp appearance access history
+        tabs window find agents spaces crash profiles private blank quit mcp appearance access history
         load preview import adblock adblock-lists passkeys onboarding links relaunch split
         extensions capture popup pinned about windows dialogs trouble cards passwords updates
         restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
-        devices handback tab-drag
+        devices notifications calls battery idle handback webrtc tab-drag
       # The runs that pass on Wayland so far, in the headless sway session.
       WAYLAND_RUNS: >-
         load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -132,7 +132,7 @@ jobs:
       # calls `convert`, and records it with ffmpeg (tools/window-record.sh). sway, grim and Xwayland
       # run the headless sessions (tools/headless.sh), and wl-clipboard's wl-paste reads their
       # clipboard (check/lib.sh's clipboard_holds). The access run reads the app's tree over
-      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the mcp run's
+      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the notifications and mcp runs'
       # notification server is python3-gi's, on a bus of its own. check/ime.sh types through
       # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
@@ -197,6 +197,20 @@ jobs:
         run: |
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
+      # which stays plugged in for the job.
+      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' devices ')) }}
+        run: |
+          sudo modprobe uhid
+          sudo setsid nohup python3 check/uhid.py > "$RUNNER_TEMP/uhid.log" 2>&1 &
+          for _ in $(seq 100); do
+            grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log" && break
+            sleep 0.1
+          done
+          cat "$RUNNER_TEMP/uhid.log"
+          grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log"
+          echo "BROWSER_CHECK_HID=ilo check HID" >> "$GITHUB_ENV"
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs

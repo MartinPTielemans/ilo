@@ -474,9 +474,26 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
+    if (takes) {
+      return;
+    }
+    const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
+    if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
     }
+    // Back in the window on X11, which the window hears only after this, or elsewhere: as the user
+    // went to another app or window with the overlay open.
+    std::vector<base::OnceClosure> let_go = std::exchange(overlay_let_go_, {});
+    if (!OnWayland() && IsWithin(focus, window())) {
+      return;
+    }
+    for (base::OnceClosure& each : let_go) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+    }
+  }
+
+  void WhenOverlayLetsGo(base::OnceClosure let_go) {
+    overlay_let_go_.push_back(std::move(let_go));
   }
 
   // The UI lets the keyboard go to the window, which KeyboardForPage counts as the page's, and on
@@ -557,11 +574,13 @@ class WindowViews : public views::WidgetObserver,
   void OnWidgetShowStateChanged(views::Widget*) override {
     ShowThrough();
     // The app asks whether the window is full screen or maximized as it hears the window's size,
-    // and a window already its screen's size goes either way at that size (#1220). Posted, after
-    // the size Wayland's configure brings with the state, so the app lays the page out once.
+    // and a window already its screen's size goes either way at that size (#1220). Told once the
+    // window has the compositor's configure for the state, with its bounds: a state the browser
+    // asks for changes here at once, before that configure comes, and the app would lay the page
+    // out at the size the window is leaving (#1907).
     if (OnWayland()) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
+      AfterStateConfigured(widget_,
+                           base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
     }
   }
 
@@ -907,6 +926,8 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
+  std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
@@ -1158,6 +1179,14 @@ bool PageDialogsInOwnWindow() {
   return false;
 }
 
+bool FocusSettledOnActivation() {
+  // Aura's desktop widget tells its observers last, once it has activated its window and given
+  // views their focus back (DesktopNativeWidgetAura::HandleActivationChanged), as X11 reads the
+  // window's FocusIn and Wayland its activated state. A key read with that, in the same batch of
+  // events, comes before any task posted then (#1711).
+  return true;
+}
+
 bool KeyboardForPage(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   // The UI's, unless it only holds it while no page shows.
@@ -1183,6 +1212,17 @@ bool KeyboardForPage(views::Widget* widget) {
 void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
+  }
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  return views && views->overlay_has_keyboard();
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->WhenOverlayLetsGo(std::move(let_go));
   }
 }
 
@@ -1315,6 +1355,21 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
         frame.Inset(dialog->non_client_view()->frame_view()->GetInsets());
       }
       return frame;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the slot's holder, which the X server doesn't see.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.holder && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      const gfx::Vector2d at = slot.holder->bounds().OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
     }
   }
   return std::nullopt;

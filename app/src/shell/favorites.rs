@@ -13,18 +13,20 @@ use crate::icon_picker::Subject;
 use crate::tooltip::{self, Anchor, Tip};
 
 use super::{
-    Curve, DEVELOPER_TILE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X, FOOTER_HEIGHT,
-    HAIRLINE, HOVERED, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SLEEPING_FAVICON, Shell, Slot,
-    Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_HOVERED, TILE_MARK,
-    TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT,
-    TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme, access::Accessible, developer_outline,
-    rows::capture_glyph, tile_theme::RING_WIDTH, title,
+    Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X,
+    FOOTER_HEIGHT, HAIRLINE, HOVERED, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
+    SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP,
+    TILE_HEIGHT, TILE_HOVERED, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING,
+    TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
+    access::Accessible, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
 use crate::palette::{Palette, Tone};
 
 /// The most favorites a Space shows, as Arc's 12 a profile. Past it a tab doesn't become one,
-/// and a list longer already, from before or an import, is kept.
+/// and a list longer already, from before or an import, is kept. A split view counts as one.
 pub(super) const MOST_FAVORITES: usize = 12;
+
+use crate::tokens::shell::SPLIT_TILE_FAVICON;
 
 /// Who shares the favorites, as Settings lists the choices. Each is the core's BC_FAVORITES_ value
 /// of the same name, which the bin checks at compile time.
@@ -457,7 +459,7 @@ impl Shell {
     /// icon (tile_theme.rs). A click shows it, a double-click takes it back to its URL (Dia), and a
     /// right-click shows its menu.
     fn tile(&self, tab: u64, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let selected = tab == self.selected && self.shown_has_plate();
+        let selected = self.tile_shown(tab);
         // Full for a dragged tile, which covers what it passes, and none for the others then.
         let dragging = self.dragging();
         let hover = match dragging {
@@ -466,7 +468,9 @@ impl Shell {
         };
         let developer = self.page(tab).developer_mode;
         let fill = tile_fill(&self.palette, developer, hover.unwrap_or(0.));
-        let theme = selected.then(|| self.tile_theme(tab)).flatten();
+        // A split's tile has the default ring, as no one icon themes it.
+        let themed = selected && self.panes(tab).len() == 1;
+        let theme = themed.then(|| self.tile_theme(tab)).flatten();
         let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
         // The outline takes the ring's place.
         let ring = if selected && developer {
@@ -484,7 +488,7 @@ impl Shell {
             false if selected => shown,
             false => fill,
         };
-        let icon = self.tile_icon(tab, theme.as_deref());
+        let icon = self.tile_middle(tab, theme.as_deref());
         div()
             .id(("tile", tab))
             .when(self.a11y, |tile| {
@@ -525,6 +529,7 @@ impl Shell {
                     }
                 }),
             )
+            .relative()
             .on_click(cx.listener(move |shell, _, _, cx| shell.clicked_tile(tab, cx)))
             .children(self.drawn_for_picker(Subject::Tab(tab)))
             .children(theme.as_deref().and_then(TileTheme::layers))
@@ -586,7 +591,9 @@ impl Shell {
         // The first click showed it.
         if event.click_count == 2 {
             log!("browser: command back-to-pinned-url via favorite");
-            return self.browser.back_to_pinned_url(tab, cx);
+            return self
+                .browser
+                .back_to_pinned_url(self.favorite_focused(tab), cx);
         }
         self.press_tile(tab, event.position)
     }
@@ -597,7 +604,8 @@ impl Shell {
             return;
         }
         log!("browser: command select via favorite");
-        self.select(tab, cx);
+        // A split shows focused where it was focused last.
+        self.select(self.favorite_focused(tab), cx);
         // As a row's press does (show_row).
         self.browser.focus_page(cx)
     }
@@ -634,7 +642,8 @@ impl Shell {
         self.favorites.contains(&tab) || self.favorites.len() < MOST_FAVORITES
     }
 
-    /// The favorites `space` shows: its own, or its profile's.
+    /// The favorites `space` shows: its own, or its profile's. A split view is one, its first
+    /// tab's tile.
     pub(super) fn favorites_of(&self, space: &Space) -> Vec<u64> {
         let held_by = [space.id, space.profile];
         let holders = &self.favorite_holders;
@@ -644,7 +653,97 @@ impl Shell {
                     .get(tab)
                     .is_some_and(|holder| held_by.contains(holder))
             })
+            .filter(|&tab| {
+                self.favorite_split(tab)
+                    .is_none_or(|split| split.tabs[0] == tab)
+            })
             .collect()
+    }
+
+    /// Whether the tab shown is `tab`'s, or one of its split's for a favorite split's tile.
+    pub(super) fn tile_shown(&self, tab: u64) -> bool {
+        self.shown_has_plate()
+            && match self.favorite_split(tab) {
+                Some(split) => split.tabs.contains(&self.selected),
+                None => tab == self.selected,
+            }
+    }
+
+    /// A favorite split's tile's middle: each tab's favicon in a segment of its own, all as wide,
+    /// each after the first behind the split row's line, so it reads as the row it was (ours: Arc's
+    /// tile isn't recorded). Three in a narrow tile take a smaller favicon. An icon the user gave
+    /// it takes their place.
+    fn split_icons(&self, tabs: &[u64], width: f32) -> gpui::Div {
+        let segment = width / tabs.len() as f32;
+        let size = match segment < FAVICON_SIZE + 6. {
+            true => SPLIT_TILE_FAVICON,
+            false => FAVICON_SIZE,
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .children(tabs.iter().enumerate().map(|(index, &tab)| {
+                let icon = div()
+                    .size(px(size))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(self.page(tab).unloaded, |icon| {
+                        icon.opacity(SLEEPING_FAVICON)
+                    })
+                    .child(self.tab_icon_sized(tab, size));
+                div()
+                    .relative()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon)
+                    .when(index > 0, |segment| {
+                        segment.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px((TILE_HEIGHT - SEGMENT_LINE) / 2.))
+                                .w(px(1.))
+                                .h(px(SEGMENT_LINE))
+                                .bg(self.palette.faint(DIVIDER)),
+                        )
+                    })
+            }))
+    }
+
+    /// `tab`'s icon in a box `size` wide, as tab_icon draws it in a favicon's.
+    fn tab_icon_sized(&self, tab: u64, size: f32) -> gpui::AnyElement {
+        let page = self.page(tab);
+        if size >= FAVICON_SIZE || !page.icon.is_empty() {
+            return self.tab_icon(tab);
+        }
+        let drawn = px(FAVICON_DRAWN * size / FAVICON_SIZE);
+        match self.tabs.get(&tab).and_then(|each| each.favicon.clone()) {
+            Some(favicon) => img(favicon).size(drawn).into_any_element(),
+            None => svg()
+                .path("icons/globe.svg")
+                .size(drawn)
+                .text_color(self.palette.text(SECONDARY))
+                .into_any_element(),
+        }
+    }
+
+    /// What a tile draws in its middle: a favorite split's segments, unless it has an icon of its
+    /// own, else the favicon or the one-colour icon's template.
+    fn tile_middle(&self, tab: u64, theme: Option<&TileTheme>) -> gpui::AnyElement {
+        // A split's row dragged over the favorites is its tile too.
+        let panes = self.panes(tab);
+        match panes.len() > 1 && self.page(tab).icon.is_empty() {
+            true => {
+                let width = self.tile_places(self.tile_tabs().len().max(1))[0][2];
+                self.split_icons(&panes, width).into_any_element()
+            }
+            false => self.tile_icon(tab, theme).into_any_element(),
+        }
     }
 
     /// The tiles of `favorites` on the page of a Space beside the shown one's, at their places
@@ -655,9 +754,10 @@ impl Shell {
             .into_iter()
             .zip(favorites)
             .map(|([left, top, width], &tab)| {
-                let selected = tab == selected;
+                let selected = self.panes(tab).contains(&selected);
                 let developer = self.page(tab).developer_mode;
-                let theme = selected.then(|| self.tile_theme(tab)).flatten();
+                let themed = selected && self.panes(tab).len() == 1;
+                let theme = themed.then(|| self.tile_theme(tab)).flatten();
                 let (shown, ring_width, ring) = shown_look(theme.as_deref(), &self.palette);
                 let ring = if selected && developer {
                     gpui::transparent_black()
@@ -685,7 +785,7 @@ impl Shell {
                         tile_fill(&self.palette, developer, 0.)
                     })
                     .children(theme.as_deref().and_then(TileTheme::layers))
-                    .child(self.tile_icon(tab, theme.as_deref()))
+                    .child(self.tile_middle(tab, theme.as_deref()))
                     .when(selected && developer, |tile| {
                         tile.child(developer_outline(&self.palette, TILE_RADIUS))
                     });

@@ -64,6 +64,8 @@ cleanup() {
   [ -z "${others:-}" ] || kill $others 2>/dev/null || true
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
+  # A run's own way back, named in run_undo, such as policies' taking its policies off the system.
+  [ -z "${run_undo:-}" ] || $run_undo || true
   # A run's temp dir, such as the updates run's with its key.
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
@@ -107,6 +109,12 @@ fail() {
 gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
+}
+# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so.
+engine_has() {
+  local commit
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {

@@ -52,7 +52,11 @@ fn card(tab: u64, pictured: bool) -> Card {
         host: "example.com".into(),
         icon: Icon::Favicon(None),
         pictured,
+        paused: false,
         actions: vec![Action::Pin, Action::Favorite, Action::Split],
+        panes: Vec::new(),
+        focused: tab,
+        ring: gpui::black(),
     }
 }
 

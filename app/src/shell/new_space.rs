@@ -79,7 +79,7 @@ impl Shell {
     /// window makes none.
     pub(super) fn new_space_beside(&self, space: u64) -> bool {
         let last = self.spaces.last().is_some_and(|last| last.id == space);
-        last && !self.private && self.form.is_none()
+        last && !self.one_space() && self.form.is_none()
     }
 
     /// Readies a new Space as the fingers' pull reaches it and lets it go as they go back, with a

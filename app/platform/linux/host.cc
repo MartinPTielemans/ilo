@@ -386,6 +386,9 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
 
 void host_set_little_status_item(void (*clicked)(void)) {}
 
+// The launcher's action is the .desktop file's, which the package writes.
+void host_set_little_task(const char* title, const char* arguments) {}
+
 // The app reports each browser window GPUI's window in it hears become active (host_window_active).
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;

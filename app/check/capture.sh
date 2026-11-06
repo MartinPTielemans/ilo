@@ -1,6 +1,7 @@
 # ⇧⌘2 from the page opens capture mode over it, with the keyboard, and the pointer over an element
 # lights the box the core hit tests. A click takes it, and the menu's Copy copies a picture of just
-# that box to a pasteboard of the run's own and shows the toast with Save and Share. Save to
+# that box to a pasteboard of the run's own and shows the toast with Save and Share. ⇧⌘-drag on
+# the page takes the rectangle dragged at once. Save to
 # Library, the menu's first row, saves it into the profile's Media and says so, and the Library's
 # Media shows it first, opens it in a tab and deletes it from its menu, and then says it is empty
 # in a line that wraps in its list, narrow and wide, light and dark. On Windows the toast's Save
@@ -22,10 +23,12 @@ else
   copied='^browser: clipboard png [0-9]* bytes$'
   buttons=save
 fi
-# A page longer than any view, with a box at a known place in it.
+# A page longer than any view, with a box and a link at known places in it.
 page='data:text/html;charset=utf-8,<title>loading</title>
 <body style="margin:0;height:6000px">
 <div style="position:absolute;left:300px;top:200px;width:200px;height:100px;background:teal"></div>
+<a href="https://example.org/"
+  style="position:absolute;left:20px;top:20px;font:24px system-ui">a link</a>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
 log="$out/capture.log"
 step=0
@@ -129,6 +132,25 @@ if windows; then
   in_browser RenderWidgetHostViewCocoa "after the save dialog"
   saved_to=" The toast's Save saved it to $picture, from $out/capture-save-dialog.png."
 fi
+
+# ⇧⌘-drag on the page, as Arc's, starts capture mode dragging and takes the rectangle dragged at
+# once, with the menu at its corner. The page's window keeps the pointer, so the core hands capture
+# mode the drag. The app's lines may come at any of the drag's steps.
+from=$((step + 1))
+send press $(in_page 320 210) cmd shift
+send dragto $(in_page 330 220) cmd shift
+send dragto $(in_page 480 290) cmd shift
+send release $(in_page 480 290) cmd shift
+expect 'browser: tab [0-9]* press with modifiers [0-9]* taken$' \
+  "the core didn't hand the app the ⇧⌘ press on the page" "$from"
+expect '^browser: capture started$' "⇧⌘-drag on the page didn't start capture mode" "$from"
+expect '^browser: capture chose 320 210 160 80$' \
+  "⇧⌘-drag didn't take the rectangle: $(grep '^browser: capture chose' "$log" | tail -1)" "$from"
+expect '^browser: capture shown at ' "capture mode's window didn't show for ⇧⌘-drag" "$from"
+../tools/window-screenshot.sh "$pid" "$out/capture-cmd-dragged.png" || fail "no window to capture"
+send key escape
+expect '^browser: capture left (escape)$' "escape didn't leave capture mode after ⇧⌘-drag"
+expect '^browser: capture hidden$' "capture mode's window didn't hide after ⇧⌘-drag"
 
 # Save to Library, 37 to 61 down, saves the box's picture without a question and says so.
 capture_mode page
@@ -345,6 +367,15 @@ fi
 send resize 1200 760
 expect '^browser: capture left (dismissed)$' "a resize didn't leave capture mode"
 
+# ⇧⌘-click on a link, a press the core takes in case it's a drag, still reaches the page, which
+# opens the link in a tab in front as Chrome does.
+send click $(in_page 40 30) cmd shift
+expect 'browser: tab [0-9]* press ended, handed back$' \
+  "the ⇧⌘-click on a link wasn't handed back to the page"
+expect '^browser: tab [0-9]* opened by [0-9]* in the foreground$' \
+  "⇧⌘-click on a link didn't open it in a tab in front"
+none_since '^browser: capture started$' || fail "⇧⌘-click on a link started capture mode"
+
 exec 3>&-
 quit
 echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to Media's empty line, in" \
@@ -353,5 +384,5 @@ echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to M
   "$out/library-media.png, $out/media-menu.png, $out/media-empty-narrow-light.png," \
   "$out/media-empty-narrow-dark.png, $out/media-empty-wide-light.png," \
   "$out/media-empty-wide-dark.png, $out/capture-pill-light.png, $out/capture-menu-light.png," \
-  "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png." \
+  "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png, $out/capture-cmd-dragged.png." \
   "A drag took a rectangle, and a click outside and a resize left capture mode."
