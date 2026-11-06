@@ -181,6 +181,13 @@ jobs:
             defaults delete "$id" > /dev/null 2>&1 || true
             rm -rf "$HOME/Library/Caches/$id"
             defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+            # Another case's copy made the profile's Keychain item, which macOS asks before it
+            # gives to another binary, with a prompt no one answers here.
+            security dump-keychain 2> /dev/null | grep -i 'safe storage' | sort -u >> "$out/keychain.txt" || true
+            local svc
+            for svc in "ilo Safe Storage" "Browser Safe Storage" "Chromium Safe Storage" "Chrome Safe Storage"; do
+              while security delete-generic-password -s "$svc" > /dev/null 2>&1; do :; done
+            done
           }
           launch() {
             name=$1
@@ -203,7 +210,10 @@ jobs:
             log stream --style compact --level debug \
               --predicate 'subsystem BEGINSWITH "org.sparkle-project"' > "$out/$name-sparkle.txt" 2>&1 &
             streamer=$!
-            wait_for 'browser: loaded' 60 || echo "$name: the page didn't load"
+            if ! wait_for 'browser: loaded' 60; then
+              echo "$name: the page didn't load"
+              sample "$pid" 5 -file "$out/$name-sample.txt" > /dev/null 2>&1 || true
+            fi
             wait_for 'browser: updater started' 30 || echo "$name: no updater"
             sleep 2
             send state
@@ -241,21 +251,24 @@ jobs:
             send menu "About ilo"
             wait_for 'browser: settings update check at ' 15 || echo "$1: About had no Check for Updates"
             local at
-            at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //')
+            at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //' || true)
             mark "About's Check for Updates at $at"
             # shellcheck disable=SC2086
             send clickkey $at
-            wait_for 'browser: update stage found' 60 || echo "$1: found nothing"
-            wait_for 'browser: update stage ready' 900 || echo "$1: never ready"
+            if wait_for 'browser: update stage found' 60; then
+              wait_for 'browser: update stage ready' 900 || echo "$1: never ready"
+            else
+              echo "$1: found nothing"
+            fi
             sleep 1
             ../tools/window-screenshot.sh "$pid" "$out/$1.png" all 2> /dev/null || true
-            tail -n +"$((served + 1))" "$out/server.log" | grep -o '"GET [^ ]*' | sed 's/"GET //' > "$out/$1-requests.txt"
+            tail -n +"$((served + 1))" "$out/server.log" | grep -o '"GET [^ ]*' | sed 's/"GET //' > "$out/$1-requests.txt" || true
             finish
             {
               echo "### $1: $2's copy, feed $3"
               awk '/ == / { t0 = $1 } t0 && (/ == / || / browser: update/) { printf "%8.3f %s\n", $1 - t0, substr($0, index($0, " ") + 1) }' "$log"
-              found=$(grep ' browser: update stage found' "$log" | head -1 | cut -d' ' -f1)
-              ready=$(grep ' browser: update stage ready' "$log" | head -1 | cut -d' ' -f1)
+              found=$(grep ' browser: update stage found' "$log" | head -1 | cut -d' ' -f1 || true)
+              ready=$(grep ' browser: update stage ready' "$log" | head -1 | cut -d' ' -f1 || true)
               [ -z "$found" ] || [ -z "$ready" ] ||
                 echo "found to ready: $(echo "$ready - $found" | bc) s"
               echo "downloaded:"
@@ -268,6 +281,9 @@ jobs:
           }
           cd app
 
+          # 0.1.4, older than the deltas, takes the DMG.
+          fresh 0.1.4 older
+          run_case older 0.1.4 appcast.xml
           # Before: 0.1.7 with the feed main's appcast.sh makes, which has no deltas.
           fresh 0.1.7 before
           run_case before 0.1.7 appcast-no-deltas.xml
@@ -280,11 +296,22 @@ jobs:
           printf 'x' >> "$icon"
           echo "tampered: $icon"
           run_case tampered 0.1.7 appcast.xml
-          # 0.1.4, older than the deltas, takes the DMG.
-          fresh 0.1.4 older
-          run_case older 0.1.4 appcast.xml
 
           { echo '```'; cat "$out/timings.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+          # Each case took what it should have, and ended as 0.1.8, file for file.
+          failed=0
+          took() { grep -q -- "$2\$" "$out/$1-requests.txt" || { echo "::error::$1 didn't download its $2"; failed=1; }; }
+          skipped() { ! grep -q -- "$2\$" "$out/$1-requests.txt" || { echo "::error::$1 downloaded a $2"; failed=1; }; }
+          took older .dmg; skipped older .delta
+          took before .dmg; skipped before .delta
+          took after 2038-to-2045.delta; skipped after .dmg
+          took tampered 2038-to-2045.delta; took tampered .dmg
+          for name in older before after tampered; do
+            grep -q '^installed: 0.1.8 (2045)' "$out/$name-result.txt" && grep -q "^files: the same as 0.1.8's" "$out/$name-result.txt" ||
+              { echo "::error::$name didn't end as 0.1.8"; failed=1; }
+          done
+          exit $failed
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
