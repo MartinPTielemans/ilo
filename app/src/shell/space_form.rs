@@ -33,7 +33,7 @@ impl Shell {
     /// New Space…, and with `tab` Move to › New Space… in a tab's menu, which moves the tab into
     /// the Space once the form makes it, so Cancel leaves the tab where it was.
     pub(super) fn new_space_with(&mut self, tab: Option<u64>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             return;
         }
         let space = match &mut self.form {

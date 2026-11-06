@@ -1,5 +1,6 @@
 #include "browser_core/clear_site.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -53,7 +54,7 @@ class WhenCleared : public content::BrowsingDataRemover::Observer {
 
 }  // namespace
 
-void ClearSiteAndReload(bc_id tab, bool cookies) {
+void ClearSiteAndReload(bc_id tab, platform::SiteData what) {
   // A tab without its page has nothing to reload, and loads afresh once shown.
   const Tab* clearing = Tab::Get(tab);
   if (!clearing || !clearing->profile()) {
@@ -75,20 +76,31 @@ void ClearSiteAndReload(bc_id tab, bool cookies) {
   filter->AddRegisterableDomain(domain);
   Profile* profile = clearing->profile();
   content::BrowsingDataRemover* remover = profile->GetBrowsingDataRemover();
+  using Remover = content::BrowsingDataRemover;
+  uint64_t types = 0;
+  switch (what) {
+    case platform::SiteData::kCookies:
+      types = Remover::DATA_TYPE_COOKIES;
+      break;
+    case platform::SiteData::kCache:
+      types = Remover::DATA_TYPE_CACHE;
+      break;
+    case platform::SiteData::kAll:
+      types = Remover::DATA_TYPE_COOKIES | Remover::DATA_TYPE_DOM_STORAGE |
+              Remover::DATA_TYPE_CACHE;
+      break;
+  }
   // The system's engine keeps the site's data apart, once the profile has used it, and the page
-  // loads again once both have let it go. The cache's reload also fetches again what the page
-  // loads from other sites.
+  // loads again once both have let it go. A reload after the cache's clearing also fetches again
+  // what the page loads from other sites.
   const bool system_store = system_engine::StoreUsed(profile);
-  const base::RepeatingClosure done =
-      base::BarrierClosure(system_store ? 2 : 1, base::BindOnce(&Reload, tab, !cookies));
-  remover->RemoveWithFilterAndReply(
-      base::Time(), base::Time::Max(),
-      cookies ? content::BrowsingDataRemover::DATA_TYPE_COOKIES
-              : content::BrowsingDataRemover::DATA_TYPE_CACHE,
-      content::BrowsingDataRemover::ORIGIN_TYPE_UNPROTECTED_WEB, std::move(filter),
-      new WhenCleared(remover, done));
+  const base::RepeatingClosure done = base::BarrierClosure(
+      system_store ? 2 : 1, base::BindOnce(&Reload, tab, what != platform::SiteData::kCookies));
+  remover->RemoveWithFilterAndReply(base::Time(), base::Time::Max(), types,
+                                    Remover::ORIGIN_TYPE_UNPROTECTED_WEB, std::move(filter),
+                                    new WhenCleared(remover, done));
   if (system_store) {
-    platform::SystemPage::ClearSite(system_engine::StoreOf(profile), domain, cookies, done);
+    platform::SystemPage::ClearSite(system_engine::StoreOf(profile), domain, what, done);
   }
 }
 

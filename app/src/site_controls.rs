@@ -28,7 +28,7 @@ use crate::{
     icon_picker,
     palette::{self, Palette, STATE_HOVERED, STATE_PRESSED},
     passwords::{self, Login},
-    shell::{Command, MenuEntry, cubic_bezier, scaled::scaled},
+    shell::{Command, DeviceKind, MenuEntry, cubic_bezier, scaled::scaled},
     tokens::shell::{KEYED, KEYED_RING},
     tooltip,
 };
@@ -159,6 +159,19 @@ pub struct Permission {
     pub choices: Vec<Value>,
 }
 
+/// A device the site was given, as Chrome's page info lists it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Device {
+    /// Chrome's name for it, such as "Arduino Uno".
+    pub name: SharedString,
+    /// Chrome's words for what it is, such as "Serial port".
+    pub kind: SharedString,
+    /// What it is, for its glyph.
+    pub glyph: DeviceKind,
+    /// Its Remove takes it away; not for one a policy gave.
+    pub removable: bool,
+}
+
 /// What the connection to the page is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Connection {
@@ -188,6 +201,8 @@ pub struct Site {
     pub system_engine: Option<bool>,
     /// The logins the profile keeps for the site, and Never if it's set to it.
     pub logins: Vec<Login>,
+    /// The devices the site was given, after the permissions, each with Remove (#1649).
+    pub devices: Vec<Device>,
     /// Whether ads and trackers are blocked on the site, none where that isn't the user's to change
     /// there: a page that isn't http(s), one Safari's engine shows, a private window, or with
     /// blocking off in Settings.
@@ -449,6 +464,8 @@ pub trait Host {
     fn set_permission(&self, tab: u64, kind: i32, value: Value);
     /// Sets the site's permissions back to their defaults. The user's, as above.
     fn reset_permissions(&self, tab: u64);
+    /// Takes the site's device at `index` away from it.
+    fn remove_device(&self, tab: u64, index: usize);
     /// Has the profile keep the site for Safari's engine or not, and the tab show its page there or
     /// in Chromium. The user's, as above.
     fn set_system_engine(&self, tab: u64, on: bool);
@@ -559,6 +576,8 @@ enum Stop {
     Passwords,
     /// By Chrome's ContentSettingsType.
     Permission(i32),
+    /// By its place among the site's devices.
+    Device(usize),
     Reset,
     Lock,
     More,
@@ -617,13 +636,13 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
 }
 
 /// The Settings heading's rows: Safari's engine, ad blocking, Developer Mode, Passwords, the
-/// permissions, then Reset.
+/// permissions, the devices, then Reset.
 fn rows(site: &Site) -> usize {
     let firsts = site.system_engine.is_some() as usize
         + site.ad_blocking.is_some() as usize
         + site.developer_mode.is_some() as usize;
     let logins = passwords::state(&site.logins).is_some() as usize;
-    firsts + logins + site.permissions.len() + site.reset.is_some() as usize
+    firsts + logins + site.permissions.len() + site.devices.len() + site.reset.is_some() as usize
 }
 
 /// The panel's corners in its window, clockwise from the beak's tip, or its top left without one.
@@ -890,7 +909,7 @@ fn describe(site: &Site) -> String {
         )
         .collect();
     format!(
-        "{}: {}; {}{}{}",
+        "{}: {}; {}{}{}{}",
         site.site,
         site.connection_summary,
         if permissions.is_empty() {
@@ -905,6 +924,15 @@ fn describe(site: &Site) -> String {
         match site.logins.is_empty() {
             true => String::new(),
             false => format!("; passwords {}", passwords::describe(&site.logins)),
+        },
+        match site.devices.is_empty() {
+            true => String::new(),
+            false => {
+                let devices: Vec<String> = (site.devices.iter())
+                    .map(|device| format!("{} ({})", device.name, device.kind))
+                    .collect();
+                format!("; devices {}", devices.join(", "))
+            }
         }
     )
 }
@@ -1081,6 +1109,43 @@ impl SiteControls {
                 .ok();
         });
         self.host.menu(items, position, chosen, cx);
+    }
+
+    /// Shows the device's menu at `position`: Remove, which takes it away from the site.
+    fn choose_device(
+        &mut self,
+        index: usize,
+        device: Device,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.open.as_ref().map(|open| open.tab) else {
+            return;
+        };
+        let panel = cx.weak_entity();
+        let chosen = Box::new(move |chosen: Option<usize>, cx: &mut App| {
+            if chosen != Some(0) {
+                return;
+            }
+            panel
+                .update(cx, |panel, _| {
+                    let open = panel.open.as_ref();
+                    let still = open.is_some_and(|open| {
+                        open.tab == tab
+                            && open.closing.is_none()
+                            && (open.site.as_ref())
+                                .is_some_and(|site| site.devices.get(index) == Some(&device))
+                    });
+                    if still {
+                        // check.sh reads this line.
+                        log!("browser: site controls remove device {}", device.name);
+                        panel.host.remove_device(tab, index);
+                    }
+                })
+                .ok();
+        });
+        self.host
+            .menu(vec![MenuEntry::new("Remove", true)], position, chosen, cx);
     }
 
     /// Shows the "…" menu at `position`, and runs the item chosen.
@@ -1320,11 +1385,14 @@ impl SiteControls {
         ];
         let permissions = (site.permissions.iter())
             .map(|each| Some((!each.choices.is_empty()).then_some(Stop::Permission(each.kind))));
+        let devices = (site.devices.iter().enumerate())
+            .map(|(index, each)| each.removable.then_some(Stop::Device(index)));
         let reset = site.reset.as_ref().map(|_| Some(Stop::Reset));
         let rows = rows
             .into_iter()
             .flatten()
             .chain(permissions.flatten())
+            .chain(devices)
             .chain(reset);
         for (index, stop) in rows.enumerate() {
             let y = at.rows + index as f32 * ROW_PITCH;
@@ -1422,7 +1490,7 @@ impl SiteControls {
         let under = point(frame.left(), frame.bottom());
         let menu = matches!(
             stop,
-            Stop::Engine | Stop::Passwords | Stop::Permission(_) | Stop::More
+            Stop::Engine | Stop::Passwords | Stop::Permission(_) | Stop::Device(_) | Stop::More
         );
         match stop {
             Stop::Tile(name) => {
@@ -1446,6 +1514,11 @@ impl SiteControls {
             Stop::Permission(kind) => {
                 if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
                     self.choose_value(permission.clone(), under, cx);
+                }
+            }
+            Stop::Device(index) => {
+                if let Some(device) = site.devices.get(index) {
+                    self.choose_device(index, device.clone(), under, cx);
                 }
             }
             Stop::Reset => self.reset(cx),
@@ -1783,6 +1856,35 @@ impl SiteControls {
         }
     }
 
+    fn device(
+        &self,
+        index: usize,
+        device: &Device,
+        y: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let row = Self::row(
+            &palette::current(cx),
+            format!("site-device-{index}").into(),
+            y,
+            device.glyph.glyph(),
+            true,
+            device.name.clone(),
+            Some(device.kind.clone()),
+        );
+        match device.removable {
+            false => row.opacity(MANAGED_OPACITY).into_any_element(),
+            true => {
+                let row = row.children(self.ring(&Stop::Device(index), None, cx));
+                let device = device.clone();
+                row.on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
+                    panel.choose_device(index, device.clone(), event.position(), cx)
+                }))
+                .into_any_element()
+            }
+        }
+    }
+
     fn footer(&self, site: &Site, y: f32, cx: &mut Context<Self>) -> [gpui::AnyElement; 2] {
         let lock = match site.connection {
             Connection::Secure => "icons/lock.svg",
@@ -2052,6 +2154,10 @@ impl Render for SiteControls {
             }
             for (index, permission) in site.permissions.iter().enumerate() {
                 rows.push(self.permission(index, permission, y, cx));
+                y += ROW_PITCH;
+            }
+            for (index, device) in site.devices.iter().enumerate() {
+                rows.push(self.device(index, device, y, cx));
                 y += ROW_PITCH;
             }
             if let Some(label) = site.reset.clone() {

@@ -383,6 +383,20 @@ impl Fake {
             shell.update(cx, change).ok();
         });
     }
+
+    /// Changes `tab`'s split view, as the core reports it changed.
+    fn change_split(&self, tab: u64, cx: &mut App, change: impl Fn(&mut Split) + 'static) {
+        self.later(cx, move |shell, cx| {
+            let mut splits = shell.splits();
+            splits
+                .iter_mut()
+                .filter(|split| split.tabs.contains(&tab))
+                .for_each(&change);
+            let (pinned, today) = (shell.pinned().to_vec(), shell.today().to_vec());
+            let folders = shell.folders();
+            shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
+        });
+    }
 }
 
 impl Browser for Fake {
@@ -486,6 +500,11 @@ impl Browser for Fake {
                 shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
             }
         });
+    }
+
+    /// The preview's favorites are each one tab: a split's dragged tab goes alone.
+    fn move_split_to_favorites(&self, tab: u64, index: usize, cx: &mut App) {
+        self.move_to_favorites(tab, index, cx)
     }
 
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, cx: &mut App) {
@@ -718,6 +737,14 @@ impl Browser for Fake {
         0
     }
 
+    fn undo_remove_suggestion(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
+
+    fn redo_remove_suggestion(&self, _: u64, _: &mut App) -> bool {
+        false
+    }
+
     // Takes it out of the archive, without opening it.
     fn restore_archived(&self, archived: u64, cx: &mut App) {
         self.archive.borrow_mut().retain(|&(id, ..)| id != archived);
@@ -759,10 +786,12 @@ impl Browser for Fake {
         self.report_downloads(cx);
     }
 
-    fn clear_downloads(&self, cx: &mut App) {
-        self.downloads
-            .borrow_mut()
-            .retain(|each| matches!(each.state, DownloadState::Running | DownloadState::Paused));
+    fn clear_downloads(&self, private: Option<u64>, cx: &mut App) {
+        self.downloads.borrow_mut().retain(|each| {
+            matches!(each.state, DownloadState::Running | DownloadState::Paused)
+                || each.private != private.is_some()
+                || private.is_some_and(|profile| profile != each.profile)
+        });
         self.report_downloads(cx);
     }
 
@@ -805,6 +834,49 @@ impl Browser for Fake {
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
     // In UTC, with weeks from Monday.
+    // Library › Agents' made-up past tasks: two today, one yesterday, one last week.
+    fn agent_history(&self, _: u64) -> String {
+        let at = (now() / 1000.) as u64;
+        let past =
+            |id: &str, title: &str, agent: &str, ago: u64, pages: usize, orders, messages| {
+                browser::agent_history::Past {
+                    id: id.into(),
+                    title: title.into(),
+                    agent: agent.into(),
+                    started: at - ago - 300,
+                    ended: at - ago,
+                    pages: (0..pages)
+                        .map(|n| (format!("Page {n}"), format!("https://example.com/{n}")))
+                        .collect(),
+                    orders,
+                    messages,
+                }
+            };
+        let day = 24 * 60 * 60;
+        browser::agent_history::write(&[
+            past("task-4", "Book a table for four", "Claude", 1800, 3, 1, 0),
+            past("session-3", "Shipping form", "Claude Code", 7200, 2, 0, 0),
+            past(
+                "task-2",
+                "Reply to the landlord",
+                "Codex",
+                day + 3600,
+                1,
+                0,
+                1,
+            ),
+            past(
+                "session-1",
+                "Compare the museum passes",
+                "Claude Code",
+                6 * day,
+                5,
+                0,
+                0,
+            ),
+        ])
+    }
+
     fn day_starts(&self) -> [f64; 4] {
         let today = now() - now() % DAY;
         // 1 January 1970 was a Thursday.
@@ -866,6 +938,22 @@ impl Browser for Fake {
 
     fn cast_close(&self, _: &mut App) {}
 
+    fn choose_device(&self, tab: u64, _: SharedString, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_chooser(tab, None, cx));
+    }
+
+    fn cancel_chooser(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_chooser(tab, None, cx));
+    }
+
+    fn scan_devices(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            shell.set_chooser(tab, preview_chooser("bluetooth"), cx)
+        });
+    }
+
+    fn device_settings(&self, _: u64, _: &mut App) {}
+
     // Casting starting closes the dialog, as the core's does.
     fn cast_to(&self, tab: u64, _: SharedString, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
@@ -910,6 +998,8 @@ impl Browser for Fake {
     fn reload(&self, _: u64, _: bool, _: &mut App) {}
 
     fn clear_site(&self, _: u64, _: bool, _: &mut App) {}
+
+    fn clear_site_data(&self, _: u64, _: &mut App) {}
 
     fn set_developer_mode(&self, _: u64, _: bool, _: &mut App) {}
 
@@ -1079,6 +1169,7 @@ impl Browser for Fake {
         _: Bounds<Pixels>,
         _: f32,
         _: bool,
+        _: Option<Point<Pixels>>,
         _: bool,
         _: menu::Look,
         _: &mut App,
@@ -1095,6 +1186,10 @@ impl Browser for Fake {
     fn settings(&self, _: &mut App) {}
 
     fn passwords(&self, _: u64, _: &mut App) {}
+
+    fn show_autofill(&self, _: u64, _: bool) -> bool {
+        false
+    }
 
     fn take_over(&self, _: SharedString, _: u64, _: &mut App) {}
 
@@ -1197,6 +1292,24 @@ impl Browser for Fake {
         true
     }
 
+    fn move_space(&self, space: u64, after: u64, cx: &mut App) {
+        let mut spaces = self.spaces.borrow_mut();
+        let Some(from) = spaces.iter().position(|(id, ..)| *id == space) else {
+            return;
+        };
+        let entry = spaces.remove(from);
+        let to = match after {
+            0 => 0,
+            after => match spaces.iter().position(|(id, ..)| *id == after) {
+                Some(at) => at + 1,
+                None => from,
+            },
+        };
+        spaces.insert(to, entry);
+        drop(spaces);
+        self.report_spaces(cx);
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, cx: &mut App) {
         if let Some(entry) = self
             .spaces
@@ -1261,6 +1374,10 @@ impl Browser for Fake {
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
 
+    fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
+        shell::FavoritesScope::default()
+    }
+
     // The preview's window is GPUI's own, which has the keyboard already.
     fn focus_ui(&self, _: &mut App) {}
 
@@ -1309,6 +1426,16 @@ impl Browser for Fake {
             let folders = shell.folders();
             shell.set_tabs(shell.space(), pinned, today, splits, folders, cx);
         });
+    }
+
+    fn set_split_name(&self, tab: u64, name: &str, cx: &mut App) {
+        let name: SharedString = name.to_string().into();
+        self.change_split(tab, cx, move |split| split.name = name.clone());
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, cx: &mut App) {
+        let icon: SharedString = icon.to_string().into();
+        self.change_split(tab, cx, move |split| split.icon = icon.clone());
     }
 
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, cx: &mut App) {
@@ -1551,6 +1678,10 @@ impl Browser for Fake {
 
     fn new_private_window(&self, _: &mut App) {}
 
+    fn new_blank_window(&self, _: &mut App) {}
+
+    fn move_out_of_blank(&self, _: u64, _: u64, _: &mut App) {}
+
     fn new_little_window(&self, _: u64, _: &mut App) {}
 
     fn open_tab_in_little(&self, _: u64, _: &mut App) {}
@@ -1569,7 +1700,11 @@ struct PreviewBar;
 
 impl command_bar::Host for PreviewBar {
     fn suggest(&self, _: Option<&str>, _: &str, _: bool) {}
-    fn remove_suggestion(&self, _: &str) {}
+    fn remove_suggestion(&self, _: &str, _: &mut App) {}
+
+    fn step_removal(&self, _: bool, _: &mut App) -> bool {
+        false
+    }
     fn typed_url(&self, text: &str) -> Option<String> {
         self.search_url(None, text)
     }
@@ -1630,7 +1765,57 @@ impl command_bar::Host for PreviewBar {
     fn tooltip(&self, _: Option<(browser::tooltip::Tip, browser::tooltip::Anchor)>, _: &mut App) {}
 }
 
-/// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
+/// A made-up page's request for a device, as PREVIEW_CHOOSER names it.
+fn preview_chooser(name: &str) -> Option<shell::Chooser> {
+    use shell::{Chooser, ChooserDevice, DeviceKind, Scan};
+    let device = |id: &str, name: &str, detail: &str| ChooserDevice {
+        id: id.to_owned().into(),
+        name: name.to_owned().into(),
+        detail: detail.to_owned().into(),
+    };
+    let ports = vec![
+        device("serial:1", "Arduino Uno", "cu.usbmodem14101"),
+        device(
+            "serial:2",
+            "CP2102 USB to UART Bridge Controller",
+            "cu.SLAB_USBtoUART",
+        ),
+    ];
+    let paired = vec![
+        device("bt:1", "Polar H10 7E37D222", ""),
+        device("bt:2", "TICKR 4F1A", "Paired"),
+        device("bt:3", "Forerunner 255", ""),
+    ];
+    let (kind, devices, scan) = match name {
+        "hid" => (
+            DeviceKind::Hid,
+            vec![device("hid:1", "Keychron K2", "05ac:024f")],
+            Scan::Live,
+        ),
+        "usb" => (
+            DeviceKind::Usb,
+            vec![device("usb:1", "STM32 BOOTLOADER", "0483:df11")],
+            Scan::Live,
+        ),
+        "none" => (DeviceKind::Usb, Vec::new(), Scan::Live),
+        "bluetooth" => (DeviceKind::Bluetooth, paired, Scan::Scanning),
+        "stopped" => (DeviceKind::Bluetooth, Vec::new(), Scan::Stopped),
+        "off" => (DeviceKind::Bluetooth, Vec::new(), Scan::Off),
+        "denied" => (DeviceKind::Bluetooth, Vec::new(), Scan::Denied),
+        _ => (DeviceKind::Serial, ports, Scan::Live),
+    };
+    let site = match kind {
+        DeviceKind::Bluetooth => "heartrate.example.com",
+        _ => "flasher.example.com",
+    };
+    Some(Chooser {
+        site: site.into(),
+        kind,
+        devices,
+        scan,
+    })
+}
+
 /// PREVIEW_THEME=#RRGGBB gives the first Space a theme of that colour alone, and
 /// PREVIEW_THEME="x=… y=… colors=3 …" the theme as the core keeps it.
 fn preview_theme() -> Option<Theme> {
@@ -1790,6 +1975,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
     }
 }
 
+/// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
 fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     let page = |text: &str, detail: &str, url: &str, tab: u64| Suggestion {
         url: url.into(),
@@ -2061,9 +2247,19 @@ fn main() {
                                 open_when_done: false,
                                 held,
                                 started: now() - days * DAY,
+                                profile: 0,
+                                private: false,
                             },
                         )
                         .collect();
+                    // In a private window, the running one and the first finished one are its
+                    // session's, which its Library lists alone.
+                    let mut downloads: Vec<Download> = downloads;
+                    if std::env::var("PREVIEW_EMPTY").as_deref() == Ok("private") {
+                        for (index, download) in downloads.iter_mut().enumerate() {
+                            download.private = matches!(index, 0 | 3);
+                        }
+                    }
                     let first_favorite = first_download + DOWNLOADS.len() as u64;
                     let favorites: Vec<u64> = (first_favorite..).take(FAVORITES.len()).collect();
                     let folder = first_favorite + FAVORITES.len() as u64;
@@ -2136,6 +2332,11 @@ fn main() {
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
+                    // PREVIEW_CHOOSER=serial, hid, usb, bluetooth, stopped, none, off or denied has the
+                    // first tab's page ask for a device, so its chooser shows.
+                    if let Ok(chooser) = std::env::var("PREVIEW_CHOOSER") {
+                        shell.set_chooser(1, preview_chooser(&chooser), cx);
+                    }
                     // The second in a folder, and the last two in a split view.
                     let pinned = vec![1, folder, 2];
                     let folders = Folders {
@@ -2207,6 +2408,7 @@ fn main() {
                                 why,
                                 handoff: Some(reading[3]),
                                 back,
+                                ..Default::default()
                             };
                             shell.set_agent_question(Some(question), cx);
                         }
@@ -2319,14 +2521,15 @@ fn main() {
             });
             let shell_window = window.as_ref().ok().copied();
             match window {
-                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads or =spaces opens
-                // it there; =rename opens its Spaces with the first card's name in its field.
+                // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces or
+                // =agents opens it there; =rename opens its Spaces with the first card's name in its field.
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
                             match std::env::var("PREVIEW_LIBRARY").as_deref() {
                                 Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
                                 Ok("spaces") => shell.show_spaces(cx),
+                                Ok("agents") => shell.show_agents(cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -2661,6 +2864,8 @@ impl site_controls::Host for PreviewSiteControls {
 
     fn reset_permissions(&self, _: u64) {}
 
+    fn remove_device(&self, _: u64, _: usize) {}
+
     fn set_system_engine(&self, _: u64, _: bool) {}
 
     fn allow_saving(&self, _: u64, _: &browser::passwords::Login) {}
@@ -2733,6 +2938,7 @@ fn preview_site() -> Site {
         reset: Some("Reset permissions".into()),
         system_engine: None,
         logins: Vec::new(),
+        devices: Vec::new(),
         ad_blocking: Some(true),
         developer_mode: Some(false),
     }
@@ -2860,25 +3066,29 @@ impl gpui::Render for AccountPage {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        use browser::palette::PAPER;
+        use browser::palette::{INK, PAPER};
         use browser::settings_card::Colors;
         use browser::settings_column::{self, Section};
         use browser::settings_rows::Look;
-        use browser::tokens::palette::STAND_IN;
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::NAME;
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
-        let look = Look::settings(true);
+        // Dark, as Settings is in a dark system, unless PREVIEW_APPEARANCE=light.
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        self.account
+            .update(cx, |account, cx| account.set_look(look, cx));
         let field = browser::settings_search::field(
             &self.search,
-            rgb(PAPER),
+            if dark { rgb(PAPER) } else { rgb(INK) },
             gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
             |_, _| {},
             cx,
         );
         let column = settings_column::column(
             Section::Sync,
-            true,
+            dark,
             Rc::default(),
             gpui::IntoElement::into_any_element(field),
             None,
@@ -2886,22 +3096,23 @@ impl gpui::Render for AccountPage {
             Rc::new(|_, _| {}),
             window.is_a11y_active(),
         );
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let colors = Colors {
             line: look.line,
-            name: rgb(PAPER).opacity(NAME),
+            name: base.opacity(NAME),
             heading: look.heading,
         };
         let card = self.card.draw(
             Section::Sync.name(),
             div().child(self.account.clone()),
-            true,
+            dark,
             colors,
         );
         div()
             .relative()
             .size_full()
             .flex()
-            .bg(rgb(STAND_IN))
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
             .font_family(browser::face::UI)
             .text_size(px(text::BODY))
             .text_color(look.ink)
@@ -2936,6 +3147,22 @@ impl account::Host for PreviewAccount {
     fn request_pairing(&self) {}
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
+    // PREVIEW_SYNC=never, unreachable, throttled or stopped shows that line, else synced at 15:04.
+    fn activity(&self) -> account::Activity {
+        let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
+        let trouble = match shown.as_str() {
+            "unreachable" => Some(account::Trouble::Unreachable),
+            "throttled" => Some(account::Trouble::Throttled),
+            "stopped" => Some(account::Trouble::Stopped),
+            _ => None,
+        };
+        let synced = if shown == "never" { "" } else { "at 15:04" };
+        account::Activity {
+            synced: synced.into(),
+            trouble,
+        }
+    }
+    fn delete_account(&self) {}
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {}
     fn confirm(
         &self,

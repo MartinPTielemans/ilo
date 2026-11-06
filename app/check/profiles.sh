@@ -10,8 +10,8 @@
 # its Space's downloads go in, and Clear… for its browsing data, as ⇧⌘⌫ opens it for the Space
 # shown. Little ilo's bar picks the other profile for its page, which is kept for the site, and a
 # link from another app to the site opens in Little ilo in that profile.
-# Deleting the Space leaves its profile unused, and Delete in the menu deletes it once the
-# user confirms.
+# Deleting the Space leaves its profile with only a favorite, and Delete in the menu deletes it,
+# favorite and all, once the user confirms.
 
 # The cookie page's title says whether it finds its cookie, p, never a value, since the app logs
 # every title, and "c" sets it. The cookie outlives the run, so its value is this run's start and an
@@ -436,6 +436,41 @@ expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \
 # Settings opens only once the tab ⌘W leaves is shown: its page, shown later, would take the
 # keyboard back from Settings, and the click on its section would go to the browser window.
 expect "^browser: selected $d\( in .*\)\{0,1\}\$" "⌘W didn't show the second Space's tab again"
+# Clear Browsing Data run from the bar is a pick, kept in the profile's folder. The dialog's Delete,
+# with the history it ticks, deletes the history of its time, which takes the pick: Cancel has the
+# keyboard, and Delete is after it.
+bar_command clear-browsing-data "Clear Browsing Data" "clear browsing"
+expect '^browser: command bar picks kept in ' "a pick in the command bar wasn't kept"
+picks=$(sed -n 's/^browser: command bar picks kept in //p' "$log" | tail -1)
+[ -e "$picks" ] || fail "the command bar's picks aren't where it said: $picks"
+expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
+  "the command bar didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
+# The dialog takes the keyboard a moment after its page loads, which the app's log can't tell
+# (clear.sh asks DevTools, which this run hasn't): Tab and Space sent before then follow the
+# settings page's link instead, and ⌘← brings the dialog back for another try.
+deleted=
+for _ in 1 2 3; do
+  send key tab
+  send key space
+  missed=
+  for _ in $(seq 100); do
+    logged '^browser: history deleted ' && deleted=1 && break
+    logged '^browser: page [0-9]* back 1 forward 0 loading [01] chrome://settings/' && missed=1 && break
+    sleep 0.1
+  done
+  [ -z "$deleted" ] && [ -n "$missed" ] || break
+  history_key left back page
+  expect '^browser: page [0-9]* back 0 forward 1 loading 0 chrome://settings/clearBrowserData$' \
+    "⌘← didn't bring Clear browsing data back"
+done
+[ -n "$deleted" ] || fail "Delete in Clear browsing data didn't delete the history"
+# A pattern of the path, whose backslashes on Windows grep would read as its own, \b in \browser-app.
+expect "^browser: command bar picks none in $(printf '%s\n' "$picks" | sed 's/[][\\.*^$]/\\&/g')\$" \
+  "deleting the history kept the bar's picks"
+[ ! -e "$picks" ] || fail "deleting the history left the bar's picks: $picks"
+../tools/window-screenshot.sh "$pid" "$out/clear-browsing-data-deleted.png" || fail "no window to capture"
+send key w cmd
+expect "^browser: today $d\$" "⌘W didn't close Clear browsing data: Today is \"$(today)\""
 # A profile's own settings sit in the sections they belong to, a row per profile: its search
 # engine and download folder in General, its archive time in Tabs & Sidebar. Settings › Profiles
 # lists the profiles, with New Profile under them. Settings logs where it draws each control the
@@ -461,17 +496,17 @@ send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
 post clickkey $(drawn "archive $work")
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "the second profile's Archive Today tabs after didn't show the times, with 12 hours chosen"
 send choose 7 days
 expect "^browser: profile $work archive tabs after 7 days\$" "choosing 7 days didn't set the second profile's"
 post clickkey $(drawn "archive $default")
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "the second profile's time changed the first's"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the first profile's times"
 post clickkey $(drawn "archive $work")
-expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 days$' \
+expect '^browser: menu shown 12 hours (default), 24 hours, 7 days (checked), 30 days, Never$' \
   "the second profile didn't keep 7 days"
 send key escape
 expect '^browser: menu closed$' "escape didn't close the second profile's times"
@@ -510,6 +545,12 @@ send ime off
 send key return
 expect "^browser: renamed profile $spare spare 日本語\$" \
   "the new profile wasn't named: $(grep '^browser: renamed profile' "$log" | tail -1)"
+# What the app keeps for a profile goes in its folder, as the command bar's picks do, so it goes
+# with the profile. A Space in it would have made them; the run puts them there itself.
+spare_picks="$(sed -n "s/^browser: profile $spare folder //p" "$log" | tail -1)/Command bar picks"
+[ "$spare_picks" != "/Command bar picks" ] || fail "the app didn't log the new profile's folder"
+mkdir -p "$(dirname "$spare_picks")"
+printf 'New Window\t1\n' > "$spare_picks"
 ../tools/window-screenshot.sh "$pid" "$out/settings-profiles.png" || fail "no window to capture"
 # Settings asks in an alert, and off the Mac, which has none, in its dialog, where escape cancels
 # and return deletes. The dialog covers Settings, taking its clicks, until it has gone.
@@ -532,6 +573,11 @@ post clickkey $(drawn "delete profile $spare")
 expect "^browser: $asks shown Delete “spare 日本語”?\$" "Delete in Settings didn't ask again"
 settings_answer Delete
 expect "^browser: removed profile $spare spare 日本語\$" "Delete in Settings didn't delete it"
+for _ in $(seq 300); do
+  [ -e "$spare_picks" ] || break
+  sleep 0.1
+done
+[ ! -e "$spare_picks" ] || fail "the deleted profile left its command bar picks: $spare_picks"
 # The first profile's Clear… in Privacy opens Clear browsing data in its Space, leaving Settings.
 send clickkey $(drawn "toolbar Privacy")
 expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
@@ -570,17 +616,22 @@ send type d
 expect '^browser: download [0-9]* done profile.txt$' "the second profile's page didn't download"
 [ -f "$work_downloads/profile.txt" ] ||
   fail "the second profile's download isn't in the folder Change… gave it"
-# Its icon flies to the Library button first, over the sidebar the right-click below goes to.
+# Its icon flies to the Library button first, over the sidebar the drag below starts in.
 flight=$(grep '^browser: download [0-9]* done profile.txt$' "$log" | tail -1 | cut -d' ' -f3)
 expect "^browser: download landed $flight\$" "the second profile's download didn't land"
-# Deleted, the Space leaves its profile unused, which the first Space's menu then deletes, once the
-# user confirms.
-post rightclick $name_point
+# Its tab made the profile's favorite, the Space is empty, and deleted at once it leaves the
+# profile with a favorite no Space shows. The first Space's menu then deletes the profile, favorite
+# and all, once the user confirms (#1524).
+send press $(row 0)
+send dragto 100 160
+send dragto 114 112
+expect '^browser: drag shape tile$' "the second Space's row dragged onto its name didn't turn into a tile"
+send release 114 112
+expect "^browser: favorites $d\$" "the second Space's row dragged onto its name didn't make a favorite"
+post rightclick $tiled_name
 expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
   "a right-click on the Space's name didn't show its menu"
 post choose Delete Space
-expect '^browser: dialog settled$' "Delete Space didn't ask first"
-send key return
 expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
@@ -598,4 +649,4 @@ send key return
 expect "^browser: removed profile $work personal\$" "the profile wasn't deleted"
 exec 3>&-
 quit
-echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms; a profile nothing is in is deleted from the menu once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"
+echo "ok: the New Space form's Profile row makes a profile and puts the Space in it, where its tabs open without the first profile's cookie, from a command bar that followed it from the first profile's Space too, and its Choose a Theme row colours it; an empty Space's menu moves it between profiles, and a Space with tabs keeps its profile; held partway between two profiles' Spaces, each page has its own URL field and favorites; a new Space is in the profile of the Space it's made from; favorites show only in their profile's Spaces; after a relaunch each Space is in its profile and each tab loads in it; a tab moved to another profile's Space loads there with its cookies, after a warning only the first time; in Every Space a favorite has a twin in the other profile, which goes with it when it’s removed, comes back with ⌘Z, and goes back to the favorite’s URL in its own profile, and stays the other profile’s own favorite after; ⇧⌘⌫ opens Clear browsing data in the Space shown; Clear Browsing Data from the command bar is a pick, kept in the profile's folder, which the dialog's Delete takes with the history; Settings › Profiles sets the second profile's download folder, which its page downloads into, its search engine, which the command bar then searches with in its Space while the first's keeps DuckDuckGo, and its archive time, leaving the first's, opens Clear browsing data for the first in its Space, renames a profile on a double-click, which the Space menu shows, and makes one, named with Japanese input, and deletes it once the user confirms, with what the app kept in its folder; a profile no Space is in is deleted from the menu, its favorite with it, once the user confirms; Little ilo's bar reopens its page in the other profile, without the first's cookie, and keeps that profile for the site, where a link from another app to the site then opens, in that profile's Space. Windows: $out/profile-popup.png, $out/little-profile.png, $out/little-kept-profile.png, $out/profile-form.png, $out/profile-made.png, $out/profile-menu.png, $out/profile-space.png, $out/profile-swipe.png, $out/profile-move.png, $out/clear-browsing-data.png, $out/clear-browsing-data-deleted.png, $out/settings-profile-boxes.png, $out/settings-profile-settings.png, $out/settings-profile-name.png, $out/settings-profiles.png, $out/profile-delete.png"

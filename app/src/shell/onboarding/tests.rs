@@ -443,6 +443,19 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     );
 }
 
+/// A quit under way closes the window the flow fades from, so its end opens no command bar there.
+#[gpui::test]
+fn a_quit_under_way_brings_no_command_bar_as_the_flow_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    cx.simulate_keystrokes("escape");
+    crate::shell::quit_goes_ahead();
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    assert!(host.command_bars.borrow().is_empty());
+}
+
 /// The opt-ins step shows the switches offered, each Settings' own and set as it's turned, and
 /// none offered leaves the step out.
 #[gpui::test]

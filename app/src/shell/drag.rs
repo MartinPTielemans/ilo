@@ -407,7 +407,8 @@ impl Shell {
     /// nearest it. Over the list it's a row, which goes up and down over rows that stay put, and a
     /// line marks the place, in the pinned tabs or Today, nearest where it's drawn. Where that's
     /// at the end of folders or after one, the pointer moved right takes it into them, a row in for
-    /// each FOLDER_INDENT. A split view's row stays in the list, and a folder's in the pinned tabs.
+    /// each FOLDER_INDENT. A split view's row over the favorites is its tile, as it becomes one
+    /// favorite, and a folder's row stays in the pinned tabs.
     pub(super) fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(drag) = self
             .drag
@@ -458,7 +459,6 @@ impl Shell {
         let over_favorites = !incoming
             && !away
             && !folder
-            && self.panes(tab).len() == 1
             && self.has_room_for(tab)
             && pointer.y < self.list_top_with(favorites + 1) - self.tiles_scrolled();
         let mut depth = 0;
@@ -610,7 +610,7 @@ impl Shell {
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
             && self.panes(tab).len() == 1
-            && !self.private;
+            && !self.one_space();
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
         if drag.edge.map(|(right, _)| right) == side {
             return;

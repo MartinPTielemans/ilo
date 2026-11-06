@@ -6,8 +6,10 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -26,6 +28,10 @@ bool OnWayland();
 // (bc_wayland_display). Null off Wayland.
 void* JoinWaylandDisplay(void (*dispatched)());
 
+// Runs |done|, posted, once |widget|'s window has acked a configure of the compositor's with the
+// state the window has now, such as the one a full screen it asked for brings, whose bounds are
+// then in. Soon off Wayland.
+void AfterStateConfigured(views::Widget* widget, base::OnceClosure done);
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
 
@@ -84,6 +90,10 @@ void AnswerClipboardRequests();
 // clipped to the Picture in Picture window, which Chrome would then grow to hold it (#1161). In
 // window_views.cc.
 void FloatPictureInPictureBubbles();
+
+// Where DevTools docked in a page of |widget|'s window show, the first pane's with them, and the
+// page beside them, from its content's top-left (bc_window_devtools). In window_views.cc.
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget);
 
 }  // namespace browser_core::platform
 

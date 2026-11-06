@@ -245,17 +245,26 @@ fn the_server_answers_what_needs_no_browser() {
             "list_tabs",
             "open_tab",
             "close_tab",
+            "split_tabs",
+            "add_to_split",
+            "separate_tab",
+            "list_split",
             "navigate",
             "snapshot",
             "read_page",
             "click",
             "type",
+            "select",
             "press_key",
             "scroll",
             "screenshot",
+            "request",
             "run_steps",
             "hand_off",
-            "ask_for_tab"
+            "ask_for_tab",
+            "pin_tab",
+            "unpin_tab",
+            "remove_tab"
         ]
     );
     assert_eq!(list["id"], "a");

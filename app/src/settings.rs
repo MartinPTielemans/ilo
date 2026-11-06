@@ -19,6 +19,7 @@ use browser::default_browser::{self, DefaultBrowser, Os};
 use browser::dialog;
 use browser::import::ImportView;
 use browser::link_rules::LinkRulesView;
+use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
@@ -63,11 +64,31 @@ use browser::tokens::text;
 actions!(settings, [CloseSettings, ReleaseHeldProfile]);
 
 /// What Arc offers for how long a Today tab waits unseen before it's archived, in seconds.
-const ARCHIVE_AFTER: [(&str, f64); 4] = [
+const ARCHIVE_AFTER: [(&str, f64); 5] = [
     ("12 hours (default)", 12. * 3600.),
     ("24 hours", 24. * 3600.),
     ("7 days", 7. * 24. * 3600.),
     ("30 days", 30. * 24. * 3600.),
+    // Ours (#1636), Arc had none: Clear and ⌘W still archive (BC_ARCHIVE_NEVER).
+    ("Never", ARCHIVE_NEVER),
+];
+
+/// The core's BC_ARCHIVE_NEVER.
+const ARCHIVE_NEVER: f64 = -1.;
+
+/// Chrome's page zoom choices, as its settings page's.
+const PAGE_ZOOM: [(&str, f64); 11] = [
+    ("50%", 0.5),
+    ("67%", 2. / 3.),
+    ("75%", 0.75),
+    ("80%", 0.8),
+    ("90%", 0.9),
+    ("100% (default)", 1.),
+    ("110%", 1.1),
+    ("125%", 1.25),
+    ("150%", 1.5),
+    ("175%", 1.75),
+    ("200%", 2.),
 ];
 
 /// What's offered for how long a Little ilo window that isn't in use stays open before it closes
@@ -388,6 +409,8 @@ enum Popup {
     TaskModel(Cli),
     /// General's Appearance.
     Appearance,
+    /// General's Page zoom.
+    PageZoom,
 }
 
 impl Popup {
@@ -403,6 +426,7 @@ impl Popup {
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::Appearance => "Appearance".into(),
+            Popup::PageZoom => "Page zoom".into(),
         }
     }
 }
@@ -558,6 +582,36 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_remove_device(id.as_ptr()) };
     }
 
+    fn activity(&self) -> account::Activity {
+        let mut activity = bc::bc_sync_activity::default();
+        unsafe { bc::bc_sync_read_activity(&mut activity) };
+        let mut day_starts = [0.; 4];
+        unsafe { platform::host_day_starts(day_starts.as_mut_ptr()) };
+        let trouble = match activity.trouble as u32 {
+            bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
+            bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
+            bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
+            _ => None,
+        };
+        // check.sh waits for this line.
+        log!(
+            "browser: sync activity {} {trouble:?}",
+            if activity.last_synced > 0. {
+                "synced"
+            } else {
+                "never"
+            }
+        );
+        account::Activity {
+            synced: account::synced_when(activity.last_synced, day_starts).into(),
+            trouble,
+        }
+    }
+
+    fn delete_account(&self) {
+        unsafe { bc::bc_sync_delete_account() };
+    }
+
     fn copy_secret(&self, text: &str, kept: Duration, cx: &mut App) {
         let secret = CString::new(text).unwrap_or_default();
         let seconds = u32::try_from(kept.as_secs()).unwrap_or(u32::MAX);
@@ -679,8 +733,10 @@ struct Profile {
     id: u64,
     name: SharedString,
     spaces: usize,
-    /// As the core has it: not the one it started with, nor one a Space or a favorite is in.
+    /// As the core has it: not the one it started with, nor one a Space is in.
     deletable: bool,
+    /// The favorites its tabs hold, which go with it.
+    favorites: usize,
     /// Why it has no Delete, for the line under its name.
     kept: Option<SharedString>,
     /// Whether one of the user's Spaces is in it, for Clear Browsing Data's tab to open in.
@@ -753,13 +809,14 @@ fn profiles() -> Vec<Profile> {
         .map(|(index, id)| {
             let count = spaces.iter().filter(|&&each| each == id).count();
             let listed = listed.iter().filter(|&&each| each == id).count();
-            let favorites = favorites.contains(&id);
-            let kept = shell::profile_kept(index == 0, total, listed, count > listed, favorites);
+            let favorites = favorites.iter().filter(|&&each| each == id).count();
+            let kept = shell::profile_kept(index == 0, total, listed, count > listed);
             Profile {
                 id,
                 name: crate::name(bc::bc_profile_name, id),
                 spaces: listed,
-                deletable: index > 0 && count == 0 && !favorites,
+                deletable: index > 0 && count == 0,
+                favorites,
                 kept: kept.map(Into::into),
                 users_space: users.contains(&id),
             }
@@ -915,6 +972,11 @@ fn show_now(cx: &mut App) {
             settings.shown = true;
             if settings.section == Section::Agents {
                 look_for_clients(cx);
+            }
+            if settings.section == Section::Sync {
+                settings
+                    .account
+                    .update(cx, |account, cx| account.read_activity(cx));
             }
             cx.notify();
         })
@@ -1447,6 +1509,10 @@ impl Settings {
         if section == Section::Agents {
             look_for_clients(cx);
         }
+        if section == Section::Sync {
+            self.account
+                .update(cx, |account, cx| account.read_activity(cx));
+        }
         let look = self.look;
         self.links = (section == Section::Links).then(|| {
             let host = Rc::new(crate::link_rules_host::CoreLinkRules);
@@ -1761,7 +1827,21 @@ impl Settings {
                     .into_any_element(),
             )
         });
-        let found: Vec<Row> = search.into_iter().chain(folders).collect();
+        let ask = self.toggle(
+            "ask where to save",
+            "Ask where to save each file",
+            unsafe { bc::bc_ask_where_to_save() },
+            set_ask_where_to_save,
+            accent,
+            cx,
+        );
+        let ask = setting(
+            look,
+            "Ask where to save each file",
+            Some("Each download asks where it goes, rather than saving to its folder.".into()),
+            vec![ask],
+        );
+        let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
         let appearance = shell::app_appearance(cx);
         let appearance_popup = self.popup(
             Popup::Appearance,
@@ -1775,16 +1855,44 @@ impl Settings {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
         };
-        let mut looks = vec![setting(
-            look,
-            "Appearance",
-            Some(appearance_line.into()),
-            vec![
-                appearance_popup
-                    .child(self.drawn("appearance".into()))
-                    .into_any_element(),
-            ],
-        )];
+        let zoom = unsafe { bc::bc_page_zoom() };
+        let zoom_chosen = PAGE_ZOOM
+            .iter()
+            .position(|&(_, each)| (each - zoom).abs() < 0.001);
+        let zoom_label: SharedString = match zoom_chosen {
+            Some(index) => PAGE_ZOOM[index].0.into(),
+            None => format!("{:.0}%", zoom * 100.).into(),
+        };
+        let zoom_popup = self.popup(
+            Popup::PageZoom,
+            zoom_label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_page_zoom(zoom_chosen, window, cx)
+            }),
+        );
+        let mut looks = vec![
+            setting(
+                look,
+                "Appearance",
+                Some(appearance_line.into()),
+                vec![
+                    appearance_popup
+                        .child(self.drawn("appearance".into()))
+                        .into_any_element(),
+                ],
+            ),
+            setting(
+                look,
+                "Page zoom",
+                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+                vec![
+                    zoom_popup
+                        .child(self.drawn("page zoom".into()))
+                        .into_any_element(),
+                ],
+            ),
+        ];
         // The Dock's, which the Mac alone has.
         if cfg!(target_os = "macos") {
             let colored = !off(DOCK_ICON_PLAIN);
@@ -1840,9 +1948,9 @@ impl Settings {
             ),
             |profile| {
                 let id = profile.id;
-                // Nothing to show until the core has loaded it.
+                // Nothing to show until the core has loaded it, which Never (-1) isn't.
                 let after = unsafe { bc::bc_profile_archive_after(id) };
-                (after > 0.).then(|| {
+                (after != 0.).then(|| {
                     let (label, chosen) = archive_after(after);
                     let popup = self.popup(
                         Popup::ArchiveAfter(id),
@@ -1930,8 +2038,12 @@ impl Settings {
             ),
             vec![edge],
         )];
-        // Where the host watches for it (host_watch_option_taps).
-        if cfg!(any(target_os = "macos", target_os = "linux")) {
+        // Where the host watches for it (host_watch_option_taps), or on Windows the core.
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             let option = unsafe { bc::bc_option_reveals_sidebar() };
             let spoken = match cfg!(target_os = "macos") {
                 true => "Show the hidden sidebar when ⌥ is pressed alone",
@@ -2011,37 +2123,54 @@ impl Settings {
             true => ("⌥⌘N", "⌥⌘-click", "⇧-click"),
             false => ("Ctrl+Alt+N", "Ctrl+Alt-click", "Shift-click"),
         };
+        let little_on = unsafe { bc::bc_little_windows() };
+        let little_switch = self.toggle(
+            "little windows",
+            "Little ilo",
+            little_on,
+            set_little_windows,
+            accent,
+            cx,
+        );
+        // Off, the line is the receipt: what's gone, and where things go instead.
+        let little_line = match little_on {
+            true => format!(
+                "A small window for a quick look: {little_keys}, {little_click} a link, or a link \
+                 from another app."
+            ),
+            false => format!(
+                "Off: {little_keys} does nothing, {little_click} opens a tab behind, and links \
+                 from other apps open in the Space in front."
+            ),
+        };
         let little = feature(
             look,
             "icons/app-window.svg",
             concat!("Little ", env!("APP_NAME")),
-            Some(
-                format!(
-                    "A small window for a quick look: {little_keys}, {little_click} a link, or a \
-                     link from another app."
-                )
-                .into(),
-            ),
-            Vec::new(),
+            Some(little_line.into()),
+            vec![little_switch],
         );
-        // The Mac's alone, the one with a host for the button so far.
-        let menu_bar = mac.then(|| {
-            let on = crate::little_in_menu_bar();
-            let switch = self.toggle(
-                "little in the menu bar",
-                "Show in the menu bar",
-                on,
-                set_little_in_menu_bar,
-                accent,
-                cx,
-            );
-            nested(setting(
-                look,
-                "Show in the menu bar",
-                Some("A button there opens a new one.".into()),
-                vec![switch],
-            ))
-        });
+        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
+        // place every desktop shows (browser::little_launch).
+        // With Little ilo off, none (#1636).
+        let menu_bar =
+            (little_launch::button(little_launch::os()).filter(|_| little_on)).map(|button| {
+                let on = crate::little_in_menu_bar();
+                let switch = self.toggle(
+                    "little in the menu bar",
+                    button.row,
+                    on,
+                    set_little_in_menu_bar,
+                    accent,
+                    cx,
+                );
+                nested(setting(
+                    look,
+                    button.row,
+                    Some(button.line.into()),
+                    vec![switch],
+                ))
+            });
         let (label, chosen) = chosen_time(&LITTLE_ARCHIVE_AFTER, unsafe {
             bc::bc_little_archive_after()
         });
@@ -2059,10 +2188,11 @@ impl Settings {
             Some("Counted from when you leave the window.".into()),
             vec![little_archive.into_any_element()],
         ));
+        // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
             .chain(menu_bar)
-            .chain([little_archive])
+            .chain(little_on.then_some(little_archive))
             .collect();
         let previews = unsafe { bc::bc_link_previews() };
         let previews = self.toggle(
@@ -2171,8 +2301,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, each profile's browsing data, and crash
-    /// reports where the build names a collector.
+    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// profile's browsing data, and crash reports where the build names a collector.
     fn privacy(
         &self,
         profiles: &[Profile],
@@ -2196,11 +2326,42 @@ impl Settings {
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking])];
+        let prompts = unsafe { bc::bc_notification_prompts() };
+        let prompts_switch = self.toggle(
+            "notification prompts",
+            "Let sites ask to send notifications",
+            prompts,
+            set_notification_prompts,
+            accent,
+            cx,
+        );
+        let prompts_line = match prompts {
+            true => "Calls and chat need it. A site you allowed or blocked keeps its choice.",
+            false => "Off: no site can ask. A site you allowed or blocked keeps its choice.",
+        };
+        let prompts = setting(
+            look,
+            "Let sites ask to send notifications",
+            Some(prompts_line.into()),
+            vec![prompts_switch],
+        );
+        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
         }
+        let relay = unsafe { bc::bc_relay_calls() };
+        let relay = self.toggle(
+            "relay calls",
+            "Relay calls",
+            relay,
+            set_relay_calls,
+            accent,
+            cx,
+        );
+        let line = "Calls always go through a relay. Some apps won't connect, and calls may lag.";
+        let relay = setting(look, "Relay calls", Some(line.into()), vec![relay]);
+        blocks.push(Block::Rows(vec![relay]));
         // Only a profile one of the user's Spaces is in, for Clear Browsing Data's tab to open in.
         let clear = profiles
             .iter()
@@ -2215,7 +2376,6 @@ impl Settings {
                 .child(self.drawn(format!("clear {id}")))
                 .on_click(cx.listener(move |_, _, _, cx| {
                     if crate::clear_browsing_data(id) {
-                        browser::shell::forget_bar_usage(id, cx);
                         hide(cx);
                     }
                 }));
@@ -2525,6 +2685,30 @@ impl Settings {
         self.pop_up(Popup::Favorites, items, picked, window, cx);
     }
 
+    /// General's Page zoom: Chrome's choices, which every profile's pages take.
+    fn choose_page_zoom(&mut self, chosen: Option<usize>, window: &Window, cx: &mut Context<Self>) {
+        let items: Vec<MenuEntry> = (PAGE_ZOOM.iter().enumerate())
+            .map(|(index, &(title, _))| {
+                let on = Some(index) == chosen;
+                MenuEntry {
+                    checked: on,
+                    over: on,
+                    ..MenuEntry::new(title, true)
+                }
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some((title, factor)) = picked.map(|index| PAGE_ZOOM[index]) {
+                // check.sh waits for this line.
+                log!("browser: page zoom {title}");
+                unsafe { bc::bc_set_page_zoom(factor) };
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::PageZoom, items, picked, window, cx);
+    }
+
     /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
     /// window takes.
     fn choose_appearance(&mut self, chosen: Appearance, window: &Window, cx: &mut Context<Self>) {
@@ -2652,13 +2836,13 @@ impl Settings {
                         }))
                         .into_any_element()
                 });
-            let name = profile.name.clone();
+            let (name, favorites) = (profile.name.clone(), profile.favorites);
             let delete = profile.deletable.then(|| {
                 self.button(("delete-profile", id), "Delete")
                     .relative()
                     .child(self.drawn(format!("delete profile {id}")))
                     .on_click(cx.listener(move |settings, _, window, cx| {
-                        settings.delete(id, name.clone(), window, cx)
+                        settings.delete(id, name.clone(), favorites, window, cx)
                     }))
                     .into_any_element()
             });
@@ -2768,6 +2952,9 @@ impl Settings {
         let profile = unsafe { bc::bc_profile_create(c_name.as_ptr()) };
         // check.sh waits for this line.
         log!("browser: create profile {profile} {name}");
+        if let Some(folder) = crate::bar_picks_host::folder(profile) {
+            log!("browser: profile {profile} folder {}", folder.display());
+        }
         if profile != 0 {
             self.rename(profile, name.into(), cx);
         }
@@ -2779,11 +2966,12 @@ impl Settings {
         &mut self,
         profile: u64,
         name: SharedString,
+        favorites: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let message = format!("Delete “{name}”?");
-        let detail = "Its history, cookies and logins go with it.";
+        let detail = shell::profile_goes_with(favorites_scope(), favorites);
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,
@@ -2801,7 +2989,7 @@ impl Settings {
         {
             let _ = window;
             cx.spawn(async move |_, _| {
-                if crate::ask(&message, detail, &["Delete", "Cancel"], true) == 0 {
+                if crate::ask(&message, &detail, &["Delete", "Cancel"], true) == 0 {
                     unsafe { bc::bc_profile_delete(profile) };
                 }
             })
@@ -3198,6 +3386,7 @@ impl Settings {
                         let did = agents::tools::Did {
                             tool: entry.action.to_string(),
                             site: entry.site.to_string(),
+                            target: entry.target.to_string(),
                             ..Default::default()
                         };
                         let tense = match entry.refused.is_empty() {
@@ -3702,9 +3891,18 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
+        // Little ilo's commands have no row while it's off.
+        let little = unsafe { bc::bc_little_windows() };
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
+                .filter(|(_, keys)| {
+                    little
+                        || !matches!(
+                            keys,
+                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
+                        )
+                })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
                         (Keys::Of(command), _) => self.shortcut(*command, &shown(name), accent, cx),
@@ -4124,6 +4322,10 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
     crate::set_little_in_menu_bar(on);
 }
 
+fn set_little_windows(on: bool, cx: &mut App) {
+    crate::set_little_windows(on, cx);
+}
+
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
     unsafe { bc::bc_set_unload_idle_tabs(unload) };
 }
@@ -4131,6 +4333,11 @@ fn set_unload_idle_tabs(unload: bool, _: &mut App) {
 /// In every profile; a site's own stays as the user set it in the Site Controls.
 fn set_ad_blocking(on: bool, _: &mut App) {
     unsafe { bc::bc_set_ad_blocking(on) };
+}
+
+/// On, a page's WebRTC goes only through its TURN relays, as it does in a profile with a proxy.
+fn set_relay_calls(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_relay_calls(on) };
 }
 
 /// Off, the next launch opens one window with no Today tabs, theirs going in the archive.
@@ -4225,6 +4432,14 @@ fn set_automatic_update_checks(on: bool, _: &mut App) {
 
 fn set_whats_new(shown: bool, _: &mut App) {
     set_off(updates::NO_WHATS_NEW, !shown);
+}
+
+fn set_ask_where_to_save(ask: bool, _: &mut App) {
+    unsafe { bc::bc_set_ask_where_to_save(ask) };
+}
+
+fn set_notification_prompts(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_notification_prompts(on) };
 }
 
 fn set_warn_moving_profiles(warn: bool, _: &mut App) {

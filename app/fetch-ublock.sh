@@ -1,8 +1,8 @@
 #!/bin/bash
 # Downloads the uBlock Origin ublock.ini names, checked against its hash, into .deps/ublock, adds
 # our key to its manifest so its id doesn't depend on where the app is, takes out the timers that
-# wake an idle browser and the reload as it first starts, reloads once a page that loaded what it
-# blocks before it was ready (below), and prints its folder.
+# wake an idle browser and the reload as it first starts, has it say when it's ready to block, for the
+# core to hold the first pages until then (below), and prints its folder.
 # Nothing in the download runs here: it's unzipped into a folder of its own and only read.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -13,7 +13,7 @@ fail() {
 }
 
 # What starts each file this changes, as GPL 3 asks of a changed file.
-changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, and a page that loaded what it blocks before it was ready reloads once."
+changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, and it says when it's ready to block."
 
 # Puts $3, which may be several lines or none, in place of the line $2 of uBlock Origin's file $1,
 # and fails unless that line is there once, so a new release is read again before it ships.
@@ -75,34 +75,11 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # URL loader factories, dropping a subresource they were asking for (#954).
   edit js/start.js "    if ( lastVersionInt === 0 && vAPI.webextFlavor.soup.has('chromium') ) {" \
     '    if ( false ) {'
-  # A page that started before it was ready loaded its ads, as Chromium doesn't hold a request for
-  # an extension that hasn't started, and uBlock Origin starts after the first pages (#744). Once
-  # ready, it goes through what each open page loaded, as the page's resource timing lists it, and
-  # reloads once a page that loaded something it blocks, unless the user has pressed or typed in it.
-  # No page waits for it.
-  IFS= read -r -d '' reload_unready <<'EOF' || true
-            vAPI.net.setSuspendableListener(onBeforeRequest);
-            vAPI.tabs.query({ url: [ 'http://*/*', 'https://*/*' ], discarded: false }).then(tabs => {
-                const types = { script: 'script', img: 'image', image: 'image', css: 'stylesheet', link: 'stylesheet', xmlhttprequest: 'xmlhttprequest', fetch: 'xmlhttprequest', beacon: 'ping', video: 'media', audio: 'media', embed: 'object', object: 'object' };
-                for ( const tab of tabs ) {
-                    vAPI.tabs.executeScript(tab.id, {
-                        code: "[ navigator.userActivation.hasBeenActive, performance.getEntriesByType('resource').map(entry => [ entry.name, entry.initiatorType ]) ]",
-                        runAt: 'document_start',
-                    }).then(([ loaded ]) => {
-                        if ( Array.isArray(loaded) === false || loaded[0] !== false ) { return; }
-                        const pageStore = µb.pageStoreFromTabId(tab.id);
-                        if ( pageStore === null ) { return; }
-                        const blocked = loaded[1].some(([ url, initiator ]) => {
-                            if ( /^https?:/.test(url) === false ) { return false; }
-                            const fctxt = µb.filteringContext.fromWebrequestDetails({ tabId: tab.id, frameId: 0, parentFrameId: -1, type: types[initiator] || 'other', url, method: 'GET', documentUrl: tab.url });
-                            return pageStore.filterRequest(fctxt) === 1;
-                        });
-                        if ( blocked ) { vAPI.tabs.reload(tab.id); }
-                    });
-                }
-            });
-EOF
-  edit js/traffic.js '            vAPI.net.setSuspendableListener(onBeforeRequest);' "$reload_unready"
+  # Chromium sends a request only to the listeners there are as it starts, and uBlock Origin starts
+  # with the first pages and is ready seconds later, so the core holds a page until it says it's
+  # ready (#744): it listens to an event only ChromeOS's kiosk apps are sent (core/ad_block.cc).
+  edit js/traffic.js '            vAPI.net.setSuspendableListener(onBeforeRequest);' \
+    $'            vAPI.net.setSuspendableListener(onBeforeRequest);\n            chrome.runtime.onRestartRequired.addListener(( ) => { });'
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
   # Earlier versions go.

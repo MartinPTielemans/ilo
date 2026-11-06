@@ -140,7 +140,7 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
     else {
         return;
     };
-    gpui_linux::show_overlay(view, ui_view, bounds, px(radius as f32), keyboard, left);
+    crate::overlays::show_over(view, ui_view, bounds, px(radius as f32), keyboard, left);
     // check.sh reads these lines.
     let at = [
         bounds.origin.x,

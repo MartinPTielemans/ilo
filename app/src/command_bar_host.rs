@@ -17,10 +17,27 @@ impl command_bar::Host for Bar {
         }
     }
 
-    fn remove_suggestion(&self, url: &str) {
-        if let Ok(url) = CString::new(url) {
-            unsafe { bc::bc_window_remove_suggestion(front().0, url.as_ptr()) };
+    fn remove_suggestion(&self, url: &str, cx: &mut App) {
+        let Ok(url) = CString::new(url) else {
+            return;
+        };
+        let window = front().0;
+        let removal = unsafe { bc::bc_window_remove_suggestion(window, url.as_ptr()) };
+        // The bar shows over the window in front, whose ⌘Z puts it back.
+        if let Some(shell) = shell_of(window) {
+            shell
+                .update(cx, |shell, cx| shell.suggestion_removed(removal, cx))
+                .ok();
         }
+    }
+
+    fn step_removal(&self, redo: bool, cx: &mut App) -> bool {
+        let Some(shell) = shell_of(front().0) else {
+            return false;
+        };
+        shell
+            .update(cx, |shell, cx| shell.step_suggestion_removal(!redo, cx))
+            .unwrap_or(false)
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {

@@ -1,0 +1,31 @@
+Keeps a tab of an agent's Space out of the open tabs session sync gives the account's other
+devices (#1796): TabContentsSyncedTabDelegate::ShouldSync asks the core, through
+g_browser_core_sync_tab (//browser_core/hooks.h, set in //browser_core/sync.cc), whether a tab
+may go. The user's own Spaces' tabs go as before; private windows Chrome leaves out itself.
+
+--- a/chrome/browser/ui/sync/tab_contents_synced_tab_delegate.cc
++++ b/chrome/browser/ui/sync/tab_contents_synced_tab_delegate.cc
+@@ -26,6 +26,11 @@
+ 
+ using content::NavigationEntry;
+ 
++// browser_core: whether the account's other devices may get |contents| as one of this device's
++// open tabs: a tab of an agent's Space stays on its device. Set by the core; null leaves Chrome's.
++// Defined here so Chrome's other targets link without it.
++bool (*g_browser_core_sync_tab)(content::WebContents* contents) = nullptr;
++
+ namespace {
+ 
+ // The minimum time between two sync updates of `last_active_time` when the tab
+@@ -146,6 +151,11 @@
+     return false;
+   }
+ 
++  // browser_core: an agent's tab, which stays on this device.
++  if (g_browser_core_sync_tab && !g_browser_core_sync_tab(web_contents_)) {
++    return false;
++  }
++
+   if (ProfileHasChildAccount()) {
+ #if BUILDFLAG(IS_ANDROID)
+     auto* blocked_navigations = GetBlockedNavigations();

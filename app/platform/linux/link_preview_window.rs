@@ -151,7 +151,7 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     gpui_linux::set_overlay_outline(view, &outline(content, None));
     gpui_linux::set_overlay_pointer(view, None);
     let bounds = Bounds::new(point(px(0.), px(0.)), content);
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), false, left);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
     // check.sh reads this line.
     eprintln!("browser: link preview shown");
 }

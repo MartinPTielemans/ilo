@@ -832,6 +832,57 @@ restore_newest "Restoring the sidebar replaced" 3
 await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
 exec 3>&-
 quit
+# A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q: the relaunch puts its
+# tab back, and its page finds both, as Chromium keeps them when it restores the last session
+# (#1934). A crash kept the cookie and a clean quit didn't, and neither kept the sessionStorage.
+# On Windows a quit still drops the session cookie (#1998).
+if windows; then
+  echo "skip: a session sign-in across ⌘Q: a quit drops its session cookie on Windows (#1998)."
+else
+  sign_in_page="${site}session-sign-in.html?restore"
+  log="$out/sign-in-a.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_URL="$sign_in_page" "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  signed=$(today)
+  await "^browser: title $signed sign-in cookie none storage none, drawn\$" ||
+    fail "the session sign-in page didn't draw, or found a sign-in before it signed in"
+  send click $page_point
+  if [ "$active" != 1 ]; then
+    exec 3>&-
+    quit
+    echo "skip: keeping a session sign-in. Browser wasn't the active app, so the page ignored the click."
+  else
+    send key s
+    expect "^browser: title $signed sign-in cookie kept storage kept, set\$" \
+      "s in the session sign-in page didn't set its session cookie and sessionStorage"
+    exec 3>&-
+    quit
+    log="$out/sign-in-b.log"
+    step=0
+    BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^browser: restored in ' || fail "the relaunch after signing in didn't restore the Spaces"
+    await '^browser: today [0-9]*$' || fail "the relaunch didn't bring back the sign-in's tab"
+    signed=$(today)
+    await "^browser: title $signed sign-in cookie [a-z]* storage [a-z]*, drawn\$" ||
+      fail "the sign-in's tab didn't load its page after the relaunch"
+    found=$(grep "^browser: title $signed sign-in cookie " "$log" | tail -1)
+    case "$found" in
+      *"cookie kept storage kept, drawn") ;;
+      *"cookie none storage none, drawn") fail "⌘Q signed the site out: its session cookie and its sessionStorage are gone after the relaunch" ;;
+      *"cookie none"*) fail "⌘Q dropped the site's session cookie, though its sessionStorage came back" ;;
+      *) fail "the relaunch put the sign-in's tab back without its sessionStorage, though its session cookie stayed" ;;
+    esac
+    ../tools/window-screenshot.sh "$pid" "$out/sign-in-kept.png" || fail "no window to capture"
+    exec 3>&-
+    quit
+  fi
+fi
 # With Restore windows from last session turned off in Settings › General, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
@@ -871,7 +922,8 @@ log="$out/fresh-b.log"
 BROWSER_DRIVE=1 "$browser" < /dev/null > "$log" 2>&1 &
 pid=$!
 await '^browser: restored in ' || fail "a launch with Restore windows off didn't bring the Spaces back"
-await "^browser: pinned $p\$" || fail "the pinned tab didn't come back with Restore windows off"
+# Its id is the launch's own, as ids never repeat across launches (#1447), so it's the one pinned.
+await '^browser: pinned [0-9][0-9]*$' || fail "the pinned tab didn't come back with Restore windows off"
 await '^browser: archive 1 tabs$' || fail "the Today tab didn't go in the archive with Restore windows off"
 # A window says it's open after its Space's lines, on Linux after the archive's too, so the count
 # below waits for it (#1038).
@@ -882,6 +934,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
 echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"
