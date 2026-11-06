@@ -16,6 +16,11 @@ tools/appcast.sh runs it:
   appcast.py nightly APPCAST BUILD KEEP
       Names BUILD's entries by their version and build, as nightlies share a version, and keeps
       each OS's newest KEEP builds.
+  appcast.py bases APPCAST BUILD COUNT
+      Prints the build and archive URL of each of the COUNT newest Mac updates older than BUILD,
+      one a line, for the deltas to BUILD.
+  appcast.py delta APPCAST BUILD FROM URL LENGTH SIGNATURE
+      Adds the delta at URL, which patches build FROM into BUILD, to BUILD's Mac entry.
 
 For the updates run (app/check/updates.sh), which never reads the owner's key or feed:
 
@@ -134,6 +139,36 @@ def nightly(appcast, build, keep):
     write(tree, appcast)
 
 
+def bases(appcast, build, count):
+    items = [
+        item for item in ET.parse(appcast).getroot().find("channel").findall("item")
+        if not os_of(item).startswith("windows") and item.find("enclosure") is not None
+        and item.find("enclosure").get("url") and int(build_of(item)) < int(build)
+    ]
+    for item in sorted(items, key=lambda item: int(build_of(item)), reverse=True)[:int(count)]:
+        print(build_of(item), item.find("enclosure").get("url"))
+
+
+def delta(appcast, build, base, url, length, signature):
+    tree = ET.parse(appcast)
+    for item in tree.getroot().find("channel").findall("item"):
+        if build_of(item) != build or os_of(item).startswith("windows"):
+            continue
+        deltas = item.find(s("deltas"))
+        if deltas is None:
+            deltas = ET.SubElement(item, s("deltas"))
+        ET.SubElement(deltas, "enclosure", {
+            "url": url,
+            s("deltaFrom"): base,
+            "length": length,
+            "type": "application/octet-stream",
+            s("edSignature"): signature,
+        })
+        write(tree, appcast)
+        return
+    sys.exit(f"{appcast} has no Mac update for build {build}")
+
+
 # Ed25519 (RFC 8032) on the standard library: the public key of a 32-byte seed, which is what
 # Sparkle's newer keys keep.
 P = 2**255 - 19
@@ -220,6 +255,10 @@ if __name__ == "__main__":
         finish(args[0], args[1], args[3:])
     elif command == "nightly" and len(args) == 3:
         nightly(*args)
+    elif command == "bases" and len(args) == 3:
+        bases(*args)
+    elif command == "delta" and len(args) == 6:
+        delta(*args)
     elif command == "key" and len(args) == 1:
         key(*args)
     elif command == "local" and len(args) in (4, 7):

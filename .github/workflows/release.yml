@@ -6,6 +6,7 @@
 #   ilo-linux-x86_64.flatpak     flatpak.yml's bundle, naming ilo's Flatpak repository, which it
 #   ilo.flatpakref               updates from, and the repository's entry (tools/flatpak-repo.sh)
 #   SHA256SUMS, and appcast.xml  the updates feed's next state (tools/appcast.sh)
+#   ilo-mac-arm64-<a>-to-<b>.delta  Sparkle's deltas to the DMG's app from the three builds before
 #   ilo-demo.tar.gz              the site's live demo, when the commit has one (demo.yml)
 # and, in the run rather than the release, winget's manifests for the Windows installer.
 # On a pushed v* tag, or by hand with the tag's name. The tag must be app/Cargo.toml's version, and
@@ -563,7 +564,7 @@ jobs:
     needs: [version, windows, mac]
     if: ${{ !cancelled() && needs.mac.result == 'success' && needs.mac.outputs.signed == 'true' }}
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: app
@@ -601,7 +602,8 @@ jobs:
       # standard input, never through the Keychain. appcast.sh names the DMG ilo.dmg in the
       # appcast; the release's is ilo-mac-arm64.dmg.
       # A nightly's appcast is the nightly feed's next state, beside its packages under the names
-      # it gives them (tools/appcast.sh --nightly).
+      # it gives them (tools/appcast.sh --nightly). Either's Mac deltas, from the three builds
+      # before it, are assets beside the appcast: appcast.sh downloads those builds' DMGs.
       - name: Appcast
         env:
           UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
@@ -639,6 +641,7 @@ jobs:
           fi
           mkdir "$RUNNER_TEMP/appcast"
           sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$RUNNER_TEMP/appcast/appcast.xml"
+          find build/release/appcast -name 'ilo-*.delta' -exec mv {} "$RUNNER_TEMP/appcast/" \;
 
       - uses: actions/upload-artifact@v4
         with:
