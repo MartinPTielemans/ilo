@@ -1562,8 +1562,14 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   const bc_id freed = left && Picturing(left) ? left : 0;
   PasswordOffer::Moving moving(freed);
   HoldPictured();
-  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt.
-  tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt. The tab
+  // active already isn't activated again: off the Mac the window leaves a page's full screen as
+  // Chrome asks, so the app's frame for the new size comes within Chrome's change to the tabs that
+  // ended the page's full screen, as closing them all does, where activating one fails a CHECK
+  // (#1991).
+  if (leaving != contents) {
+    tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  }
   const bc_id tab = Tab::IdOf(contents);
   std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
