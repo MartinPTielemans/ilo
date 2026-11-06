@@ -1,0 +1,291 @@
+# Temporary, for #1980, never for main: proves tools/appcast.sh's deltas on a feed served on the
+# runner. The released DMGs of 0.1.4 to 0.1.8 are re-signed ad hoc with a key the run makes, as
+# their own key is the owner's, then 0.1.5 to 0.1.8 are released to the feed one after another as
+# release.yml does, and the copies are timed from "found" to "is ready". It makes no GitHub release.
+name: Delta proof
+
+on:
+  push:
+    branches: ['feat/sparkle-deltas-1980-*']
+    paths: [.github/workflows/delta-proof.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: delta-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  proof:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SITE: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v4
+
+      # setup.sh's Sparkle, without the engine setup.sh links.
+      - name: Sparkle
+        run: |
+          version=$(sed -n 's/^ *SPARKLE=//p' app/setup.sh)
+          sha=$(sed -n 's/^ *SPARKLE_SHA256=//p' app/setup.sh)
+          mkdir -p app/.deps/Sparkle
+          curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz" -o "$RUNNER_TEMP/sparkle.tar.xz"
+          echo "$sha  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C app/.deps/Sparkle
+          ls app/.deps/Sparkle/bin
+
+      - name: Apps
+        run: |
+          swift .github/scripts/display-mode.swift 1920 1080 || true
+          mkdir -p "$RUNNER_TEMP/out" "$RUNNER_TEMP/dmgs"
+          public=$(python3 -I tools/appcast.py key "$RUNNER_TEMP/key")
+          feed=$SITE/MartinPTielemans/ilo/releases/download/updates/appcast.xml
+          for v in 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8; do
+            d=$RUNNER_TEMP/released/$v
+            mkdir -p "$d" "$RUNNER_TEMP/apps/$v"
+            gh release download "v$v" -R MartinPTielemans/ilo -p ilo-mac-arm64.dmg -D "$d"
+            hdiutil attach -quiet -nobrowse -readonly -mountpoint "$d/volume" "$d/ilo-mac-arm64.dmg"
+            ditto "$d/volume/ilo.app" "$RUNNER_TEMP/apps/$v/ilo.app"
+            hdiutil detach -quiet "$d/volume"
+            rm -rf "$d"
+            a=$RUNNER_TEMP/apps/$v/ilo.app
+            echo "== $v: $(plutil -extract CFBundleVersion raw "$a/Contents/Info.plist"), $(du -sk "$a" | cut -f1) KB"
+            codesign -dv "$a" 2>&1 | grep -E 'Authority=Developer|TeamIdentifier' || true
+            plutil -replace SUPublicEDKey -string "$public" "$a/Contents/Info.plist"
+            plutil -replace SUFeedURL -string "$feed" "$a/Contents/Info.plist"
+            # The outer bundle alone: what's nested keeps its Developer ID signature.
+            codesign --force --sign - "$a"
+            codesign --verify --deep --strict "$a"
+            if [ "$v" != 0.1.4 ]; then
+              hdiutil create -quiet -volname ilo -srcfolder "$RUNNER_TEMP/apps/$v" -format UDZO \
+                -o "$RUNNER_TEMP/dmgs/$v.dmg"
+              ls -l "$RUNNER_TEMP/dmgs/$v.dmg"
+            fi
+          done
+
+      # Releases 0.1.5 to 0.1.8, each as release.yml's Appcast step makes it and its publish job
+      # serves it, with the feed's URL on the runner.
+      - name: Releases
+        run: |
+          out=$RUNNER_TEMP/out
+          site=$RUNNER_TEMP/site
+          releases=$site/MartinPTielemans/ilo/releases/download
+          mkdir -p "$releases/updates"
+          nohup python3 -I -m http.server 8000 --bind 127.0.0.1 --directory "$site" > "$out/server.log" 2>&1 &
+          for _ in $(seq 50); do curl -s -o /dev/null "$SITE/" && break; sleep 0.1; done
+          echo "$SITE/MartinPTielemans/ilo/releases/download/updates/appcast.xml" > app/branding/update-feed
+          UPDATE_PRIVATE_KEY=$(cat "$RUNNER_TEMP/key")
+          export UPDATE_PRIVATE_KEY
+          for v in 0.1.5 0.1.6 0.1.7 0.1.8; do
+            rm -rf app/build/release
+            mkdir -p app/build/release
+            cp "$RUNNER_TEMP/dmgs/$v.dmg" app/build/release/ilo.dmg
+            ditto "$RUNNER_TEMP/apps/$v/ilo.app" app/build/release/ilo.app
+            printf 'ilo %s, re-signed for the proof of #1980.\n' "$v" > "$RUNNER_TEMP/notes.md"
+            start=$(date +%s)
+            (cd app && ../tools/appcast.sh "$RUNNER_TEMP/notes.md") > "$out/appcast-$v.txt" 2>&1 ||
+              { cat "$out/appcast-$v.txt"; exit 1; }
+            echo "== $v's appcast.sh took $(($(date +%s) - start)) s"
+            grep -E '^Delta|^No delta' "$out/appcast-$v.txt" || echo "no deltas"
+            url=/releases/download/v$v
+            dir=$releases/v$v
+            mkdir -p "$dir"
+            appcast=app/build/release/appcast/appcast.xml
+            [ "$(grep -cF "$url/ilo.dmg\"" "$appcast")" = 1 ] || { echo "no $url/ilo.dmg"; exit 1; }
+            sed "s#$url/ilo\.dmg\"#$url/ilo-mac-arm64.dmg\"#" "$appcast" > "$dir/appcast.xml"
+            find app/build/release/appcast -name 'ilo-*.delta' -exec mv {} "$dir/" \;
+            cp app/build/release/ilo.dmg "$dir/ilo-mac-arm64.dmg"
+            cp "$dir/appcast.xml" "$releases/updates/appcast.xml"
+            ls -l "$dir"
+          done
+          cp "$releases/updates/appcast.xml" "$out/appcast.xml"
+          perl -0pe 's#\s*<sparkle:deltas>.*?</sparkle:deltas>##sg' "$out/appcast.xml" > "$out/appcast-no-deltas.xml"
+          cat "$out/appcast.xml"
+          { echo '```xml'; cat "$out/appcast.xml"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # Screen capture for the copies the cases run, as check-mac.yml grants it.
+      - name: Grants
+        run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          exe=$(plutil -extract CFBundleExecutable raw "$RUNNER_TEMP/apps/0.1.8/ilo.app/Contents/Info.plist")
+          paths=
+          for name in before after tampered older; do
+            paths="$paths
+          $RUNNER_TEMP/run/$name/ilo.app/Contents/MacOS/$exe"
+          done
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in /*) paths="$paths
+          $path" ;; esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      - name: Cases
+        run: |
+          out=$RUNNER_TEMP/out
+          site=$RUNNER_TEMP/site
+          updates=$site/MartinPTielemans/ilo/releases/download/updates/appcast.xml
+          target=$RUNNER_TEMP/apps/0.1.8/ilo.app
+          now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+          stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
+          has() { grep -q " $1" "$log"; }
+          # Waits up to $2 s for a line matching $1.
+          wait_for() {
+            local i
+            for i in $(seq $(($2 * 10))); do
+              has "$1" && return 0
+              kill -0 "$pid" 2> /dev/null || return 1
+              sleep 0.1
+            done
+            return 1
+          }
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            wait_for "browser: drive $step done" 30 || echo "driver didn't finish $*"
+          }
+          mark() { echo "$(now) == $*" >> "$log"; }
+          # A fresh copy of version $1 for case $2, which checked a moment ago, so the launch makes
+          # no check of its own.
+          fresh() {
+            rm -rf "$RUNNER_TEMP/run/$2"
+            mkdir -p "$RUNNER_TEMP/run/$2"
+            ditto "$RUNNER_TEMP/apps/$1/ilo.app" "$RUNNER_TEMP/run/$2/ilo.app"
+            app=$RUNNER_TEMP/run/$2/ilo.app
+            exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+            id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
+            defaults delete "$id" > /dev/null 2>&1 || true
+            rm -rf "$HOME/Library/Caches/$id"
+            defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+          }
+          launch() {
+            name=$1
+            log=$out/$name.log
+            : > "$log"
+            fifo=$RUNNER_TEMP/drive-$name
+            rm -f "$fifo"
+            mkfifo "$fifo"
+            profile=$RUNNER_TEMP/profile-$name
+            mkdir -p "$profile"
+            step=0
+            (BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>updates</title>' \
+              BROWSER_PROFILE_DIR="$profile" "$exe" < "$fifo" 2>&1 | stamp >> "$log") &
+            exec 3> "$fifo"
+            for _ in $(seq 100); do
+              pid=$(pgrep -n -f "^$exe" || true)
+              [ -n "$pid" ] && break
+              sleep 0.1
+            done
+            log stream --style compact --level debug \
+              --predicate 'subsystem BEGINSWITH "org.sparkle-project"' > "$out/$name-sparkle.txt" 2>&1 &
+            streamer=$!
+            wait_for 'browser: loaded' 60 || echo "$name: the page didn't load"
+            wait_for 'browser: updater started' 30 || echo "$name: no updater"
+            sleep 2
+            send state
+          }
+          # Quits, which installs the ready update over the copy, and waits for it.
+          finish() {
+            exec 3>&-
+            kill "$pid" 2> /dev/null || true
+            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
+            local i
+            for i in $(seq 1200); do
+              [ "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist" 2> /dev/null)" = 2045 ] &&
+                ! pgrep -f Autoupdate > /dev/null && break
+              sleep 0.1
+            done
+            kill "$streamer" 2> /dev/null || true
+            pkill -9 -f "$RUNNER_TEMP/run/" || true
+            {
+              echo "installed: $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist") ($(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")), $((i / 10)) s after the quit"
+              codesign --verify --deep --strict "$app" 2>&1 && echo "signature: valid"
+              if diff -rq "$app" "$target" > "$out/$name-diff.txt" 2>&1; then
+                echo "files: the same as 0.1.8's"
+              else
+                echo "files: $(wc -l < "$out/$name-diff.txt" | tr -d ' ') differ from 0.1.8's"
+              fi
+            } | tee -a "$out/$name-result.txt"
+            sleep 2
+          }
+          # Case $1: version $2's copy, with the feed $3, checks from About down to ready.
+          run_case() {
+            cp "$out/$3" "$updates"
+            local served
+            served=$(wc -l < "$out/server.log")
+            launch "$1"
+            send menu "About ilo"
+            wait_for 'browser: settings update check at ' 15 || echo "$1: About had no Check for Updates"
+            local at
+            at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //')
+            mark "About's Check for Updates at $at"
+            # shellcheck disable=SC2086
+            send clickkey $at
+            wait_for 'browser: update stage found' 60 || echo "$1: found nothing"
+            wait_for 'browser: update stage ready' 900 || echo "$1: never ready"
+            sleep 1
+            ../tools/window-screenshot.sh "$pid" "$out/$1.png" all 2> /dev/null || true
+            tail -n +"$((served + 1))" "$out/server.log" | grep -o '"GET [^ ]*' | sed 's/"GET //' > "$out/$1-requests.txt"
+            finish
+            {
+              echo "### $1: $2's copy, feed $3"
+              awk '/ == / { t0 = $1 } t0 && (/ == / || / browser: update/) { printf "%8.3f %s\n", $1 - t0, substr($0, index($0, " ") + 1) }' "$log"
+              found=$(grep ' browser: update stage found' "$log" | head -1 | cut -d' ' -f1)
+              ready=$(grep ' browser: update stage ready' "$log" | head -1 | cut -d' ' -f1)
+              [ -z "$found" ] || [ -z "$ready" ] ||
+                echo "found to ready: $(echo "$ready - $found" | bc) s"
+              echo "downloaded:"
+              while read -r path; do
+                echo "  $path $(stat -f %z "$site$path" 2> /dev/null) bytes"
+              done < "$out/$1-requests.txt"
+              grep -i -E 'delta|fall' "$out/$1-sparkle.txt" | grep -v -i 'predicate' | head -20
+              cat "$out/$1-result.txt"
+            } | tee -a "$out/timings.txt"
+          }
+          cd app
+
+          # Before: 0.1.7 with the feed main's appcast.sh makes, which has no deltas.
+          fresh 0.1.7 before
+          run_case before 0.1.7 appcast-no-deltas.xml
+          # After: 0.1.7 with the deltas.
+          fresh 0.1.7 after
+          run_case after 0.1.7 appcast.xml
+          # A 0.1.7 copy whose files the delta doesn't match falls back to the DMG.
+          fresh 0.1.7 tampered
+          icon=$(find "$app/Contents/Resources" -maxdepth 1 -name '*.icns' | head -1)
+          printf 'x' >> "$icon"
+          echo "tampered: $icon"
+          run_case tampered 0.1.7 appcast.xml
+          # 0.1.4, older than the deltas, takes the DMG.
+          fresh 0.1.4 older
+          run_case older 0.1.4 appcast.xml
+
+          { echo '```'; cat "$out/timings.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: delta-proof
+          path: |
+            ${{ runner.temp }}/out
+            !${{ runner.temp }}/out/*.dmg
