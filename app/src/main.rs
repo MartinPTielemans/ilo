@@ -49,6 +49,7 @@ mod active_window;
 mod agents_core;
 mod bar_picks_host;
 mod browser_windows;
+mod daily_count_host;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
 mod drive;
@@ -521,6 +522,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         needs_you_host::start(cx);
+        daily_count_host::start(cx);
         open_window(None, None, cx);
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
@@ -659,6 +661,7 @@ extern "C" fn became_active() {
     update_app_later(|cx| {
         settings::check_default_browser(cx);
         import_host::became_active(cx);
+        daily_count_host::became_active(cx);
         browser::shell::follow_scroll_bars(cx);
         // GTK's settings file, Linux's last word, says nothing as it changes.
         #[cfg(target_os = "linux")]
@@ -774,6 +777,11 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let collector = include_str!("../branding/crash-reports").trim();
     if cfg!(feature = "prod") && !collector.is_empty() {
         args.push(format!("--crash-upload-url={collector}"));
+    }
+    // Where the daily usage count goes, which only the prod build names, unless the process was
+    // given it, as a check is. The user's sync server doesn't change it.
+    if let Some(switch) = daily_count_host::prepare(&given, &profile) {
+        args.push(switch);
     }
     // The sync server the account signs in to until the user names another, a default service URL
     // a fork or a self-hosted server names in branding/sync-server (build.rs). Without one the

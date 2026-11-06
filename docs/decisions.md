@@ -121,3 +121,15 @@ Consequences now:
 No crash report leaves the device without the user's yes, in Send Crash Reports (off) or the offer after a crash. A report can hold a URL or page text but no user folder, and it asks Sentry to infer no IP. Official builds send them to ilo's Sentry in the EU, which takes minidumps. The collector is a default service URL: a fork names its own or none.
 
 Revisit if Sentry stops taking minidumps or keeping them in the EU.
+
+## 10. A daily usage count: anonymous, on, with a switch
+
+Once a UTC day, a copy sends one count to ilo's server, unless the user turns off Send a Daily Usage Count in Settings › Privacy. The owner decided this on 2026-11-06 (#1977). Without it nobody can tell how many people use ilo or whether a release lost them, and crash reports (decision 9) count only the copies that crash and opt in.
+
+- **What's sent:** ilo's version and channel, the OS and its major version, the chip, and four yes-or-no flags: daily, and whether it's the copy's first run, or its first count this ISO week or calendar month. The flags let the server sum daily, weekly and monthly users and new installs without telling copies apart.
+- **What's never sent:** an ID of any kind, a cookie, the time of day, and anything about pages, history, tabs, Spaces, profiles, agents, accounts, extensions or settings. The copy keeps only the date of its last count. The request carries the address and Chromium's user agent, as any does; the server keeps only each day's totals per combination of the fields above, never the address or user agent, and logs nothing of the request.
+- **When:** about 30 seconds after launch, or on coming back to the app on a new day. No timer runs after that, so an idle browser never wakes for it. A refused count waits for the next launch; a missed day is never sent later.
+- **How:** the core posts it through Chromium's network stack, without credentials, to the one endpoint the build names, and its traffic annotation names the switch. It's a call that sends this count and nothing else, never a general fetch, and no agent tool reaches it.
+- **Where:** the endpoint is a default service URL, `app/branding/daily-count`, which only the prod build names. Official builds send to `sync.ilobrowser.com`, whichever sync server the user picks; a fork names its own or none, and a build that names none sends nothing and offers no switch. A dev build never sends one.
+
+Revisit if the count's fields stop telling releases apart without telling copies apart, or if the server can't keep it to totals.

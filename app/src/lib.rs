@@ -94,6 +94,7 @@ pub mod build_info;
 pub mod capture;
 pub mod child;
 pub mod command_bar;
+pub mod daily_count;
 pub mod default_browser;
 pub mod dialog;
 pub mod dock_dot;
