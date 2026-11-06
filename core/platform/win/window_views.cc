@@ -24,6 +24,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/platform/focus_ring_aura.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
 #include "ui/aura/client/focus_change_observer.h"
@@ -552,6 +553,14 @@ class WindowViews : public views::WidgetObserver,
   // back to the view that had it. Only from another window: the core gives the window the keyboard
   // to take it from both (ReleaseKeyboard).
   bool FilterMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM, LRESULT*) override {
+    // Signing out or restarting, Windows ends the process once the windows have heard it. Chrome's
+    // own windows end the session then, as SIGTERM does elsewhere, writing what must be kept, the
+    // Spaces among it; these aren't Chrome's, so they do it here (#1990). It ends the process,
+    // unless the session is ending already.
+    if (message == WM_ENDSESSION && w_param) {
+      chrome::SessionEnding();
+      return false;
+    }
     if (message == WM_ACTIVATE && LOWORD(w_param) == WA_INACTIVE) {
       HWND focus = GetFocus();
       had_keyboard_ = focus && IsChild(hwnd, focus) ? focus : nullptr;

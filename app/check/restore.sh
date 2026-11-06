@@ -19,7 +19,7 @@
 # A new download's row dragged hands its file to the system's drag, the Library closing until it's
 # let go. Resting on the Library button shows the newest finished downloads, each with its picture
 # or its type's icon, and the menu of one's row there has Move to Trash, which puts its file in the
-# Trash. A SIGTERM, which macOS sends at logout and restart, keeps a tab opened just before it.
+# Trash. The session ending, at logout or restart, keeps a tab opened just before it.
 # Reports how long putting them back takes.
 # With the auto-archive's 12 hours made 8 s, a Today tab no window has shown for that long goes in
 # the archive, counting the time across a quit, and the tab shown stays. The first tabs it takes
@@ -615,29 +615,25 @@ expect "^browser: page $a back 1 forward 1 loading 0 https://example.com/\$" \
 send key right cmd
 expect "^browser: page $a back 1 forward 0 loading 0 https://example.org/\$" \
   "Forward didn't reach the last page of the restored history"
-# The Space shown at the quit is the one the SIGTERM launch below opens its tab in, and the count it
-# checks is the second Space's tab and the new one.
+# The Space shown at the quit is the one the launch below whose session ends opens its tab in, and
+# the count it checks is the second Space's tab and the new one.
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space again"
 exec 3>&-
 quit
 
-# A SIGTERM ends the session at once, before the save the new tab scheduled, which the core writes
-# as Chrome exits. Windows ends one with WM_ENDSESSION instead, which nothing sends yet (#1990).
-if windows; then
-  echo "skip: a SIGTERM's session end: Windows ends one with WM_ENDSESSION (#1990)."
-else
-  log="$out/session-ending.log"
-  BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
-  pid=$!
-  await '^browser: restored in ' || fail "the launch before the SIGTERM didn't restore the Spaces"
-  await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
-  kill -TERM "$pid"
-  exited
-  [ "$(python3 -I -c 'import json, sys
+# The session ends at once, before the save the new tab scheduled, which the core writes as Chrome
+# exits: a SIGTERM on the Mac and Linux, WM_ENDSESSION on Windows (end_session).
+log="$out/session-ending.log"
+BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
+pid=$!
+await '^browser: restored in ' || fail "the launch before the session end didn't restore the Spaces"
+await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
+end_session || fail "the session couldn't end"
+exited
+[ "$(python3 -I -c 'import json, sys
 print(*[len(space["today"]) for space in json.load(open(sys.argv[1], encoding="utf-8"))["spaces"]])' "$saved")" = "2 2" ] ||
-    fail "the tab opened before the SIGTERM wasn't kept"
-fi
+  fail "the tab opened before the session end wasn't kept"
 restore_ms=$(sed -n 's/^browser: restored in \([0-9.]*\) ms$/\1/p' "$out/restored.log" "$out/restored-again.log" | tr '\n' ' ')
 
 # Auto-archive, 8 s instead of 12 hours. Tab a, then b, opens over the Spaces, and a isn't seen
@@ -882,6 +878,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. The session ending keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
 echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"
