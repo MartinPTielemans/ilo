@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
@@ -25,6 +26,7 @@
 #include "browser_core/platform/linux/wayland.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
 #include "components/input/native_web_keyboard_event.h"
@@ -62,6 +64,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -156,6 +159,44 @@ gfx::Size ContentPixelsOf(views::Widget* widget) {
 // The window's content, in DIPs.
 gfx::Size ContentSizeOf(views::Widget* widget) {
   return gfx::ScaleToFlooredSize(ContentPixelsOf(widget), 1 / ScaleOf(widget));
+}
+
+// Whether |widget| or a bubble of its has the keyboard: under Wayland Chromium makes a bubble
+// active in its window's place, such as Chrome's prompt on a Mini Player.
+bool HasKeyboard(views::Widget* widget) {
+  if (widget->IsActive()) {
+    return true;
+  }
+  for (views::Widget* owned : views::Widget::GetAllOwnedWidgets(widget->GetNativeView())) {
+    if (owned->IsActive()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The Mini Player that Chrome floated by itself as its tab hid, a page's window or a video's, if
+// it's open and has the keyboard.
+views::Widget* AutoMiniPlayerWithKeyboard() {
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  content::WebContents* opener = manager->GetWebContents();
+  auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
+  if (!helper || !helper->IsInAutoPictureInPicture()) {
+    return nullptr;
+  }
+  views::Widget* floating = nullptr;
+  if (content::WebContents* child = manager->GetChildWebContents()) {
+    floating = views::Widget::GetTopLevelWidgetForNativeView(child->GetNativeView());
+  } else {
+    for (aura::Window* window : views::DesktopWindowTreeHostPlatform::GetAllOpenWindows()) {
+      views::Widget* widget = window ? views::Widget::GetWidgetForNativeWindow(window) : nullptr;
+      // VideoOverlayWindowViews's name.
+      if (widget && widget->GetName() == "PictureInPictureWindow") {
+        floating = widget;
+      }
+    }
+  }
+  return floating && HasKeyboard(floating) ? floating : nullptr;
 }
 
 // An aura window in the browser window holding one pane's page and its docked DevTools, or the side
@@ -570,6 +611,32 @@ class WindowViews : public views::WidgetObserver,
       AfterStateConfigured(widget_,
                            base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
     }
+  }
+
+  // A window can't map under Wayland without the compositor giving it the keyboard, as sway and
+  // Hyprland do, so the Mini Player that floats as the user leaves its tab takes it from the
+  // browser window, where on the Mac and X11 it never has it (#1961). The window has it back with
+  // an xdg-activation token, which Chromium's Activate asks for, once: a click in the Mini Player
+  // later gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard
+  // after telling the window it lost it.
+  void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    if (!active && OnWayland()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  void TakeKeyboardFromMiniPlayer() {
+    static base::NoDestructor<base::WeakPtr<views::Widget>> taken_from;
+    views::Widget* floating = AutoMiniPlayerWithKeyboard();
+    if (!floating || floating == taken_from->get()) {
+      return;
+    }
+    *taken_from = floating->GetWeakPtr();
+    // check.sh reads this line.
+    LOG(ERROR) << "browser: mini player gave the keyboard back";
+    widget_->Activate();
   }
 
   // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
