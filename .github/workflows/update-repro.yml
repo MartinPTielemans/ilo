@@ -203,72 +203,27 @@ jobs:
           }
           cd app
 
-          # 1. 0.1.8 with automatic checks turned off in About, then About's check and the menu's.
-          fresh 0.1.8 auto-off
-          launch auto-off
+          # Sparkle's installer jobs left loaded with their processes gone, as when an install is
+          # cut off: an update to ready, then its Autoupdate and Updater killed.
+          fresh 0.1.7 stale
+          launch stale-0.1.7
           about_open
-          at=$(grep ' browser: settings switch automatic update checks at ' "$log" | tail -1 | sed 's/.* at //')
-          mark "switch automatic update checks off at $at"
-          # shellcheck disable=SC2086
-          send clickkey $at
-          wait_for 'browser: update checks automatic off' 10 || echo "auto-off: the switch didn't turn off"
           about_check 1
+          wait_for 'browser: update stage ready' 900 || echo "stale: never ready"
+          wait_for 'prewarmed in' 120 || true
+          jobs_now "stale: ready"
+          pkill -9 -f "$app/Contents/Frameworks/Sparkle.framework" || true
+          sleep 2
+          jobs_now "stale: installer killed"
+          # The same app, its update ready: About's check and the menu's.
+          about_open
           about_check 2
           menu_check 1
           finish
-
-          # 2. 0.1.7 to 0.1.8 from About, Restart to Update, then checks in the copy it relaunched.
-          fresh 0.1.7 relaunch
-          launch relaunch-0.1.7
-          about_open
-          about_check 1
-          wait_for 'browser: update stage ready' 900 || echo "relaunch: never ready"
-          wait_for 'prewarmed in' 120 || true
-          wait_for 'browser: settings update restart at ' 15 || echo "relaunch: no Restart to Update"
-          at=$(grep ' browser: settings update restart at ' "$log" | tail -1 | sed 's/.* at //')
-          jobs_now "relaunch: before Restart to Update"
-          mark "Restart to Update at $at"
-          old=$pid
-          # shellcheck disable=SC2086
-          post clickkey $at
-          for _ in $(seq 1200); do kill -0 "$old" 2> /dev/null || break; sleep 0.1; done
-          mark "0.1.7 quit"
-          exec 3>&-
-          new=
-          for _ in $(seq 1200); do
-            new=$(pgrep -n -f "^$exe" || true)
-            [ -n "$new" ] && [ "$new" != "$old" ] && break
-            new=
-            sleep 0.1
-          done
-          mark "relaunched as ${new:-nothing}, build $(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")"
-          kill "$streamer" 2> /dev/null || true
-          sleep 10
-          jobs_now "relaunch: the relaunched copy, 10 s on"
-          # The relaunched copy has no driver: its menu through System Events, with its windows
-          # counted until Sparkle's alert adds one.
-          if [ -n "$new" ]; then
-            pid=$new
-            ../tools/window-screenshot.sh "$pid" "$out/relaunched.png" all 2> /dev/null || true
-            windows() { osascript -e "tell application \"System Events\" to count windows of (first process whose unix id is $pid)" 2>&1; }
-            {
-              echo "$(now) windows before: $(windows)"
-              echo "$(now) click Check for Updates…"
-              osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid) to click menu item \"Check for Updates…\" of menu 1 of menu bar item 2 of menu bar 1" 2>&1
-              echo "$(now) clicked"
-              for _ in $(seq 150); do
-                echo "$(now) windows $(windows)"
-                sleep 0.2
-              done
-            } > "$out/relaunched-menu.txt" 2>&1
-            ../tools/window-screenshot.sh "$pid" "$out/relaunched-menu.png" all 2> /dev/null || true
-            kill "$pid" 2> /dev/null || true
-            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
-            pkill -9 -f "$RUNNER_TEMP/run/" || true
-          fi
-          sleep 2
-          jobs_now "relaunch: after the relaunched copy quit"
-          launch relaunched-0.1.8
+          jobs_now "stale: 0.1.7 quit"
+          # 0.1.8, up to date, with the jobs as they were left.
+          fresh 0.1.8 stale-current
+          launch stale-0.1.8
           about_open
           about_check 1
           about_check 2
@@ -284,25 +239,6 @@ jobs:
           done | tee "$out/timings.txt"
           cat "$out/jobs.txt"
           { echo '```'; cat "$out/timings.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-      # How big Sparkle's delta from 0.1.7 to 0.1.8 would be.
-      - name: Delta
-        if: ${{ always() }}
-        continue-on-error: true
-        run: |
-          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/out"
-          curl -sSfL https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz | tar -xJ -C "$RUNNER_TEMP/sparkle"
-          start=$(date +%s)
-          "$RUNNER_TEMP/sparkle/bin/BinaryDelta" create --verbose "$RUNNER_TEMP/apps/0.1.7/ilo.app" "$RUNNER_TEMP/apps/0.1.8/ilo.app" "$RUNNER_TEMP/out/0.1.7-0.1.8.delta" > "$RUNNER_TEMP/out/delta.txt" 2>&1
-          made=$(($(date +%s) - start))
-          {
-            echo "delta $(stat -f %z "$RUNNER_TEMP/out/0.1.7-0.1.8.delta") bytes, made in $made s"
-            echo "dmg $(stat -f %z "$RUNNER_TEMP/dmg/0.1.8/ilo-mac-arm64.dmg") bytes"
-            echo "app $(du -sk "$RUNNER_TEMP/apps/0.1.8/ilo.app" | cut -f1) KB"
-            hdiutil imageinfo "$RUNNER_TEMP/dmg/0.1.8/ilo-mac-arm64.dmg" | grep -E 'Format|Partition|Checksum' | head
-          } | tee -a "$RUNNER_TEMP/out/delta.txt"
-          mv "$RUNNER_TEMP/out/0.1.7-0.1.8.delta" "$RUNNER_TEMP/delta.bin"
-          tail -5 "$RUNNER_TEMP/out/delta.txt" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
