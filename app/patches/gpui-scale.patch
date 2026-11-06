@@ -1,17 +1,19 @@
 diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
-index 2fc922724f..8718225a23 100644
+index 2fc922724f..6ab9305385 100644
 --- a/crates/gpui/src/app.rs
 +++ b/crates/gpui/src/app.rs
-@@ -1559,6 +1559,14 @@ impl App {
+@@ -1559,6 +1559,16 @@ impl App {
          self.platform.active_window()
      }
  
-+    /// Whether the app is the active one: one of its windows has the keyboard. Every platform
-+    /// reports a window's focus, while an app's own activation only some do.
++    /// Whether the app is the active one, as the platform says, or else as its windows' focus
++    /// does: one of them has the keyboard.
 +    pub(crate) fn is_active(&self) -> bool {
-+        self.windows
-+            .values()
-+            .any(|window| window.as_ref().is_some_and(|window| window.active.get()))
++        self.platform.is_active().unwrap_or_else(|| {
++            self.windows
++                .values()
++                .any(|window| window.as_ref().is_some_and(|window| window.active.get()))
++        })
 +    }
 +
      /// Opens a new window with the given option and the root view returned by the given function.
@@ -94,10 +96,22 @@ index 11f0b72406..ea39b6a547 100644
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..1dd824ce0a 100644
+index a875ee0f37..82374f058c 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -1415,8 +1415,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+@@ -399,6 +399,11 @@ pub trait Platform: 'static {
+     /// The callback runs on the main thread outside of any window update.
+     fn on_displays_changed(&self, callback: Box<dyn FnMut()>);
+     fn active_window(&self) -> Option<AnyWindowHandle>;
++    /// Whether this app is the active one, where the platform knows it apart from its windows'
++    /// focus, which an embedder's windows can keep from GPUI's; `None` where it doesn't.
++    fn is_active(&self) -> Option<bool> {
++        None
++    }
+     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
+         None
+     }
+@@ -1415,8 +1420,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -113,7 +127,7 @@ index a875ee0f37..1dd824ce0a 100644
          anyhow::bail!("render_to_image not implemented for this platform")
      }
  }
-@@ -2596,9 +2601,10 @@ pub struct WindowOptions {
+@@ -2596,9 +2606,10 @@ pub struct WindowOptions {
      /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
      pub app_owns_titlebar_drag: bool,
  
