@@ -640,6 +640,8 @@ fi
 # Another window and back to its tab's: the Mini Player goes back in the tab, as Arc's does.
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+# The driver numbers windows in the order they were made, the private one that closed too.
+second=$(grep -c '^browser: window opened ' "$log")
 send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
@@ -679,7 +681,7 @@ $(grep 'browser: mini player left at ' "$log" | tail -1 | sed 's/.* left at //')
 LEFT
 [ -n "$lh" ] || fail "the core didn't hear where the last Mini Player was left"
 # The window ⌘N opened goes, so the relaunch brings back the video's alone, where the driver clicks.
-send window 2
+send window "$second"
 send key w cmd shift
 expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
 exec 3>&-
