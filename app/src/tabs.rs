@@ -410,8 +410,9 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
         let executor = cx.foreground_executor().clone();
         executor
             .spawn(async move {
+                // Outside the update, as closing the pop-up's window calls back into GPUI.
+                popup_closed(tab);
                 cx.update(|cx| {
-                    popup_closed(tab);
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);
                     link_preview::tab_closed(tab, cx);

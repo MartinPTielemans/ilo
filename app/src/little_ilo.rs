@@ -169,7 +169,10 @@ pub(crate) fn little_popup_opened(
         return;
     };
     if unsafe { bc::bc_window_take_tab(popup, tab) } == 0 {
-        unsafe { bc::bc_window_close(popup) };
+        // After this update, as AppKit's will-close calls back into GPUI, which it holds.
+        cx.foreground_executor()
+            .spawn(async move { unsafe { bc::bc_window_close(popup) } })
+            .detach();
         log!("browser: little window {window} put {tab} in space {home}");
         return;
     }
@@ -186,7 +189,8 @@ pub(crate) fn little_popup_opened(
 }
 
 /// A pop-up's page closed, as a sign-in's closes itself once it's done: its window goes, and the
-/// Little ilo window that opened it has the keyboard back.
+/// Little ilo window that opened it has the keyboard back. Never inside a GPUI update, as the
+/// window's close calls back into GPUI (AppKit's will-close).
 pub(crate) fn popup_closed(tab: u64) {
     let Some((popup, opener)) = POPUP_WINDOWS.with_borrow_mut(|windows| windows.remove(&tab))
     else {
