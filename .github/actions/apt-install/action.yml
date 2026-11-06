@@ -53,23 +53,27 @@ runs:
           exit 0
         fi
         shopt -s nullglob
+        fix=
         if [ "$HIT" = true ]; then
-          # The .debs this image lacked when the cache was made, and none if it lacked nothing.
+          # The .debs apt fetched on this image when the cache was made, and none if it fetched
+          # nothing. dpkg, as apt would fetch a cached .deb again whose version the index also has.
           debs=("$DIR"/*.deb)
           echo "${#debs[@]} packages from the cache, $(du -sh "$DIR" | cut -f1)"
-          if [ "${#debs[@]}" = 0 ] || sudo apt-get install -yq --no-download $OPTIONS "${debs[@]}"; then
+          if [ "${#debs[@]}" = 0 ] || sudo DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}"; then
             exit 0
           fi
           echo "::warning::The cached packages didn't install on their own, so apt fetches what they lack."
+          fix=-f
         fi
         mkdir -p "$DIR/partial"
+        sudo chown _apt "$DIR/partial"
         # Once a job: a second install in the job reads the index the first fetched.
         if [ ! -e "$RUNNER_TEMP/apt-updated" ]; then
           "${apt[@]}" update -q
           touch "$RUNNER_TEMP/apt-updated"
         fi
         # apt takes a restored .deb whose version and hash match the index, and fetches the rest.
-        "${apt[@]}" -o Dir::Cache::Archives="$DIR" install -yq $OPTIONS $PACKAGES
+        "${apt[@]}" -o Dir::Cache::Archives="$DIR" install -yq $fix $OPTIONS $PACKAGES
         # The last image's .debs that the mirror no longer has go, and the rest stay with the new.
         sudo apt-get -o Dir::Cache::Archives="$DIR" autoclean -q
         sudo rm -rf "$DIR/partial" "$DIR/lock"
