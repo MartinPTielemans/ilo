@@ -5309,6 +5309,20 @@ fn file_name(url: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+thread_local! {
+    static QUIT_GONE_AHEAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The browser's quit has gone ahead (quitting.rs), and its windows are going: from now on nothing
+/// opens over one, as on Wayland a surface made on a window going ends the connection.
+pub fn quit_goes_ahead() {
+    QUIT_GONE_AHEAD.set(true);
+}
+
+pub(crate) fn quit_gone_ahead() -> bool {
+    QUIT_GONE_AHEAD.get()
+}
+
 /// The `file:` URL of the file at `path`, with what a URL can't hold escaped, and a Windows path's
 /// drive and backslashes as Chromium reads them.
 pub fn file_url(path: &str) -> String {

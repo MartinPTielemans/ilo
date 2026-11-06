@@ -36,6 +36,7 @@ pub(crate) unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: boo
         "browser: quit going ahead{}",
         if restarting { ", restarting" } else { "" }
     );
+    shell::quit_goes_ahead();
     restarting && relaunch_into_update()
 }
 
