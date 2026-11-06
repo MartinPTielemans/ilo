@@ -18,7 +18,9 @@
 //! agentrelease, agentdisconnect, takeback, age and insert, and Windows' stack. The Mac's
 //! modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl and alt
 //! with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt with Alt.
-//! flags presses and lets go of those keys, the last key's among them, and the keys after it go with what it holds. insert
+//! flags presses and lets go of those keys, the last key's among them, and the keys after it go with what it holds. key's
+//! again, Linux's alone, presses the key again as the app answers the first press in a page, and
+//! logs "browser: drive pressed again". insert
 //! commits its text to a field of the UI's, not a page's. scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
@@ -154,6 +156,31 @@ fn attempt(n: u64, line: String, until: Option<Instant>) {
     }
 }
 
+/// Has `press` press the key the command is pressing again as the app answers its press in a page
+/// (`page_key_answered`), with key's "again": while the app still handles the first press, before
+/// Chromium's loop goes on to what it posted, as a quick second press on a busy machine comes. A
+/// command whose press no page had drops it once it's done.
+pub(super) fn press_again(press: Box<dyn FnOnce() -> Option<()>>) {
+    PRESS_AGAIN.set(Some(press));
+}
+
+/// The app has answered a page's key, before the page has it (keys.rs's tab_key_before_page): a key
+/// to press again (`press_again`) goes now, and is with the X server or the compositor before the
+/// app returns.
+pub(crate) fn page_key_answered() {
+    let Some(press) = PRESS_AGAIN.take() else {
+        return;
+    };
+    let pressed = press().is_some();
+    sync();
+    crate::drive_wayland::sync();
+    // check.sh reads this line.
+    log!(
+        "browser: drive pressed again{}",
+        if pressed { "" } else { ", but couldn't" }
+    );
+}
+
 /// Has the command running, which can't yet, run again soon, as one naming a window the window
 /// manager hasn't listed yet. False once it has been trying for 2 s, when it can't.
 pub(super) fn again() -> bool {
@@ -233,6 +260,8 @@ fn settle(n: u64) {
             if let Some(browser) = driven() {
                 watch_zoom(browser.window);
             }
+            // Past here no press of the command's is still to be answered.
+            PRESS_AGAIN.take();
             let (key, focus, active) = keyboard();
             let marked = Field::with_keys().and_then(Field::marked);
             let marked = marked.map_or("none".into(), |at| format!("{},{}", at.start, at.len()));
@@ -303,6 +332,8 @@ thread_local! {
     static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
     /// That the command running asked to run again, and until when.
     static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// A key's second press, which the app's answer to the first page key presses (`press_again`).
+    static PRESS_AGAIN: Cell<Option<Box<dyn FnOnce() -> Option<()>>>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
@@ -2233,6 +2264,10 @@ fn run_command(line: &str) -> Option<()> {
             if name == "tab" && words.contains(&"ctrl") && !words.contains(&"cmd") {
                 let option = if words.contains(&"alt") { alt } else { 0 };
                 state = state & !alt | ctrl | option;
+            }
+            if words.contains(&"again") {
+                let name = name.to_owned();
+                press_again(Box::new(move || key(&name, state)));
             }
             key(name, state)
         }

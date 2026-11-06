@@ -15,6 +15,8 @@
 # ⌘W otherwise shows the tab below, or above at the bottom. Tabs opened behind close to their
 # sibling, then their opener; after a switch to an unrelated tab, a tab opened in front closes to
 # the tab below; and a pinned tab's newest tab opened in front closes back to it, past an older one.
+# On Linux two quick ⇧⌘T from the page, the second before the first's tab has its page focused,
+# reopen both tabs closed last.
 # Closing the last tab leaves the Space empty, with no pane, its window resizing, and on Windows
 # maximizing and restoring, with no page, and ⌘T still works there. Mute/Unmute Tab mutes a tab,
 # its row shows a speaker while it plays, crossed out while it's muted, and a click on it unmutes
@@ -631,6 +633,35 @@ expect_tabs "$b $a" "$b" "after closing the top tab"
 switch "9 cmd" "$a"
 send key w cmd
 expect_tabs "$b" "$b" "after closing the bottom tab"
+# Two quick ⇧⌘T from the page reopen both tabs just closed. Linux's driver presses the second as the
+# app answers the first, its tab started and its renderer starting: a quick second press on a busy
+# machine comes then, before the tasks the first posted, among them the one that focuses the tab's
+# page, and went to the pane the page before left, where nothing heard it (#1519).
+if [ "$(uname)" = Linux ]; then
+  send key t cmd shift again
+  logged '^browser: drive pressed again$' || fail "the driver didn't press ⇧⌘T again as the app answered the first"
+  for _ in $(seq 100); do
+    [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] && break
+    sleep 0.1
+  done
+  [ "$(since $step | grep -c '^browser: command reopen-closed-tab via page$')" -ge 2 ] ||
+    fail "the second of two quick ⇧⌘T didn't reach the UI: Today is \"$(today)\""
+  logged '^browser: key for tab [0-9]*, with no page view to hear it, to the browser$' ||
+    fail "the second ⇧⌘T came once the reopened tab's page had the keyboard, so the check missed #1519's race"
+  expect "^browser: today [0-9][0-9]* $b [0-9][0-9]*\$" \
+    "two quick ⇧⌘T didn't reopen both tabs where they were: Today is \"$(today)\""
+  top=$(today | cut -d' ' -f1)
+  bottom=$(today | cut -d' ' -f3)
+  # Closed again, so the run goes on as it was.
+  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+  [ "$shown" = "$bottom" ] || switch "9 cmd" "$bottom"
+  send key w cmd
+  expect "^browser: today $top $b\$" "⌘W didn't close the bottom tab ⇧⌘T reopened"
+  shown=$(grep '^browser: selected ' "$log" | tail -1 | cut -d' ' -f3)
+  [ "$shown" = "$top" ] || switch "1 cmd" "$top"
+  send key w cmd
+  expect_tabs "$b" "$b" "after closing the tabs two quick ⇧⌘T reopened"
+fi
 send key w cmd
 expect_tabs " *" 0 "after closing the last tab"
 ../tools/window-screenshot.sh "$pid" "$out/empty.png" || fail "no window to capture"
@@ -1418,7 +1449,7 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
-echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, and the button's tooltip names it and its key over the bar, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
+echo "ok: new tabs open at the top and show, the command bar lists the Space's other tabs before anything is typed, suggests pages, their tabs and well-known sites and completes what's typed, ⌘L opens it centred and a click on the URL field over the field, ⇧⌘A lists the open tabs alone, typing filters them and ↩ switches, ⌘T and ⌘L close the open bar again, ⌘L's field holds the whole address and ↩ on it reloads, Tab in the empty field or \"/ \" lists only the commands until Esc or ⌫ leaves, keys and clicks switch, ⇧⌦ and a click on a row's trash take a page out of history and ⌥⌘⌫ a search typed before, and the button's tooltip names it and its key over the bar, ⇧⌘↩ searches and ⌘↩ opens a tab behind that loads once shown, Tab on a hinted row and a space after an engine's keyword search with it alone until ⌫ leaves, ↩ on a sum's row copies its result, and a right-click in its field shows Paste and Go, ⌃Tab goes back through the tabs shown while ⌃ is held, a page's tab goes under it and closing it, by close and ↩ in the command bar, goes back, tabs opened behind close to their sibling then their opener, a switch to an unrelated tab and a link opened in front forget older openers, so a pinned tab's newest tab closes back to it, ⌘W shows the tab below or above, on Linux two quick ⇧⌘T reopen both tabs closed last, an empty Space shows no pane, its window resizes, and on Windows maximizes and restores, and it still opens tabs, a tab mutes and its speaker unmutes it, a tab unseen 2 hours lets go of its page as another shows unless it plays sound, asks before it's left or shows in a split, and gets it back with its history once shown, and Settings' Unload switch turns that off and on, Site Search Settings opens Chromium's search engines page, back right-clicked or held lists the pages back, nearest first, with their favicons, and a row picked goes there, back held and reload pressed shrink a little and grow back, and reload let go off it doesn't reload, and ⌘-clicked opens the page back in a tab behind. Reset all tabs in this Space takes the loaded pinned tabs back to their pinned URLs and leaves the unloaded one. ⌘-click and ⇧-click choose three rows, whose menu and ⇧⌘C copy their links in order, and ⌘D pins them, New Folder folders them and ⌘W closes them, each undone by ⌘Z. On Windows the bar, a tooltip and a menu are on screen only while the UI shows them: after Esc, ⌘T again or a click on the page, as the pointer leaves, after Windows shows them again and after their window was minimized."
 [ -z "${committed:-}" ] || echo "  On Windows Alt+F4 in the bar closes its window and the bar opens" \
   "over the next one, the bar" \
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
