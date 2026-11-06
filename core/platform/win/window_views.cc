@@ -27,6 +27,7 @@
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
 #include "browser_core/window.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
 #include "ui/aura/client/focus_change_observer.h"
@@ -679,6 +680,14 @@ class WindowViews : public views::WidgetObserver,
                      WPARAM w_param,
                      LPARAM l_param,
                      LRESULT* result) override {
+    // Signing out or restarting, Windows ends the process once the windows have heard it. Chrome's
+    // own windows end the session then, as SIGTERM does elsewhere, writing what must be kept, the
+    // Spaces among it; these aren't Chrome's, so they do it here (#1990). It ends the process,
+    // unless the session is ending already.
+    if (message == WM_ENDSESSION && w_param) {
+      chrome::SessionEnding();
+      return false;
+    }
     if (message == WM_SYSCOMMAND && (w_param & 0xFFF0) == SC_KEYMENU && l_param == 0 &&
         alt_taps::Tapped(hwnd)) {
       *result = 0;
