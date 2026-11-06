@@ -1,7 +1,7 @@
 The Mac's Crashpad client starts its handler again: ungoogled-chromium-macos's
 disable-crashpad-handler.patch makes StartHandler a stub. Apart from
-chromium-crashpad-start.patch because only the Mac's tree has that stub: elsewhere the file is
-already as this patch leaves it, so the series skips it there.
+chromium-crashpad-start.patch, in the series' mac/ section, because only the Mac's tree has that
+stub.
 
 --- a/third_party/crashpad/crashpad/client/crashpad_client_mac.cc
 +++ b/third_party/crashpad/crashpad/client/crashpad_client_mac.cc

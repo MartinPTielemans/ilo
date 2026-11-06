@@ -68,8 +68,8 @@ LOGOS
 
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a
 # later commit after it (ungoogled-chromium-macos 156.0.8078.47 builds one that fixes the tag's
-# patches), for the pinned Chromium version. A platform whose tag names another version lags the
-# Mac's point release, and is checked against its tag alone. Takes the submodule's path and
+# patches), for the pinned Chromium version. A platform whose tag names another version, behind the
+# Mac's or ahead of it, is checked against its tag alone. Takes the submodule's path and
 # "<repository> <tag>".
 check_ungoogled() {
   local uc=$1 platform_tag=$2 version uc_tag pinned tag_version
@@ -103,12 +103,17 @@ check_ungoogled() {
 # a later run on a kept tree takes out, newest first, the patches from the first one that changed
 # or left the series, and applies the series again from there. A patch already in the tree is
 # skipped, so this is safe to run again; one that neither applies cleanly nor is in the tree has
-# drifted from it. In the Mac's bash 3.2, which has no mapfile and calls an empty array unbound.
+# drifted from it. Takes the tree's path, then "mac" for the Mac's tree: the series' mac/ section is
+# the Mac's alone, and every other tree leaves it out. In the Mac's bash 3.2, which has no mapfile
+# and calls an empty array unbound.
 apply_series() {
-  local src=$1 kept=$1/.browser_core-series name patch first=0 i
+  local src=$1 platform=${2:-} kept=$1/.browser_core-series name patch first=0 i
   local -a names=() applied=()
   ln -sfn "$(dirname "$engine")/core" "$src/browser_core"
-  while read -r name; do names+=("$name"); done < <(grep -v -e '^#' -e '^$' "$engine/series")
+  while read -r name; do
+    [ "${name%%/*}" != mac ] || [ "$platform" = mac ] || continue
+    names+=("$name")
+  done < <(grep -v -e '^#' -e '^$' "$engine/series")
   if [ -f "$kept/series" ]; then
     while read -r name; do applied+=("$name"); done <"$kept/series"
   elif ! series_fits "$src" "${names[@]}"; then

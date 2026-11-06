@@ -142,7 +142,7 @@ if [ "$(node -p 'require(process.argv[1]).version' "$esbuild_module/package.json
 fi
 ln -sfn "$esbuild_module" "$src/third_party/devtools-frontend/src/node_modules/esbuild"
 
-apply_series "$src"
+apply_series "$src" mac
 
 # By content, without times: a file that differs is written now, newer than what the build made
 # from it, and every other file keeps its date. ninja then rebuilds only what the update changed.

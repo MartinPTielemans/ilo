@@ -16,18 +16,16 @@ to decide; nothing comes back.
  #include "build/build_config.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/chrome_browser_interface_binders.h"
-@@ -141,6 +142,10 @@
- #include "chrome/browser/offline_pages/offline_page_tab_helper.h"
+@@ -332,11 +333,18 @@
  #endif
+ }
  
 +// browser_core: the core adds its interfaces to a frame's (//browser_core/hooks.h).
 +void (*g_browser_core_populate_frame_binders)(
 +    mojo::BinderMapWithContext<content::RenderFrameHost*>* map) = nullptr;
 +
- namespace {
- 
- #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-@@ -337,6 +342,9 @@ void ChromeContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+ void ChromeContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+     content::RenderFrameHost* render_frame_host,
      mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
    chrome::internal::PopulateChromeFrameBinders(map, render_frame_host);
    chrome::internal::PopulateChromeWebUIFrameBinders(map, render_frame_host);
