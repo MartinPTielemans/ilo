@@ -1224,6 +1224,10 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 let option = if words.contains(&"alt") { ALT } else { 0 };
                 state = state & !ALT | CONTROL | option;
             }
+            if words.contains(&"again") {
+                let name = name.to_owned();
+                drive::press_again(Box::new(move || key(&name, state)));
+            }
             key(name, state)
         })(),
         // Each modifier going down or up as its key does, after the modifiers the last key went
