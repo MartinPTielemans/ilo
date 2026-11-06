@@ -17,6 +17,7 @@ unsafe extern "C" {
     #[cfg(target_os = "windows")]
     pub fn drive_watch_menus(
         menus: extern "C" fn(ui_view: *mut c_void, title: *const c_char, bar: bool) -> bool,
+        dialog: extern "C" fn(label: *const c_char) -> bool,
     );
     #[cfg(target_os = "linux")]
     pub fn host_choose(title: *const c_char) -> bool;

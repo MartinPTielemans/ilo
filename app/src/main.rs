@@ -802,7 +802,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         };
         #[cfg(target_os = "windows")]
         unsafe {
-            platform::drive_watch_menus(drive_menus::run)
+            platform::drive_watch_menus(drive_menus::run, drive_menus::choose)
         };
     }
     let host = bc::bc_host {
