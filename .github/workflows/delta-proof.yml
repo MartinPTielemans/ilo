@@ -60,8 +60,12 @@ jobs:
             codesign -dv "$a" 2>&1 | grep -E 'Authority=Developer|TeamIdentifier' || true
             plutil -replace SUPublicEDKey -string "$public" "$a/Contents/Info.plist"
             plutil -replace SUFeedURL -string "$feed" "$a/Contents/Info.plist"
-            # The outer bundle alone: what's nested keeps its Developer ID signature.
-            codesign --force --sign - "$a"
+            # Sparkle's installer talks only to an app signed as it is, so it's ad hoc too; what
+            # else is nested keeps its Developer ID signature.
+            sparkle=$a/Contents/Frameworks/Sparkle.framework/Versions/B
+            for code in "$sparkle/Updater.app" "$sparkle/Autoupdate" "$sparkle/../../../Sparkle.framework" "$a"; do
+              codesign --force --sign - "$code"
+            done
             codesign --verify --deep --strict "$a"
             if [ "$v" != 0.1.4 ]; then
               hdiutil create -quiet -volname ilo -srcfolder "$RUNNER_TEMP/apps/$v" -format UDZO \
@@ -258,7 +262,7 @@ jobs:
               while read -r path; do
                 echo "  $path $(stat -f %z "$site$path" 2> /dev/null) bytes"
               done < "$out/$1-requests.txt"
-              grep -i -E 'delta|fall' "$out/$1-sparkle.txt" | grep -v -i 'predicate' | head -20
+              grep -i -E 'delta|fall' "$out/$1-sparkle.txt" | grep -v -i 'predicate' | head -20 || true
               cat "$out/$1-result.txt"
             } | tee -a "$out/timings.txt"
           }
