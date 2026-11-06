@@ -16,7 +16,8 @@
 # /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
 # address.html and card.html are an address's form and a card's, their first field across the
 # page's top 40%, which post as the login does and put "filled" in the title while Chrome fills
-# that field.
+# that field, and "unfocused" once the page's focus leaves its fields for nothing, which comes after
+# autofill hears of it, as both go the frame's way to the browser in turn.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -180,6 +181,9 @@ setInterval(() => {
     document.title = filled ? "filled" : "cleared";
   }
 }, 100);
+addEventListener("focusout", () => setTimeout(() => {
+  if (document.activeElement == document.body) document.title = "unfocused";
+}));
 </script>' "$1"
 }
 autofill_form address name 'address-line1 address-level2 address-level1 postal-code country email' \
