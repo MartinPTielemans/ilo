@@ -1118,6 +1118,12 @@ BC_EXPORT bool bc_window_focus_ring(bc_id window, bc_rect* frame);
 // as the Mac's sees it as a child window.
 BC_EXPORT bool bc_window_dialog(bc_id window, bc_rect* frame);
 
+// On Linux, the frames of Chromium's own popups that show over |window|, such as autofill's
+// dropdown, from the top-left of the window's content and from the bottom up. Copies up to |count|
+// into |frames| and returns how many there are. For the test driver, which can't see them on
+// Wayland, as the Mac's sees them as child windows.
+BC_EXPORT size_t bc_window_popups(bc_id window, bc_rect* frames, size_t count);
+
 // On Linux, while an overlay of the app's over |window|, such as the command bar, has the keyboard:
 // neither the window's pages nor its UI get keys, and the page or UI that had them keeps its focus,
 // to have them back once the overlay gives them up (|takes| false).
