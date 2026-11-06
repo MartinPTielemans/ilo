@@ -173,17 +173,20 @@ void PicturePage(content::WebContents* contents, uint64_t request, gfx::Size at_
   const gfx::Size fitted = Fitted(whole, at_most);
   // A hidden page's view gives up its compositor on the Mac, so nothing draws it and a copy waits
   // for a frame that never comes. Held as captured, still hidden to the page, as Chrome holds a
-  // background tab for its preview, it draws once unseen, until the copy answers. Off the Mac a
-  // page no window shows is out of every window, with no compositor at all, so it's held hidden in
-  // its tab's window too.
+  // background tab for its preview, it draws once unseen, until the copy answers. A page still on
+  // screen is held so too: a switch keeps the page it left there until the new one draws (the
+  // Mac's window_views.mm), and one that leaves during the copy would otherwise give up its
+  // compositor as it goes, and the copy come back empty (#1658). Off the Mac a page no window
+  // shows is out of every window, with no compositor at all, so it's held hidden in its tab's
+  // window too.
   base::ScopedClosureRunner held;
-  base::ScopedClosureRunner drawing;
   if (!view->IsShowing()) {
     Window* window = Window::Holding(tab);
     held = platform::DrawUnseen(window ? window->widget() : nullptr, contents->GetNativeView());
-    drawing = contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
-                                               /*stay_awake=*/false, /*is_activity=*/false);
   }
+  base::ScopedClosureRunner drawing =
+      contents->IncrementCapturerCount(gfx::Size(), /*stay_hidden=*/true,
+                                       /*stay_awake=*/false, /*is_activity=*/false);
   view->CopyFromSurface(
       copied, fitted == whole ? gfx::Size() : fitted, base::TimeDelta(),
       base::BindOnce(

@@ -1,10 +1,12 @@
 #ifndef BROWSER_CORE_PROFILES_H_
 #define BROWSER_CORE_PROFILES_H_
 
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "browser_core/public/browser_core.h"
 
@@ -42,6 +44,12 @@ void ReleaseProfiles();
 // may. Turned on again, the default goes back to Chrome's, but only when it |changed|, so a
 // default chosen in Chrome's settings stays.
 void ApplyAutoPictureInPicture(bool changed);
+// Chromium's settings Settings shows, browser-wide (session.h's Settings): one the user changed.
+enum class Everyday { kAskWhereToSave, kPageZoom, kNotificationPrompts };
+// Writes them into every profile loaded, as the user has them: each that isn't Chromium's own
+// default, and the one that |changed|, so a profile's choice in chrome://settings stays until the
+// user changes the row. Notifications' default alone: each site's own choice stays.
+void ApplyEveryday(std::optional<Everyday> changed);
 // |profile|'s off-the-record profile, made if there's none: the session its private windows
 // share. Chrome destroys it once the last of their Browsers has gone, which ends the session, and
 // then private_session_ended. A session that has ended isn't handed out again while Chrome waits
@@ -58,6 +66,8 @@ std::vector<bc_id> Profiles();
 bc_id ProfileId(const std::string& dir);
 // Empty for an id the core didn't give.
 std::string ProfileDir(bc_id profile);
+// The profile's folder, which Chrome deletes with it, or empty for an id the core didn't give.
+base::FilePath ProfileFolder(bc_id profile);
 // "Default" for one Chrome named itself.
 std::string ProfileName(bc_id profile);
 // Names |profile| |name|, unless |name| is empty.

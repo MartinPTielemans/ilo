@@ -1046,12 +1046,32 @@ impl Shell {
                 .tab()
                 .is_some_and(|tab| panes.contains(&tab))
         });
+        let (name, icon): (SharedString, SharedString) =
+            self.split(first).map_or_else(Default::default, |split| {
+                (split.name.clone(), split.icon.clone())
+            });
+        let named = !name.is_empty() || has_icon(&icon);
         let content = match renaming {
             Some(renaming) => {
-                let Some(tab) = renaming.naming.tab() else {
-                    unreachable!()
+                let icon = match renaming.naming {
+                    Naming::Split(_) => self.split_icon(&icon, first),
+                    naming => self.tab_icon(naming.tab().unwrap_or(first)),
                 };
-                plate(self.tab_icon(tab), self.naming_field(renaming, cx))
+                plate(icon, self.naming_field(renaming, cx))
+            }
+            None if named => {
+                let close = hovered
+                    .then(|| self.row_button(panes.clone(), closable, cx))
+                    .flatten();
+                let name = match name.is_empty() {
+                    true => panes
+                        .iter()
+                        .map(|&tab| self.title(tab))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    false => name.to_string(),
+                };
+                self.named_split(first, &panes, name.into(), &icon, close, cx)
             }
             None => {
                 let close = hovered
@@ -1077,19 +1097,102 @@ impl Shell {
             }
         };
         let renaming = renaming.is_some();
-        self.row(Row::Tab(first), content, ghost, cx)
-            .when(!renaming, |row| {
-                row.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |shell, event: &MouseDownEvent, _, _| {
-                        shell.press_row(first, event.position)
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Middle,
-                    cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
-                )
+        let bounds = self.drawn_for_picker(Subject::Tab(first));
+        let row = self
+            .row(Row::Tab(first), content, ghost, cx)
+            .children(bounds);
+        row.when(!renaming, |row| {
+            row.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, _| {
+                    shell.press_row(first, event.position)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
+            )
+        })
+    }
+
+    /// A split view's row with a name or an icon of its own, as Arc's custom-info cell: one plate
+    /// with the split's icon and `name`, in place of its segments. A press shows the page shown
+    /// last, a double-click renames the split and a right-click shows its menu, as a segment's do.
+    fn named_split(
+        &self,
+        first: u64,
+        panes: &[u64],
+        name: SharedString,
+        icon: &SharedString,
+        close: Option<impl IntoElement>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
+        let dot = panes.iter().find_map(|&tab| self.status_dot(tab));
+        let label = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .when(close.is_none(), |label| label.pr(px(TITLE_END_INSET)))
+            .child(title(&self.palette, name.clone(), row_selected))
+            .when(close.is_none(), |label| label.children(dot))
+            .children(close);
+        let content = div()
+            .id(("named-split", first))
+            .size_full()
+            .when(self.a11y, |content| {
+                content
+                    .role(Role::Tab)
+                    .accessibility_id(Self::tab_access_id(first))
+                    .aria_label(format!("{name}, split view"))
+                    .aria_selected(row_selected)
+                    .pressed_by_mouse_down(true, true)
             })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    // The first press showed the split; the row's press may start a drag.
+                    if event.click_count == 2 {
+                        cx.stop_propagation();
+                        return shell.rename_tab(first, cx);
+                    }
+                    if shell.choose_by_press(first, event, cx) {
+                        return cx.stop_propagation();
+                    }
+                    shell.show_row(shell.row_tab(first), cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    if shell.dragging().is_none() {
+                        shell.tab_menu(shell.row_tab(first), event.position, cx)
+                    }
+                }),
+            )
+            .child(plate(self.split_icon(icon, first), label));
+        div().size_full().child(content)
+    }
+
+    /// The icon of `tab`'s split view: the one the user gave it, else Lucide's columns-2, or rows-2
+    /// while it's stacked, in a folder's ink.
+    fn split_icon(&self, icon: &SharedString, tab: u64) -> AnyElement {
+        if has_icon(icon) {
+            return emoji(icon.clone());
+        }
+        let glyph = if self.stacked(tab) {
+            "icons/rows-2.svg"
+        } else {
+            "icons/columns-2.svg"
+        };
+        svg()
+            .path(glyph)
+            .flex_none()
+            .size(px(FAVICON_DRAWN))
+            .text_color(self.palette.text(SECONDARY))
+            .into_any_element()
     }
 
     /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
@@ -1392,7 +1495,7 @@ impl Shell {
             .map(|space| space.name.clone())
             .unwrap_or_default();
         // A heading VoiceOver can jump to, whose menu is the Space's.
-        let row = name_box(&self.palette, room)
+        let row = name_box(&self.palette, room, self.blank)
             .id("space-name")
             // Lit while the pinned rows are collapsed, where Arc's turns bold.
             .when(shut, |row| {
@@ -1733,9 +1836,21 @@ pub(super) struct Breath {
 impl Breath {
     /// How strong a loading dot drawn now is.
     pub(super) fn strength(&self) -> f32 {
+        self.through(BREATH).map_or(1., breath_strength)
+    }
+
+    /// How far round a loading ring drawn now is, as a fraction of a turn each `turn`: none while
+    /// motion is reduced.
+    pub(super) fn turned(&self, turn: Duration) -> f32 {
+        self.through(turn).unwrap_or(0.)
+    }
+
+    /// How far through its `period` something drawn now on this clock is, or None while motion is
+    /// reduced and it holds still.
+    fn through(&self, period: Duration) -> Option<f32> {
         self.drawn.set(true);
         if self.still.get() {
-            return 1.;
+            return None;
         }
         let now = Instant::now();
         if self
@@ -1746,7 +1861,7 @@ impl Breath {
             self.since.set(Some(now));
         }
         let since = self.since.get().unwrap_or(now);
-        breath_strength((now.duration_since(since).as_secs_f32() / BREATH.as_secs_f32()).fract())
+        Some((now.duration_since(since).as_secs_f32() / period.as_secs_f32()).fract())
     }
 
     /// Something drawn now moves on this clock, as a loading dot does.

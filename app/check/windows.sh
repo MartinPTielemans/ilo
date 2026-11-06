@@ -543,6 +543,33 @@ send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"
 send window 1
 
+# Linux's desktop file's New window and New incognito window launch ilo again with Chrome's
+# --new-window and --incognito, as Windows' jump list does: the running browser opens a window as
+# ⌘N or ⇧⌘N would, from the regular window in front (#669).
+if [ "$(uname)" = Linux ]; then
+  for launch in "--new-window window new-window 0" "--incognito private\ window new-private-window 1"; do
+    eval "set -- $launch"
+    "$browser" "$1" >> "$out/new-window-launch.log" 2>&1 ||
+      fail "the second launch with $1 failed: $(tail -1 "$out/new-window-launch.log")"
+    expect_late "^browser: launched again for a new window, private $4\$" \
+      "the running browser didn't hear the launch with $1 ask for a window"
+    expect_late "^browser: command $3 via launch\$" "the launch with $1 didn't run $3"
+    expect_late "^browser: $2 opened [0-9]" "the launch with $1 opened no $2"
+    launched=$(sed -n "s/^browser: $2 opened \([0-9]*\).*/\1/p" "$log" | tail -1)
+    # A window ⌘N's command opens may open its command bar, which escape closes.
+    for _ in $(seq 30); do
+      logged '^browser: command bar shown$' && { send key escape; break; }
+      sleep 0.1
+    done
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key w cmd shift
+    expect "^browser: window closed $launched\$" "⇧⌘W didn't close the window the launch with $1 opened"
+    send window 1
+  done
+else
+  echo "skip: a launch asking for a new window: the Mac's Dock has the items, and Windows' jump list waits for the header batch's engine."
+fi
+
 # ⌘N from a window full screen of its own opens one that goes full screen too, then opens its command
 # bar (#669), on Windows as elsewhere.
 send window 1

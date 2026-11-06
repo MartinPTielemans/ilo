@@ -205,7 +205,7 @@ pub(crate) fn set_shape(overlay: c_int, corners: &[(f32, f32, f32)]) {
 /// over the browser window in the order they're mapped, whatever X's stacking says.
 pub(crate) fn show(overlay: c_int, ui_view: *mut c_void, bounds: Bounds<Pixels>, radius: f32) {
     if let Some((view, framed)) = place(overlay, bounds, radius) {
-        gpui_linux::show_overlay(view, ui_view, framed, px(0.), false, |_| {});
+        crate::overlays::show_over(view, ui_view, framed, px(0.), false, |_| {});
     }
 }
 

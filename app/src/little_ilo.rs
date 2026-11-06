@@ -58,6 +58,155 @@ pub(crate) fn little_tab_opened(window: bc::bc_id, tab: u64, home: bc::bc_id, cx
     update_window_in(window, cx, |shell, cx| shell.little_sent(tab, cx));
 }
 
+thread_local! {
+    /// What a page asked of the pop-up each tab is, from tab_popup, until its tab_opened comes.
+    static POPUPS: RefCell<HashMap<u64, (bc::bc_rect, bool)>> = RefCell::default();
+    /// Each pop-up's window, by its tab, with the Little ilo window whose page opened it.
+    static POPUP_WINDOWS: RefCell<HashMap<u64, (bc::bc_id, bc::bc_id)>> = RefCell::default();
+    /// The pop-ups' windows, until each closes: sized by their pages, not the user.
+    static POPUP_IDS: RefCell<std::collections::HashSet<bc::bc_id>> = RefCell::default();
+}
+
+/// Whether `window`, closing, is a pop-up's, which it forgets: a sign-in's size is its page's, so
+/// it isn't the next Little ilo window's to open at (save_little_size).
+pub(crate) fn popup_window_closed(window: bc::bc_id) -> bool {
+    POPUP_IDS.with_borrow_mut(|ids| ids.remove(&window))
+}
+
+/// The tab opened next in `window` is a pop-up its page asked for, with its content's size and,
+/// if `placed`, where (bc_host's tab_popup).
+pub(crate) unsafe extern "C" fn tab_popup(
+    _: *mut c_void,
+    window: bc::bc_id,
+    tab: bc::bc_id,
+    opener: bc::bc_id,
+    requested: bc::bc_rect,
+    placed: bool,
+) {
+    let bc::bc_rect {
+        x,
+        y,
+        width,
+        height,
+    } = requested;
+    let at = if placed {
+        format!(" at {x:.0} {y:.0}")
+    } else {
+        String::new()
+    };
+    // check.sh reads this line.
+    log!("browser: tab {tab} popup of {opener} in window {window} asks {width:.0} {height:.0}{at}");
+    POPUPS.with_borrow_mut(|popups| popups.insert(tab, (requested, placed)));
+}
+
+/// What the page asked of `tab`, if it's a pop-up, once: its tab_opened has come.
+pub(crate) fn take_popup(tab: u64) -> Option<(bc::bc_rect, bool)> {
+    POPUPS.with_borrow_mut(|popups| popups.remove(&tab))
+}
+
+/// A pop-up a Little ilo window's page asked for, as a sign-in's, opens as a Little ilo window of
+/// its own over it, at the size the page asked, as Chrome's opens as a window (#1919): it's a tab
+/// still (decision 3), in its home's profile, its page live, which the window's bar names. Else,
+/// as a link's tab, it goes behind.
+pub(crate) fn little_popup_opened(
+    window: bc::bc_id,
+    tab: u64,
+    home: bc::bc_id,
+    (asked, placed): (bc::bc_rect, bool),
+    cx: &mut App,
+) {
+    let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
+    let Some(from) = from else {
+        return little_tab_opened(window, tab, home, cx);
+    };
+    let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+    let opener = match unsafe {
+        platform::host_window_frame(from.ui_view, &mut x, &mut y, &mut width, &mut height)
+    } {
+        true => Frame {
+            x,
+            y,
+            width,
+            height,
+        },
+        false => {
+            let (width, height) = little_size();
+            let (x, y) = platform::centered(width, height);
+            Frame {
+                x,
+                y,
+                width,
+                height,
+            }
+        }
+    };
+    let at = placed.then_some((asked.x, asked.y));
+    let frame = window_frames::popup(opener, (asked.width, asked.height), at, &screens());
+    let home = little_home(home, main_window_for(home).unwrap_or(0));
+    let profile = unsafe { bc::bc_space_profile(home) };
+    // Its page goes to its home's Today, where a Little ilo window takes it from.
+    unsafe { bc::bc_tab_move_to_space(tab, home) };
+    let at = bc::bc_rect {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    };
+    let opened = (profile != 0)
+        .then(|| {
+            open_window_as(
+                Some(from),
+                Some(Own::Little { profile, home }),
+                None,
+                Some(at),
+                cx,
+            )
+        })
+        .flatten();
+    let Some(popup) = opened else {
+        // check.sh reads this line.
+        log!("browser: little window {window} put {tab} in space {home}");
+        return;
+    };
+    if unsafe { bc::bc_window_take_tab(popup, tab) } == 0 {
+        // After this update, as AppKit's will-close calls back into GPUI, which it holds.
+        cx.foreground_executor()
+            .spawn(async move { unsafe { bc::bc_window_close(popup) } })
+            .detach();
+        log!("browser: little window {window} put {tab} in space {home}");
+        return;
+    }
+    POPUP_WINDOWS.with_borrow_mut(|windows| windows.insert(tab, (popup, window)));
+    POPUP_IDS.with_borrow_mut(|ids| ids.insert(popup));
+    // check.sh reads this line.
+    log!(
+        "browser: little window {window} popup {tab} in window {popup} at {:.0} {:.0} {:.0} {:.0}",
+        frame.x,
+        frame.y,
+        frame.width,
+        frame.height
+    );
+}
+
+/// A pop-up's page closed, as a sign-in's closes itself once it's done: its window goes, and the
+/// Little ilo window that opened it has the keyboard back. Never inside a GPUI update, as the
+/// window's close calls back into GPUI (AppKit's will-close).
+pub(crate) fn popup_closed(tab: u64) {
+    let Some((popup, opener)) = POPUP_WINDOWS.with_borrow_mut(|windows| windows.remove(&tab))
+    else {
+        return;
+    };
+    let open = |id| WINDOWS.with_borrow(|windows| windows.iter().any(|w| w.id == id));
+    if open(popup) {
+        unsafe { bc::bc_window_close(popup) };
+    }
+    if open(opener) {
+        unsafe { bc::bc_window_activate(opener) };
+        // check.sh reads this line.
+        log!("browser: little window {opener} has the keyboard back from {popup}");
+    }
+}
+
 /// Where a Little ilo window opens: centred a little above the middle of the screen the pointer is
 /// on, as Arc's, else of the one the windows open on.
 pub(crate) fn little_frame() -> bc::bc_rect {
@@ -157,6 +306,9 @@ pub(crate) fn open_links_in_little(front: bc::bc_id, urls: Vec<String>, cx: &mut
 /// The Little ilo windows open, as the Dock's menu opens: 0 with none, 1 with one on screen, 2
 /// with all of them hidden.
 pub(crate) extern "C" fn dock_little() -> c_int {
+    if !unsafe { crate::bc::bc_little_windows() } {
+        return -1;
+    }
     WINDOWS.with_borrow(|windows| {
         let mut little = windows.iter().filter(|w| w.little.is_some()).peekable();
         if little.peek().is_none() {
@@ -179,17 +331,7 @@ pub(crate) extern "C" fn dock_chosen(item: c_int) {
             return new_little_window("dock", cx);
         }
         if item == 3 || item == 4 {
-            let command = match item {
-                3 => shell::Command::NewWindow,
-                _ => shell::Command::NewPrivateWindow,
-            };
-            let front = WINDOWS.with_borrow(|windows| {
-                (windows.iter().find(|w| w.regular())).and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = front {
-                shell.update(cx, |shell, cx| shell.run(command, "dock", cx));
-            }
-            return;
+            return new_window_in_front(item == 4, "dock", cx);
         }
         let shown = item == 1;
         let little: Vec<(bc::bc_id, *mut c_void)> = WINDOWS.with_borrow(|windows| {
@@ -230,9 +372,11 @@ pub(crate) fn new_little_window(from: &str, cx: &mut App) {
     }
 }
 
-/// The menu bar's Little ilo button was clicked.
+/// The menu bar's Little ilo button was clicked, or on Windows the notification area's icon.
 pub(crate) extern "C" fn status_item_clicked() {
-    update_app_later(|cx| new_little_window("menu bar", cx));
+    let place =
+        little_launch::button(little_launch::os()).map_or("menu bar", |button| button.place);
+    update_app_later(move |cx| new_little_window(place, cx));
 }
 
 /// Where the choice to show Little ilo's button in the menu bar is kept, beside its size: there
@@ -256,8 +400,19 @@ pub(crate) fn set_little_in_menu_bar(on: bool) {
     } else {
         std::fs::remove_file(path)
     };
-    let clicked = on.then_some(status_item_clicked as extern "C" fn());
+    let clicked = (on && unsafe { crate::bc::bc_little_windows() })
+        .then_some(status_item_clicked as extern "C" fn());
     unsafe { platform::host_set_little_status_item(clicked) };
+}
+
+/// Settings › Features' Little ilo switch: the core opens none while it's off, and every window's
+/// menus, the command bar's rows and ⌥⌘-click on a row follow. The menu bar's button goes, its own
+/// choice kept for when Little ilo is on again. The windows open stay.
+pub(crate) fn set_little_windows(on: bool, cx: &mut gpui::App) {
+    unsafe { crate::bc::bc_set_little_windows(on) };
+    let clicked = (on && little_in_menu_bar()).then_some(status_item_clicked as extern "C" fn());
+    unsafe { platform::host_set_little_status_item(clicked) };
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_little_windows(on, cx));
 }
 
 /// ⌥⌘-click on a link in a page of `window`: `url` opens in a new Little ilo window, for the
@@ -273,6 +428,10 @@ pub(crate) unsafe extern "C" fn window_open_little(
         .to_string_lossy()
         .into_owned();
     update_app(|cx| {
+        // A launch that asked for one, from the jump list or the launcher, names no window or link.
+        if window == 0 && url.is_empty() {
+            return new_little_window("command line", cx);
+        }
         let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == window).cloned());
         let Some(from) = from else {
             return;

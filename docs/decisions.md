@@ -121,3 +121,9 @@ Consequences now:
 No crash report leaves the device without the user's yes, in Send Crash Reports (off) or the offer after a crash. A report can hold a URL or page text but no user folder, and it asks Sentry to infer no IP. Official builds send them to ilo's Sentry in the EU, which takes minidumps. The collector is a default service URL: a fork names its own or none.
 
 Revisit if Sentry stops taking minidumps or keeping them in the EU.
+
+## 10. WebRTC: a page learns no address HTTP doesn't give it
+
+WebRTC gathers on the default route's public interface only (`default_public_interface_only`), so calls and peer-to-peer pages connect directly without telling a page a local address. While a profile uses a proxy, WebRTC goes only through it and TURN relays (`disable_non_proxied_udp`, ungoogled-chromium's default), so the proxy hides the real address. Settings › Privacy › Relay calls makes every profile relay-only, for those who want it always. Chrome's `default` isn't ours: ungoogled-chromium builds without mDNS (`enable_mdns=false`), so it would hand pages the raw local addresses that Chrome's own hides. Evidence: #1774.
+
+Revisit if the engine builds with mDNS again, or if a full-tunnel VPN is found to leak its real address under `default_public_interface_only`.

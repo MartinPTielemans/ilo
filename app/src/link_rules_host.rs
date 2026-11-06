@@ -62,7 +62,8 @@ pub fn save() {
 /// The user's Space a link to `url` from another app opens in, by the first rule it meets, else
 /// everything else's, 0 being the Space in front and `LITTLE` Little ilo.
 pub fn route(url: &str) -> u64 {
-    let (space, rule) = RULES.with_borrow(|rules| rules.route(url, &users_spaces()));
+    let little = unsafe { crate::bc::bc_little_windows() };
+    let (space, rule) = RULES.with_borrow(|rules| rules.route_with(url, &users_spaces(), little));
     if let Some(rule) = rule {
         let place = match space {
             LITTLE => "little ilo".to_string(),
@@ -91,6 +92,10 @@ pub fn preview_route(url: &str, shown: u64) -> u64 {
 pub struct CoreLinkRules;
 
 impl Host for CoreLinkRules {
+    fn little_windows(&self) -> bool {
+        unsafe { bc::bc_little_windows() }
+    }
+
     fn spaces(&self) -> Vec<(u64, SharedString)> {
         (users_spaces().into_iter())
             .map(|space| (space, name(bc::bc_space_name, space)))

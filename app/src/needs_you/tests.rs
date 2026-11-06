@@ -63,6 +63,7 @@ fn waiting(agent: &str, name: &str, id: u64, handoff: Option<u64>) -> Card {
         why: "Sign in to github.com".into(),
         handoff,
         back: false,
+        ..Default::default()
     };
     let status = match handoff {
         Some(_) => "Waiting for you",

@@ -25,6 +25,7 @@ One file per area, so lanes working on different areas edit different files. A n
 - [Ad blocking](ad-blocking.md)
 - [Passwords and autofill](passwords-and-autofill.md)
 - [Downloads](downloads.md)
+- [Site notifications](site-notifications.md)
 - [Find in page](find-in-page.md)
 - [Zoom](zoom.md)
 - [Link target](link-target.md)

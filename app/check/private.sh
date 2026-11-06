@@ -5,7 +5,9 @@
 # share the session. Closing the last private window ends the session, and the next ⇧⌘N starts a
 # new one without its cookie. Nothing private is written: after the quit the Spaces file and the
 # profile's history have none of its pages, the profile's cookies don't have its cookie, and a
-# relaunch brings back no private window.
+# relaunch brings back no private window. A private window's Library has its session's downloads
+# (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
+# window's doesn't, nor does the profile's history after the quit.
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
 # sets it. The private windows load it at a URL of their own, which nothing may write.
@@ -20,6 +22,8 @@ onkeydown = e => {
   }
 };
 </script>' > "$out/site/private.html"
+# What a private window downloads: the server sends a .bin as a file to save, not a page to show.
+printf '%s' 'a private download' > "$out/site/private-notes.bin"
 regular_url="${site}private.html"
 private_url="${site}private.html?private-only"
 log="$out/private.log"
@@ -108,12 +112,43 @@ send key r cmd
 expect "^browser: title $p cookie private\$" "the private session lost its cookie on a reload"
 ../tools/window-screenshot.sh "$pid" "$out/private.png" all || fail "no window to capture"
 
-# The regular window's page, from the same site, doesn't see it.
+# Its download is its Library's: going to a file from its command bar downloads it, and ⇧⌘J opens
+# the Library on Downloads, which lists it alone.
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the private window"
+send insert "${site}private-notes.bin"
+send key return
+for _ in $(seq 100); do
+  grep -q '^browser: download [0-9]* done private-notes.bin$' "$log" && break
+  sleep 0.1
+done
+grep -q '^browser: download [0-9]* done private-notes.bin$' "$log" ||
+  fail "the private window's download didn't finish: $(grep -c 'private-notes' "$out/site.log") requests"
+send window 4
+send key j cmd shift
+expect '^browser: library section downloads$' "⇧⌘J didn't open the private window's Library"
+expect '^browser: library lists downloads: private-notes.bin$' \
+  "the private window's Library didn't list its session's download alone"
+../tools/window-screenshot.sh "$pid" "$out/private-library.png" || fail "no window to capture"
+send key j cmd shift
+expect '^browser: library hidden$' "⇧⌘J didn't close the private window's Library"
+
+# The regular window's page, from the same site, doesn't see it, and its Library lists none of the
+# private window's downloads.
 send window 1
 send key r cmd
 expect "^browser: loaded $a $regular_url\$" "⌘R didn't reload the regular window's page"
 none_since "^browser: title $a cookie private\$" ||
   fail "the regular window saw the private window's cookie"
+send key j cmd shift
+expect '^browser: library lists downloads: ' "⇧⌘J didn't open the regular window's Library"
+listed=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: library lists downloads: ' |
+  tail -1)
+case $listed in
+*private-notes.bin*) fail "the regular window's Library listed the private window's download" ;;
+esac
+send key j cmd shift
+expect '^browser: library hidden$' "⇧⌘J didn't close the regular window's Library"
 
 # The profile's second private window shares the session.
 send window 4
@@ -167,6 +202,7 @@ echo "$pages" | grep -q 'private-only' && fail "the Spaces file has a private wi
 history="$(dirname "$saved")/Default/History"
 [ -s "$history" ] || fail "the profile has no history"
 grep -q 'private-only' "$history" && fail "the profile's history has a private window's page"
+grep -q 'private-notes' "$history" && fail "the profile's history has a private window's download"
 cookies="$(dirname "$saved")/Default/Network/Cookies"
 if command -v sqlite3 > /dev/null && [ -f "$cookies" ]; then
   [ "$(sqlite3 "$cookies" "select count(*) from cookies where name = 'private'")" = 0 ] ||
@@ -185,7 +221,7 @@ grep -q '^browser: private window opened' "$log" &&
   fail "the relaunch brought back a private window"
 grep -q 'private-only' "$log" && fail "the relaunch brought back a private window's page"
 quit
-echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, closing the last one ends the session, the next starts without its cookie, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png"
+echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, whose download its Library lists and the regular window's doesn't, closing the last one ends the session, the next starts without its cookie, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png, $out/private-library.png"
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
 # the Extensions menu lists only the allowed one and uBlock Origin, the browser's own, allowed

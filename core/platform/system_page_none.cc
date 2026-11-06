@@ -21,7 +21,10 @@ void SystemPage::DeleteStore(const std::string&) {}
 
 void SystemPage::ReleaseStore(const std::string&) {}
 
-void SystemPage::ClearSite(const SystemStore&, const std::string&, bool, base::OnceClosure done) {
+void SystemPage::ClearSite(const SystemStore&,
+                           const std::string&,
+                           SiteData,
+                           base::OnceClosure done) {
   std::move(done).Run();
 }
 

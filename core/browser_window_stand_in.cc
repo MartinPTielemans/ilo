@@ -521,6 +521,23 @@ ui::AcceleratorProvider* BrowserWindowStandIn::GetAcceleratorProvider() {
   return this;
 }
 
+// Chrome calls these when the URL a tab shows changes without a navigation telling the core, as
+// when Chromium stops showing a new tab's pending URL once its blank document draws (#1668):
+// UpdateToolbar with no contents for the tab shown, ResetToolbarTabState for one behind it. The
+// app hears of it in the tab's state. Chrome's switch to a tab passes that tab, which the app
+// picked itself, so it says nothing new.
+void BrowserWindowStandIn::UpdateToolbar(content::WebContents* contents) {
+  if (!contents && browser_) {
+    ResetToolbarTabState(browser_->GetTabStripModel()->GetActiveWebContents());
+  }
+}
+
+void BrowserWindowStandIn::ResetToolbarTabState(content::WebContents* contents) {
+  if (Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr) {
+    tab->StateChanged();
+  }
+}
+
 bool BrowserWindowStandIn::UpdateToolbarSecurityState() {
   return false;
 }

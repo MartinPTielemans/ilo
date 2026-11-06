@@ -88,6 +88,7 @@ impl Agents {
             agent: AGENT.into(),
             action: SharedString::from(action.to_string()),
             site: SharedString::from(site.to_string()),
+            target: SharedString::default(),
             refused: SharedString::from(refused.to_string()),
             steps: Vec::new(),
             by: SharedString::from(by.to_string()),

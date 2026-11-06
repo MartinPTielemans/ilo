@@ -113,6 +113,28 @@ arrow-tile = 0.04
 # A command's keys, as chips.
 chip-radius = 6.0
 
+[command-bar.site-colors]
+# In the site searches a new profile has, the chip and the selected row are in the site's own
+# colour, as Arc's are (#1397), and the palette moves each along its lightness until it reads on
+# the bar and Ink or Paper reads on it (ours: Arc's colours and glow aren't ilo's look). GitHub's,
+# X's and Wikipedia's marks are black and white, so they keep the chip and the Space's accent, as
+# a site search the user adds does.
+google-drive = 0xfbbc04
+gmail = 0xea4335
+google-maps = 0x34a853
+google-calendar = 0x4285f4
+google-docs = 0x4285f4
+dropbox = 0x0061ff
+amazon = 0xff9900
+figma = 0xa259ff
+youtube = 0xff0033
+reddit = 0xff4500
+soundcloud = 0xff5500
+asana = 0xf06a6a
+linkedin = 0x0a66c2
+apple-music = 0xfa243c
+spotify = 0x1ed760
+
 [dialog]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Renaming and deleting). The card is centred
 # in the window. Its text is inset 38 from its top and left, and its buttons 28 from its right
@@ -322,6 +344,11 @@ picture-default = 0.625
 # A tab with no picture shows its favicon on a ground of the ink at this.
 ground = 0.05
 favicon = 24.0
+# A favorite split's card shows its pages side by side in the picture's box, as the window does
+# with the split's gap scaled down to this, and the page focused last ringed this wide in the
+# Space's colour (ours, from the mock the owner took, #689).
+split-gap = 4.0
+split-ring = 1.0
 # The card starts this far right of the row's plate, and stays this far inside the window.
 gap = 8.0
 edge = 8.0
@@ -334,6 +361,9 @@ title-line = 18.0
 title = 0.9
 host-size = 11.0
 host = 0.55
+# A page Battery Saver froze says so in the host's place (#686): Lucide's pause at the host's size,
+# then the words, this far after it.
+paused-gap = 5.0
 # The actions, beside the host: control-sized buttons, inset from the card's right and bottom
 # edges by as much as keeps their corners concentric with its: 16 - 10.
 button = 28.0
@@ -347,24 +377,34 @@ rim = 0.5
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
-# Preview, #690). Arc's isn't measured, so it takes the hover card's look: the panel radius in the
-# palette's overlay with the popover level's rim, and rows at the row radius inside its padding,
-# concentric: 16 - 4.
-width = 272.0
+# Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
+# with its glyph centred 20 in and its text from 36, a 1 pt line under it, then rows 4 below it on
+# a 45 pitch, each a 44 fill 4 in from the sides with the favicon centred 20 in and the title over
+# its age from 36, at most 320 tall. Ours: the hover card's look, the panel radius in the palette's
+# overlay with the popover level's rim, the rows at the row radius, concentric: 16 - 4, so 3 more
+# under the last row than Arc's 1.
+width = 240.0
 radius = 16.0
 padding = 4.0
 rim = 0.5
-# The search, a line of body type after the magnifying glass, as tall as a sidebar row.
-search = 32.0
+tallest = 320.0
+search = 48.0
 search-glyph = 14.0
-# Each tab a row: its icon, then its title, at these alphas of the ink. The selected row has the
-# selected state's plate, a hovered one the hovered state's.
-row = 32.0
+# The line under the search, at this alpha of the ink, as the sidebar's dividers.
+divider = 1.0
+divider-alpha = 0.15
+# Each tab a row: its icon, then its title over how long ago it was seen, at these alphas of the
+# ink. The selected row and the one under the pointer both have the selected state's plate.
+row = 45.0
+row-fill = 44.0
 row-radius = 12.0
 icon = 16.0
-icon-x = 10.0
-title-x = 34.0
+icon-x = 8.0
+title-x = 32.0
 title-size = 13.0
+title-line = 16.0
+age-size = 11.0
+age-line = 14.0
 title = 0.9
 hint = 0.55
 
@@ -784,6 +824,12 @@ short-padding = 8.0
 words-columns = 4
 word-number = 24.0
 word-gap = 6.0
+# Ours: the account's status line starts with a dot, ilo green while it syncs and the destructive
+# red while something stops it, 6 before the line, which says what stops it in that red, 4 before
+# the rest.
+status-dot = 7.0
+status-dot-gap = 6.0
+word-space = 4.0
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
 # over its boxes.
@@ -842,6 +888,10 @@ tile-gap = 8.0
 tile-min = 47.0
 tile-columns = 4
 tile-radius = 12.0
+# A favorite split's tile holds each tab's favicon in a segment of its own behind the split row's
+# line; a segment narrower than a favicon and 6, as three in a 47 pt tile are, takes this smaller
+# one (ours, from the mock the owner took, #689: Arc's tile isn't recorded).
+split-tile-favicon = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
 tile-mark = 12.0
@@ -998,6 +1048,12 @@ space-swatch-hovered = 12.0
 space-shown-least = 22.0
 space-clear = 4.0
 space-least = 4.0
+# A Space's dot dragged along the switcher, or its card by its handle along the Library's: its place
+# dims to half while its copy follows the pointer, and the gap it would go into shows the rows' drop
+# line stood up, among the dots 16 tall on their middle without the ring, which would be a dot's
+# size, and among the cards with it, as the rows' (ours: Arc's isn't recorded).
+space-dragged = 0.5
+space-drop-line = 16.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -1572,12 +1628,19 @@ buttons-top = 12.0
 close = 22.0
 close-inset = 7.0
 close-glyph = 12.0
+# Above each change a request card lists, and above why it asks, so each reads as one.
+change-gap = 6.0
 
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a
-# row in it, its glyph before its name over what it's doing.
+# row in it, its glyph before its name over what it's doing. A page's device chooser has the same
+# rows (#1649). The list starts `list-top` under the card's words, and a row's glyph sits on the
+# card's text column, so its plate, at a tab row's radius, hangs `row-inset` outside it.
 row = 40.0
 row-gap = 2.0
+list-top = 6.0
+row-inset = 8.0
+glyph-gap = 10.0
 glyph = 16.0
 name = 13.0
 status = 11.0

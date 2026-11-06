@@ -87,6 +87,9 @@ use crate::tokens::text;
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
 pub(crate) const MOVE: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
+/// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
+/// Windows once it has hidden: a page's question is answered then.
+const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
 const DROP: f32 = 32.;
 
 /// What a dialog asks.
@@ -951,6 +954,19 @@ impl Dialog {
                 )
             }
             None => (None, None),
+        };
+        // On Linux the page has the keyboard back as the dialog starts leaving (Host::hold_keys),
+        // and Chromium drops its keys until its question is answered, so it's answered then: ⌘L
+        // typed right after Esc opens the command bar (#1711, #1963). After this update, as the
+        // core's answer can come back to the dialog.
+        let answered = match answered {
+            Some((answered, reply))
+                if PAGE_ANSWERED_AS_IT_LEAVES && asked.source == Source::Page =>
+            {
+                cx.defer(move |cx| answered(reply, cx));
+                None
+            }
+            answered => answered,
         };
         asked._leave = Some(cx.spawn(async move |dialog, cx| {
             cx.background_executor()

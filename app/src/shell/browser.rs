@@ -39,6 +39,9 @@ pub trait Browser {
     /// Makes `tab` the favorite at `index` of the favorites without it, else the last, out of its
     /// Space, or moves it there among them.
     fn move_to_favorites(&self, tab: u64, index: usize, cx: &mut App);
+    /// The same for `tab` with the rest of its split view, which become one favorite, a split,
+    /// focused where it's focused now.
+    fn move_split_to_favorites(&self, tab: u64, index: usize, cx: &mut App);
     /// Moves `tab` to `index` in its Space's Today tabs, or in its pinned tabs, inside `folder` if
     /// it isn't 0, pinning or unpinning it, with the rest of its split view. `index` counts tabs,
     /// not rows, without the split's, and folders directly in the pinned tabs or `folder` count
@@ -71,6 +74,8 @@ pub trait Browser {
     fn set_folder_open(&self, folder: u64, open: bool, cx: &mut App);
     /// Collapses `space`'s pinned rows, or expands them.
     fn set_pinned_open(&self, space: u64, open: bool, cx: &mut App);
+    /// Turns Chrome's Battery Saver off until the computer's plugged in again.
+    fn battery_saver_off_for_now(&self, _cx: &mut App) {}
     /// Moves `folder`, with what's in it, to `index` in `to`, else in the pinned tabs, counted as
     /// `move_tab` counts.
     fn move_folder(&self, folder: u64, to: u64, index: usize, cx: &mut App);
@@ -82,6 +87,10 @@ pub trait Browser {
     fn move_in_split(&self, tab: u64, index: usize, cx: &mut App);
     /// Stacks the pages of `tab`'s split view top to bottom, or puts them side by side.
     fn set_split_stacked(&self, tab: u64, stacked: bool, cx: &mut App);
+    /// Names `tab`'s split view, or takes its name away for an empty one.
+    fn set_split_name(&self, tab: u64, name: &str, cx: &mut App);
+    /// Gives `tab`'s split view `icon`, an emoji, or takes its icon away for an empty one.
+    fn set_split_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Gives the pages of `tab`'s split view `shares` of it, in their order, or even shares.
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, cx: &mut App);
     /// Gives `tab`'s page its split's card, the other pages kept at 220 pt however wide it is, or
@@ -116,6 +125,16 @@ pub trait Browser {
     fn cast_close(&self, cx: &mut App);
     /// A click on the device `id` in `tab`'s Cast dialog: casts to it, or stops it casting.
     fn cast_to(&self, tab: u64, id: SharedString, cx: &mut App);
+    /// A click on the device `id` in `tab`'s chooser: the page gets it, and the site may use it
+    /// until the user removes it in Site Controls.
+    fn choose_device(&self, tab: u64, id: SharedString, cx: &mut App);
+    /// The chooser's ×: the page's request ends as Chrome's Cancel ends it.
+    fn cancel_chooser(&self, tab: u64, cx: &mut App);
+    /// The chooser's Scan again: Bluetooth looks for devices again.
+    fn scan_devices(&self, tab: u64, cx: &mut App);
+    /// The chooser's Bluetooth Settings… or System Settings…: the system's settings, where
+    /// Bluetooth is turned on, or ilo let use it.
+    fn device_settings(&self, tab: u64, cx: &mut App);
     /// Closes the Today tabs of the Space shown, but the one shown, unless it shows them all, and
     /// returns the id of the clear, or 0 if it closed none.
     fn clear(&self, cx: &mut App) -> u64;
@@ -170,6 +189,11 @@ pub trait Browser {
     /// Puts back what the archive removal `removal` took out, and returns how many tabs, 0 if it
     /// is gone. The removals are the core's, shared by its windows, so each asks for its own.
     fn undo_archive_remove(&self, removal: u64, cx: &mut App) -> usize;
+    /// Puts back what the window's removal from history `removal` took out, as it was, or takes
+    /// it out again for `redo_remove_suggestion`. Whether it could: the core keeps the window's
+    /// last ten removals.
+    fn undo_remove_suggestion(&self, removal: u64, cx: &mut App) -> bool;
+    fn redo_remove_suggestion(&self, removal: u64, cx: &mut App) -> bool;
     /// Reopens the archived tab `archived` at the top of the Today tabs of the Space shown, and
     /// shows it.
     fn restore_archived(&self, archived: u64, cx: &mut App);
@@ -179,8 +203,9 @@ pub trait Browser {
     fn clear_archive(&self, cx: &mut App) -> u64;
     /// Does `action` to the download.
     fn act_on_download(&self, download: u64, action: DownloadAction, cx: &mut App);
-    /// Takes the downloads that aren't running or paused off the list, keeping their files.
-    fn clear_downloads(&self, cx: &mut App);
+    /// Takes the downloads that aren't running or paused off the list, keeping their files: those
+    /// of `private`'s private session, else every profile's own.
+    fn clear_downloads(&self, private: Option<u64>, cx: &mut App);
     /// Looks up the icon the system shows for the download's file, and calls
     /// `Shell::set_download_icon`.
     fn download_icon(&self, download: u64, cx: &mut App);
@@ -212,6 +237,11 @@ pub trait Browser {
     /// The starts of today, yesterday, this week and last week in the user's calendar, in
     /// milliseconds since the Unix epoch.
     fn day_starts(&self) -> [f64; 4];
+    /// When a window last showed `tab`, in milliseconds since the Unix epoch: now while one shows
+    /// it. 0 when that isn't known.
+    fn last_seen(&self, _tab: u64) -> f64 {
+        0.
+    }
     fn go_back(&self, tab: u64, cx: &mut App);
     fn go_forward(&self, tab: u64, cx: &mut App);
     /// Lists the pages back from `tab`'s, or forward of it, and calls `Shell::show_history`.
@@ -225,6 +255,9 @@ pub trait Browser {
     /// Deletes the cookies, or else the cache, the profile keeps for the site of the tab's page,
     /// then reloads it.
     fn clear_site(&self, tab: u64, cookies: bool, cx: &mut App);
+    /// Deletes the cookies, storage and cache the profile keeps for the site of the tab's page,
+    /// then reloads it past the cache. The user's alone: agents get no path to it.
+    fn clear_site_data(&self, tab: u64, cx: &mut App);
     /// Turns Developer Mode on or off for the site of the tab's page, in its profile. The user's
     /// view: agents get none.
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);
@@ -314,13 +347,19 @@ pub trait Browser {
     /// Opens Chrome's Clear browsing data dialog in a tab of the Space shown, for its profile. The
     /// user's, as site_search_settings is.
     fn clear_browsing_data(&self, cx: &mut App);
-    /// The command bar picks kept for `profile`, as `usage::Usage` writes them, on this computer
-    /// only: never synced, sent or put in a crash report. The user's, so no agent path reads them.
-    fn bar_picks(&self, _profile: u64) -> String {
+    /// The profile's own folder on this computer, which goes when it's deleted, or None for one
+    /// the browser doesn't know.
+    fn profile_folder(&self, _profile: u64) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Library › Agents' past tasks kept for `profile`, as `agent_history::write` writes them, on
+    /// this computer only: never synced, sent or put in a crash report, and no agent path reads
+    /// them.
+    fn agent_history(&self, _profile: u64) -> String {
         String::new()
     }
-    /// Keeps `text` as `profile`'s command bar picks, as `bar_picks` reads them.
-    fn set_bar_picks(&self, _profile: u64, _text: &str) {}
+    /// Keeps `text` as `profile`'s past tasks, as `agent_history` reads them.
+    fn set_agent_history(&self, _profile: u64, _text: &str) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;
@@ -344,6 +383,9 @@ pub trait Browser {
     fn set_icon(&self, tab: u64, icon: &str, cx: &mut App);
     /// Deletes a Space, closing its tabs, and returns whether it will, as the last can't go.
     fn delete_space(&self, space: u64, cx: &mut App) -> bool;
+    /// Moves a Space to right after the Space `after`, or first if it's 0, as a dot dragged along
+    /// the switcher or a card along the Library's Spaces moves it.
+    fn move_space(&self, _space: u64, _after: u64, _cx: &mut App) {}
     /// Brings back the sidebar of the profile of the Space the window shows from its backup taken
     /// at `time`, in milliseconds since 1970, keeping the one it has as a backup.
     fn restore_sidebar(&self, time: u64, cx: &mut App);
@@ -368,8 +410,10 @@ pub trait Browser {
     fn account_host(&self) -> Option<Rc<dyn crate::account::Host>> {
         None
     }
-    /// Deletes a profile no Space or favorite is in, with everything the browser keeps in it.
+    /// Deletes a profile no Space is in, with its favorites and everything the browser keeps in it.
     fn delete_profile(&self, profile: u64, cx: &mut App);
+    /// Who shares the favorites, as Settings has it.
+    fn favorites_scope(&self, cx: &mut App) -> super::FavoritesScope;
     /// Shows ilo's own menu of `items` at `position` in the window, or in the reveal's panel if
     /// `in_reveal`, in `look`, as a right-click there does, or with the item marked `over` on
     /// `position`, its title's top left there, as a pop-up button's menu does. Then calls `chosen`
@@ -672,7 +716,8 @@ pub trait Browser {
         cx: &mut App,
     );
     /// Starts capture mode over the tab's page, at `frame` in the window with corners of `radius`,
-    /// or leaves it if it's on; or with `full_page` captures all of the page and copies it. Its
+    /// or leaves it if it's on; or with `full_page` captures all of the page and copies it. With
+    /// `press`, a ⇧⌘-drag's on the page, it starts dragging from there, and doesn't leave. Its
     /// menu offers Save to Library with `library`, as a private window has no Library, and it
     /// draws in the window's menus' `look`.
     fn capture(
@@ -681,6 +726,7 @@ pub trait Browser {
         frame: Bounds<Pixels>,
         radius: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         library: bool,
         look: crate::menu::Look,
         cx: &mut App,
@@ -711,6 +757,9 @@ pub trait Browser {
     fn import(&self, cx: &mut App);
     /// Opens the Settings window on its Passwords tab, with the logins of `space`'s profile.
     fn passwords(&self, space: u64, cx: &mut App);
+    /// Opens Chrome's autofill dropdown at the field of `tab`'s page that has the keyboard, with
+    /// every login the profile has if `logins`. False while no field of its page has it.
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool;
     /// The user takes over `tab`, where the agent with the id `agent` is at work: it may not act
     /// there until they hand it back.
     fn take_over(&self, agent: SharedString, tab: u64, cx: &mut App);
@@ -766,6 +815,11 @@ pub trait Browser {
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
+    /// Opens a Blank Window in the shown Space's profile, after this one's draw.
+    fn new_blank_window(&self, cx: &mut App);
+    /// Moves `tab`, a Blank Window's, to the top of the user's `space`'s Today, where the regular
+    /// window showing that Space, else the one in front, shows it live; the Blank Window stays.
+    fn move_out_of_blank(&self, tab: u64, space: u64, cx: &mut App);
     /// Closes this window. Its tabs go to the window that was in front before it, live.
     fn close_window(&self, cx: &mut App);
     /// Starts the system's drag of `tab`, whose row was dragged out of this window, showing the
@@ -927,6 +981,10 @@ pub struct Split {
     /// The tab whose page took the card with the others kept at 220 pt, else 0. The shares then
     /// stay even, as the core works the widths out from this at every layout.
     pub expanded: u64,
+    /// The name and the emoji the user gave it, which its row shows in place of its pages' titles
+    /// and favicons, else empty.
+    pub name: SharedString,
+    pub icon: SharedString,
 }
 
 /// A Space's folders in its pinned tabs. What's in each follows it there.

@@ -92,8 +92,10 @@ delegate_noop!(State: ZwpVirtualKeyboardV1);
 
 thread_local! {
     static SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
-    /// Each browser window by sway's id for it, in the order the app made them: the window
-    /// command's numbers.
+    /// Each browser window the app has made, in order: the window command's numbers. Numbered as
+    /// it's made, so one that closes before a command reaches it still counts, as on the Mac.
+    static MADE: RefCell<Vec<bc::bc_id>> = const { RefCell::new(Vec::new()) };
+    /// Each browser window with sway's id for it, once sway lists it.
     static PAIRED: RefCell<Vec<(bc::bc_id, i64)>> = const { RefCell::new(Vec::new()) };
     static DRIVEN: Cell<usize> = const { Cell::new(0) };
     /// The modifiers flags holds, and those the last key went with, as drive.rs keeps them.
@@ -415,11 +417,16 @@ fn browsers(nodes: &[Node]) -> Vec<(bc::bc_id, Node)> {
     })
 }
 
+/// Numbers the browser window the app just made, for the window command.
+pub(crate) fn window_made(id: bc::bc_id) {
+    MADE.with_borrow_mut(|made| made.push(id));
+}
+
 /// The browser window the app made `index`th, from 0, while it's open.
 fn browser(index: usize) -> Option<(bc::bc_id, Node)> {
     let nodes = ours();
     let open = browsers(&nodes);
-    let id = PAIRED.with_borrow(|paired| paired.get(index).map(|&(id, _)| id))?;
+    let id = MADE.with_borrow(|made| made.get(index).copied())?;
     let found = open.into_iter().find(|&(each, _)| each == id);
     if found.is_none() {
         describe(&nodes);
@@ -451,7 +458,7 @@ fn stacked() -> Vec<(bc::bc_id, Node)> {
 /// A browser window as order and front name it: "window <n>", numbered as the window command
 /// numbers them.
 fn name_of(id: bc::bc_id) -> String {
-    let index = PAIRED.with_borrow(|paired| paired.iter().position(|&(each, _)| each == id));
+    let index = MADE.with_borrow(|made| made.iter().position(|&each| each == id));
     index.map_or_else(
         || "none".to_string(),
         |index| format!("window {}", index + 1),
@@ -1060,9 +1067,16 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let number: usize = words.next()?.parse().ok()?;
             let index = number.checked_sub(1)?;
             // The core says a window opened before sway has mapped it, and windows pair as sway
-            // lists them, so one not paired yet is waited for (#1579).
+            // lists them, so an open one not paired yet is waited for (#1579).
             let Some((_, node)) = browser(index) else {
-                if PAIRED.with_borrow(|paired| paired.len() <= index) {
+                let unpaired = MADE
+                    .with_borrow(|made| made.get(index).copied())
+                    .is_none_or(|id| {
+                        WINDOWS.with_borrow(|windows| windows.iter().any(|w| w.id == id))
+                            && PAIRED
+                                .with_borrow(|paired| paired.iter().all(|&(each, _)| each != id))
+                    });
+                if unpaired {
                     drive::again();
                 }
                 return None;
@@ -1175,6 +1189,15 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             }
             let notches = count.max(1) * if dy > 0. { 1 } else { -1 };
             wheel(x, y, wl_pointer::Axis::VerticalScroll, notches)
+        })(),
+        // In the window with the keyboard, as clickkey's point is: Settings, which is GPUI's.
+        "scrollkey" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let dy: f64 = words.next()?.parse().ok()?;
+            let count: i32 = words.next()?.parse().ok()?;
+            await_settings_focus();
+            let (left, top) = key_origin()?;
+            swipe(left + x, top + y, (0., -dy), count.max(1).unsigned_abs(), 0)
         })(),
         "swipe" => (|| {
             let (x, y) = in_driven_point(&mut words)?;
