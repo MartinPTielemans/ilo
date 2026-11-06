@@ -42,7 +42,9 @@ jobs:
           now=$(date +%s)
           system="/Library/Application Support/com.apple.TCC/TCC.db"
           approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
-          paths=$(find -L "$RUNNER_TEMP/apps" -path '*/Contents/MacOS/*' -type f -perm -u+x)
+          paths="$(find -L "$RUNNER_TEMP/apps" -path '*/Contents/MacOS/*' -type f -perm -u+x)
+          /usr/bin/osascript
+          /System/Library/CoreServices/System Events.app/Contents/MacOS/System Events"
           pid=$$
           while [ "$pid" -gt 1 ]; do
             path=$(ps -o comm= -p "$pid")
@@ -55,6 +57,9 @@ jobs:
             sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
               auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
               VALUES ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('kTCCServiceAccessibility', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
             defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
           done
           sudo killall tccd || true
@@ -68,11 +73,22 @@ jobs:
           now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
           stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
           has() { grep -q " $1" "$log"; }
+          count() { grep -c " $1" "$log" || true; }
           # Waits up to $2 s for a line matching $1.
           wait_for() {
             local i
             for i in $(seq $(($2 * 10))); do
               has "$1" && return 0
+              kill -0 "$pid" 2> /dev/null || return 1
+              sleep 0.1
+            done
+            return 1
+          }
+          # Waits up to $2 s for more lines matching $1 than $3.
+          wait_more() {
+            local i
+            for i in $(seq $(($2 * 10))); do
+              [ "$(count "$1")" -gt "$3" ] && return 0
               kill -0 "$pid" 2> /dev/null || return 1
               sleep 0.1
             done
@@ -88,26 +104,42 @@ jobs:
             echo "$*" >&3
           }
           mark() { echo "$(now) == $*" >> "$log"; }
-          # Launches version $1 for case $2.
-          launch() {
-            version=$1 name=$2
-            app=$RUNNER_TEMP/apps/$version/ilo.app
+          jobs_now() {
+            {
+              echo "== $(now) $*"
+              launchctl list | grep -i -e sparkle -e "$id" || echo "no launchd jobs"
+              for job in sparkle-progress sparkle-updater; do
+                launchctl print "gui/$(id -u)/$id-$job" 2>&1 | grep -E 'state|pid|program|last exit|runs|name|endpoint' | head -20
+              done
+              ps -axo pid,etime,command | grep -i -e autoupdate -e 'Updater.app' | grep -v grep || echo "no installer running"
+            } >> "$out/jobs.txt"
+          }
+          # Fresh copy of version $1 for case $2.
+          fresh() {
+            rm -rf "$RUNNER_TEMP/run/$2"
+            mkdir -p "$RUNNER_TEMP/run/$2"
+            ditto "$RUNNER_TEMP/apps/$1/ilo.app" "$RUNNER_TEMP/run/$2/ilo.app"
+            app=$RUNNER_TEMP/run/$2/ilo.app
             exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
             id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
             defaults delete "$id" > /dev/null 2>&1 || true
             rm -rf "$HOME/Library/Caches/$id"
             # Checked a moment ago, so the launch makes no check of its own.
             defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+          }
+          # Launches $app with the driver, logging to case $1.
+          launch() {
+            name=$1
             log=$out/$name.log
+            : > "$log"
             fifo=$RUNNER_TEMP/drive-$name
             rm -f "$fifo"
             mkfifo "$fifo"
             profile=$RUNNER_TEMP/profile-$name
-            rm -rf "$profile"
             mkdir -p "$profile"
             step=0
             (BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>updates</title>' \
-              BROWSER_PROFILE_DIR="$profile" "$exe" < "$fifo" 2>&1 | stamp > "$log") &
+              BROWSER_PROFILE_DIR="$profile" "$exe" < "$fifo" 2>&1 | stamp >> "$log") &
             exec 3> "$fifo"
             for _ in $(seq 100); do
               pid=$(pgrep -n -f "^$exe" || true)
@@ -126,98 +158,151 @@ jobs:
             ../tools/window-screenshot.sh "$pid" "$out/$name.png" all 2> /dev/null || true
             exec 3>&-
             kill "$pid" 2> /dev/null || true
-            sleep 2
-            pkill -9 -f "$RUNNER_TEMP/apps/" || true
+            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
+            pkill -9 -f "$RUNNER_TEMP/run/" || true
             kill "$streamer" 2> /dev/null || true
             sleep 1
           }
           # Samples the app's threads once a check has taken more than 3 s.
           sample_if_slow() {
-            local what=$1 pattern=$2
             sleep 3
-            if ! has "$pattern"; then
-              sample "$pid" 5 -file "$out/$name-$what-sample.txt" > /dev/null 2>&1 || true
-            fi
+            [ "$(count "$2")" -gt "$3" ] ||
+              sample "$pid" 5 -file "$out/$name-$1-sample.txt" > /dev/null 2>&1 || true
           }
-          cd app
-          about_check() {
+          about_open() {
             send menu "About ilo"
             wait_for 'browser: settings update check at ' 15 || echo "$name: About had no Check for Updates"
-            # shellcheck disable=SC2046
-            at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //')
-            mark "click About's Check for Updates at $at"
-            send clickkey $at
           }
-
-          # 1. No update, the app menu's Check for Updates…, twice.
-          launch 0.1.8 none-menu
-          for try in 1 2; do
-            n=$(grep -c ' browser: update none:\| browser: update failed:' "$log" || true)
-            mark "menu Check for Updates… $try"
+          about_check() {
+            local at n ended
+            at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //')
+            n=$(count 'browser: update stage current')
+            ended=$(count 'browser: update stage \(current\|failed\|idle\|ready\)')
+            jobs_now "$name: About's check $1"
+            mark "About's Check for Updates $1 at $at"
+            # shellcheck disable=SC2086
+            send clickkey $at
+            sample_if_slow "about-$1" 'browser: update stage current' "$n" &
+            wait_more 'browser: update stage \(current\|failed\|idle\|found\)' 120 "$ended" ||
+              echo "$name: About's check $1 didn't end"
+            sleep 2
+            ../tools/window-screenshot.sh "$pid" "$out/$name-about-$1.png" all 2> /dev/null || true
+          }
+          menu_check() {
+            local n
+            n=$(count 'browser: update \(none:\|failed:\)')
+            jobs_now "$name: menu check $1"
+            mark "menu Check for Updates… $1"
             post "menu Check for Updates…"
-            sample_if_slow "menu-$try" 'browser: update none:'
-            for _ in $(seq 1200); do
-              [ "$(grep -c ' browser: update none:\| browser: update failed:' "$log" || true)" -gt "$n" ] && break
-              sleep 0.1
-            done
-            sleep 3
-            ../tools/window-screenshot.sh "$pid" "$out/$name-$try.png" all 2> /dev/null || true
-            # Closes "You're up to date".
+            sample_if_slow "menu-$1" 'browser: update \(none:\|failed:\)' "$n" &
+            wait_more 'browser: update \(none:\|failed:\)' 120 "$n" || echo "$name: menu check $1 didn't end"
+            sleep 2
+            ../tools/window-screenshot.sh "$pid" "$out/$name-menu-$1.png" all 2> /dev/null || true
             post "key return"
             sleep 2
-          done
+          }
+          cd app
+
+          # 1. 0.1.8 with automatic checks turned off in About, then About's check and the menu's.
+          fresh 0.1.8 auto-off
+          launch auto-off
+          about_open
+          at=$(grep ' browser: settings switch automatic update checks at ' "$log" | tail -1 | sed 's/.* at //')
+          mark "switch automatic update checks off at $at"
+          # shellcheck disable=SC2086
+          send clickkey $at
+          wait_for 'browser: update checks automatic off' 10 || echo "auto-off: the switch didn't turn off"
+          about_check 1
+          about_check 2
+          menu_check 1
           finish
 
-          # 2. No update, About's Check for Updates, twice.
-          launch 0.1.8 none-about
-          for try in 1 2; do
-            n=$(grep -c ' browser: update stage current' "$log" || true)
-            about_check
-            sample_if_slow "about-$try" 'browser: update stage current'
-            for _ in $(seq 1200); do
-              [ "$(grep -c ' browser: update stage current' "$log" || true)" -gt "$n" ] && break
-              sleep 0.1
-            done
-            sleep 3
-            ../tools/window-screenshot.sh "$pid" "$out/$name-$try.png" all 2> /dev/null || true
-          done
-          finish
-
-          # 3. 0.1.7 to 0.1.8 from About, down to ready.
-          launch 0.1.7 update-about
-          about_check
-          wait_for 'browser: update stage ready' 900 || echo "$name: never ready"
+          # 2. 0.1.7 to 0.1.8 from About, Restart to Update, then checks in the copy it relaunched.
+          fresh 0.1.7 relaunch
+          launch relaunch-0.1.7
+          about_open
+          about_check 1
+          wait_for 'browser: update stage ready' 900 || echo "relaunch: never ready"
           wait_for 'prewarmed in' 120 || true
-          finish
-
-          # 4. 0.1.7 to 0.1.8 from the menu: Install Update, then Install and Relaunch.
-          launch 0.1.7 update-menu
-          mark "menu Check for Updates…"
-          post "menu Check for Updates…"
-          keyed=0
-          for _ in $(seq 9000); do
-            has 'browser: update stage ready' && break
-            k=$(grep -c 'alert has the keyboard' "$log" || true)
-            if [ "$k" -gt "$keyed" ]; then
-              keyed=$k
-              sleep 1
-              ../tools/window-screenshot.sh "$pid" "$out/$name-alert-$k.png" all 2> /dev/null || true
-              mark "return in Sparkle's window"
-              post "key return"
-            fi
-            kill -0 "$pid" 2> /dev/null || break
+          wait_for 'browser: settings update restart at ' 15 || echo "relaunch: no Restart to Update"
+          at=$(grep ' browser: settings update restart at ' "$log" | tail -1 | sed 's/.* at //')
+          jobs_now "relaunch: before Restart to Update"
+          mark "Restart to Update at $at"
+          old=$pid
+          # shellcheck disable=SC2086
+          post clickkey $at
+          for _ in $(seq 1200); do kill -0 "$old" 2> /dev/null || break; sleep 0.1; done
+          mark "0.1.7 quit"
+          exec 3>&-
+          new=
+          for _ in $(seq 1200); do
+            new=$(pgrep -n -f "^$exe" || true)
+            [ -n "$new" ] && [ "$new" != "$old" ] && break
+            new=
             sleep 0.1
           done
-          wait_for 'prewarmed in' 120 || true
-          sleep 5
+          mark "relaunched as ${new:-nothing}, build $(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")"
+          kill "$streamer" 2> /dev/null || true
+          sleep 10
+          jobs_now "relaunch: the relaunched copy, 10 s on"
+          # The relaunched copy has no driver: its menu through System Events, with its windows
+          # counted until Sparkle's alert adds one.
+          if [ -n "$new" ]; then
+            pid=$new
+            ../tools/window-screenshot.sh "$pid" "$out/relaunched.png" all 2> /dev/null || true
+            windows() { osascript -e "tell application \"System Events\" to count windows of (first process whose unix id is $pid)" 2>&1; }
+            {
+              echo "$(now) windows before: $(windows)"
+              echo "$(now) click Check for Updates…"
+              osascript -e "tell application \"System Events\" to tell (first process whose unix id is $pid) to click menu item \"Check for Updates…\" of menu 1 of menu bar item 2 of menu bar 1" 2>&1
+              echo "$(now) clicked"
+              for _ in $(seq 150); do
+                echo "$(now) windows $(windows)"
+                sleep 0.2
+              done
+            } > "$out/relaunched-menu.txt" 2>&1
+            ../tools/window-screenshot.sh "$pid" "$out/relaunched-menu.png" all 2> /dev/null || true
+            kill "$pid" 2> /dev/null || true
+            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
+            pkill -9 -f "$RUNNER_TEMP/run/" || true
+          fi
+          sleep 2
+          jobs_now "relaunch: after the relaunched copy quit"
+          launch relaunched-0.1.8
+          about_open
+          about_check 1
+          about_check 2
+          menu_check 1
+          menu_check 2
           finish
+          jobs_now "end"
 
-          # Times from each case's first mark.
+          # Times from each mark.
           for f in "$out"/*.log; do
             echo "### $(basename "$f" .log)"
-            awk 'NR == 1 { } / == / && !t0 { t0 = $1 } t0 && (/ == / || / browser: update/ || / browser: settings update/) { printf "%8.3f %s\n", $1 - t0, substr($0, index($0, " ") + 1) }' "$f"
+            awk '/ == / { t0 = $1 } t0 && (/ == / || / browser: update/) { printf "%8.3f %s\n", $1 - t0, substr($0, index($0, " ") + 1) }' "$f"
           done | tee "$out/timings.txt"
+          cat "$out/jobs.txt"
           { echo '```'; cat "$out/timings.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # How big Sparkle's delta from 0.1.7 to 0.1.8 would be.
+      - name: Delta
+        if: ${{ always() }}
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/out"
+          curl -sSfL https://github.com/sparkle-project/Sparkle/releases/download/2.10.1/Sparkle-2.10.1.tar.xz | tar -xJ -C "$RUNNER_TEMP/sparkle"
+          start=$(date +%s)
+          "$RUNNER_TEMP/sparkle/bin/BinaryDelta" create --verbose "$RUNNER_TEMP/apps/0.1.7/ilo.app" "$RUNNER_TEMP/apps/0.1.8/ilo.app" "$RUNNER_TEMP/out/0.1.7-0.1.8.delta" > "$RUNNER_TEMP/out/delta.txt" 2>&1
+          made=$(($(date +%s) - start))
+          {
+            echo "delta $(stat -f %z "$RUNNER_TEMP/out/0.1.7-0.1.8.delta") bytes, made in $made s"
+            echo "dmg $(stat -f %z "$RUNNER_TEMP/dmg/0.1.8/ilo-mac-arm64.dmg") bytes"
+            echo "app $(du -sk "$RUNNER_TEMP/apps/0.1.8/ilo.app" | cut -f1) KB"
+            hdiutil imageinfo "$RUNNER_TEMP/dmg/0.1.8/ilo-mac-arm64.dmg" | grep -E 'Format|Partition|Checksum' | head
+          } | tee -a "$RUNNER_TEMP/out/delta.txt"
+          mv "$RUNNER_TEMP/out/0.1.7-0.1.8.delta" "$RUNNER_TEMP/delta.bin"
+          tail -5 "$RUNNER_TEMP/out/delta.txt" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
