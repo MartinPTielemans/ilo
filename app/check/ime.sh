@@ -167,7 +167,9 @@ out=$PWD/build/check/ime
 rm -rf "$out"
 mkdir -p "$out"
 home=$(mktemp -d)
-trap 'rm -rf "$home"' EXIT
+# A helper Chromium leaves can still be writing the profile as this runs, and under set -e a failed
+# rm would turn the runs' passes into a failure.
+trap 'rm -rf "$home" || true' EXIT
 # fcitx5's own configuration: the US keyboard, quick phrase on Ctrl+;, and on X11 the composition
 # drawn by the app (on-the-spot XIM), not by fcitx5 over it.
 mkdir -p "$home/config/fcitx5/conf"
