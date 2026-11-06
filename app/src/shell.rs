@@ -5319,7 +5319,7 @@ pub fn quit_goes_ahead() {
     QUIT_GONE_AHEAD.set(true);
 }
 
-pub(crate) fn quit_gone_ahead() -> bool {
+pub fn quit_gone_ahead() -> bool {
     QUIT_GONE_AHEAD.get()
 }
 
