@@ -1,6 +1,7 @@
 // Pairing's cryptography (ilo-server's docs/protocol.md, Pairing): a device that holds the account
 // secret seals it to a new device through the relay, which can't read it, and both show a match
 // code the user compares, which the relay can't forge, as the new device commits to its key first.
+// And when the new device's request goes out.
 
 #ifndef BROWSER_CORE_SYNC_PAIRING_H_
 #define BROWSER_CORE_SYNC_PAIRING_H_
@@ -11,6 +12,9 @@
 #include <string>
 #include <vector>
 
+#include "base/functional/callback.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "browser_core/sync_words.h"
 
 namespace browser_core {
@@ -109,6 +113,29 @@ class PairingAnswer {
   bool revealed_ = false;
   std::optional<PairingKey> requester_;
   std::string code_;
+};
+
+// A new device's request for the secret goes out on its relay, which is often still connecting
+// when the device, just signed in, asks (#1975). So the request waits for the relay to open, and
+// gives up if it hasn't within kWait, by when the relay has tried a few times.
+class PairingWait {
+ public:
+  static constexpr base::TimeDelta kWait = base::Seconds(30);
+
+  // Runs |send| now if the relay is |open|, else at Opened(), or |gave_up| if that isn't within
+  // kWait. Either may delete this.
+  void Start(bool open, base::OnceClosure send, base::OnceClosure gave_up);
+  // The relay opened: the request goes out if it hasn't.
+  void Opened();
+  // Whether the request has yet to go out.
+  bool waiting() const { return !send_.is_null(); }
+
+ private:
+  void GiveUp();
+
+  base::OnceClosure send_;
+  base::OnceClosure gave_up_;
+  base::OneShotTimer timer_;
 };
 
 }  // namespace browser_core
