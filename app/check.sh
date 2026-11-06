@@ -173,7 +173,9 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # often it dismissed them, for sites whose ports a later run may get, and a failed clear run may
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
-# launch, so no later run's call floated (#1165).
+# launch, so no later run's call floated (#1165). A failed favorites run may have left the first
+# profile's archive at 24 hours, which the profile keeps as its own and no later run's menu then
+# showed at 12 (#1982); dropped, the profile takes Settings' default again.
 # Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
 # Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
@@ -192,7 +194,8 @@ for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_i
     exceptions.pop(kind, None)
 defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
 defaults.pop("auto_picture_in_picture", None)
-prefs.get("browser_core", {}).pop("developer_mode", None)
+for key in ("developer_mode", "archive_after"):
+    prefs.get("browser_core", {}).pop(key, None)
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
