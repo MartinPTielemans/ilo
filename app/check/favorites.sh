@@ -498,6 +498,9 @@ expect '^browser: tiles settled$' "the tiles didn't settle after the split's dro
 ../tools/window-screenshot.sh "$pid" "$out/favorite-split-tile.png" || fail "no window to capture"
 # Its right page, three quarters across the card the sidebar leaves.
 width=$(grep '^browser: drawn at' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9]*\).*/\1/')
+# The pointer goes there first, as a real one does: the Mac's click alone doesn't tell GPUI the
+# pointer left the tile, and resting on it again below would then be no new hover.
+send move $((228 + (width - 238) * 3 / 4)) 400
 send click $((228 + (width - 238) * 3 / 4)) 400
 expect "^browser: selected $y\( in .*\)\{0,1\}\$" "a click in the split's right page didn't focus it"
 switch "1 cmd" "$a"
