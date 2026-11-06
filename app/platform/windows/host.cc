@@ -2797,8 +2797,16 @@ void host_maximize_window(void* ui_view) {
   if (!root) {
     return;
   }
+  HWND key = GetForegroundWindow();
+  DWORD process = 0;
+  GetWindowThreadProcessId(key, &process);
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+  // Maximizing activates it too, which a window a relaunch brings back behind the one in front
+  // mustn't be (#1454): the keyboard goes back to the app's window that had it.
+  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
+    SetForegroundWindow(key);
+  }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
     SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
