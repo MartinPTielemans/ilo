@@ -3,6 +3,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/files/file_path.h"
 #include "base/supports_user_data.h"
 #include "components/download/public/common/download_item.h"
 
@@ -17,6 +18,8 @@ struct AgentDownload : base::SupportsUserData::Data {
   uint64_t tab = 0;
   // The user said yes, so its completion goes on.
   bool allowed = false;
+  // Paused while it asks, once its target was resolved.
+  bool paused = false;
   // Chrome's question about its completion, asked again once the user says yes.
   base::OnceClosure again;
 };
@@ -46,6 +49,16 @@ bool AgentDownloadOf(download::DownloadItem* item, std::string* agent, uint64_t*
 
 void ForgetAgentDownload(download::DownloadItem* item) {
   item->RemoveUserData(AgentDownload::kKey);
+}
+
+void PauseOnceResolved(download::DownloadItem* item) {
+  AgentDownload* held = Of(item);
+  if (!held || held->allowed || held->paused ||
+      item->GetState() != download::DownloadItem::IN_PROGRESS || item->GetFullPath().empty()) {
+    return;
+  }
+  held->paused = true;
+  item->Pause();
 }
 
 bool HoldCompletion(download::DownloadItem* item, base::OnceClosure again) {

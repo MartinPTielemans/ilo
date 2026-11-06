@@ -166,6 +166,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   }
   void OnDownloadUpdated(content::DownloadManager* manager,
                          download::DownloadItem* item) override {
+    PauseOnceResolved(item);
     std::string agent;
     bc_id tab = 0;
     const int state = StateOf(*item);
@@ -214,9 +215,9 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     if (!request && Window::Showing(tab)) {
       return;
     }
-    // Paused, it takes nothing more while it asks, and a file that comes whole anyway isn't put
-    // in place until the user says yes (HoldCompletion).
-    item->Pause();
+    // Paused once Chrome has resolved where it goes, it takes nothing more while it asks
+    // (PauseOnceResolved, from OnDownloadUpdated), and a file that comes whole before then isn't
+    // put in place until the user says yes (HoldCompletion).
     MarkAgentDownload(item, space->agent()->id, tab);
     // Its file isn't named until Chrome picks where it goes: the name the server gives, as Chrome
     // finds it.

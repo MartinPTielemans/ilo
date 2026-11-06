@@ -25,6 +25,12 @@ bool AgentDownloadOf(download::DownloadItem* item, std::string* agent, uint64_t*
 // Forgets that |item| is an agent's, as it ends.
 void ForgetAgentDownload(download::DownloadItem* item);
 
+// Pauses |item|, an agent's the user hasn't answered, so it takes nothing more while it asks, once
+// Chrome has put it where it goes. Chrome allows no pause before: a download must enter
+// IN_PROGRESS unpaused, and its file has a path only from that moment. Once, so the pause's own
+// update doesn't ask again.
+void PauseOnceResolved(download::DownloadItem* item);
+
 // Chrome's question before it puts |item|'s file in place: true holds it, keeping |again|, which
 // asks once more, while an agent's download waits on the user. Any other goes on.
 bool HoldCompletion(download::DownloadItem* item, base::OnceClosure again);
