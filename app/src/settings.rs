@@ -1948,9 +1948,9 @@ impl Settings {
             ),
             |profile| {
                 let id = profile.id;
-                // Nothing to show until the core has loaded it.
+                // Nothing to show until the core has loaded it, which Never (-1) isn't.
                 let after = unsafe { bc::bc_profile_archive_after(id) };
-                (after > 0.).then(|| {
+                (after != 0.).then(|| {
                     let (label, chosen) = archive_after(after);
                     let popup = self.popup(
                         Popup::ArchiveAfter(id),
