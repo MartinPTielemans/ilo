@@ -623,17 +623,21 @@ exec 3>&-
 quit
 
 # A SIGTERM ends the session at once, before the save the new tab scheduled, which the core writes
-# as Chrome exits.
-log="$out/session-ending.log"
-BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
-pid=$!
-await '^browser: restored in ' || fail "the launch before the SIGTERM didn't restore the Spaces"
-await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
-kill -TERM "$pid"
-exited
-[ "$(python3 -I -c 'import json, sys
+# as Chrome exits. Windows ends one with WM_ENDSESSION instead, which nothing sends yet (#1990).
+if windows; then
+  echo "skip: a SIGTERM's session end: Windows ends one with WM_ENDSESSION (#1990)."
+else
+  log="$out/session-ending.log"
+  BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  await '^browser: restored in ' || fail "the launch before the SIGTERM didn't restore the Spaces"
+  await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
+  kill -TERM "$pid"
+  exited
+  [ "$(python3 -I -c 'import json, sys
 print(*[len(space["today"]) for space in json.load(open(sys.argv[1], encoding="utf-8"))["spaces"]])' "$saved")" = "2 2" ] ||
-  fail "the tab opened before the SIGTERM wasn't kept"
+    fail "the tab opened before the SIGTERM wasn't kept"
+fi
 restore_ms=$(sed -n 's/^browser: restored in \([0-9.]*\) ms$/\1/p' "$out/restored.log" "$out/restored-again.log" | tr '\n' ' ')
 
 # Auto-archive, 8 s instead of 12 hours. Tab a, then b, opens over the Spaces, and a isn't seen
