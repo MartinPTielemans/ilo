@@ -12,7 +12,10 @@ serve
 # each sending the other its description once it has gathered, then says which local candidates
 # getStats lists, by type, protocol and address, and whether they connected, within 5 s. It leaves
 # out the active TCP candidates WebRTC lists at 0.0.0.0 and ::, port 9, which hold no address and
-# listen on nothing (RFC 6544).
+# listen on nothing (RFC 6544). The channel is negotiated, each peer making its own: one the other
+# announces is Blink's remote channel, opened without its event, which a state change posted before
+# can take back to connecting, and opening again it fails a DCHECK on a Dev engine
+# (rtc_data_channel.cc:873, upstream; the IP handling policy only filters candidates).
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
 const servers = {iceServers: [{urls: "stun:" + location.search.slice(1)}]};
@@ -25,7 +28,8 @@ const gathered = peer => new Promise(done => {
 (async () => {
   try {
     const a = new RTCPeerConnection(servers), b = new RTCPeerConnection(servers);
-    const channel = a.createDataChannel("check");
+    const channel = a.createDataChannel("check", {negotiated: true, id: 0});
+    b.createDataChannel("check", {negotiated: true, id: 0});
     const open = new Promise(done => {
       channel.onopen = () => done(true);
       setTimeout(() => done(false), 5000);
