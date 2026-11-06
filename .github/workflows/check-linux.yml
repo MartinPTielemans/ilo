@@ -137,15 +137,19 @@ jobs:
       # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
       # allows them, and the sandbox stays on.
-      # A stalled download times out in 20 s and is retried, rather than hanging the run (#1969).
+      # The packages come from the Actions cache, and from the mirror only on a miss (#1969).
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev
+            libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1
+            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland
+            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
+
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1 \
-            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland \
-            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's
@@ -158,7 +162,9 @@ jobs:
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
       # portal and permission store, which only it needs.
       - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) }}
-        run: sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq flatpak flatpak-builder ostree xdg-desktop-portal
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         uses: actions/cache@v4

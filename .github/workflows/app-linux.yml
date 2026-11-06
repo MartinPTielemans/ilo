@@ -46,11 +46,10 @@ jobs:
       # bindgen reads the core's header with libclang; GPUI's X11 window system links xcb and
       # xkbcommon, and loads Wayland's, fontconfig and Vulkan at run time.
       - name: Install tools
-        run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev
-          rustup update stable --no-self-update
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+      - run: rustup update stable --no-self-update
 
       - uses: actions/cache@v4
         with:
@@ -73,10 +72,16 @@ jobs:
       # The same screens on Wayland and X11, side by side, so text that fits on the Mac but not here
       # shows on every change to the app (tools/parity.sh). It only reports: nothing here fails the
       # job. lavapipe draws GPUI's Vulkan in software, as the runner has no GPU.
+      - id: parity-tools
+        continue-on-error: true
+        uses: ./.github/actions/apt-install
+        with:
+          packages: sway grim xwayland imagemagick mesa-vulkan-drivers
+          options: --no-install-recommends
       - name: Capture the parity screens
+        if: steps.parity-tools.outcome == 'success'
         continue-on-error: true
         run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq --no-install-recommends sway grim xwayland imagemagick mesa-vulkan-drivers
           export XDG_RUNTIME_DIR=$(mktemp -d)
           ../tools/parity.sh target/release/preview ../parity
 

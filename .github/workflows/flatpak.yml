@@ -62,10 +62,13 @@ jobs:
       # The UI's build as in app-linux.yml; Xvfb and ImageMagick to start the bundle and see it.
       - name: Install tools
         if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            flatpak flatpak-builder xvfb imagemagick
+      - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev flatpak flatpak-builder xvfb imagemagick
           rustup update stable --no-self-update
           # Ubuntu's AppArmor keeps bubblewrap, which flatpak builds and runs in, from making
           # user namespaces.
@@ -140,6 +143,11 @@ jobs:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
+      - if: ${{ steps.server.outcome == 'success' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: xdotool openbox xauth
+
       - name: Sign in
         if: ${{ steps.server.outcome == 'success' }}
         working-directory: app
@@ -148,7 +156,6 @@ jobs:
           LANG: en_US.UTF-8
         run: |
           (cd .deps/ilo-server && cargo build --release --locked)
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq xdotool openbox xauth
           XDG_RUNTIME_DIR=$(mktemp -d) ILO_SERVER=$PWD/.deps/ilo-server/target/release/ilo-server \
             BROWSER_FLATPAK=1 BROWSER_XVFB=1 dbus-run-session -- ./check.sh sync-account
 
