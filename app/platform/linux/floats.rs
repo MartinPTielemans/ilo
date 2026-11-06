@@ -191,7 +191,7 @@ fn show(kind: Kind, ui_view: *mut c_void) -> Option<Bounds<Pixels>> {
         float.over = ui_view;
         float.view
     })?;
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), false, left);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
     Some(bounds)
 }
 

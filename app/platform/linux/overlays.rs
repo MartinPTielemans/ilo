@@ -133,6 +133,22 @@ fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<
     OVERLAYS.with_borrow_mut(|overlays| overlays.get_mut(overlay as usize)?.as_mut().map(f))
 }
 
+/// Shows `view` over the window whose UI is `ui_view`, as gpui_linux::show_overlay does, unless the
+/// quit has gone ahead: its window is going, and under Wayland a subsurface made on a surface
+/// Chromium has destroyed is a protocol error, which ends the connection.
+pub(crate) fn show_over(
+    view: *mut c_void,
+    ui_view: *mut c_void,
+    bounds: Bounds<Pixels>,
+    radius: Pixels,
+    keyboard: bool,
+    left: fn(*mut c_void),
+) {
+    if !browser::shell::quit_gone_ahead() {
+        gpui_linux::show_overlay(view, ui_view, bounds, radius, keyboard, left);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_overlay(
     overlay: c_int,
@@ -312,7 +328,7 @@ pub extern "C" fn host_show_overlay(
             },
         );
     }
-    gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_overlay);
+    show_over(view, ui_view, bounds, radius, true, left_overlay);
     let (origin, size) = (bounds.origin, bounds.size);
     let name = NAMES[overlay as usize];
     let at = [origin.x, origin.y, size.width, size.height].map(f32::from);
@@ -654,7 +670,7 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     });
     lend_keyboard(window, view, true);
     gpui_linux::set_overlay_pointer(view, None);
-    gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_dialog);
+    show_over(view, ui_view, bounds, radius, true, left_dialog);
     // check.sh reads this line.
     eprintln!("browser: dialog window shown");
 }

@@ -373,6 +373,20 @@ pub(crate) fn open_window_as(
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
+    // Under Wayland the compositor can answer a window the restore puts back full screen with a
+    // configure of no size before its first frame, which Chromium, holding the full screen it asked
+    // for (chromium-wayland-state-after-ack.patch), gives no bounds, and the frame it then commits
+    // traps. Undone in this task, before any configure is read, it comes back windowed, at its
+    // windowed frame, and goes full screen once its UI shows.
+    #[cfg(target_os = "linux")]
+    let full_screen_later =
+        restored && wayland_size.is_some() && unsafe { bc::bc_window_is_full_screen(id) };
+    #[cfg(not(target_os = "linux"))]
+    let full_screen_later = false;
+    if full_screen_later {
+        unsafe { bc::bc_window_toggle_full_screen(id) };
+        log!("browser: window back windowed until its UI shows");
+    }
     if let Some(Own::Little { .. }) = own {
         unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
@@ -421,6 +435,10 @@ pub(crate) fn open_window_as(
                 log!("browser: UI shown at {:.1} ms", unsafe {
                     platform::host_since_launch()
                 });
+                // Unless the compositor's answer to the full screen undone has put it there.
+                if full_screen_later && !unsafe { bc::bc_window_is_full_screen(id) } {
+                    unsafe { bc::bc_window_toggle_full_screen(id) };
+                }
                 cx.update(overlays_now);
                 cx.update(agents_core::start);
                 // The command bar's settings rows, built in a task of their own once the UI

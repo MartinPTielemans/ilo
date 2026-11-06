@@ -117,7 +117,7 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
         }
         shadows::show(SITE_CONTROLS, ui_view, bounds, 0.);
     }
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), true, left_popover);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), true, left_popover);
     true
 }
 
