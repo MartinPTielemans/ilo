@@ -90,11 +90,12 @@ if [ "$(uname)" = Darwin ] && { [ "$keyed" = "$sign_in_key" ] || [ "$keyed" = no
 fi
 # Escape closes the dialog, which on the Mac has the keyboard. Elsewhere one may go to the page
 # first, which gives the dialog the keyboard for the next (DidGetIgnoredUIEvent, in Chromium's
-# WebContentsModalDialogManager); on Linux it's the X server's, to whichever window has it.
+# WebContentsModalDialogManager); on X11 it's the X server's, to whichever window has it, and on
+# Wayland the driver's, to the window sway focuses.
 [ "$(uname)" != Darwin ] || send key escape
 for _ in $(seq 100); do
   grep -q 'browser: sync sign-in dialog closed$' "$log" && break
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     xdotool key Escape
   elif [ "$(uname)" != Darwin ]; then
     send key escape

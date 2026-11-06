@@ -513,37 +513,43 @@ cat "$out/handover-summary.txt"
 
 # Stay On Top keeps the first window over the others, the fourth too once it's in front, and the
 # command bar's Don't Stay On Top lets it go back among them (Arc's Window › Stay On Top). The
-# command bar, an overlay, still shows over it.
-send window 1
-bar_command stay-on-top "Stay On Top" "stay on top"
-expect '^browser: stays on top 1$' "Stay On Top didn't keep the window on top"
-send window $driven_fourth
-send order
-expect "^browser: order window 1 window $driven_fourth" \
-  "the fourth window in front came over the one on top: $(grep '^browser: order' "$log" | tail -1)"
-send window 1
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar over the window on top"
-../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
-bar_command stay-on-top "Don't Stay On Top" "stay on top"
-expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
-send window $driven_fourth
-send order
-expect "^browser: order window $driven_fourth window 1" \
-  "the fourth window in front didn't come over the one no longer on top: $(grep '^browser: order' "$log" | tail -1)"
+# command bar, an overlay, still shows over it. Wayland gives a client no way to stay on top, so
+# there the command bar doesn't offer it (frames::stays_on_top).
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: Stay On Top: Wayland gives a window no way to stay on top"
+else
+  send window 1
+  bar_command stay-on-top "Stay On Top" "stay on top"
+  expect '^browser: stays on top 1$' "Stay On Top didn't keep the window on top"
+  send window $driven_fourth
+  send order
+  expect "^browser: order window 1 window $driven_fourth" \
+    "the fourth window in front came over the one on top: $(grep '^browser: order' "$log" | tail -1)"
+  send window 1
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar over the window on top"
+  ../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+  bar_command stay-on-top "Don't Stay On Top" "stay on top"
+  expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
+  send window $driven_fourth
+  send order
+  expect "^browser: order window $driven_fourth window 1" \
+    "the fourth window in front didn't come over the one no longer on top: $(grep '^browser: order' "$log" | tail -1)"
+fi
 send window $driven_fourth
 send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"
 send window 1
 
 # ⌘N from a window full screen of its own opens one that goes full screen too, then opens its command
-# bar (#669), on Windows as elsewhere. Wayland's sessions don't run this run.
+# bar (#669), on Windows as elsewhere.
 send window 1
 send fullscreen
 expect '^browser: window entered full screen$' "the first window didn't go full screen for ⌘N"
 send key n cmd
+new_in=$step
 expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
 full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect_late '^browser: new window went full screen$' \
@@ -553,8 +559,14 @@ send window "$(grep -c '^browser: window opened ' "$log")"
 send key w cmd shift
 expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
 send window 1
-send fullscreen
-expect '^browser: window left full screen$' "the first window didn't leave full screen after ⌘N's"
+# Sway keeps one window of a workspace full screen, so there the first left as ⌘N's went.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  logged '^browser: window left full screen$' "$new_in" ||
+    fail "the first window stayed full screen under sway as ⌘N's went full screen"
+else
+  send fullscreen
+  expect '^browser: window left full screen$' "the first window didn't leave full screen after ⌘N's"
+fi
 
 # A tab's row dragged out of its window (#1798), on the Mac, Windows and Linux's X11. Over the other window's list
 # it moves there where the line marks, its page live with what was typed in it, and let go where
