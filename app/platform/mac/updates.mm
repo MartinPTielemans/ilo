@@ -8,7 +8,6 @@
 #import <Security/Security.h>
 #import <Sparkle/Sparkle.h>
 
-#include <os/log.h>
 #include <signal.h>
 
 #include "../host.h"
@@ -30,11 +29,6 @@ constexpr NSInteger kKeyTriesLimit = 3;
 
 void Log(NSString* line) {
   fprintf(stderr, "browser: %s\n", line.UTF8String);
-  // An app opened from Finder has no stderr, so the unified log keeps where a slow check's time
-  // went (#1976): log show --last 1h --predicate 'subsystem == "app.ilo.browser"'.
-  static os_log_t updates =
-      os_log_create(NSBundle.mainBundle.bundleIdentifier.UTF8String ?: "browser", "updates");
-  os_log(updates, "%{public}@", line);
 }
 
 // The running app's designated requirement, which macOS grants Keychain items to: alike across
