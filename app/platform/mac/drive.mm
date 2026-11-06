@@ -105,6 +105,9 @@
 //                                         panel" if none begins within 5 s. The driver keeps each
 //                                         save panel the app begins off screen, logging "browser:
 //                                         save panel offers <name> in <folder>"
+//   savecancel                            ends the save panel the app began as its Cancel does,
+//                                         once it has, logging "browser: save panel cancelled",
+//                                         or "browser: no save panel" if none begins within 5 s
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -891,6 +894,7 @@ void (^g_save_panel_done)(NSModalResponse);
 NSURL* g_save_panel_url;
 IMP g_save_panel_class;
 IMP g_begin_panel;
+IMP g_begin_sheet;
 IMP g_panel_url;
 
 void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) {
@@ -903,6 +907,18 @@ void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) 
   g_save_panel_done = done;
   fprintf(stderr, "browser: save panel offers %s in %s\n",
           self.nameFieldStringValue.UTF8String ?: "", self.directoryURL.path.UTF8String ?: "");
+}
+
+// Chrome begins a download's panel as a sheet on the browser window, which the driver keeps off
+// screen too: its view is out of process, where a posted escape never reaches it.
+void BeginSheet(NSSavePanel* self, SEL selector, NSWindow* parent,
+                void (^done)(NSModalResponse)) {
+  if ([self isKindOfClass:NSOpenPanel.class]) {
+    ((void (*)(id, SEL, NSWindow*, void (^)(NSModalResponse)))g_begin_sheet)(self, selector, parent,
+                                                                             done);
+    return;
+  }
+  BeginPanel(self, @selector(beginWithCompletionHandler:), done);
 }
 
 NSURL* PanelURL(NSSavePanel* self, SEL selector) {
@@ -920,6 +936,12 @@ NSSavePanel* SavePanel(id self, SEL selector) {
       class_getInstanceMethod(kind, @selector(beginWithCompletionHandler:)), (IMP)BeginPanel);
   if (begin != (IMP)BeginPanel) {
     g_begin_panel = begin;
+  }
+  IMP sheet = method_setImplementation(
+      class_getInstanceMethod(kind, @selector(beginSheetModalForWindow:completionHandler:)),
+      (IMP)BeginSheet);
+  if (sheet != (IMP)BeginSheet) {
+    g_begin_sheet = sheet;
   }
   IMP url = method_setImplementation(class_getInstanceMethod(kind, @selector(URL)), (IMP)PanelURL);
   if (url != (IMP)PanelURL) {
@@ -959,14 +981,15 @@ void AwaitKeyTitle(NSString* text, int tries, void (^done)(void)) {
 
 // Picks |path| in the save panel the app began, once it has, which may be a moment after the app
 // asked for it: for up to 5 s.
+// With no |path|, as its Cancel.
 void AnswerSavePanel(NSString* path, int tries, void (^done)(void)) {
   if (g_save_panel_done) {
     void (^answer)(NSModalResponse) = g_save_panel_done;
     g_save_panel_done = nil;
-    g_save_panel_url = [NSURL fileURLWithPath:path isDirectory:NO];
-    fprintf(stderr, "browser: save panel answered\n");
+    g_save_panel_url = path ? [NSURL fileURLWithPath:path isDirectory:NO] : nil;
+    fprintf(stderr, "browser: save panel %s\n", path ? "answered" : "cancelled");
     // The app's handler reads the panel's URL as it runs.
-    answer(NSModalResponseOK);
+    answer(path ? NSModalResponseOK : NSModalResponseCancel);
     g_save_panel = nil;
     g_save_panel_url = nil;
     done();
@@ -1715,6 +1738,10 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "savepanel") {
     AnswerSavePanel(@(line.substr(std::min(line.size(), action.size() + 1)).c_str()), 50, done);
+    return true;
+  }
+  if (action == "savecancel") {
+    AnswerSavePanel(nil, 50, done);
     return true;
   }
   if (action == "pasteboard") {

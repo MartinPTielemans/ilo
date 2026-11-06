@@ -102,7 +102,15 @@ sleep 3
 [ "$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep -c '^browser: download [0-9]* done everyday')" = 0 ] ||
   fail "with Ask on, the page's download saved by itself"
 ../tools/window-screenshot.sh "$pid" "$out/everyday-ask.png" all || fail "no window to capture"
-send key escape
+if [ "$(uname)" = Darwin ]; then
+  # Chrome's panel is out of process, where a posted escape never reaches it, and while it's up
+  # the app won't quit: the driver keeps it off screen and cancels it.
+  grep -q '^browser: save panel offers everyday' "$log" || fail "with Ask on, no save panel asked where to save"
+  send savecancel
+  expect '^browser: save panel cancelled$' "the save panel wasn't cancelled"
+else
+  send key escape
+fi
 everyday_section General
 in_sight "switch ask where to save" || fail "Settings didn't draw Ask where to save each file"
 send clickkey $at
