@@ -203,32 +203,55 @@ jobs:
           }
           cd app
 
-          # Sparkle's installer jobs left loaded with their processes gone, as when an install is
-          # cut off: an update to ready, then its Autoupdate and Updater killed.
-          fresh 0.1.7 stale
-          launch stale-0.1.7
-          about_open
-          about_check 1
-          wait_for 'browser: update stage ready' 900 || echo "stale: never ready"
-          wait_for 'prewarmed in' 120 || true
-          jobs_now "stale: ready"
-          pkill -9 -f "$app/Contents/Frameworks/Sparkle.framework" || true
-          sleep 2
-          jobs_now "stale: installer killed"
-          # The same app, its update ready: About's check and the menu's.
-          about_open
-          about_check 2
-          menu_check 1
+          # The on-screen windows, front to back, with their owners and levels.
+          cat > "$RUNNER_TEMP/windows.swift" <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+          for w in list.prefix(14) {
+            let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+            print(w[kCGWindowOwnerName as String] ?? "?", w[kCGWindowOwnerPID as String] ?? 0,
+                  "layer", w[kCGWindowLayer as String] ?? 0, "name", w[kCGWindowName as String] ?? "",
+                  "at", b["X"] ?? 0, b["Y"] ?? 0, b["Width"] ?? 0, b["Height"] ?? 0)
+          }
+          SWIFT
+          swiftc -O "$RUNNER_TEMP/windows.swift" -o "$RUNNER_TEMP/windows" 2> /dev/null || true
+          seen() {
+            { echo "== $(now) $1"; "$RUNNER_TEMP/windows"; } >> "$out/windows.txt" 2>&1
+            screencapture -x "$out/screen-$1.png" 2> /dev/null || true
+          }
+          menu_seen() {
+            local n
+            n=$(count 'browser: update alert shows')
+            mark "menu Check for Updates… $1"
+            post "menu Check for Updates…"
+            wait_more 'browser: update alert shows' 30 "$n" || echo "$name: no alert"
+            sleep 1.5
+            seen "$1"
+            post "key return"
+            sleep 2
+          }
+
+          # Window › Stay On Top, then the menu's check: where Sparkle's alert is.
+          fresh 0.1.8 ontop
+          launch ontop
+          seen ontop-before
+          send menu "Stay On Top"
+          sleep 1
+          menu_seen ontop
+          # Settings, at its level, over the window kept on top?
+          send menu "About ilo"
+          sleep 1.5
+          seen ontop-settings
           finish
-          jobs_now "stale: 0.1.7 quit"
-          # 0.1.8, up to date, with the jobs as they were left.
-          fresh 0.1.8 stale-current
-          launch stale-0.1.8
-          about_open
-          about_check 1
-          about_check 2
-          menu_check 1
-          menu_check 2
+
+          # Full screen, then the menu's check.
+          fresh 0.1.8 fullscreen
+          launch fullscreen
+          send fullscreen
+          wait_for 'browser: window entered full screen' 15 || echo "fullscreen: didn't enter"
+          sleep 2
+          menu_seen fullscreen
           finish
           jobs_now "end"
 
