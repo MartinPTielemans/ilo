@@ -571,8 +571,11 @@ send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space"
 expect_tabs "$e" "$e" "in the second Space"
 expect "^browser: loaded $e https://example.com/\$" "the second Space's tab didn't load once shown"
-# The window's close button, which ends the app too: the driver doesn't report it done.
-echo "click 20 24" >&3
+# The window's close button, which ends the app too: the driver doesn't report it done. On Windows
+# the UI's buttons are minimize, maximize and close, so close is the third (appearance.sh).
+close_button="20 24"
+if windows; then close_button="66 24"; fi
+echo "click $close_button" >&3
 exec 3>&-
 await '^browser: window closed ' || fail "a click on the close button didn't close the window"
 exited
