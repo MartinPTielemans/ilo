@@ -2270,6 +2270,25 @@ BC_EXPORT void bc_set_send_crash_reports(bool send);
 // off, or delete it. Nothing once answered, or without an offer.
 BC_EXPORT void bc_answer_crash_report(bool send);
 
+// The daily usage count, which Settings › Privacy › Send a Daily Usage Count turns off. Posts one
+// count, as JSON, to the endpoint the app named with --daily-count-url, https or a loopback http,
+// the only place it ever posts: this copy's |version|, digits and dots, and |channel|, "release"
+// or "nightly", which the app gives; the OS, its major version and the chip, which the core adds;
+// whether this is the copy's |first| run; that it's the first count today, always; and whether
+// it's the first this ISO week (|weekly|) and this month (|monthly|). Nothing else: no ID, no
+// cookie, nothing about pages, tabs, Spaces, agents, accounts or settings. The app keeps the
+// switch and the date of the last count, and decides when to send. |sent| gets, always after the
+// call returns and on the main thread, whether the endpoint took it: false without an endpoint,
+// with another on its way, or for a |version| or |channel| that isn't one of those. No agent tool
+// reaches it.
+BC_EXPORT void bc_send_daily_count(const char* version,
+                                   const char* channel,
+                                   bool first,
+                                   bool weekly,
+                                   bool monthly,
+                                   void (*sent)(void* context, bool ok),
+                                   void* context);
+
 // What bc_download_act does: opens the file, or for one still running, opens it once it's done or
 // no longer; shows it in the system's file manager; pauses, resumes or cancels it; takes it off
 // the list, keeping a finished file and deleting any other; or keeps one Chrome held.
