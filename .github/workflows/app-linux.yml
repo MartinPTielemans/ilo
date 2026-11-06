@@ -58,8 +58,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/target
-          key: app-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          key: app-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**', 'core/public/browser_core.h') }}
           restore-keys: app-linux-
+
+      # Cargo rebuilds what's older than its inputs, and a cache saved after this checkout (another
+      # branch's, while apt stalled) is newer than them all, so its bindings and builds of the core's
+      # header and the app would pass as fresh (#2003). Our files are made newer than anything restored.
+      - run: git ls-files -z . ../core/public | xargs -0 touch
 
       - run: ./setup.sh
       - run: cargo test --release --lib
