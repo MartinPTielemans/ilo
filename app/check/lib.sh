@@ -224,6 +224,17 @@ quit_app() {
     osascript -e "tell application id \"$app_id\" to quit"
   fi
 }
+# Ends the session as the system does at a logout or restart. The Mac and Linux send SIGTERM, which
+# Chromium takes for the session ending. Windows asks the app's windows and then tells them it ends
+# (app-windows.py end-session, #1990): Git Bash's kill would end the app's children first, and then
+# the app from a thread of its own, which no sign-out does.
+end_session() {
+  if windows; then
+    python3 -I check/app-windows.py end-session "$(cat "/proc/$pid/winpid")"
+  else
+    kill -TERM "$pid"
+  fi
+}
 # The app's own process: the one started, or in the Flatpak, where that's flatpak's, the browser
 # process in its sandbox, as the host numbers it, the chrome process that isn't a helper.
 app_pid() {
