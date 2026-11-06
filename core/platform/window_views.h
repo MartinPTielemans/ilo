@@ -120,6 +120,11 @@ void ReleaseKeyboard(views::Widget* widget);
 // on Windows an owned window, in front; on Linux lent (bc_window_overlay_takes_keyboard).
 bool OverlayHasKeyboard(views::Widget* widget);
 
+// Runs |let_go|, posted, once the overlay that has the keyboard of |widget|'s window lets it go: on
+// the Mac as the overlay's window stops being key, on Windows as another window comes in front, on
+// Linux as the app takes it back, unless X11's focus came back into the window.
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go);
+
 // On Linux and Windows: the app's UI takes the keyboard in |widget|'s window, to keep
 // (bc_window_ui_takes_keyboard) or until a page shows (bc_window_ui_holds_keyboard), which
 // KeyboardForPage counts as the page's meanwhile. The Mac's window holds the keys for the next page

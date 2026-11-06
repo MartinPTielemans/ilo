@@ -4,6 +4,8 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <cstdio>
+#include <memory>
+#include <utility>
 
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
@@ -548,6 +550,25 @@ bool OverlayHasKeyboard(views::Widget* widget) {
     }
   }
   return false;
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  NSWindow* overlay = NSApp.keyWindow;
+  if (!overlay) {
+    return;
+  }
+  auto held = std::make_shared<base::OnceClosure>(std::move(let_go));
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  __block id observer = [center addObserverForName:NSWindowDidResignKeyNotification
+                                            object:overlay
+                                             queue:nil
+                                        usingBlock:^(NSNotification*) {
+                                          [center removeObserver:observer];
+                                          observer = nil;
+                                          // Posted, as the next key window takes it after.
+                                          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                                              FROM_HERE, std::move(*held));
+                                        }];
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {

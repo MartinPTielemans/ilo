@@ -2790,17 +2790,24 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     }
     // Posted: on the Mac, an overlay's window is key only once the window has let go.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](base::WeakPtr<Window> window) {
-                         if (window && !window->active() &&
-                             !platform::OverlayHasKeyboard(window->widget_.get()) &&
-                             !MiniPlayerHasKeyboard()) {
-                           window->left_ = true;
-                         }
-                       },
-                       weak_factory_.GetWeakPtr()));
+        FROM_HERE, base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
   }
   ReportActiveBrowser();
+}
+
+void Window::CheckLeft() {
+  if (active()) {
+    return;
+  }
+  // A menu open as the user goes to another app or window lets the keyboard go there after.
+  if (platform::OverlayHasKeyboard(widget_.get())) {
+    platform::WhenOverlayLetsGo(widget_.get(),
+                                base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
+    return;
+  }
+  if (!MiniPlayerHasKeyboard()) {
+    left_ = true;
+  }
 }
 
 bool Window::little() const {
