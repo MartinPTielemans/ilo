@@ -488,25 +488,34 @@ if [ "$(uname)" = Darwin ]; then
     "Edit lacks ilo's AutoFill after Find: $(grep "$edit" "$log" | tail -1)"
   [ "$(grep "$edit" "$log" | tail -1 | grep -o 'AutoFill ›' | wc -l)" -eq 3 ] ||
     fail "Edit has the system's AutoFill too: $(grep "$edit" "$log" | tail -1)"
-  # How many child windows the browser window has, Chrome's dropdown among them.
-  children() {
+  # Sets children to how many child windows the browser window has, Chrome's dropdown among them.
+  # In this shell, never in $(…), where send's count of the driver's steps would be lost.
+  count_children() {
     send layout
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' || true
+    children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      grep -c '^browser: layout child' || true)
   }
   # Waits for the browser window to have more child windows than $shown, or fails with $1.
   dropdown_shown() {
-    for _ in $(seq 30); do [ "$(children)" -gt "$shown" ] && return; done
+    for _ in $(seq 30); do
+      count_children
+      [ "$children" -gt "$shown" ] && return
+    done
     fail "$1"
   }
   # Waits for Chrome's dropdown to close, after escape, or fails with $1.
   dropdown_gone() {
     send key escape
-    for _ in $(seq 30); do [ "$(children)" = "$shown" ] && return; done
+    for _ in $(seq 30); do
+      count_children
+      [ "$children" = "$shown" ] && return
+    done
     fail "$1"
   }
   go_from_bar "${site#http://}address.html"
   expect "^browser: title $tab address\$" "the address page didn't load for Edit › AutoFill"
-  shown=$(children)
+  count_children
+  shown=$children
   send click 600 60
   dropdown_shown "a click in the address field showed no dropdown"
   dropdown_gone "escape didn't close the dropdown the click showed"
