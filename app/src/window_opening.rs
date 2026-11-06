@@ -211,6 +211,8 @@ pub(crate) fn open_window_as(
     unsafe {
         platform::host_window_opened(ui_view, id)
     };
+    #[cfg(target_os = "linux")]
+    crate::drive::window_made(id, ui_view);
     let from_shell = from.as_ref().and_then(|from| from.shell.upgrade());
     // Its Space, which the core made with the window.
     let own_space = own.map(|own| (unsafe { bc::bc_window_space(id) }, own));

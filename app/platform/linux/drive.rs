@@ -295,7 +295,8 @@ thread_local! {
     /// The driver's own connection to the X server, with its root window.
     static X: RefCell<Option<Rc<(RustConnection, xproto::Window)>>> = const { RefCell::new(None) };
     /// Each browser window the app has made, in order, by its UI's X window (`host_ui_view`'s
-    /// order on the Mac): the window command's numbers.
+    /// order on the Mac): the window command's numbers. Numbered as it's made, so one that closes
+    /// before a command reaches it, as a pop-up that closes itself, still counts, as on the Mac.
     static MADE: RefCell<Vec<(bc::bc_id, xproto::Window)>> = const { RefCell::new(Vec::new()) };
     /// The window command's, from 0.
     static DRIVEN: Cell<usize> = const { Cell::new(0) };
@@ -404,24 +405,21 @@ struct Browser {
     gpui: xproto::Window,
 }
 
+/// Numbers the browser window the app just made, for the window command.
+pub(crate) fn window_made(id: bc::bc_id, ui_view: *mut std::ffi::c_void) {
+    match crate::drive_wayland::on() {
+        true => crate::drive_wayland::window_made(id),
+        false => MADE.with_borrow_mut(|made| made.push((id, ui_view as usize as u32))),
+    }
+}
+
 /// The browser window the app made `index`th, from 0, while it's open.
 fn browser(index: usize) -> Option<Browser> {
-    let open: Vec<(bc::bc_id, xproto::Window)> = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .map(|w: &BrowserWindow| (w.id, w.ui_view as usize as u32))
-            .collect()
+    let (id, ui) = MADE.with_borrow(|made| made.get(index).copied())?;
+    let open = WINDOWS.with_borrow(|windows| {
+        (windows.iter()).any(|w: &BrowserWindow| w.id == id && w.ui_view as usize as u32 == ui)
     });
-    let (id, ui) = MADE.with_borrow_mut(|made| {
-        let mut new: Vec<_> = (open.iter())
-            .filter(|each| !made.contains(each))
-            .copied()
-            .collect();
-        new.sort();
-        made.extend(new);
-        made.get(index).copied()
-    })?;
-    open.contains(&(id, ui)).then_some(())?;
+    open.then_some(())?;
     let x = server()?;
     let (connection, _) = &*x;
     // Under Wayland the view is a surface, which the X server knows nothing of.
