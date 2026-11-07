@@ -1016,7 +1016,7 @@ A tab mode for working on a site, as Arc's (once Dev Tab). Nothing of it is reco
 - **View › Developer.** Its last item, after a separator, by the same two names, for the page shown; with no such page it's left out, as Arc's shows only with a page.
 - **⌃D.** Arc's Toggle Developer Mode, as Settings › Shortcuts lists it, which can give it another key. It isn't reserved: a page gets it first, so a text field in the page, where ⌃D deletes forward on the Mac, keeps it, as a page that handles it does, and so do the UI's fields, the command bar's too. Anywhere else, from the page or the UI, it turns the shown page's site on or off. Off the Mac it would be Alt+D, which stays Chrome's (Keyboard), so it has no key there.
 - Ours: no JSON viewer in 0.1.0, where entering Arc's installs the JSON Formatter extension (the owner, 2026-10-30); a built-in one would be its own item after it.
-- Tabs moved from Little Arc keep Developer Mode as Arc's do once ilo has Little Arc, which waits (#693).
+- **Little ilo.** A Little ilo window's page turns Developer Mode on and off by the command bar, View › Developer and ⌃D, as a regular window's does, its bar saying the whole URL while it's on. ⌘O takes the page to the main window in it, as Arc's Little Arc does.
 
 ### Capture
 
