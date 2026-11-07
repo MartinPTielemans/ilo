@@ -6,6 +6,7 @@
 # Usage: count-server.py <port file>
 import http.server
 import json
+import socketserver
 import sys
 
 
@@ -37,7 +38,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+# TCPServer, as site.sh's server binds: HTTPServer's bind looks 127.0.0.1's name up, 35 s
+# on the hosted Mac (#2022).
+server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
 with open(sys.argv[1], "w") as f:
     f.write(str(server.server_address[1]))
 server.serve_forever()
