@@ -609,6 +609,9 @@ struct Space {
     folders: Folders,
     /// The tab it shows, or showed last.
     shown: u64,
+    /// Tabs shown in closed folders before, which stay listed there after another tab shows,
+    /// until a click on their folder closes it for good, as Arc keeps them, per window (#1405).
+    peeked: Vec<u64>,
 }
 
 impl Space {
@@ -627,8 +630,9 @@ impl Space {
     fn pinned_rows(&self, collapsed: bool) -> impl Iterator<Item = u64> + '_ {
         let shown = self.panes(self.shown)[0];
         let folded = move |row| collapsed || self.holders(row).any(|folder| !self.is_open(folder));
+        let listed = move |row| row == shown || (!collapsed && self.peeked.contains(&row));
         (self.pinned.iter().copied())
-            .filter(move |&row| !self.later(row) && (row == shown || !folded(row)))
+            .filter(move |&row| !self.later(row) && (listed(row) || !folded(row)))
     }
 
     /// Whether `tab` is in a split after its first, which stands for the split's row.
@@ -691,15 +695,55 @@ impl Space {
         }
     }
 
-    /// The closed folder the tab shown is listed under with folders hidden between them, which
-    /// marks them with three dots on its glyph, as Arc's does (#1405).
-    fn eliding(&self) -> Option<u64> {
+    /// Each closed folder that lists a tab, the one shown or one peeked, with folders hidden
+    /// between them, which it marks with three dots on its glyph, as Arc's does (#1405), and the
+    /// tab.
+    fn dotted(&self) -> Vec<(u64, u64)> {
         let shown = self.panes(self.shown)[0];
-        let outer = self
-            .holders(shown)
+        std::iter::once(shown)
+            .chain(self.peeked.iter().copied())
+            .filter_map(|tab| {
+                let outer = self.outer_closed(tab)?;
+                (self.depth(tab) > self.depth(outer) + 1).then_some((outer, tab))
+            })
+            .collect()
+    }
+
+    /// Whether `folder` has its dots (`dotted`).
+    fn elides(&self, folder: u64) -> bool {
+        self.dotted().iter().any(|&(dotted, _)| dotted == folder)
+    }
+
+    /// The outermost closed folder `row` is in, if any.
+    fn outer_closed(&self, row: u64) -> Option<u64> {
+        self.holders(row)
             .filter(|&folder| !self.is_open(folder))
-            .last()?;
-        (self.depth(shown) > self.depth(outer) + 1).then_some(outer)
+            .last()
+    }
+
+    /// Keeps the tab shown listed in its closed folders as `next` shows, as Arc does, and lets go
+    /// of those no closed folder holds now.
+    fn keep_peek(&mut self, next: u64) {
+        let (shown, next) = (self.panes(self.shown)[0], self.panes(next)[0]);
+        let mut peeked: Vec<u64> = (self.peeked.iter().copied())
+            .filter(|&tab| tab != shown && tab != next && self.outer_closed(tab).is_some())
+            .collect();
+        if let Some(outer) = self.outer_closed(shown).filter(|_| shown != next) {
+            // check.sh reads this line.
+            log!("browser: folder {outer} keeps {shown}");
+            peeked.push(shown);
+        }
+        self.peeked = peeked;
+    }
+
+    /// Lets go of the tabs kept listed in `folder`, and says whether there were any.
+    fn drop_peeks(&mut self, folder: u64) -> bool {
+        let before = self.peeked.len();
+        let peeked = std::mem::take(&mut self.peeked);
+        self.peeked = (peeked.into_iter())
+            .filter(|&tab| !self.holders(tab).any(|holder| holder == folder))
+            .collect();
+        self.peeked.len() != before
     }
 
     /// Whether `shown` and its split are all of its Today tabs, so Clear has nothing else to close
@@ -1106,8 +1150,8 @@ pub struct Shell {
     focus_renaming: bool,
     /// The pinned tabs and folders changed and haven't been drawn since.
     outline_changed: bool,
-    /// The folder last drawn with its dots and the tab shown it lists, for check.sh.
-    dots_drawn: Option<(u64, u64)>,
+    /// The folders last drawn with their dots and the tab each lists, for check.sh.
+    dots_drawn: Vec<(u64, u64)>,
     /// The favorites the shown Space shows over its own tabs, left to right.
     favorites: Vec<u64>,
     /// Every favorite, and each one's holder: the Space it belongs to under Each Space, else the
@@ -1697,7 +1741,7 @@ impl Shell {
             renaming: None,
             focus_renaming: false,
             outline_changed: false,
-            dots_drawn: None,
+            dots_drawn: Vec::new(),
             favorites: Vec::new(),
             all_favorites: Vec::new(),
             favorite_splits: Vec::new(),
@@ -1995,6 +2039,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         }];
         shell
     }
@@ -2045,6 +2090,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         }];
         shell
     }
@@ -2241,9 +2287,9 @@ impl Shell {
         self.shown_space().map_or(0, |space| space.depth(row))
     }
 
-    /// The closed folder of the Space shown that marks folders hidden over the tab shown.
-    fn eliding(&self) -> Option<u64> {
-        self.shown_space().and_then(Space::eliding)
+    /// Whether `folder` of the Space shown has its dots (Space::dotted).
+    fn elides(&self, folder: u64) -> bool {
+        self.shown_space().is_some_and(|space| space.elides(folder))
     }
 
     /// How far in `row` is drawn in the Space shown (Space::listed_depth).
@@ -2518,6 +2564,7 @@ impl Shell {
                         splits: Vec::new(),
                         folders: Folders::default(),
                         shown: 0,
+                        peeked: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -2556,6 +2603,7 @@ impl Shell {
                     splits: std::mem::take(&mut space.splits),
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
+                    peeked: std::mem::take(&mut space.peeked),
                 }
             })
             .collect();
@@ -2756,10 +2804,28 @@ impl Shell {
                 log!("browser: iconed folder {folder} {icon}");
             }
         }
-        let eliding = entry.eliding();
+        let dotted = |space: &Space| {
+            space
+                .dotted()
+                .into_iter()
+                .map(|(folder, _)| folder)
+                .collect()
+        };
+        let eliding: Vec<u64> = dotted(entry);
         let before_folders = std::mem::replace(&mut entry.folders, folders);
+        // A folder opened or closed, from anywhere, lets go of the tabs it kept, so it closes
+        // whole next time.
+        let toggled: Vec<u64> = (entry.folders.folders.iter())
+            .filter(|(id, (_, open))| {
+                (before_folders.folders.get(id)).is_some_and(|(_, was)| was != open)
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        for folder in toggled {
+            entry.drop_peeks(folder);
+        }
         if space == self.space {
-            let eliding = (eliding, entry.eliding());
+            let eliding = (eliding, dotted(entry));
             (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
         }
         let has_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
@@ -3108,9 +3174,11 @@ impl Shell {
         // Only a closed folder changes the rows, and a tab switch has nothing more to do.
         if !space.folders.folders.values().any(|&(_, open)| !open) {
             space.shown = tab;
+            space.peeked.clear();
             return;
         }
         let before = space.slots(head);
+        space.keep_peek(tab);
         space.shown = tab;
         if space.slots(head) != before {
             self.move_rows(before, Curve::Slide, cx);
@@ -3888,13 +3956,12 @@ impl Render for Shell {
             log!("browser: outline {outline}");
         }
         // check.sh reads this line, as the folder's dots are drawn.
-        let dots = (self.shown_space())
-            .and_then(|space| Some((space.eliding()?, space.panes(space.shown)[0])));
+        let dots = self.shown_space().map_or_else(Vec::new, Space::dotted);
         if dots != self.dots_drawn {
-            self.dots_drawn = dots;
-            if let Some((folder, tab)) = dots {
+            for (folder, tab) in dots.iter().filter(|dot| !self.dots_drawn.contains(dot)) {
                 log!("browser: folder {folder} dots over {tab}");
             }
+            self.dots_drawn = dots;
         }
         // As the outline's, so a click on Clear, which shows only under the pointer, finds it.
         if std::mem::take(&mut self.hover_changed) {
@@ -4461,7 +4528,7 @@ impl Shell {
             let row = row_box().pl(px(PLATE_INSET + depth as f32 * FOLDER_INDENT));
             if let Some((name, open)) = space.folders.folders.get(&tab) {
                 let name = title(&self.palette, name.clone(), false).pr(px(TITLE_END_INSET));
-                let elided = space.eliding() == Some(tab);
+                let elided = space.elides(tab);
                 return row.child(plate(folder_icon(&self.palette, *open, elided), name));
             }
             let panes = space.panes(tab);
@@ -5516,6 +5583,7 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         }
     }
 
