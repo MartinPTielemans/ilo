@@ -714,6 +714,21 @@ addEventListener('message', (event) => {
     *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
   esac
+  # Proof for #1444 only, never merged: Word for the web's reading view of a public document
+  # (calibre's demo, opened in Microsoft's viewer, which needs no sign-in), as an agent reads it.
+  word_url="https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fcalibre-ebook.com%2Fdownloads%2Fdemos%2Fdemo.docx"
+  word=$(call open_tab "{\"url\":\"$word_url\"}")
+  printf '%s\n' "$word" > "$out/word-open.txt"
+  word_tab=$(printf '%s\n' "$word" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  for each in $(seq 30); do
+    word_text=$(call read_page "{\"tab\":$word_tab}")
+    case "$word_text" in *"Demonstration of DOCX"*) break ;; esac
+    sleep 2
+  done
+  printf '%s\n' "$word_text" > "$out/word-text.txt"
+  call snapshot "{\"tab\":$word_tab}" > "$out/word-snapshot.txt"
+  ../tools/window-screenshot.sh "$pid" "$out/word.png" all || true
+  echo "proof #1444: after $each reads, read_page $(case "$word_text" in *"Demonstration of DOCX"*) echo has ;; *) echo lacks ;; esac) the document's text, snapshot $(grep -q "Demonstration of DOCX" "$out/word-snapshot.txt" && echo has || echo lacks) it"
   outline=$later
   clicked=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of button "Deep button")\"}")
   case "$clicked" in
