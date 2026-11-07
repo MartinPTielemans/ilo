@@ -589,6 +589,9 @@ expect '^browser: library hidden$' "restoring the archived tab didn't close the 
 ../tools/window-screenshot.sh "$pid" "$out/archive-restored-to-space.png" || fail "no window to capture"
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab restored to its Space"
+# Tab a again, as the relaunch's ⌃1 expects it shown.
+send click $(row 1)
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on tab a's row didn't show it"
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space after the restore"
 expect_tabs "$e" "$e" "back in the second Space"
