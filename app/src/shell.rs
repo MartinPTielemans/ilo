@@ -677,6 +677,31 @@ impl Space {
         self.holders(row).count()
     }
 
+    /// How far in `row` is drawn: by the folders it's in, but the tab shown inside closed folders,
+    /// which is listed one under the outermost of them, the folders between staying hidden, as
+    /// Arc's is (#1405).
+    fn listed_depth(&self, row: u64) -> usize {
+        match self
+            .holders(row)
+            .filter(|&folder| !self.is_open(folder))
+            .last()
+        {
+            Some(outer) => self.depth(outer) + 1,
+            None => self.depth(row),
+        }
+    }
+
+    /// The closed folder the tab shown is listed under with folders hidden between them, which
+    /// marks them with three dots on its glyph, as Arc's does (#1405).
+    fn eliding(&self) -> Option<u64> {
+        let shown = self.panes(self.shown)[0];
+        let outer = self
+            .holders(shown)
+            .filter(|&folder| !self.is_open(folder))
+            .last()?;
+        (self.depth(shown) > self.depth(outer) + 1).then_some(outer)
+    }
+
     /// Whether `shown` and its split are all of its Today tabs, so Clear has nothing else to close
     /// and closes them too, which an arrow before it says (Arc).
     fn clears_last(&self, shown: u64) -> bool {
@@ -1081,6 +1106,8 @@ pub struct Shell {
     focus_renaming: bool,
     /// The pinned tabs and folders changed and haven't been drawn since.
     outline_changed: bool,
+    /// The folder last drawn with its dots and the tab shown it lists, for check.sh.
+    dots_drawn: Option<(u64, u64)>,
     /// The favorites the shown Space shows over its own tabs, left to right.
     favorites: Vec<u64>,
     /// Every favorite, and each one's holder: the Space it belongs to under Each Space, else the
@@ -1670,6 +1697,7 @@ impl Shell {
             renaming: None,
             focus_renaming: false,
             outline_changed: false,
+            dots_drawn: None,
             favorites: Vec::new(),
             all_favorites: Vec::new(),
             favorite_splits: Vec::new(),
@@ -2213,6 +2241,17 @@ impl Shell {
         self.shown_space().map_or(0, |space| space.depth(row))
     }
 
+    /// The closed folder of the Space shown that marks folders hidden over the tab shown.
+    fn eliding(&self) -> Option<u64> {
+        self.shown_space().and_then(Space::eliding)
+    }
+
+    /// How far in `row` is drawn in the Space shown (Space::listed_depth).
+    fn listed_depth(&self, row: u64) -> usize {
+        self.shown_space()
+            .map_or(0, |space| space.listed_depth(row))
+    }
+
     /// What a row says: a folder's name, else the tab's title.
     fn label(&self, row: u64) -> SharedString {
         match self.is_folder(row) {
@@ -2717,11 +2756,12 @@ impl Shell {
                 log!("browser: iconed folder {folder} {icon}");
             }
         }
+        let eliding = entry.eliding();
+        let before_folders = std::mem::replace(&mut entry.folders, folders);
         if space == self.space {
-            self.swaps
-                .folders_changed(&entry.folders, &folders, Instant::now());
+            let eliding = (eliding, entry.eliding());
+            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
         }
-        entry.folders = folders;
         let has_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
         // After a Clear, the rows left are in their places at once (Arc).
         let cleared = space == self.space && {
@@ -3847,6 +3887,15 @@ impl Render for Shell {
             });
             log!("browser: outline {outline}");
         }
+        // check.sh reads this line, as the folder's dots are drawn.
+        let dots = (self.shown_space())
+            .and_then(|space| Some((space.eliding()?, space.panes(space.shown)[0])));
+        if dots != self.dots_drawn {
+            self.dots_drawn = dots;
+            if let Some((folder, tab)) = dots {
+                log!("browser: folder {folder} dots over {tab}");
+            }
+        }
         // As the outline's, so a click on Clear, which shows only under the pointer, finds it.
         if std::mem::take(&mut self.hover_changed) {
             log!("browser: sidebar hovered {}", self.sidebar_hovered as u8);
@@ -4408,14 +4457,16 @@ impl Shell {
     fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
-            let row = row_box().pl(px(PLATE_INSET + space.depth(tab) as f32 * FOLDER_INDENT));
+            let depth = space.listed_depth(tab);
+            let row = row_box().pl(px(PLATE_INSET + depth as f32 * FOLDER_INDENT));
             if let Some((name, open)) = space.folders.folders.get(&tab) {
                 let name = title(&self.palette, name.clone(), false).pr(px(TITLE_END_INSET));
-                return row.child(plate(folder_icon(&self.palette, *open), name));
+                let elided = space.eliding() == Some(tab);
+                return row.child(plate(folder_icon(&self.palette, *open, elided), name));
             }
             let panes = space.panes(tab);
             if panes.len() > 1 {
-                let width = self.segment_width(space.depth(tab), panes.len());
+                let width = self.segment_width(depth, panes.len());
                 let segments = panes.iter().map(|&pane| {
                     self.segment(&self.palette, pane, width, pane == tab, pane == selected)
                 });
@@ -5145,9 +5196,9 @@ fn plate(icon: impl IntoElement, label: impl IntoElement) -> gpui::Div {
 }
 
 /// A folder's icon, open or closed.
-fn folder_icon(palette: &Palette, open: bool) -> AnyElement {
+fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
     svg()
-        .path(swap::folder_glyph(open))
+        .path(swap::folder_glyph(open, elided))
         .size(px(FAVICON_DRAWN))
         .text_color(palette.text(SECONDARY))
         .into_any_element()
