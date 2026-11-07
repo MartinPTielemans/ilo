@@ -109,8 +109,27 @@ jobs:
           done
           wait_for 'browser: loaded' 60 || echo "the page didn't load"
           sleep 2
+          # A Space's name row shows once there are two (check/spaces.sh makes its second so).
+          send menu New Space…
+          wait_for 'browser: command new-space via ui' 15 || echo "New Space didn't run"
+          sleep 1
+          send type reading
+          send key return
+          sleep 2
           # The … at the end of the Space's name row, in the window's points (check/spaces.sh).
           edit="202 112"
+          # The driver's own click there first, so a real click that shows no menu is aimed right.
+          n=$(count 'browser: menu shown ')
+          send move $edit
+          send click $edit
+          sleep 1
+          if [ "$(count 'browser: menu shown ')" -gt "$n" ]; then
+            echo "CALIBRATION: the driver's click at $edit showed the menu"
+            send dismiss
+          else
+            echo "CALIBRATION: the driver's click at $edit showed no menu"
+          fi
+          screencapture -x "$out/calibration.png" || true
           # Real clicks at the … of window $1, the window server's, with "moved" and "bare".
           clicks() {
             local window=$1 label=$2 at how n shown
@@ -139,11 +158,11 @@ jobs:
           # Another app in front, its window away from ilo's.
           clicks 1 finder 'osascript -e "tell application \"Finder\" to activate"; sleep 0.5'
           # Another app's window over ilo's page, in front, the … clear of it.
-          osascript -e 'tell application "TextEdit" to make new document' \
-            -e 'tell application "TextEdit" to set bounds of front window to {400, 60, 1200, 700}' \
-            -e 'tell application "TextEdit" to activate' || echo "TextEdit didn't open"
-          clicks 1 overlapped 'osascript -e "tell application \"TextEdit\" to activate"; sleep 0.5'
-          osascript -e 'tell application "TextEdit" to quit saving no' || true
+          osascript -e 'tell application "Finder" to make new Finder window' \
+            -e 'tell application "Finder" to set bounds of front window to {700, 150, 1400, 700}' \
+            -e 'tell application "Finder" to activate' || echo "the Finder window didn't open"
+          clicks 1 overlapped 'osascript -e "tell application \"Finder\" to activate"; sleep 0.5'
+          osascript -e 'tell application "Finder" to close every window' || true
           # A second ilo window, in front.
           osascript -e "tell application id \"$id\" to activate"
           send key n cmd
