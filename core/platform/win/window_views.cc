@@ -923,6 +923,10 @@ void ShowPages(views::Widget* widget,
   views->LayOut();
 }
 
+// shortcut: each pane is an HWND of its own, which would have to shrink with its content scaled
+// in it; until then the pages keep their size under a tab dragged over them.
+void ScalePages(views::Widget*, double) {}
+
 void HoldPagesForResize(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->set_held(true);

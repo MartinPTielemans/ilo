@@ -41,10 +41,13 @@
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
@@ -167,7 +170,20 @@ struct Slot {
   bool bottom_corners_only = false;
   // Its corners' own, for a link preview's page, else the window's.
   std::optional<double> corner_radius;
+  // The scale a pane draws at, and the point in the window's content it's drawn smaller about
+  // (ScalePages).
+  float scale = 1;
+  gfx::PointF scaled_about;
 };
+
+// Where |slot| shows in the window's content, drawn at its scale.
+gfx::RectF ShownFrame(const Slot& slot) {
+  const gfx::Rect frame = slot.holder->bounds();
+  const gfx::PointF& about = slot.scaled_about;
+  const float s = slot.scale;
+  return gfx::RectF(about.x() + s * (frame.x() - about.x()),
+                    about.y() + s * (frame.y() - about.y()), s * frame.width(), s * frame.height());
+}
 
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
@@ -235,6 +251,7 @@ class WindowViews : public views::WidgetObserver,
   Slot& preview() { return preview_; }
   FocusRing& ring() { return ring_; }
   void set_corner_radius(double radius) { corner_radius_ = radius; }
+  void set_page_scale(float scale) { page_scale_ = scale; }
   bool held() const { return held_; }
   void set_held(bool held) { held_ = held; }
   void set_preview_color(SkColor4f color) { preview_color_ = color; }
@@ -357,6 +374,38 @@ class WindowViews : public views::WidgetObserver,
     LayOut(side_panel_, size);
     LayOut(preview_, size);
     ring_.Fit();
+    ScalePanes();
+  }
+
+  // Draws the panes, with their DevTools and ring, at page_scale_ of their size about the centre of
+  // their frames, by their holders' transforms, so they're never laid out again for it.
+  void ScalePanes() {
+    gfx::Rect frames;
+    for (const Slot& slot : panes_) {
+      if (slot.holder && slot.page) {
+        frames.Union(slot.holder->bounds());
+      }
+    }
+    const gfx::PointF about(frames.x() + frames.width() / 2.f, frames.y() + frames.height() / 2.f);
+    for (Slot& slot : panes_) {
+      if (!slot.holder) {
+        continue;
+      }
+      slot.scale = page_scale_;
+      slot.scaled_about = about;
+      // A layer's transform is about its own top-left.
+      const float in_x = about.x() - slot.holder->bounds().x();
+      const float in_y = about.y() - slot.holder->bounds().y();
+      gfx::Transform transform;
+      if (page_scale_ != 1) {
+        transform.Translate(in_x, in_y);
+        transform.Scale(page_scale_, page_scale_);
+        transform.Translate(-in_x, -in_y);
+      }
+      if (slot.holder->transform() != transform) {
+        slot.holder->SetTransform(transform);
+      }
+    }
   }
 
   void LayOut(Slot& slot, const gfx::Size& window_size) {
@@ -400,7 +449,7 @@ class WindowViews : public views::WidgetObserver,
     if (OnWayland()) {
       std::vector<gfx::Rect> region;
       for (const Slot* slot : shown) {
-        region.push_back(gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale));
+        region.push_back(gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)));
       }
       if (edge) {
         const int w = pixels.width();
@@ -449,11 +498,11 @@ class WindowViews : public views::WidgetObserver,
         .rectangles = {XRectangle(input)},
     });
     for (const Slot* slot : shown) {
-      const gfx::Rect frame = gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale);
+      const gfx::Rect frame = gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale));
       std::vector<x11::Rectangle> hole;
-      for (gfx::Rect row :
-           RoundShape(frame.size(), slot->corner_radius.value_or(corner_radius_) * scale,
-                      slot->bottom_corners_only)) {
+      for (gfx::Rect row : RoundShape(
+               frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
+               slot->bottom_corners_only)) {
         row.Offset(frame.OffsetFromOrigin());
         hole.push_back(XRectangle(row));
       }
@@ -901,6 +950,8 @@ class WindowViews : public views::WidgetObserver,
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
+  // What the panes are drawn at (ScalePages).
+  float page_scale_ = 1;
   // The pages stay where they are as the window resizes, until ShowPages (HoldPagesForResize).
   bool held_ = false;
   // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
@@ -1091,6 +1142,16 @@ void ShowPages(views::Widget* widget,
   if (panes.empty()) {
     views->UITakesKeyboard();
   }
+}
+
+void ScalePages(views::Widget* widget, double scale) {
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return;
+  }
+  views->set_page_scale(static_cast<float>(scale));
+  views->ScalePanes();
+  views->ShowThrough();
 }
 
 void HoldPagesForResize(views::Widget* widget) {

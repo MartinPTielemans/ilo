@@ -73,6 +73,12 @@ void ShowPages(views::Widget* widget,
                uint32_t ring_color,
                std::optional<SidePanelPage> side_panel);
 
+// Draws the panes shown in |widget|'s window, with their DevTools and ring, at |scale| of their
+// size about the centre of their frames, without laying them out again, and keeps doing so as
+// ShowPages lays them out, until it's 1 again. Clicks go to the UI around them on Linux, and to
+// their frames on the Mac. On Windows it does nothing yet.
+void ScalePages(views::Widget* widget, double scale);
+
 // Keeps the pages shown in |widget|'s window where they are as it resizes, until ShowPages lays
 // them out again: for a page going full screen, or back, which the app lays out once, at the
 // window's new size. On the Mac, where the app hears of a resize before the pages are laid out at

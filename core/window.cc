@@ -1,6 +1,7 @@
 #include "browser_core/window.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 #include <numeric>
@@ -1838,6 +1839,10 @@ void Window::SetPageMoving(bool moving) {
   if (SidePanel* side_panel = ShownSidePanel(); side_panel && side_panel->contents()) {
     StretchOnResize(side_panel->contents(), moving);
   }
+}
+
+void Window::SetPageScale(double scale) {
+  platform::ScalePages(widget_.get(), std::isnan(scale) ? 1.0 : std::clamp(scale, 0.5, 1.0));
 }
 
 void Window::Select(bc_id tab) {
