@@ -564,9 +564,15 @@ impl Edit {
                     return None;
                 }
                 let first = tabs[0];
+                let shown = shell.selected;
                 shell.browser.move_tab(first, false, 0, 0, cx);
                 shell.join_again(&tabs, &look, cx);
                 shell.browser.move_split_to_favorites(first, index, cx);
+                // The core shows the split it joins again, where the user had another tab. The
+                // shell still has that one selected, so this goes past its check.
+                if !tabs.contains(&shown) && shell.has_tab(shown) {
+                    shell.browser.select(shown, cx);
+                }
                 Some(Edit::SeparateFavorite(first))
             }
             Edit::SeparateFavorite(tab) => shell.separate_favorite_now(tab, cx),
