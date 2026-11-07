@@ -26,9 +26,9 @@ if [ "$(git -C .deps/zed rev-parse HEAD)" != "$ZED_REV" ]; then
 fi
 # One patch a crate: gpui_macos's, gpui_windows's and gpui_linux's embed GPUI in Chromium's window
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
-# Edit menu's Paste and Match Style and, on the Mac, caps a window's frame rate only while the app
-# isn't the active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds its pipelines
-# once for all windows.
+# Edit menu's Paste and Match Style and caps a window's frame rate only while the app isn't the
+# active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds its pipelines once for
+# all windows.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
   "$PWD/patches/gpui-wgpu-vulkan.patch"
