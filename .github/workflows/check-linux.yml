@@ -45,8 +45,8 @@ env:
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
     load preview import adblock adblock-lists passkeys onboarding links relaunch split
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
-    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
-    devices notifications calls battery idle handback webrtc tab-drag
+    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
+    sync-extensions little devices notifications calls battery idle handback webrtc tab-drag
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
