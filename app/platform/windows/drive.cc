@@ -1975,6 +1975,9 @@ LRESULT CALLBACK DropRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   if ((message->message == WM_MOUSELEAVE || message->message == WM_NCMOUSELEAVE) &&
       message->lParam != kDriverLeave && message->hwnd == g_hovered) {
     message->message = WM_NULL;
+  } else if (message->message == WM_MOUSELEAVE || message->message == WM_NCMOUSELEAVE) {
+    fprintf(stderr, "browser: probe 1583 leave %p hovered %p pressed %p capture %p driver %d\n",
+            message->hwnd, g_hovered, g_pressed, GetCapture(), message->lParam == kDriverLeave);
   } else if (message->message == WM_MOUSEMOVE) {
     const auto posted =
         std::ranges::find(g_posted_moves, std::pair(message->hwnd, message->lParam));
