@@ -1,14 +1,19 @@
-# Probe for #1358, never for main: whether a hosted Windows runner's display can change its scale
-# while windows are open, as moving a window to a display of another scale does, through the call
-# Settings' Scale uses (DisplayConfigSetDeviceInfo's DPI scale). Prints each display's scale steps,
-# steps the first up one, reads the monitor's DPI and a window's WM_DPICHANGED, and steps it back.
+"""The scale of the display Windows shows the app on, changed while the app runs, as Settings' Scale
+changes it: Windows tells each window on it its new DPI (WM_DPICHANGED), as when a window moves to
+a display of another scale (#1358). The hosted runner has one display, so this is the one way to
+give the app's windows a new DPI there.
+
+`get` prints the first display's steps from the one Windows recommends: "current minimum maximum",
+such as "0 0 1" for 100% of 100% to 125%. `set N` makes it step N and waits until a window of the
+helper's own has heard its new DPI, then prints that DPI.
+Usage: scale.py get|set N"""
+
 import ctypes
 import ctypes.wintypes as w
 import sys
 import time
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
-shcore = ctypes.WinDLL("shcore")
 user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # per monitor v2
 
 
@@ -21,6 +26,8 @@ class Header(ctypes.Structure):
                 ("id", ctypes.c_uint32)]
 
 
+# DISPLAYCONFIG_DEVICE_INFO_GET_DPI_SCALE and _SET_DPI_SCALE, which Settings uses and the SDK
+# doesn't declare: steps relative to the display's recommended scale.
 class GetScale(ctypes.Structure):
     _fields_ = [("header", Header), ("minimum", ctypes.c_int32), ("current", ctypes.c_int32),
                 ("maximum", ctypes.c_int32)]
@@ -38,58 +45,32 @@ class ModeInfo(ctypes.Structure):
     _fields_ = [("bytes", ctypes.c_byte * 64)]
 
 
-assert ctypes.sizeof(PathInfo) == 72 and ctypes.sizeof(ModeInfo) == 64
-
-paths, modes = ctypes.c_uint32(), ctypes.c_uint32()
-QDC_ONLY_ACTIVE_PATHS = 2
-print("buffer sizes:", user32.GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, ctypes.byref(paths),
-                                                          ctypes.byref(modes)), paths.value, modes.value)
-path_array = (PathInfo * paths.value)()
-mode_array = (ModeInfo * modes.value)()
-print("query:", user32.QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ctypes.byref(paths), path_array,
-                                          ctypes.byref(modes), mode_array, None))
-
-
-user32.MonitorFromPoint.argtypes = [w.POINT, w.DWORD]
-user32.MonitorFromPoint.restype = ctypes.c_void_p
+def first_display():
+    paths, modes = ctypes.c_uint32(), ctypes.c_uint32()
+    QDC_ONLY_ACTIVE_PATHS = 2
+    if user32.GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, ctypes.byref(paths), ctypes.byref(modes)):
+        sys.exit("scale: no display config")
+    path_array = (PathInfo * paths.value)()
+    mode_array = (ModeInfo * modes.value)()
+    if user32.QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ctypes.byref(paths), path_array,
+                                 ctypes.byref(modes), mode_array, None) or not paths.value:
+        sys.exit("scale: no display")
+    return path_array[0]
 
 
-def monitor_dpi():
-    monitor = user32.MonitorFromPoint(w.POINT(0, 0), 1)
-    x, y = ctypes.c_uint(), ctypes.c_uint()
-    shcore.GetDpiForMonitor(ctypes.c_void_p(monitor), 0, ctypes.byref(x), ctypes.byref(y))
-    return x.value
-
-
-def scale(path):
+def steps(path):
     get = GetScale()
     get.header = Header(-3, ctypes.sizeof(GetScale), path.source_adapter, path.source_id)
-    result = user32.DisplayConfigGetDeviceInfo(ctypes.byref(get))
-    return result, get.minimum, get.current, get.maximum
+    if user32.DisplayConfigGetDeviceInfo(ctypes.byref(get)):
+        sys.exit("scale: the display's scale can't be read")
+    return get.current, get.minimum, get.maximum
 
 
-def set_scale(path, relative):
-    put = SetScale()
-    put.header = Header(-4, ctypes.sizeof(SetScale), path.source_adapter, path.source_id)
-    put.relative = relative
-    return user32.DisplayConfigSetDeviceInfo(ctypes.byref(put))
-
-
-# A window of our own, to see whether Windows tells it the scale changed.
-heard = []
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
 user32.DefWindowProcW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 user32.DefWindowProcW.restype = ctypes.c_ssize_t
-
-
-def proc(hwnd, message, wparam, lparam):
-    if message == 0x02E0:  # WM_DPICHANGED
-        rect = ctypes.cast(lparam, ctypes.POINTER(w.RECT)).contents
-        heard.append((wparam & 0xFFFF, rect.left, rect.top, rect.right, rect.bottom))
-    return user32.DefWindowProcW(hwnd, message, wparam, lparam)
-
-
-callback = WNDPROC(proc)
+user32.CreateWindowExW.restype = w.HWND
+user32.GetDpiForWindow.argtypes = [w.HWND]
 
 
 class WNDCLASS(ctypes.Structure):
@@ -99,39 +80,44 @@ class WNDCLASS(ctypes.Structure):
                 ("lpszClassName", w.LPCWSTR)]
 
 
-window_class = WNDCLASS(lpfnWndProc=callback, lpszClassName="DpiProbe")
-user32.RegisterClassW(ctypes.byref(window_class))
-user32.CreateWindowExW.restype = w.HWND
-hwnd = user32.CreateWindowExW(0, "DpiProbe", "dpi probe", 0x10CF0000, 100, 100, 400, 300, None, None,
-                              None, None)
-user32.GetDpiForWindow.argtypes = [w.HWND]
+def set_step(path, relative):
+    heard = []
 
+    def proc(hwnd, message, wparam, lparam):
+        if message == 0x02E0:  # WM_DPICHANGED
+            heard.append(wparam & 0xFFFF)
+        return user32.DefWindowProcW(hwnd, message, wparam, lparam)
 
-def pump(seconds):
-    end = time.time() + seconds
+    callback = WNDPROC(proc)
+    user32.RegisterClassW(ctypes.byref(WNDCLASS(lpfnWndProc=callback, lpszClassName="ScaleHelper")))
+    # A hidden window of its own on the display, which Windows tells as it tells the app's.
+    hwnd = user32.CreateWindowExW(0x80, "ScaleHelper", "", 0x80000000, 0, 0, 10, 10, None, None, None,
+                                  None)
+    before = user32.GetDpiForWindow(hwnd)
+    put = SetScale()
+    put.header = Header(-4, ctypes.sizeof(SetScale), path.source_adapter, path.source_id)
+    put.relative = relative
+    if user32.DisplayConfigSetDeviceInfo(ctypes.byref(put)):
+        sys.exit("scale: the display's scale can't be set")
     message = w.MSG()
+    end = time.time() + 10
     while time.time() < end:
         while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
-            user32.TranslateMessage(ctypes.byref(message))
             user32.DispatchMessageW(ctypes.byref(message))
+        if user32.GetDpiForWindow(hwnd) != before or steps(path)[0] == relative and heard:
+            break
         time.sleep(0.02)
+    print(user32.GetDpiForWindow(hwnd))
+    user32.DestroyWindow(hwnd)
 
 
-pump(0.5)
-print("window", hwnd, "dpi", user32.GetDpiForWindow(hwnd), "monitor dpi", monitor_dpi())
-for index in range(paths.value):
-    path = path_array[index]
-    print("path", index, "source", path.source_id, "scale (result, min, current, max):", scale(path))
-if paths.value == 0:
-    sys.exit("no display path")
-path = path_array[0]
-result, minimum, current, maximum = scale(path)
-target = current + 1 if current < maximum else current - 1
-print("set to", target, "->", set_scale(path, target))
-pump(3)
-print("after: window dpi", user32.GetDpiForWindow(hwnd), "monitor dpi", monitor_dpi(),
-      "scale", scale(path), "WM_DPICHANGED heard", heard)
-print("back to", current, "->", set_scale(path, current))
-pump(3)
-print("restored: window dpi", user32.GetDpiForWindow(hwnd), "monitor dpi", monitor_dpi(),
-      "scale", scale(path), "WM_DPICHANGED heard", heard)
+def main():
+    if sys.argv[1:2] == ["get"] and len(sys.argv) == 2:
+        print(*steps(first_display()))
+    elif sys.argv[1:2] == ["set"] and len(sys.argv) == 3:
+        set_step(first_display(), int(sys.argv[2]))
+    else:
+        sys.exit(__doc__)
+
+
+main()

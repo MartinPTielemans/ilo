@@ -214,6 +214,45 @@ PY
   done
 fi
 
+# Probe for #1358, never for main: the command bar's window as the display's own scale changes
+# under it, from 100% to 125% and back, as Settings' Scale changes it.
+if windows; then
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar for the scale probe"
+  # The overlays over the page now, in $shown, and the window's layout, in $layout_now.
+  overlays_now() {
+    send overlays
+    shown=$(grep '^browser: overlays shown ' "$log" | tail -1 | cut -d' ' -f4-)
+    send layout
+    layout_now=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
+  }
+  sleep 1
+  scale_before=$(python3 -I check/scale.py get)
+  overlays_now
+  bar_100=$shown layout_100=$layout_now
+  echo "probe-1358: scale $scale_before, at 100%: $bar_100"
+  echo "probe-1358: layout at 100%: $layout_100"
+  dpi=$(python3 -I check/scale.py set 1)
+  sleep 2
+  overlays_now
+  bar_125=$shown layout_125=$layout_now
+  ../tools/window-screenshot.sh "$pid" "$out/probe-1358-125.png" || true
+  echo "probe-1358: dpi $dpi, at 125%: $bar_125"
+  echo "probe-1358: layout at 125%: $layout_125"
+  dpi=$(python3 -I check/scale.py set 0)
+  sleep 2
+  overlays_now
+  bar_back=$shown
+  echo "probe-1358: dpi $dpi, back at 100%: $bar_back"
+  grep -i 'dropped\|dpi\|panicked' "$log" | tail -10
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar after the scale probe"
+  # Sizes alone: a place in points from the screen's corner moves with the scale.
+  sizes() { echo "$1" | sed 's/ at [0-9-]*,[0-9-]*//g'; }
+  [ "$(sizes "$bar_100")" = "$(sizes "$bar_125")" ] && [ "$(sizes "$bar_100")" = "$(sizes "$bar_back")" ] ||
+    fail "the command bar's window changed with the display's scale: $bar_100 / $bar_125 / $bar_back"
+fi
+
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
 # from the start. The page's w opens one whose server never answers, so it never commits, and its
