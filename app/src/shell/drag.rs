@@ -79,7 +79,7 @@ impl Shell {
                     favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
                     icon: self.page(tab).icon,
                     folder: folder.map(|space| space.is_open(tab)),
-                    indent: self.depth(tab) as f32 * FOLDER_INDENT,
+                    indent: self.listed_depth(tab) as f32 * FOLDER_INDENT,
                     top: top + self.slide(slot),
                     start: moved,
                 });
@@ -698,7 +698,7 @@ impl Shell {
     /// it would join it on the left, before a split's first page, as Arc's does
     /// (`SidebarDropTargetRegion`).
     fn left_half(&self, row: u64, x: f32) -> bool {
-        let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
+        let left = PLATE_INSET + self.listed_depth(row) as f32 * FOLDER_INDENT;
         x < (left + self.rows_width() - PLATE_INSET) / 2.
     }
 

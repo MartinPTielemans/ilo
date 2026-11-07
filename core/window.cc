@@ -1562,8 +1562,14 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   const bc_id freed = left && Picturing(left) ? left : 0;
   PasswordOffer::Moving moving(freed);
   HoldPictured();
-  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt.
-  tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  // A full-screen page's tab leaving takes the window out with it, within ActivateTabAt. The tab
+  // active already isn't activated again: off the Mac the window leaves a page's full screen as
+  // Chrome asks, so the app's frame for the new size comes within Chrome's change to the tabs that
+  // ended the page's full screen, as closing them all does, where activating one fails a CHECK
+  // (#1991).
+  if (leaving != contents) {
+    tabs->ActivateTabAt(tabs->GetIndexOfWebContents(contents));
+  }
   const bc_id tab = Tab::IdOf(contents);
   std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
@@ -2790,17 +2796,24 @@ void Window::OnWidgetActivationChanged(views::Widget* widget, bool active) {
     }
     // Posted: on the Mac, an overlay's window is key only once the window has let go.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](base::WeakPtr<Window> window) {
-                         if (window && !window->active() &&
-                             !platform::OverlayHasKeyboard(window->widget_.get()) &&
-                             !MiniPlayerHasKeyboard()) {
-                           window->left_ = true;
-                         }
-                       },
-                       weak_factory_.GetWeakPtr()));
+        FROM_HERE, base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
   }
   ReportActiveBrowser();
+}
+
+void Window::CheckLeft() {
+  if (active()) {
+    return;
+  }
+  // A menu open as the user goes to another app or window lets the keyboard go there after.
+  if (platform::OverlayHasKeyboard(widget_.get())) {
+    platform::WhenOverlayLetsGo(widget_.get(),
+                                base::BindOnce(&Window::CheckLeft, weak_factory_.GetWeakPtr()));
+    return;
+  }
+  if (!MiniPlayerHasKeyboard()) {
+    left_ = true;
+  }
 }
 
 bool Window::little() const {

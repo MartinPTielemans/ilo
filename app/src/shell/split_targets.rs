@@ -1,8 +1,8 @@
 //! Add Split View's targets (Dia, docs/ux-spec.md › Split view › Drag targets): a tab dragged out
-//! of the sidebar over the page becomes a picture of a window, and a target slides in at each of
-//! the card's sides, and at its top and bottom as Arc's stacks them. Let go over one, the tab joins
-//! the page shown in a split view on that side. A link dragged over the page brings the same
-//! targets, and let go on one it opens in a pane there.
+//! of the sidebar over the page becomes a picture of a window, and one target slides in, as Arc's
+//! one region, at the card's side nearest the pointer, its top and bottom too as Arc's stacks them.
+//! Let go over it, the tab joins the page shown in a split view on that side. A link dragged over
+//! the page brings the same target, and let go on it it opens in a pane there.
 //! GPUI can't draw over the page's native view, so the app draws them in a window of its own over
 //! the browser window, which the mouse goes through (`Browser::show_drop_targets`).
 
@@ -91,32 +91,42 @@ impl Edge {
 pub(super) struct OverPage {
     /// The tab it would join.
     with: u64,
-    /// When the targets began sliding in.
-    since: Instant,
     /// Where the pointer is in the window.
     pointer: Point<Pixels>,
     /// Each target, as one split has one orientation: all four for a page alone, else the two
     /// along its split's. For each, whether the tab is over it, since when, and how far it had
     /// grown toward its size under the tab then.
     targets: Vec<(Edge, bool, Instant, f32)>,
+    /// The one target shown, at the card's edge nearest the pointer, as Arc's one region, or the
+    /// one under the tab while it's there; and since when, as it slides in from that edge.
+    shown: (Edge, Instant),
     /// The dragged tab, where its press showed it in place of the page it would join, which shows
     /// under the targets instead: it shows again once they go without it let go on one.
     back: Option<u64>,
 }
 
 impl OverPage {
-    fn new(with: u64, edges: Vec<Edge>, pointer: Point<Pixels>, back: Option<u64>) -> Self {
+    fn new(
+        with: u64,
+        edges: Vec<Edge>,
+        card: Bounds<Pixels>,
+        pointer: Point<Pixels>,
+        back: Option<u64>,
+    ) -> Self {
         log!("browser: drop targets for {with}");
         let since = Instant::now();
+        let shown = (nearest(&edges, card, pointer), since);
+        // check.sh reads this line.
+        log!("browser: drop target shown {}", shown.0.name());
         let targets = edges
             .into_iter()
             .map(|edge| (edge, false, since, 0.))
             .collect();
         OverPage {
             with,
-            since,
             pointer,
             targets,
+            shown,
             back,
         }
     }
@@ -139,15 +149,29 @@ impl OverPage {
     fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>, now: Instant) {
         let edge = self.edge();
         self.pointer = position;
+        // The one under the tab lets it go once the pointer leaves it.
         for target in &mut self.targets {
             let (at, under, since, from) = *target;
-            // Under once the pointer is in the grown target, until it leaves the one under it.
-            let bounds = match under {
-                true => under_bounds(card, at, position),
-                false => target_bounds(card, at, grown_at(at)),
-            };
-            if bounds.contains(&position) != under {
-                *target = (at, !under, now, grown(under, since, from));
+            if under && !under_bounds(card, at, position).contains(&position) {
+                *target = (at, false, now, grown(true, since, from));
+            }
+        }
+        // It stays shown while the tab is over it, so the pointer passing nearer another edge on
+        // its way in doesn't take away the target it's aiming at.
+        let edges: Vec<Edge> = self.targets.iter().map(|(at, ..)| *at).collect();
+        let shown = self
+            .edge()
+            .unwrap_or_else(|| nearest(&edges, card, position));
+        if shown != self.shown.0 {
+            self.shown = (shown, now);
+            // check.sh reads this line.
+            log!("browser: drop target shown {}", shown.name());
+        }
+        // The one shown is under the tab once the pointer is in it grown.
+        for target in &mut self.targets {
+            let (at, under, since, from) = *target;
+            if !under && at == shown && target_bounds(card, at, grown_at(at)).contains(&position) {
+                *target = (at, true, now, grown(false, since, from));
             }
         }
         if self.edge() != edge {
@@ -253,7 +277,7 @@ impl Shell {
         drag.moving = true;
         let over = drag
             .over_page
-            .get_or_insert_with(|| OverPage::new(with, edges, position, back));
+            .get_or_insert_with(|| OverPage::new(with, edges, card, position, back));
         over.point(card, position, crate::motion::start(cx));
         cx.notify();
         true
@@ -282,7 +306,7 @@ impl Shell {
     }
 
     /// A link to `url` is dragged over `tab`'s page, at `point` in it. Over a page shown that has
-    /// room for another, the targets slide in as for a tab, and the one under the pointer grows.
+    /// room for another, the target slides in as for a tab, and grows once the pointer is in it.
     /// Returns whether the pointer is on one, where the drag is the app's and the page doesn't see
     /// it.
     pub fn link_over_page(
@@ -306,7 +330,7 @@ impl Shell {
             .as_ref()
             .is_none_or(|link| link.over.with != with)
         {
-            let over = OverPage::new(with, self.edges_for(with), position, None);
+            let over = OverPage::new(with, self.edges_for(with), card, position, None);
             self.link_over = Some(LinkOver {
                 url: url.to_string(),
                 over,
@@ -403,7 +427,7 @@ impl Shell {
         let card = self.page_frame(self.viewport).0;
         let palette = self.palette;
         let fill = self.window_fill().blend(palette.plate(TARGET_PLATE));
-        let t = over.since.elapsed().as_secs_f32();
+        let t = over.shown.1.elapsed().as_secs_f32();
         let growing = over
             .targets
             .iter()
@@ -411,14 +435,13 @@ impl Shell {
         if growing || t < TARGET_SLIDE + TARGET_GROW {
             window.request_animation_frame();
         }
-        let mut targets: Vec<_> = over
+        // Only the one shown: one the pointer left for another edge goes at once.
+        let targets = over
             .targets
             .iter()
-            .map(|&(edge, under, since, from)| (edge, grown(under, since, from)))
-            .collect();
-        // The one growing under the tab goes over the others, which it can reach.
-        targets.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let targets = targets.into_iter().map(|(edge, way)| {
+            .filter(|(edge, ..)| *edge == over.shown.0);
+        let targets = targets.map(|&(edge, under, since, from)| {
+            let way = grown(under, since, from);
             let under = under_bounds(card, edge, over.pointer);
             let bounds = mix_bounds(arriving(card, edge, t), under, way);
             target(bounds, card, edge, way, fill, palette)
@@ -458,6 +481,25 @@ impl Shell {
 
 /// How far a target has grown toward its size under the tab: `from` at `since`, going to all the
 /// way if `under`, else none.
+/// Which of `edges` is nearest `pointer`, each as a fraction of the card's width or height, so its
+/// diagonals split it, the first of them on a tie.
+fn nearest(edges: &[Edge], card: Bounds<Pixels>, pointer: Point<Pixels>) -> Edge {
+    let away = |edge: &Edge| -> f32 {
+        let (gap, across) = match edge {
+            Edge::Left => (pointer.x - card.left(), card.size.width),
+            Edge::Right => (card.right() - pointer.x, card.size.width),
+            Edge::Top => (pointer.y - card.top(), card.size.height),
+            Edge::Bottom => (card.bottom() - pointer.y, card.size.height),
+        };
+        gap / across
+    };
+    edges
+        .iter()
+        .min_by(|a, b| away(a).total_cmp(&away(b)))
+        .copied()
+        .unwrap_or(Edge::Right)
+}
+
 fn grown(under: bool, since: Instant, from: f32) -> f32 {
     let to = if under { 1. } else { 0. };
     from + (to - from) * ease_out(since.elapsed().as_secs_f32() / TARGET_GROW)
@@ -821,6 +863,47 @@ mod tests {
         assert!(
             shell.read_with(cx, |shell, _| shell.link_over.is_none()),
             "a full split has none"
+        );
+    }
+
+    /// One target shows, Arc's one region, at the card's edge nearest the pointer as a fraction
+    /// of its width or height, and the one under the tab stays shown while it's there, though the
+    /// pointer comes nearer another edge.
+    #[gpui::test]
+    fn one_target_shows_at_the_edge_nearest_the_pointer(cx: &mut TestAppContext) {
+        let (shell, _host, card) = shown_alone(cx);
+        let url = "https://example.org/";
+        let at = |x: f32, y: f32| {
+            let point = point(
+                card.left() + card.size.width * x,
+                card.top() + card.size.height * y,
+            );
+            in_page(card, point)
+        };
+        let mut shown = |x: f32, y: f32| {
+            shell.update(cx, |shell, cx| {
+                shell.link_over_page(10, at(x, y), url, cx);
+                let over = &shell.link_over.as_ref().unwrap().over;
+                (over.shown.0.name(), over.edge().map(Edge::name))
+            })
+        };
+        // Off the targets grown, which reach about a quarter of the way in.
+        assert_eq!(shown(0.3, 0.5), ("left", None));
+        assert_eq!(shown(0.5, 0.3), ("top", None));
+        assert_eq!(shown(0.6, 0.7), ("bottom", None));
+        assert_eq!(shown(0.7, 0.5), ("right", None));
+        let left = target_bounds(card, Edge::Left, grown_at(Edge::Left)).center();
+        let left = ((left.x - card.left()) / card.size.width, 0.5);
+        assert_eq!(shown(left.0, left.1), ("left", Some("left")));
+        assert_eq!(
+            shown(0.2, 0.17),
+            ("left", Some("left")),
+            "nearer the top, but under the left target"
+        );
+        assert_eq!(
+            shown(0.5, 0.17),
+            ("top", Some("top")),
+            "out of the left target, into the top one"
         );
     }
 

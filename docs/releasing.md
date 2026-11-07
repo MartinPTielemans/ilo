@@ -38,12 +38,14 @@ Turn the track off by removing `app/branding/update-feed-nightly` from main. The
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
 3. **Write the release's changelog entry** in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging. Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
-4. **Tag the commit and push the tag.** The release's notes are the tag's message:
+4. **Tag the commit and push the tag.** The release's notes are the tag's message, written in Markdown with no title line, since GitHub shows the release's name above them:
 
    ```bash
-   git tag -a v0.1.4 <commit>    # the editor's text is the release's notes
+   git tag -a --cleanup=verbatim -F notes.md v0.1.4 <commit>
    git push origin v0.1.4
    ```
+
+   `--cleanup=verbatim` keeps the notes' `##` headings, which git's default cleanup strips as comment lines.
 
    A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.
 5. **Check the draft release's files, then publish it.**

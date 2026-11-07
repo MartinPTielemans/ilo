@@ -189,6 +189,9 @@ pub enum Command {
     /// Pins the tab shown, or the rows chosen, at the bottom of this folder of the Space shown, as
     /// their menu's Add to Folder › does.
     MoveToFolder(u64),
+    /// Runs the action of the extension with this id (`extensions::id_number`) on the tab shown,
+    /// as the Extensions menu does.
+    RunExtension(u128),
     NextSpace,
     PreviousSpace,
     /// Hides the docked sidebar, or shows it.
@@ -817,6 +820,7 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     });
     let mut named = shell.named_bar_rows();
     named.extend(shell.numbered_bar_row(typed, cx));
+    named.extend(shell.extension_bar_rows());
     with_named_ranked(found, typed, &named, keys, picks)
 }
 
@@ -1193,6 +1197,7 @@ impl Command {
             Command::PinToSpace(_) => "pin-to-space",
             Command::OpenFolder(_) => "open-folder",
             Command::MoveToFolder(_) => "move-to-folder",
+            Command::RunExtension(_) => "run-extension",
             Command::NextSpace => "next-space",
             Command::PreviousSpace => "previous-space",
             Command::ToggleSidebar => "toggle-sidebar",
@@ -1731,6 +1736,9 @@ impl Shell {
                     false => self.chosen_in_order(),
                 };
                 return self.add_to_folder(rows, folder, cx);
+            }
+            Command::RunExtension(id) => {
+                return self.run_extension(&super::extensions::id_text(id), cx);
             }
             Command::NextSpace => return self.show_space_at(space.map(|index| index + 1), cx),
             Command::PreviousSpace => {

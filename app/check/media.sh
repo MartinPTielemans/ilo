@@ -10,7 +10,8 @@
 # menu's Cast… open the tab's Cast card, and × closes it. A video's page menu floats it in Picture
 # in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
 # moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
-# shows where it was left, and coming back to its tab's window from another puts it back in the tab.
+# shows where it was left, after a relaunch too, and coming back to its tab's window from another
+# window, or from another app with a menu open, puts it back in the tab.
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
 # Shared without its picker; the question for the camera is answered with Allow, as the user would,
 # since the fake question Chromium can put in its place never tells the browser what's captured.
@@ -207,6 +208,21 @@ EOF
   done
   fail "$2"
 }
+# kept_keys: waits for the browser window to have the keyboard once the call has floated as its
+# tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
+# keyboard as it maps, and the core gives it back (#1961).
+kept_keys() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    expect '^browser: mini player gave the keyboard back$' \
+      "the call floating as its tab hid didn't give the browser window the keyboard back"
+  fi
+  for _ in $(seq 100); do
+    send state
+    [ "$key" = BrowserCoreNSWindow ] && return 0
+    sleep 0.1
+  done
+  fail "the call floating as its tab hid kept the keyboard in $key"
+}
 # A call floats once its tab is hidden, as Arc's does: Chrome's automatic Picture in Picture for a
 # page using the camera that asks for it with its media session, on https or a file alone. So a
 # page from the https server, from the command bar, whose "c" calls and which says when Chrome
@@ -257,6 +273,7 @@ send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
 expect "^browser: title $f in a call\$" "Allow didn't give the floating call the camera"
 shown "$b"
 expect "^browser: title $f floating\$" "the call didn't float with its tab hidden"
+kept_keys
 # It lands as its tab is shown, so before the click that gives its page the keyboard.
 shown "$f"
 expect "^browser: title $f landed\$" "the floating call didn't come back with its tab"
@@ -318,6 +335,7 @@ expect "^browser: title $f asked 1\$" "blocked in its Site Controls, the call st
 floats Allow
 shown "$b"
 expect "^browser: title $f floating\$" "allowed in its Site Controls, the call didn't float"
+kept_keys
 # Allowed, it floats without Chrome's prompt, which on X11 is a window of its own over the
 # call's bottom right corner while it shows (#1263).
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
@@ -363,6 +381,7 @@ send click $page_point
 mini_player on
 shown "$b"
 expect "^browser: title $f floating\$" "with the Mini Player on again, the call didn't float"
+kept_keys
 shown "$f"
 expect "^browser: title $f landed\$" "the call floating again didn't come back with its tab"
 send click $page_point
@@ -613,18 +632,23 @@ expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
 send choose "$(cased 'Picture in Picture')"
 expect "^browser: title $v floating\$" "the video didn't float a second time"
 expect 'browser: mini player placed at ' "the core didn't place the second Mini Player"
-read -r nx ny nw nh wx wy ww wh <<PLACED
+# Whether the last Mini Player placed shows where the last was left, $lx $ly $lw $lh, at that one's
+# corner nearest its screen's, with $across and $down saying so for mini_player_at.
+placed_where_left() {
+  read -r nx ny nw nh wx wy ww wh <<PLACED
 $(placed)
 PLACED
-ex=$lx across="x == $lx"
-if [ $((lx + lw / 2)) -gt $((wx + ww / 2)) ]; then
-  ex=$((lx + lw - nw)) across="x + w == $((lx + lw))"
-fi
-ey=$ly down="y == $ly"
-if [ $((ly + lh / 2)) -gt $((wy + wh / 2)) ]; then
-  ey=$((ly + lh - nh)) down="y + h == $((ly + lh))"
-fi
-[ "$nx $ny" = "$ex $ey" ] ||
+  ex=$lx across="x == $lx"
+  if [ $((lx + lw / 2)) -gt $((wx + ww / 2)) ]; then
+    ex=$((lx + lw - nw)) across="x + w == $((lx + lw))"
+  fi
+  ey=$ly down="y == $ly"
+  if [ $((ly + lh / 2)) -gt $((wy + wh / 2)) ]; then
+    ey=$((ly + lh - nh)) down="y + h == $((ly + lh))"
+  fi
+  [ "$nx $ny" = "$ex $ey" ]
+}
+placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
@@ -635,11 +659,72 @@ fi
 # Another window and back to its tab's: the Mini Player goes back in the tab, as Arc's does.
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+# The driver numbers windows in the order they were made, the private one that closed too.
+second=$(grep -c '^browser: window opened ' "$log")
 send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
 expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
+# The same with a menu open as the user goes to another app: the menu closes as the app's window
+# takes the keyboard, and coming back puts the Mini Player back (#1614). On X11, as in mcp.sh, a
+# window of another client's takes it from xdotool.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+  post rightclick $page_point
+  expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
+    "the video's menu had no Picture in Picture the third time"
+  send choose "$(cased 'Picture in Picture')"
+  expect "^browser: title $v floating\$" "the video didn't float a third time"
+  post rightclick $page_point
+  expect "^browser: menu shown " "the video's page had no menu over its Mini Player"
+  rm -f "$out/other-in"
+  mkfifo "$out/other-in"
+  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  other=$!
+  exec 7> "$out/other-in"
+  for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
+  xdotool windowactivate --sync "$(head -1 "$out/other-window.log")" 2> /dev/null ||
+    fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
+  expect '^browser: menu window hidden$' "the menu stayed open as another app took the keyboard"
+  send window 1
+  expect 'browser: mini player back in its tab$' \
+    "coming back from another app with a menu open didn't put the Mini Player back in its tab"
+  expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
+  exec 7>&-
+  wait "$other" 2> /dev/null || true
+else
+  echo "skip: coming back from another app with a menu open, on $(uname) ${WAYLAND_DISPLAY:+Wayland}: no other app's window to go to."
+fi
+# Launched again, the next shows where the last was left before the quit, as Arc's does.
+read -r lx ly lw lh <<LEFT
+$(grep 'browser: mini player left at ' "$log" | tail -1 | sed 's/.* left at //')
+LEFT
+[ -n "$lh" ] || fail "the core didn't hear where the last Mini Player was left"
+# The window ⌘N opened goes, so the relaunch brings back the video's alone, where the driver clicks.
+send window "$second"
+send key w cmd shift
+expect '^browser: window closed [0-9]' "⇧⌘W didn't close the second window"
+exec 3>&-
+quit
+log="$out/media-relaunched.log"
+step=0
+# Another address, as the Space brings back the video's tab too.
+BROWSER_DRIVE=1 BROWSER_URL="${site}video.html?again" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await "^browser: loaded [0-9]* ${site}video.html?again\$" ||
+  fail "the video's page didn't load after a relaunch"
+v=$(grep "^browser: loaded [0-9]* ${site}video.html?again\$" "$log" | tail -1 | cut -d' ' -f3)
+await "^browser: title $v playing\$" || fail "the video didn't play after a relaunch"
+post rightclick $page_point
+expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
+  "the video's menu had no Picture in Picture after a relaunch"
+send choose "$(cased 'Picture in Picture')"
+expect "^browser: title $v floating\$" "the video didn't float after a relaunch"
+expect 'browser: mini player placed at ' "the core didn't place the Mini Player after a relaunch"
+placed_where_left ||
+  fail "after a relaunch the Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 exec 3>&-
 quit
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, and coming back to its tab's window from another puts it back in the tab."
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."
