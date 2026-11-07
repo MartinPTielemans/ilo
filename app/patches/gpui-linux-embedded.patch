@@ -227,10 +227,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..6eab8da600
+index 0000000000..bb6c40d819
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1101 @@
+@@ -0,0 +1,1122 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -639,9 +639,30 @@ index 0000000000..6eab8da600
 +    }) else {
 +        return;
 +    };
++    #[allow(unused_mut)]
++    let mut keyboard = shown.keyboard;
++    // Under Wayland nothing the overlay still has to do touches its parent's surface, which the
++    // embedder can destroy before the hide runs, as a pop-up's window closes under its dialog
++    // (#1999): a subsurface made on it ends the connection, and a commit to it ends the app.
++    #[cfg(feature = "wayland")]
++    if super::platform::with_embedded_connection(|c| matches!(c, DisplayConnection::Wayland(_)))
++        == Some(true)
++    {
++        let showed = OPS.with_borrow_mut(|ops| {
++            let to_show = |op: &Op| matches!(op, Op::Show { view: each, .. } if *each == view);
++            let showed = !ops.iter().any(to_show);
++            ops.retain(|op| {
++                !matches!(op, Op::Show { view: each, .. } | Op::Move { view: each, .. } if *each == view)
++            });
++            showed
++        });
++        super::wayland::overlay_hiding(view as _);
++        // One that never showed never had the keys.
++        keyboard &= showed;
++    }
 +    later(Op::Hide {
 +        view,
-+        keyboard: shown.keyboard,
++        keyboard,
 +        hidden: Box::new(hidden),
 +    });
 +}
@@ -1749,7 +1770,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..b1982f7c9d 100644
+index 2d40cf7fa9..c4f4d5b5e8 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2848,7 +2869,7 @@ index 2d40cf7fa9..b1982f7c9d 100644
              }
              _ => {}
          }
-@@ -3479,3 +4027,631 @@ mod tests {
+@@ -3479,3 +4027,638 @@ mod tests {
          );
      }
  }
@@ -3467,6 +3488,13 @@ index 2d40cf7fa9..b1982f7c9d 100644
 +    }
 +}
 +
++/// The overlay window of the `view` surface is to hide: see `hiding_over`.
++pub(crate) fn overlay_hiding(view: *mut std::ffi::c_void) {
++    if let Some(window) = overlay_window(view) {
++        window.hiding_over();
++    }
++}
++
 +pub(crate) fn hide_overlay(view: *mut std::ffi::c_void, keyboard: bool) {
 +    if let Some(window) = overlay_window(view) {
 +        if keyboard {
@@ -3542,7 +3570,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..7fdfa4b6fb 100644
+index 8d92234ef1..2ea3302106 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3716,7 +3744,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
              presentation: PresentationState::Unpresented,
              pending_frame_callback: None,
              in_progress_window_controls: None,
-@@ -896,6 +971,285 @@ impl WaylandWindowStatePtr {
+@@ -896,6 +971,293 @@ impl WaylandWindowStatePtr {
          self.state.borrow().surface.clone()
      }
  
@@ -3892,6 +3920,14 @@ index 8d92234ef1..7fdfa4b6fb 100644
 +        }
 +    }
 +
++    /// The overlay that shows is to hide, which it does later (`hide_over`): its frames until then
++    /// commit no more to its parent, which the embedder may destroy first.
++    pub fn hiding_over(&self) {
++        if let Ok(mut state) = self.state.try_borrow_mut() {
++            state.commit_parent = false;
++        }
++    }
++
 +    /// Hides the overlay that shows, at once and with no frame left on its surface to show again.
 +    pub fn hide_over(&self) {
 +        {
@@ -4002,7 +4038,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
      pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
          self.state.borrow().surface_state.toplevel().cloned()
      }
-@@ -936,6 +1290,21 @@ impl WaylandWindowStatePtr {
+@@ -936,6 +1298,21 @@ impl WaylandWindowStatePtr {
      }
  
      pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -4024,7 +4060,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
-@@ -966,7 +1335,8 @@ impl WaylandWindowStatePtr {
+@@ -966,7 +1343,8 @@ impl WaylandWindowStatePtr {
          let mut state = self.state.borrow_mut();
  
          let frame_loop = self.frame_loop.get();
@@ -4034,7 +4070,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
              return;
          }
  
-@@ -1024,6 +1394,12 @@ impl WaylandWindowStatePtr {
+@@ -1024,6 +1402,12 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4047,7 +4083,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
      pub fn retry_timer_fired(&self, signal_at: Instant) {
          if self.frame_loop.get() == FrameLoop::RetryScheduled {
              self.frame(
-@@ -1060,6 +1436,10 @@ impl WaylandWindowStatePtr {
+@@ -1060,6 +1444,10 @@ impl WaylandWindowStatePtr {
      }
  
      fn update_ime_enabled(&self) {
@@ -4058,7 +4094,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1873,17 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1881,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4076,7 +4112,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1989,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1997,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -4106,7 +4142,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2302,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2310,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -4119,7 +4155,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2427,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2435,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -4133,7 +4169,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2469,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2477,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -4145,7 +4181,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2636,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2644,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -4157,7 +4193,7 @@ index 8d92234ef1..7fdfa4b6fb 100644
          let state = self.borrow();
          if !state.active {
              return;
-@@ -2215,6 +2648,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2215,6 +2656,13 @@ impl PlatformWindow for WaylandWindow {
          state.client.update_ime_position(bounds);
      }
  
