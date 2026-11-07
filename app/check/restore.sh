@@ -579,7 +579,8 @@ expect '^browser: library section archive$' "View Archive… didn't open the Lib
 expect '^browser: library shown$' "View Archive… didn't open the Library"
 send click 300 111 cmd
 expect '^browser: restore archived [0-9][0-9]*$' "a ⌘-click on the archived tab didn't restore it"
-expect "^browser: space $first in " "the tab from the archive didn't take the window to its Space"
+# The core switches Space here, not the app, so the line has no "in N ms".
+expect "^browser: space $first\$" "the tab from the archive didn't take the window to its Space"
 expect "^browser: today [0-9][0-9]* $c $a\$" \
   "the archived tab didn't come back at the top of its Space's Today: Today is \"$(today)\""
 r=$(today | cut -d' ' -f1)
