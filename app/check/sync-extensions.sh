@@ -94,8 +94,16 @@ done
 settings_keyboard
 send clickkey $(drawn "sync switch settings")
 expect '^browser: sync settings off$' "a click on Settings' switch didn't turn it off on B"
-await '^browser: account syncs settings false extensions true$' ||
-  fail "B's core didn't take turning Settings off"
+# Sync starts again without ilo's settings, and with the extensions.
+types=
+for _ in $(seq 300); do
+  types=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep 'browser: sync types ' | tail -1)
+  case $types in *Extensions*) case $types in *"ilo Settings"*) ;; *) break ;; esac ;; esac
+  types=
+  sleep 0.1
+done
+[ -n "$types" ] || fail "B's sync didn't start again without its settings: $(grep \
+  'browser: sync types ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/sync-extensions-b-off.png" || fail "no window to capture"
 
 device b
