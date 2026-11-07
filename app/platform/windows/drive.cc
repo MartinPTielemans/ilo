@@ -1969,6 +1969,12 @@ LRESULT CALLBACK DriverProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 // own moves reach the app's windows.
 LRESULT CALLBACK DropRealPointer(int code, WPARAM wparam, LPARAM lparam) {
   auto* message = reinterpret_cast<MSG*>(lparam);
+  if (code == HC_ACTION && wparam != PM_REMOVE && message->message == WM_MOUSEMOVE) {
+    fprintf(stderr, "browser: probe 1583 peeked move %p at %d %d, flags %llu\n", message->hwnd,
+            static_cast<short>(LOWORD(message->lParam)),
+            static_cast<short>(HIWORD(message->lParam)),
+            static_cast<unsigned long long>(wparam));
+  }
   if (code != HC_ACTION || wparam != PM_REMOVE) {
     return CallNextHookEx(nullptr, code, wparam, lparam);
   }
@@ -1989,6 +1995,16 @@ LRESULT CALLBACK DropRealPointer(int code, WPARAM wparam, LPARAM lparam) {
               static_cast<short>(HIWORD(message->lParam)));
       message->message = WM_NULL;
     }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+LRESULT CALLBACK ProbeSentMoves(int code, WPARAM wparam, LPARAM lparam) {
+  auto* sent = reinterpret_cast<CWPSTRUCT*>(lparam);
+  if (code == HC_ACTION && (sent->message == WM_MOUSEMOVE || sent->message == WM_NCMOUSEMOVE)) {
+    fprintf(stderr, "browser: probe 1583 sent move %u %p at %d %d, from another thread %d\n",
+            sent->message, sent->hwnd, static_cast<short>(LOWORD(sent->lParam)),
+            static_cast<short>(HIWORD(sent->lParam)), wparam != 0);
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
@@ -2046,6 +2062,7 @@ void drive_start(void) {
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
+  SetWindowsHookExW(WH_CALLWNDPROC, ProbeSentMoves, nullptr, GetCurrentThreadId());
   host_drive_drags(DriveDrag);
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
