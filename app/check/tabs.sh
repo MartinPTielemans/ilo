@@ -783,8 +783,8 @@ expect '^browser: command bar go https://duckduckgo.com/?q=example.com$' \
   "⇧⌘↩ didn't search for what was typed: $(grep '^browser: command bar go' "$log" | tail -1)"
 expect '^browser: command bar hidden$' "⇧⌘↩ didn't close the command bar"
 # Site search, as Chrome's keyword mode: Tab on the row that hints the default engine searches
-# with it alone, ⌫ in its empty field leaves it, keeping the keyword and a space, and a space typed
-# after the keyword is only a space, as in Arc, where Tab enters it again (#1397).
+# with it alone, ⌫ in its empty field leaves it, putting back what was typed before Tab, and a
+# space typed after the keyword is only a space, as in Arc, where Tab enters it again (#1397).
 listed='^browser: command bar suggestions "duckduckgo.com'
 hint="[0-9.]* ms: [^,]* site duckduckgo.com"
 send key t cmd
@@ -804,9 +804,8 @@ expect "$listed cats\" in [0-9.]* ms: https://duckduckgo.com/?q=cats" \
 for _ in 1 2 3 4 5; do send key backspace; done
 expect '^browser: command bar leaves site search$' \
   "⌫ in the site search's empty field didn't leave it"
-expect '^browser: command bar drew "duckduckgo.com "$' \
-  "leaving the site search didn't put the keyword and the space back"
-send key backspace
+expect '^browser: command bar drew "duckduckgo.com"$' \
+  "leaving the site search didn't put back what was typed before Tab"
 expect "$listed\" in $hint" \
   "the command bar didn't hint DuckDuckGo's site search again: $(suggestions | tr '\n' ' ')"
 send type ' '
@@ -842,8 +841,29 @@ expect '^browser: command bar site search youtube.com by tab$' \
   "Tab on the row that hints YouTube didn't enter its site search"
 expect '^browser: command bar drew ""$' "the command bar didn't draw YouTube's site search"
 ../tools/window-screenshot.sh "$pid" "$out/site-search-youtube.png" || fail "no window to capture"
+# ⌫ puts back what was typed before Tab, "yout" and not YouTube's keyword, and Esc the bar as it
+# opened, as Arc's do (#1397). Each is captured once the bar has left, before the expect on what
+# it put back, so a build that puts back something else shows it.
+send key backspace
+expect '^browser: command bar leaves site search$' "⌫ didn't leave YouTube's site search"
+expect '^browser: command bar drew "you' "the command bar didn't draw what ⌫ put back"
+../tools/window-screenshot.sh "$pid" "$out/site-left-youtube.png" || fail "no window to capture"
+expect '^browser: command bar drew "yout"$' \
+  "⌫ didn't put back what was typed before Tab: $(grep '^browser: command bar drew' "$log" | tail -1)"
+expect '^browser: command bar suggestions "yout" in [0-9.]* ms: [^,]* site youtube.com' \
+  "the command bar didn't hint YouTube's site search again: $(suggestions | tr '\n' ' ')"
+send key tab
+expect '^browser: command bar site search youtube.com by tab$' "Tab didn't enter YouTube's site search again"
+send type cats
+expect '^browser: command bar drew "cats"$' "the command bar didn't draw cats in YouTube's site search"
 send key escape
-expect '^browser: command bar leaves site search$' "Esc didn't leave YouTube's site search"
+expect '^browser: command bar leaves site search' "Esc didn't leave YouTube's site search"
+expect '^browser: command bar drew "' "the command bar didn't draw what Esc put back"
+../tools/window-screenshot.sh "$pid" "$out/site-escaped-youtube.png" || fail "no window to capture"
+expect '^browser: command bar leaves site search as it opened$' \
+  "Esc didn't leave YouTube's site search for the bar as it opened"
+expect '^browser: command bar drew ""$' \
+  "Esc didn't put back the bar as ⌘T opened it: $(grep '^browser: command bar drew' "$log" | tail -1)"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
 # ⌥⌘⌫ takes the selected row out too, beside ⇧⌦, as Arc's does: here the search for dogs, typed
