@@ -167,6 +167,11 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms
           "Screen: " + [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
+      # Proof for #1455 only, never merged: the display at 150% while the session's system DPI
+      # stays 96, as a second display at another scale has it.
+      - shell: pwsh
+        run: python "${{ github.workspace }}/.github/scripts/display-scale.py" 150
+
       # Microsoft's Japanese IME, one of the user's input methods, for the runs that compose with it
       # (the driver's ime ja), which look for it in the user's language list. Language.Basic is the
       # capability that has it, about 100 s from Windows Update; Server 2022 has no Install-Language.
