@@ -238,6 +238,8 @@ expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the Space's move"
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back in their order"
+# Until the dots have glided back, the second's is still drawn under the first's place (#2026).
+expect '^browser: spaces settled$' "the dots didn't settle after ⌘Z"
 send drag 97 $dots_y 160 $dots_y
 expect "^browser: dropped space $first after $second\$" "the first Space's dot flicked past the second's didn't move it"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"
@@ -538,16 +540,16 @@ none_since '^browser: library hidden$' || fail "escape in the card's icon picker
 # cards: let go over the first card's left half it goes first, the Library staying open with the
 # Space shown where it was, and ⌘Z puts it back. Held there, its copy hangs from the pointer, its
 # place dims and the line stands before the first card; the recording has the cards gliding to
-# their places as it's let go (#1580).
+# their places as it's let go (#1580). It starts after the still, which would end it (#2026).
 handle_point="$((404 + 22)) $((${content#*x} - 48 - 22))"
 handle_y=${handle_point#* }
 send move $handle_point
-record library-space-drag 5
 send press $handle_point
 send dragto 420 $handle_y
 expect "^browser: drag space $second\$" "the second card's handle didn't drag the card"
 send dragto 180 $handle_y
 ../tools/window-screenshot.sh "$pid" "$out/library-space-drag.png" || fail "no window to capture"
+record library-space-drag 3
 send release 180 $handle_y
 expect "^browser: dropped space $second after 0\$" "the second card let go over the first didn't move its Space"
 expect "^browser: spaces $second $first\$" "the second Space didn't go first"
