@@ -153,7 +153,11 @@ expect '^browser: command bar hidden$' "escape didn't close the Spaces menu"
 none_since "^browser: little window $little put " || fail "escape in the Spaces menu moved the page"
 
 # ⌘O moves its page to its Space in the main window, which shows it, and closes it. The page goes
-# live (Arc): its field keeps its text and its music plays on, with no reload.
+# live (Arc): its field keeps its text and its music plays on, with no reload, and it keeps its
+# Developer Mode, which the run turns off for it here, as the site is local and starts in it.
+bar_command toggle-developer-mode "Turn off Developer Mode for this site\$" "developer mode"
+expect "^browser: page $moved developer mode 0\$" \
+  "the command bar in the Little ilo window didn't turn Developer Mode off"
 before=$(sed -n "s/^browser: title $moved live ada playing \([0-9]*\)\$/\1/p" "$log" | tail -1)
 send key o cmd
 expect '^browser: command open-in-main-window via ' "⌘O didn't run Open in Main Window"
@@ -172,8 +176,17 @@ done
   fail "the moved page's music didn't play on with its text kept: $(grep "^browser: title $moved " "$log" | tail -1)"
 none_since "^browser: title $moved live ada paused " || fail "the move paused the page's music"
 [ "$(grep -c "^browser: loaded $moved " "$log")" = 1 ] || fail "the move reloaded the page"
+# Out of Developer Mode, the main window's URL field says the host alone and the row has no outline.
+expect '^browser: url field 127\.0\.0\.1$' \
+  "the moved page's URL field in the main window didn't say the host, as out of Developer Mode"
+none_since "^browser: page $moved developer mode 1\$" ||
+  fail "the moved page went back into Developer Mode"
+none_since "^browser: developer outline $moved at " || fail "the moved page's row has the Developer Mode outline"
 send window 1
 ../tools/window-screenshot.sh "$pid" "$out/little-moved.png" || fail "no window to capture"
+# The site's Developer Mode back on, as the steps after expect it.
+bar_command toggle-developer-mode "Turn on Developer Mode for this site\$" "developer mode"
+expect "^browser: page $moved developer mode 1\$" "the command bar didn't turn Developer Mode on again"
 send key w cmd
 expect "^browser: tab $moved closed\$" "⌘W didn't close the moved page in the main window"
 
@@ -888,4 +901,4 @@ if [ "$(uname)" = Linux ]; then
   exec 3>&-
   quit
 fi
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window live, its text kept and its music playing on, and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window live, its text, its music playing and its Developer Mode kept, and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
