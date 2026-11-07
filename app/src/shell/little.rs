@@ -742,13 +742,17 @@ impl Shell {
 }
 
 /// Whether a Little ilo window runs `command`: it has one page and no sidebar, so what works on the
-/// Spaces, the sidebar, the Library or other tabs isn't its, as it isn't a private window's.
+/// Spaces, the sidebar, the Library or other tabs isn't its, as it isn't a private window's. Its
+/// page is in a profile's site settings, as a private window's isn't, so it has Developer Mode,
+/// which ⌘O takes to the main window with it (Arc).
 pub(super) fn little_runs(command: Command) -> bool {
-    matches!(command, Command::NewLittleWindow)
-        || (super::commands::private_runs(command)
-            && !matches!(
-                command,
-                Command::NewTab
+    matches!(
+        command,
+        Command::NewLittleWindow | Command::ToggleDeveloperMode
+    ) || (super::commands::private_runs(command)
+        && !matches!(
+            command,
+            Command::NewTab
                     | Command::SearchTabs
                     | Command::NextTab
                     | Command::PreviousTab
@@ -765,5 +769,5 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::ViewLibrary
                     | Command::ViewDownloads
                     | Command::ViewMedia
-            ))
+        ))
 }
