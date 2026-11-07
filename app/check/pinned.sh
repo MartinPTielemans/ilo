@@ -964,10 +964,10 @@ probe_1583() {
   winpid=$(cat "/proc/$pid/winpid")
   timeout 900 "$cdb" -pv -p "$winpid" \
     -y "$(cygpath -w "$syms");srv*C:\\symcache*https://msdl.microsoft.com/download/symbols" \
-    -c "~0 kn 120; ~* kn 40; qd" \
+    -c "~0 kn 30; ~0s; r; dq @rsp L10; uf ole32!CDragOperation::RuntimeClassInitialize; ~0 kn 30; qd" \
     > "$out/probe-1583-stacks.txt" 2>&1
   echo "probe-1583: cdb exited $?"
-  sed -n '/~0 kn/,/~\* kn/p' "$out/probe-1583-stacks.txt" | head -150
+  grep -c . "$out/probe-1583-stacks.txt"
 }
 if true; then
   press=$((step + 1))
