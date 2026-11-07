@@ -79,7 +79,7 @@ index 98a13f304c..367e44dfd4 100644
          &mut self,
          scene: &Scene,
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..e3544609fe 100644
+index 08f91bd626..8ca65ba255 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -109,7 +109,7 @@ impl WindowsWindowInner {
@@ -290,7 +290,20 @@ index 08f91bd626..e3544609fe 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1823,3 +1950,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1021,6 +1148,12 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
++        // Windows sends a window holding the capture the pointer's moves as client moves, so a
++        // non-client one then isn't the held pointer's: one sent in its place, such as at a
++        // minimized window's -32000, would take a dragged row out of the window (#1583).
++        if unsafe { GetCapture() } == handle {
++            return None;
++        }
+         self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
+         self.restore_cursor_after_hide();
+ 
+@@ -1823,3 +1956,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
