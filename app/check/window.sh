@@ -1138,10 +1138,17 @@ expect '^browser: window entered full screen$' "the window didn't go full screen
 send key escape
 expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
 none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
+# The pair goes back to back, the page's answer to its first read after, as a slow runner can take
+# 500 ms between two steps (#2009). It waits out the 500 ms from the press above first, which would
+# otherwise make the pair's first press the second.
+sleep 0.6
 send key escape
+first=$step
+send key escape
+expect "^browser: title $keeps kept 2\$" "the page didn't get the first of two Escs" "$first"
 expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
 expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
-none_since "^browser: title $keeps kept 2\$" || fail "the second Esc that left full screen reached the page too"
+none_since "^browser: title $keeps kept 3\$" || fail "the second Esc that left full screen reached the page too"
 # Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
 # repeats come as presses, so a held Esc leaves there as one pressed twice.
 if [ "$(uname)" = Darwin ]; then
