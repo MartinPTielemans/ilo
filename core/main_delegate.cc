@@ -83,6 +83,7 @@
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/storage_partition.h"
+#include "net/cookies/canonical_cookie.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
@@ -383,6 +384,14 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     base::RepeatingClosure written = base::BarrierClosure(profiles.size(), std::move(end));
     for (Profile* profile : profiles) {
       fprintf(stderr, "browser: diag: flushing %s\n", profile->GetBaseName().AsUTF8Unsafe().c_str());
+      profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()->GetAllCookies(
+          base::BindOnce([](const std::vector<net::CanonicalCookie>& cookies) {
+            fprintf(stderr, "browser: diag: %zu cookies before the flush\n", cookies.size());
+            for (const net::CanonicalCookie& cookie : cookies) {
+              fprintf(stderr, "browser: diag: cookie %s on %s, %s\n", cookie.Name().c_str(),
+                      cookie.Domain().c_str(), cookie.IsPersistent() ? "persistent" : "session");
+            }
+          }));
       profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()->FlushCookieStore(
           base::BindOnce([](base::RepeatingClosure written) {
             fprintf(stderr, "browser: diag: a profile's cookies written\n");

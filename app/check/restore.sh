@@ -861,6 +861,11 @@ else
   if windows; then
     cookies="$(dirname "$saved")/Default/Network"
     ls -la "$cookies" > "$out/sign-in-cookies.txt" 2>&1
+    find "$(dirname "$saved")" -name Cookies >> "$out/sign-in-cookies.txt" 2>&1
+    find "$(dirname "$saved")" -name Cookies | while read -r each; do
+      echo "== $each"
+      python3 -I -c 'import sqlite3, sys; print(list(sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True).execute("select host_key, name, is_persistent from cookies")))' "$(cygpath -w "$each")"
+    done >> "$out/sign-in-cookies.txt" 2>&1
     python3 -I -c '
 import sqlite3, sys
 db = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
