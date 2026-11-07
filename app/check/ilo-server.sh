@@ -102,3 +102,50 @@ settings_keyboard() {
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
 }
+
+# The runs with several devices, each a copy of the app with a profile of its own: a, b and c, on
+# driver fds 5, 6 and 7, each started by start. The copies are in others, which cleanup stops.
+# The device the helpers drive from now, $1: its process, log, driver and step.
+on=
+device() {
+  case $on in
+  a) a_step=$step ;;
+  b) b_step=$step ;;
+  c) c_step=$step ;;
+  esac
+  on=$1
+  eval "pid=\$${1}_pid log=\$${1}_log step=\$${1}_step"
+  case $1 in
+  a) exec 3>&5 ;;
+  b) exec 3>&6 ;;
+  c) exec 3>&7 ;;
+  esac
+}
+# Starts device $1, in the profile directory $2, on driver fd $3, and drives it, on the page
+# $device_url if set, with the switches $device_args.
+start() {
+  eval "${1}_log=\$out/$run-$1.log ${1}_step=0"
+  mkdir -p "$2"
+  mkfifo "$out/drive-$1"
+  # shellcheck disable=SC2086
+  BROWSER_DRIVE=1 BROWSER_URL="${device_url:-data:text/html,<title>device $1</title>}" \
+    BROWSER_PROFILE_DIR="$2" "$browser" --sync-url="$server_url" ${device_args:-} \
+    < "$out/drive-$1" > "$out/$run-$1.log" 2>&1 3>&- 5>&- 6>&- 7>&- &
+  eval "${1}_pid=\$!"
+  others="$others $!"
+  eval "exec $3> \"\$out/drive-$1\""
+  device "$1"
+  await_load
+}
+# Shows Settings › Sync and starts signing in.
+open_sign_in() {
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings on $on"
+  send clickkey $(drawn "toolbar Sync")
+  expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab on $on"
+  at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In on $on"
+  send clickkey $at
+  expect '^browser: account SigningIn None$' "Sign In didn't start signing in on $on"
+  await 'browser: sync sign-in loaded /authorize$' ||
+    fail "the sign-in window didn't load the server's page on $on"
+}

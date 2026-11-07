@@ -60,6 +60,11 @@ proto_library("sync_spaces_proto") {
   sources = [ "sync_spaces.proto" ]
 }
 
+# What the settings sync type's entities hold (sync_settings.cc).
+proto_library("sync_settings_proto") {
+  sources = [ "sync_settings.proto" ]
+}
+
 config("exports") {
   # The framework exports only what chrome/app/framework.exports lists. This adds the C API.
   ldflags = [ "-Wl,-exported_symbols_list," + rebase_path("exports.txt", root_build_dir) ]
@@ -324,6 +329,8 @@ source_set("browser_core") {
     "sync.h",
     "sync_relay.cc",
     "sync_relay.h",
+    "sync_settings.cc",
+    "sync_settings.h",
     "sync_spaces.cc",
     "sync_spaces.h",
     "system_engine.cc",
@@ -469,6 +476,7 @@ source_set("browser_core") {
     "//components/sync",
     "//components/sync/invalidations",
     "//components/sync/protocol",
+    ":sync_settings_proto",
     ":sync_spaces_proto",
     "//components/sync_device_info",
     "//components/tabs:public",

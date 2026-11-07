@@ -2532,6 +2532,10 @@ void bc_sync_read_activity(bc_sync_activity* activity) {
   }
 }
 
+void bc_sync_choose(int what, bool on) {
+  browser_core::sync::Choose(what, on);
+}
+
 void bc_sync_delete_account(void) {
   browser_core::sync::DeleteAccount();
 }

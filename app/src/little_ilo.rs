@@ -410,6 +410,16 @@ pub(crate) fn set_little_in_menu_bar(on: bool) {
 /// choice kept for when Little ilo is on again. The windows open stay.
 pub(crate) fn set_little_windows(on: bool, cx: &mut gpui::App) {
     unsafe { crate::bc::bc_set_little_windows(on) };
+    little_windows_shown(on, cx);
+}
+
+/// The menu bar's button and every window follow whether Little ilo is on, as the core has it now,
+/// such as after the account brought it from another device.
+pub(crate) fn little_windows_followed(cx: &mut gpui::App) {
+    little_windows_shown(unsafe { crate::bc::bc_little_windows() }, cx);
+}
+
+fn little_windows_shown(on: bool, cx: &mut gpui::App) {
     let clicked = (on && little_in_menu_bar()).then_some(status_item_clicked as extern "C" fn());
     unsafe { platform::host_set_little_status_item(clicked) };
     crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_little_windows(on, cx));

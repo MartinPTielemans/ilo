@@ -1756,6 +1756,12 @@ impl crate::account::Host for Account {
         self.calls.borrow_mut().push(format!("remove {id}"));
     }
 
+    fn choose(&self, what: crate::account::Choice, on: bool) {
+        self.calls
+            .borrow_mut()
+            .push(format!("choose {what:?} {on}"));
+    }
+
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {
         self.calls.borrow_mut().push("copy secret".into());
     }

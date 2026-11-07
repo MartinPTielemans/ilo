@@ -38,6 +38,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
+#include "browser_core/sync_settings.h"
 #include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
 #include "browser_core/webrtc.h"
@@ -1236,6 +1237,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     ApplyAutoPictureInPicture(/*changed=*/false);
     ApplyWebRtc();
     ArchiveDefaultRead();
+    sync_settings::Read();
     // The profiles the Spaces and favorites are in load before they come back.
     std::set<std::string> profiles;
     if (saved) {
@@ -1278,6 +1280,7 @@ void SessionChanged() {
     g_saver->Changed();
   }
   sync_spaces::Changed();
+  sync_settings::Changed();
 }
 
 void KeepSession() {
