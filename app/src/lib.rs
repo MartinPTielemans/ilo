@@ -1,6 +1,9 @@
 //! The browser's UI, drawn with GPUI. `Browser` (main.rs) runs it on the engine, through the core's
 //! C API; `preview` runs it alone with made-up tabs.
 
+// The agents' tools are one json! list, which takes more than the default 128 to expand.
+#![recursion_limit = "256"]
+
 /// Writes a line to stderr, as `eprintln!` does, but in one write where `eprintln!` makes one for
 /// each piece, so a line Chromium logs at the same time can't land inside it, where the checks
 /// wouldn't find it.
@@ -89,6 +92,7 @@ pub fn log_handover(stage: &str, detail: &str) {
 }
 
 pub mod account;
+pub mod agent_history;
 pub mod agents;
 pub mod build_info;
 pub mod capture;
@@ -106,9 +110,11 @@ pub mod hover_card;
 pub mod icon_picker;
 pub mod import;
 pub mod launch;
+pub mod launch_picture;
 pub mod link_preview;
 pub mod link_rules;
 pub mod link_target;
+pub mod little_launch;
 pub mod little_sites;
 pub mod logging;
 pub mod menu;

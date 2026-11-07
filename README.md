@@ -56,10 +56,11 @@ cd app
 - [Roadmap](docs/roadmap.md): what comes next.
 - [Building the engine](engine/README.md): Chromium and ilo's patches.
 - [Releasing](docs/releasing.md): how a release is made.
+- [Managed policies](docs/policies.md): where an administrator sets ilo's policies on each system.
 
 ## Contributing
 
-ilo is in beta. Please report bugs in [Issues](https://github.com/MartinPTielemans/ilo/issues/new/choose); in ilo, Help › Report a Problem… fills in the details for you. [CONTRIBUTING.md](CONTRIBUTING.md) says what's likely to land and how to send it. Contributions use the [Developer Certificate of Origin](CONTRIBUTING.md#sign-off), not a CLA.
+ilo is in beta on macOS and Linux, and in alpha on Windows. Please report bugs in [Issues](https://github.com/MartinPTielemans/ilo/issues/new/choose); in ilo, Help › Report a Problem… fills in the details for you. [CONTRIBUTING.md](CONTRIBUTING.md) says what's likely to land and how to send it. Contributions use the [Developer Certificate of Origin](CONTRIBUTING.md#sign-off), not a CLA.
 
 ## License
 

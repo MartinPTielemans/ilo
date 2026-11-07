@@ -24,7 +24,8 @@ pub(crate) fn open_browser_window(
         Vec::new()
     };
     let frame = match own {
-        Some(Own::Little { .. }) => Some(little_frame()),
+        // A page's pop-up's Little ilo window is where its page asked, else Little ilo's own.
+        Some(Own::Little { .. }) => Some(at.unwrap_or_else(little_frame)),
         _ if at.is_some() => at.map(|at| placed(at).unwrap_or(at)),
         _ => frames.get(saved.unwrap_or(0)).copied().and_then(placed),
     };
@@ -51,10 +52,28 @@ pub(crate) fn open_browser_window(
         (Some(Own::Little { profile, .. }), _) => unsafe {
             bc::bc_window_open_little(bounds, ui_view, profile)
         },
+        (Some(Own::Blank(profile)), _) => unsafe {
+            bc::bc_window_open_blank(bounds, ui_view, profile)
+        },
         (None, Some(index)) => unsafe { bc::bc_window_open_saved(index, bounds, ui_view) },
         (None, None) => unsafe { bc::bc_window_open(bounds, ui_view) },
     };
     (window != 0).then_some(window)
+}
+
+/// Maximizes the browser window `id` of `ui_view`, which then un-maximizes to the frame it has, as
+/// Windows' title bar and Linux's third window button do. The Mac's zoom is a frame, which the core
+/// saves (bc_saved_window_maximized).
+#[allow(unused_variables)]
+fn maximize(id: bc::bc_id, ui_view: *mut c_void) {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        platform::host_maximize_window(ui_view)
+    };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        bc::bc_window_toggle_maximized(id)
+    };
 }
 
 /// The frames of the windows open when the browser last quit, front to back.
@@ -169,13 +188,13 @@ pub(crate) fn open_window_as(
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
     let id = open_browser_window(ui_view, after, own, saved, at)?;
-    // The launch's first window, maximized as it quit, at the frame it un-maximizes to. Before its
-    // UI opens, so that starts at the maximized size.
-    if from.is_none() && LAUNCH_MAXIMIZED.take() && own.is_none() {
-        #[cfg(target_os = "windows")]
-        unsafe {
-            platform::host_maximize_window(ui_view)
-        };
+    // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
+    // Before its UI opens, so that starts at the maximized size.
+    if let Some(index) =
+        window_frames::saved_at(from.is_none(), own.is_none() && at.is_none(), saved)
+        && unsafe { bc::bc_saved_window_maximized(index) }
+    {
+        maximize(id, ui_view);
     }
     // Under Wayland, the window's surface, which GPUI's goes in as a subsurface, is the view, and
     // GPUI's window starts at its size.
@@ -192,6 +211,8 @@ pub(crate) fn open_window_as(
     unsafe {
         platform::host_window_opened(ui_view, id)
     };
+    #[cfg(target_os = "linux")]
+    crate::drive::window_made(id, ui_view);
     let from_shell = from.as_ref().and_then(|from| from.shell.upgrade());
     // Its Space, which the core made with the window.
     let own_space = own.map(|own| (unsafe { bc::bc_window_space(id) }, own));
@@ -265,6 +286,9 @@ pub(crate) fn open_window_as(
                     }
                     shell
                 }
+                (from, Some((space, Own::Blank(profile)))) => {
+                    Shell::blank_window(engine, space, profile, from.as_ref(), cx)
+                }
                 (from, Some((space, Own::Little { profile, home }))) => {
                     Shell::little_window(engine, space, home, profile, from.as_ref(), cx)
                 }
@@ -274,6 +298,9 @@ pub(crate) fn open_window_as(
             }
         });
         window.focus(&shell.focus_handle(cx), cx);
+        // As Settings › Features has it, which the core read with the Spaces.
+        let little = unsafe { crate::bc::bc_little_windows() };
+        shell.update(cx, |shell, cx| shell.set_little_windows(little, cx));
         CX.set(Some(cx.to_async()));
         if let Some(state) = SYNC_STATE.with_borrow_mut(Option::take) {
             settings::sync_changed(state, cx);
@@ -291,6 +318,7 @@ pub(crate) fn open_window_as(
                     handle: Window::window_handle(window),
                     children: Vec::new(),
                     private: matches!(own, Some(Own::Private(_))),
+                    blank: matches!(own, Some(Own::Blank(_))),
                     little: match own {
                         Some(Own::Little { home, .. }) => Some(home),
                         _ => None,
@@ -304,6 +332,9 @@ pub(crate) fn open_window_as(
             // The core read the extensions before there was a shell to take them.
             unsafe { bc::bc_extensions_report() };
         }
+        // As at a launch below 20 %, before there was a window to hear it.
+        let battery = BATTERY_SAVER.get();
+        shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
         shell
     });
     let window = match window {
@@ -342,8 +373,22 @@ pub(crate) fn open_window_as(
     // Once the page frame is set, so the tab shown loads at its size, and before the window is on
     // screen, so the core's reports of its tabs can come before its first frame.
     let restored = first && restore_spaces(id, window, cx);
+    // Under Wayland the compositor can answer a window the restore puts back full screen with a
+    // configure of no size before its first frame, which Chromium, holding the full screen it asked
+    // for (chromium-wayland-state-after-ack.patch), gives no bounds, and the frame it then commits
+    // traps. Undone in this task, before any configure is read, it comes back windowed, at its
+    // windowed frame, and goes full screen once its UI shows.
+    #[cfg(target_os = "linux")]
+    let full_screen_later =
+        restored && wayland_size.is_some() && unsafe { bc::bc_window_is_full_screen(id) };
+    #[cfg(not(target_os = "linux"))]
+    let full_screen_later = false;
+    if full_screen_later {
+        unsafe { bc::bc_window_toggle_full_screen(id) };
+        log!("browser: window back windowed until its UI shows");
+    }
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view) };
+        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe {
@@ -390,6 +435,10 @@ pub(crate) fn open_window_as(
                 log!("browser: UI shown at {:.1} ms", unsafe {
                     platform::host_since_launch()
                 });
+                // Unless the compositor's answer to the full screen undone has put it there.
+                if full_screen_later && !unsafe { bc::bc_window_is_full_screen(id) } {
+                    unsafe { bc::bc_window_toggle_full_screen(id) };
+                }
                 cx.update(overlays_now);
                 cx.update(agents_core::start);
                 // The command bar's settings rows, built in a task of their own once the UI
@@ -534,6 +583,7 @@ pub(crate) fn finish_opening(
         Some(Own::Little { profile, home }) => {
             log!("browser: little window opened {id} profile {profile} home {home}")
         }
+        Some(Own::Blank(profile)) => log!("browser: blank window opened {id} profile {profile}"),
         None => {}
     }
     if own.is_some() {
@@ -556,6 +606,8 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
+        #[cfg(not(target_os = "linux"))]
+        platform::host_watch_page_presses(page_pressed);
         platform::host_watch_resigning_active(launch_picture_on_resigning);
         platform::host_watch_active(became_active);
     }
@@ -726,7 +778,9 @@ pub(crate) unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         if !own && !regular && !unsafe { bc::bc_quitting() } {
             save_launch_frame(window.ui_view);
         }
-        if window.little.is_some() {
+        // A sign-in pop-up's size is its page's, not the next Little ilo window's (#1919).
+        let popup = crate::little_ilo::popup_window_closed(id);
+        if window.little.is_some() && !popup {
             save_little_size(window.ui_view);
         }
         unsafe { platform::host_forget_window(window.ui_view) };

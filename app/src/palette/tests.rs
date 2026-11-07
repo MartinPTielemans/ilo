@@ -380,6 +380,12 @@ fn states(palette: &Palette, theme: Option<&Theme>) -> Vec<(String, Hsla, f32, V
             TEXT,
             lay(&window, toast::CHIP_FILL, &PRESSABLE),
         ),
+        (
+            "page chip key",
+            palette.text(shell::conversation::CHIP_KEY),
+            TEXT,
+            lay(&window, toast::CHIP_FILL, &PRESSABLE),
+        ),
         // On the overlays.
         (
             "command bar row",

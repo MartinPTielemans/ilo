@@ -7,7 +7,8 @@
 # emoji picked in the icon picker that Change Icon… hangs under its favicon takes the favicon's
 # place until Remove Icon, and a Japanese conversion in the picker's search isn't a pick. A Space's
 # icon, picked in its icon picker, comes back too. A tab closed before the quit stays closed,
-# in the archive, from which the Library reopens it at its page. A page's downloads go in the
+# in the archive, from which the Library opens it in a link preview: ⌘W closes that and leaves it
+# archived, and ⌘↩ keeps it at its page, out of the archive. A page's downloads go in the
 # check's folder, on the Mac with macOS's quarantine flag, a new one's icon flies
 # from the pointer into a bin on the Library button, recorded with the recent downloads coming and
 # going, none of those a relaunch reads does, and ⇧⌘J opens the Library on Downloads, which lists
@@ -374,20 +375,50 @@ expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't off
 choose_drawn "$(cased 'Remove Icon')"
 expect "^browser: page $c icon none\$" "Remove Icon didn't give the tab back its favicon"
 send click $page_point
-# The tab closed before the quit reopens from the Library at the top of Today, at its page. ⌘W
-# archives it again.
+# The tab closed before the quit opens from the Library in a link preview beside it, at its page
+# (#696), shown dark, then light. ⌘W closes the preview and leaves the tab in the archive, the
+# Library staying; ⌘↩ keeps it at the top of Today, out of the archive, and the Library closes.
+# ⌘W archives it again.
 send key l cmd shift
 expect '^browser: command view-library via page$' "⇧⌘L with the page focused didn't reach the UI"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
-send click 300 111
-expect '^browser: restore archived [0-9][0-9]*$' "a click on the archived tab didn't restore it"
-expect "^browser: today [0-9][0-9]* $c $a\$" \
+# Opens the archived tab in a preview, in the appearance $1, and sets $p to the preview's tab.
+archived_preview() {
+  item=Dark
+  [ "$1" = dark ] || item=Light
+  send menu "Appearance › $item"
+  expect "^browser: appearance $1\$" "View › Appearance › $item didn't change the appearance"
+  send click 300 111
+  expect '^browser: archived [0-9][0-9]* in preview$' "a click on the archived tab didn't preview it"
+  none_since '^browser: restore archived' || fail "a click on the archived tab restored it at once"
+  expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
+    "the archived tab's preview didn't open at its page"
+  p=$(grep '^browser: link preview [1-9][0-9]* https://example.org/$' "$log" | tail -1 | cut -d' ' -f4)
+  expect '^browser: link preview settled$' "the archived tab's preview didn't settle"
+  expect "^browser: loaded $p https://example.org/\$" "the archived tab's preview didn't load its page"
+  ../tools/window-screenshot.sh "$pid" "$out/archive-preview-$1.png" || fail "no window to capture"
+}
+archived_preview dark
+send key w cmd
+expect '^browser: link preview closing (cmd-w)$' "⌘W in the archived tab's preview didn't close it"
+expect "^browser: tab $p closed\$" "⌘W didn't close the archived tab's preview's page"
+none_since '^browser: restore archived' || fail "⌘W on the archived tab's preview restored it"
+none_since '^browser: archive 0 tabs$' || fail "⌘W on the archived tab's preview took it out of the archive"
+none_since '^browser: library hidden$' || fail "⌘W on the archived tab's preview closed the Library"
+none_since '^browser: command close-tab' || fail "⌘W in the archived tab's preview closed a tab"
+archived_preview light
+send key return cmd
+expect "^browser: link preview kept $p\$" "⌘↩ didn't keep the archived tab's preview"
+expect '^browser: restore archived [0-9][0-9]* from preview$' \
+  "keeping the archived tab's preview didn't restore it"
+expect "^browser: today $p $c $a\$" \
   "the archived tab didn't come back at the top of Today: Today is \"$(today)\""
-r=$(today | cut -d' ' -f1)
-expect "^browser: selected $r\$" "the tab from the archive isn't shown"
-expect "^browser: loaded $r https://example.org/\$" "the tab from the archive didn't load its page"
-expect '^browser: archive 0 tabs$' "the tab reopened stayed in the archive"
-expect '^browser: library hidden$' "reopening a tab didn't close the Library"
+expect "^browser: selected $p\$" "the tab from the archive isn't shown"
+expect '^browser: archive 0 tabs$' "the tab kept from the preview stayed in the archive"
+expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
+grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+  fail "the tab from the archive isn't at its page"
+send menu "Appearance › Automatic"
 send click $page_point
 send key w cmd
 expect_tabs "$c $a" "$c" "after closing the tab from the archive"
@@ -463,37 +494,42 @@ expect "$trashed" "the page's second download didn't finish"
 t=$(grep "$trashed" "$log" | tail -1 | cut -d' ' -f3)
 send key j cmd shift
 expect '^browser: library shown$' "⇧⌘J didn't open the Library on the second download"
-press=$((step + 1))
-send press 300 111
-send dragto 300 140
-expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
-# Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-# On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
-# driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
-# took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
-# which takes no file, and left of the page, where it's then let go.
-let_go="300 140"
-if [ "$(uname)" = Darwin ]; then
-  let_go="100 60"
-  send dragto $let_go
+# On Windows the app stops in DoDragDrop under the driver (#1583).
+if windows; then
+  echo "skip: a download's row dragged out: Windows' system drag stops under the driver (#1583)."
 else
-  expect '^browser: library hidden$' "the Library didn't close for the download's drag"
+  press=$((step + 1))
+  send press 300 111
+  send dragto 300 140
+  expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
+  # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
+  # On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
+  # driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
+  # took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
+  # which takes no file, and left of the page, where it's then let go.
+  let_go="300 140"
+  if [ "$(uname)" = Darwin ]; then
+    let_go="100 60"
+    send dragto $let_go
+  else
+    expect '^browser: library hidden$' "the Library didn't close for the download's drag"
+  fi
+  send release $let_go
+  # No real button holds the system's drag, so it may end before the release reaches it.
+  dragged() {
+    for _ in $(seq 100); do
+      sed -n "/^browser: drive $press: /,\$p" "$log" | sed -n "/$1/,\$p" | grep -q "$2" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  dragged "download $t drag" '^browser: library hidden$' ||
+    fail "the Library didn't close for the download's drag"
+  dragged "download $t drag" '^browser: file drag ended nowhere$' ||
+    fail "the download's drag didn't end where nothing took it"
+  dragged 'file drag ended' '^browser: library shown$' ||
+    fail "the Library didn't come back after the download's drag"
 fi
-send release $let_go
-# No real button holds the system's drag, so it may end before the release reaches it.
-dragged() {
-  for _ in $(seq 100); do
-    sed -n "/^browser: drive $press: /,\$p" "$log" | sed -n "/$1/,\$p" | grep -q "$2" && return 0
-    sleep 0.1
-  done
-  return 1
-}
-dragged "download $t drag" '^browser: library hidden$' ||
-  fail "the Library didn't close for the download's drag"
-dragged "download $t drag" '^browser: file drag ended nowhere$' ||
-  fail "the download's drag didn't end where nothing took it"
-dragged 'file drag ended' '^browser: library shown$' ||
-  fail "the Library didn't come back after the download's drag"
 send key j cmd shift
 expect '^browser: library hidden$' "⇧⌘J didn't close the Library after the download's drag"
 # Its row in the recent downloads shows the Library row's menu, whose Move to Trash takes the rows
@@ -535,8 +571,11 @@ send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space"
 expect_tabs "$e" "$e" "in the second Space"
 expect "^browser: loaded $e https://example.com/\$" "the second Space's tab didn't load once shown"
-# The window's close button, which ends the app too: the driver doesn't report it done.
-echo "click 20 24" >&3
+# The window's close button, which ends the app too: the driver doesn't report it done. On Windows
+# the UI's buttons are minimize, maximize and close, so close is the third (appearance.sh).
+close_button="20 24"
+if windows; then close_button="66 24"; fi
+echo "click $close_button" >&3
 exec 3>&-
 await '^browser: window closed ' || fail "a click on the close button didn't close the window"
 exited
@@ -584,17 +623,21 @@ exec 3>&-
 quit
 
 # A SIGTERM ends the session at once, before the save the new tab scheduled, which the core writes
-# as Chrome exits.
-log="$out/session-ending.log"
-BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
-pid=$!
-await '^browser: restored in ' || fail "the launch before the SIGTERM didn't restore the Spaces"
-await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
-kill -TERM "$pid"
-exited
-[ "$(python3 -I -c 'import json, sys
+# as Chrome exits. Windows ends one with WM_ENDSESSION instead, which nothing sends yet (#1990).
+if windows; then
+  echo "skip: a SIGTERM's session end: Windows ends one with WM_ENDSESSION (#1990)."
+else
+  log="$out/session-ending.log"
+  BROWSER_URL="$site" "$browser" < /dev/null > "$log" 2>&1 &
+  pid=$!
+  await '^browser: restored in ' || fail "the launch before the SIGTERM didn't restore the Spaces"
+  await "^browser: loaded [0-9]* $site\$" || fail "the page opened over the Spaces didn't load"
+  kill -TERM "$pid"
+  exited
+  [ "$(python3 -I -c 'import json, sys
 print(*[len(space["today"]) for space in json.load(open(sys.argv[1], encoding="utf-8"))["spaces"]])' "$saved")" = "2 2" ] ||
-  fail "the tab opened before the SIGTERM wasn't kept"
+    fail "the tab opened before the SIGTERM wasn't kept"
+fi
 restore_ms=$(sed -n 's/^browser: restored in \([0-9.]*\) ms$/\1/p' "$out/restored.log" "$out/restored-again.log" | tr '\n' ' ')
 
 # Auto-archive, 8 s instead of 12 hours. Tab a, then b, opens over the Spaces, and a isn't seen
@@ -715,15 +758,22 @@ expect "^browser: title $l scrolled [1-9][0-9]*\$" "the tab put back loaded its 
 expect "^browser: page $l back [0-9]* forward [0-9]* loading 0 " "the tab put back didn't finish loading"
 ../tools/window-screenshot.sh "$pid" "$out/unloaded-scrolled.png" || fail "no window to capture"
 # A quit while a page is full screen, as a video is, keeps the window windowed: the page took it
-# full screen, and it would come back so with no video in it (#383).
-send click $page_point
-send key f
-expect '^browser: page entered full screen$' "the long page didn't go full screen"
-expect '^browser: window entered full screen$' "the window didn't go full screen with the page"
-exec 3>&-
-quit
-grep -q '"fullscreen": *true' "$saved" &&
-  fail "the window was saved full screen for the page that was full screen at the quit"
+# full screen, and it would come back so with no video in it (#383). On Windows that quit crashes
+# (#1991).
+if windows; then
+  echo "skip: a quit with a page full screen, which crashes on Windows (#1991)."
+  exec 3>&-
+  quit
+else
+  send click $page_point
+  send key f
+  expect '^browser: page entered full screen$' "the long page didn't go full screen"
+  expect '^browser: window entered full screen$' "the window didn't go full screen with the page"
+  exec 3>&-
+  quit
+  grep -q '"fullscreen": *true' "$saved" &&
+    fail "the window was saved full screen for the page that was full screen at the quit"
+fi
 
 # Help › Restore Earlier Sidebar brings back the profile's sidebar from a backup, which the core
 # takes as it saves the Spaces, in the profile's directory. The sidebar it replaces becomes the
@@ -782,6 +832,57 @@ restore_newest "Restoring the sidebar replaced" 3
 await_today $((backed_up + 1)) "restoring the sidebar replaced didn't bring back the tab"
 exec 3>&-
 quit
+# A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q: the relaunch puts its
+# tab back, and its page finds both, as Chromium keeps them when it restores the last session
+# (#1934). A crash kept the cookie and a clean quit didn't, and neither kept the sessionStorage.
+# On Windows a quit still drops the session cookie (#1998).
+if windows; then
+  echo "skip: a session sign-in across ⌘Q: a quit drops its session cookie on Windows (#1998)."
+else
+  sign_in_page="${site}session-sign-in.html?restore"
+  log="$out/sign-in-a.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_URL="$sign_in_page" "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  signed=$(today)
+  await "^browser: title $signed sign-in cookie none storage none, drawn\$" ||
+    fail "the session sign-in page didn't draw, or found a sign-in before it signed in"
+  send click $page_point
+  if [ "$active" != 1 ]; then
+    exec 3>&-
+    quit
+    echo "skip: keeping a session sign-in. Browser wasn't the active app, so the page ignored the click."
+  else
+    send key s
+    expect "^browser: title $signed sign-in cookie kept storage kept, set\$" \
+      "s in the session sign-in page didn't set its session cookie and sessionStorage"
+    exec 3>&-
+    quit
+    log="$out/sign-in-b.log"
+    step=0
+    BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+    pid=$!
+    exec 3> "$out/drive"
+    await '^browser: restored in ' || fail "the relaunch after signing in didn't restore the Spaces"
+    await '^browser: today [0-9]*$' || fail "the relaunch didn't bring back the sign-in's tab"
+    signed=$(today)
+    await "^browser: title $signed sign-in cookie [a-z]* storage [a-z]*, drawn\$" ||
+      fail "the sign-in's tab didn't load its page after the relaunch"
+    found=$(grep "^browser: title $signed sign-in cookie " "$log" | tail -1)
+    case "$found" in
+      *"cookie kept storage kept, drawn") ;;
+      *"cookie none storage none, drawn") fail "⌘Q signed the site out: its session cookie and its sessionStorage are gone after the relaunch" ;;
+      *"cookie none"*) fail "⌘Q dropped the site's session cookie, though its sessionStorage came back" ;;
+      *) fail "the relaunch put the sign-in's tab back without its sessionStorage, though its session cookie stayed" ;;
+    esac
+    ../tools/window-screenshot.sh "$pid" "$out/sign-in-kept.png" || fail "no window to capture"
+    exec 3>&-
+    quit
+  fi
+fi
 # With Restore windows from last session turned off in Settings › General, a launch opens one
 # window showing no page, as ⌘N's does: the Space comes back with its pinned tab, and its Today tab
 # goes in the archive. The second window doesn't come back (#684).
@@ -821,7 +922,8 @@ log="$out/fresh-b.log"
 BROWSER_DRIVE=1 "$browser" < /dev/null > "$log" 2>&1 &
 pid=$!
 await '^browser: restored in ' || fail "a launch with Restore windows off didn't bring the Spaces back"
-await "^browser: pinned $p\$" || fail "the pinned tab didn't come back with Restore windows off"
+# Its id is the launch's own, as ids never repeat across launches (#1447), so it's the one pinned.
+await '^browser: pinned [0-9][0-9]*$' || fail "the pinned tab didn't come back with Restore windows off"
 await '^browser: archive 1 tabs$' || fail "the Today tab didn't go in the archive with Restore windows off"
 # A window says it's open after its Space's lines, on Linux after the archive's too, so the count
 # below waits for it (#1038).
@@ -832,6 +934,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page. Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. A SIGTERM keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
 echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"

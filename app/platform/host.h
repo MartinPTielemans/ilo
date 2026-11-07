@@ -20,12 +20,16 @@ void drive_start(void);
 void host_centered(double width, double height, double* x, double* y);
 
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
-// first browser window will open, with the window's material and the sidebar as it was when the
-// app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
-// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
+// first browser window will open, with the window's material and, unless |picture_width| is 0,
+// the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took
+// (host_save_launch_picture). Its part above |foot_top| points from the window's top shows at the
+// window's top and the rest at its bottom, the room just above |foot_top| cropped or repeated to
+// fit (launch_picture.rs says when that draws the sidebar as the UI will). For the moment between
+// NSApp being made and the browser starting. With |maximized|, Windows' alone, it's maximized on
+// that frame's screen, as the first browser window will be (host_maximize_window), with no picture.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool maximized);
+                             double height, bool maximized, double picture_width,
+                             double picture_height, double foot_top);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -91,9 +95,17 @@ void host_capture_name(char* name, size_t capacity);
 
 // The browser window of |ui_view| is Little ilo's, as Arc's Little Arc: each time it comes on
 // screen it comes to the desktop shown rather than taking the user to the one it was on, and opened
-// while a full-screen browser window has that desktop, it opens over it there. Before
-// host_show_window. Off the Mac, where the window manager places windows, nothing.
-void host_set_window_little(void* ui_view);
+// while a full-screen browser window has that desktop, it opens over it there. With |grows|,
+// host_show_window first shows it small, at a rectangle under the pointer, or at its middle when a
+// key opened it, until host_grow_little_window. Before host_show_window. Off the Mac, where the
+// window manager places windows and animates them its own way, it doesn't grow; Windows records
+// it, for closing it over another app's window (#1692), and Linux does nothing.
+void host_set_window_little(void* ui_view, bool grows);
+
+// Grows the Little ilo window of |ui_view| in from where host_show_window showed it small, once
+// its UI has drawn on screen, so the motion's start is seen. Nothing once it has grown or wasn't
+// held, as off the Mac.
+void host_grow_little_window(void* ui_view);
 
 // Shows the window holding |ui_view| in front, with its title bar over the UI, and makes the
 // app the active one.
@@ -135,9 +147,12 @@ bool host_window_shown(void* ui_view);
 // Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
-// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// window open, 1 with one on screen, 2 with all hidden, and -1 with Little ilo off in Settings,
+// which leaves out all of Little ilo's items. |chosen| gets the item picked: 0 New, 1
 // Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
-// Off the Mac, which has no Dock menu, nothing.
+// Off the Mac, which has no Dock menu: on Windows the taskbar's jump list gets New window and New
+// incognito window, which launch ilo again with --new-window and --incognito (bc_host's
+// app_new_window), once a window is shown; on Linux nothing, as the desktop file has them.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
 // Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
@@ -145,6 +160,13 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 // Settings › General. It draws once and then waits for a click, so an idle browser stays asleep.
 // Off the Mac, nothing, and Settings offers no switch there.
 void host_set_little_status_item(void (*clicked)(void));
+
+// Puts a task called |title| in the taskbar's jump list, which runs the browser with |arguments|,
+// as Windows' jump lists hold an app's tasks: New Little ilo Window, which the core hands the app.
+// Windows keeps the list, so it's written once a launch, as the first window opens with the
+// AppUserModelID the list goes under, and nothing waits for it. Off Windows,
+// whose Dock menu and launcher have their own, nothing.
+void host_set_little_task(const char* title, const char* arguments);
 
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
@@ -175,6 +197,12 @@ void host_watch_option_taps(void (*tapped)(void* ui_view));
 // Mac at a press in the page, on Windows as GPUI's window loses the focus, to the page or anything
 // else. Linux's UI hears it itself, through GPUI's patch and the overlays it shows.
 void host_watch_ui_keyboard(void (*left)(void* ui_view));
+
+// Calls |pressed| with the UI's view of a browser window whose page the user presses a mouse
+// button in, as the press goes on to the page: a click in an agent's page takes it over (#1080).
+// Never for a press in the UI or the window's frame, nor for the wheel. On Linux the app hears
+// them itself, from GPUI under Wayland and from the X server while an agent works (page_presses.rs).
+void host_watch_page_presses(void (*pressed)(void* ui_view));
 
 // Whether a menu is open, the menu bar's or a context menu, and if so calls |apply| once none is,
 // instead of any function an earlier call left waiting. AppKit can crash when the main menu is
@@ -255,6 +283,11 @@ void host_set_overlay_growth(int overlay, double x, double y);
 // Makes the overlay, once it grows in, shrink back to where it grew from as it hides, fading.
 void host_set_overlay_shrink(int overlay);
 
+// Makes the overlay that grows in (host_set_overlay_growth) grow from |from| of its size, rather
+// than near nothing, over |seconds|, fading in alongside, and fade out over |out| seconds as it
+// hides, shrinking back to |from| only if host_set_overlay_shrink asked: a folder's preview. Each
+// show takes the motion last set.
+void host_set_overlay_motion(int overlay, double from, double seconds, double out);
 // Under Reduce Motion the overlays that grow in and shrink back only fade, at their size. The UI
 // says so as its own Reduce Motion changes (main.rs, set_reduce_motion).
 void host_set_overlays_still(bool still);
@@ -309,7 +342,9 @@ bool host_fold_overlay(int overlay,
 void host_take_overlay_keyboard(int overlay);
 
 // Holds the keys typed from now until the command bar or the find bar takes the keyboard, and then
-// gives them to it: for a shortcut that opens one but reaches the page first, which may keep it.
+// gives them to it: for a shortcut that opens one but reaches the page first, which may keep it,
+// and on Windows for the find bar, which shows a frame before it takes the keyboard
+// (find_bar::show).
 // Showing either bar with the keyboard holds them by itself. The core says when the page has
 // answered the shortcut and no bar opens (host_release_held_keys).
 void host_hold_keys(void);
@@ -599,7 +634,7 @@ bool host_window_maximized(void* ui_view);
 // otherwise.
 bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
-// the first window comes back when it quit maximized.
+// a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
 #endif
 
@@ -864,6 +899,14 @@ void host_check_for_updates(void);
 // Sparkle shows one, Check for Updates…; on Windows, the updater's check, at once.
 void host_check_for_updates_quietly(void);
 
+// Settings › About's "Check for updates automatically" (#1793). Off, the updater asks the feed
+// nothing on its own: on the Mac, Sparkle neither checks nor downloads on its schedule; on
+// Windows, the updater's 8-hour timer doesn't fire. Check for Updates… still checks, once, when
+// asked. Given before host_start_updater, the updater starts that way; after, a change takes
+// effect at once, and turned on, the schedule runs again from the last check, which checks at
+// once if one is due. Not on Linux, whose Flatpak's updates are the system's.
+void host_set_automatic_update_checks(bool on);
+
 // Restart to Update: restarts through host_start_updater's |restart|, to relaunch into the update
 // that's HOST_UPDATE_READY. On the Mac, once macOS has checked the new version as it would at its
 // first launch, or after 15 s. Nothing installs or relaunches before the restart goes ahead
@@ -893,6 +936,43 @@ bool host_choose(const char* title);
 // For the test driver: the NSWindow of the browser window whose view host_ui_view made |index|th,
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
+
+// AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
+// Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,
+// which the app carries out as a click would. A script asks with one Apple Event at a time,
+// |event| (its sender's pid and return ID), from |sender|, the app that sent it by its name. The
+// strings are UTF-8, copied as bc_space_name copies them.
+typedef struct {
+  // Whether scripts may control the browser, asked once for each Apple Event that reads, with
+  // |action| "read". The app logs it, refused if not.
+  bool (*allowed)(uint64_t event, const char* sender, const char* action);
+  // The windows, front to back, never a private one; the Space each shows, 0 for none of the
+  // user's, and the tab it shows, 0 for none; and its name, the shown tab's title.
+  size_t (*windows)(uint64_t* windows, size_t capacity);
+  uint64_t (*window_space)(uint64_t window);
+  uint64_t (*window_tab)(uint64_t window);
+  size_t (*window_name)(uint64_t window, char* name, size_t capacity);
+  // The user's Spaces, as the switcher lists them, never an agent's.
+  size_t (*spaces)(uint64_t* spaces, size_t capacity);
+  size_t (*space_name)(uint64_t space, char* name, size_t capacity);
+  // The tabs of |space|, pinned then Today, or with 0 of the Space |window| shows.
+  size_t (*tabs)(uint64_t window, uint64_t space, uint64_t* tabs, size_t capacity);
+  size_t (*tab_title)(uint64_t tab, char* title, size_t capacity);
+  size_t (*tab_url)(uint64_t tab, char* url, size_t capacity);
+  // The commands, each logged: |window| shows |space|, or |tab|; a window opens as ⌘N's does; a
+  // tab opens loading |url|, an http or https page, in |space| of |window|, or with |window| 0 as a
+  // link from another app does. Each returns false or 0, and copies why into |why|, if refused.
+  bool (*focus_space)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      char* why, size_t capacity);
+  bool (*select_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t tab, char* why,
+                     size_t capacity);
+  uint64_t (*new_window)(uint64_t event, const char* sender, char* why, size_t capacity);
+  uint64_t (*new_tab)(uint64_t event, const char* sender, uint64_t window, uint64_t space,
+                      const char* url, char* why, size_t capacity);
+} host_scripting;
+
+// Answers scripts with |scripting|, which the app keeps for as long as it runs.
+void host_set_scripting(const host_scripting* scripting);
 
 #ifdef __cplusplus
 }

@@ -67,6 +67,19 @@ finish-args:
   - --filesystem=~/.librewolf:ro
   - --filesystem=xdg-config/librewolf/librewolf:ro
   - --filesystem=~/.var/app/io.gitlab.librewolf-community/.librewolf:ro
+# An administrator's policies (docs/policies.md), as Flathub's Chromium takes them: an extension
+# point the core reads policies from in the sandbox, whose /etc is the runtime's, rather than all
+# of the host's /etc. Version 1 merges policies/managed and policies/recommended from each
+# extension, such as an unmanaged one in /var/lib/flatpak/extension/app.ilo.browser.Extension.<name>/
+# <arch>/1.
+add-extensions:
+  app.ilo.browser.Extension:
+    version: '1'
+    directory: ilo/extensions
+    merge-dirs: policies/managed;policies/recommended
+    subdirectories: true
+    no-autodownload: true
+    autodelete: true
 modules:
   - name: zypak
     sources:
@@ -79,6 +92,11 @@ modules:
     buildsystem: simple
     build-commands:
       - cp -a Browser /app/ilo
+      # As Flathub's Chromium has them: with no extension, extensions/policies is the empty folder
+      # beside it; with one, Flatpak mounts over extensions and merges its policies there.
+      - mkdir -p /app/ilo/extensions /app/ilo/policies/managed /app/ilo/policies/recommended
+      - ln -s /app/ilo/policies /app/ilo/extensions/policies
+      - touch /app/ilo/extensions/no-mount-stamp
       - install -Dm755 ilo.sh /app/bin/ilo
       - install -Dm644 -t /app/etc cobalt.ini
       - install -Dm644 -t /app/share/applications app.ilo.browser.desktop

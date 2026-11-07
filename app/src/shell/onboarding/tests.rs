@@ -443,6 +443,19 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     );
 }
 
+/// A quit under way closes the window the flow fades from, so its end opens no command bar there.
+#[gpui::test]
+fn a_quit_under_way_brings_no_command_bar_as_the_flow_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    cx.simulate_keystrokes("escape");
+    crate::shell::quit_goes_ahead();
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    assert!(host.command_bars.borrow().is_empty());
+}
+
 /// The opt-ins step shows the switches offered, each Settings' own and set as it's turned, and
 /// none offered leaves the step out.
 #[gpui::test]
@@ -958,7 +971,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(list.title, "Bring your stuff.");
     assert_eq!(
         list.line,
-        format!("Spaces, tabs and history from the browser you used. It all stays on {here}.")
+        format!("From the browser you used. It all stays on {here}.")
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
@@ -967,10 +980,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(step(&shell, cx), Some(Step::Import));
     let choose = guide(cx);
     assert_eq!(choose.title, "What comes from Arc.");
-    assert_eq!(
-        choose.line,
-        "All of it, unless you turn something off. Tabs load when you first open them."
-    );
+    assert_eq!(choose.line, "All of it, unless you turn something off.");
     assert_eq!(choose.button.as_deref(), Some("Import"));
     assert_eq!(choose.corner, Corner::Back);
     assert_eq!(view.read_with(cx, |view, _| view.primary()), Some("Import"));

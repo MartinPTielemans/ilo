@@ -40,17 +40,27 @@ struct SavedTab {
   // Whether it's in a split view with the tab saved above it, and whether that split is stacked.
   bool split = false;
   bool stacked = false;
+  // The name and icon of that split view, if the user gave it any.
+  std::string split_name;
+  std::string split_icon;
   // Its share of its split view, or 0 while the split's shares are even.
   double share = 0;
   // Whether its page took its split view's card, the other pages keeping 220 pt, which the shares
   // aren't kept for.
   bool expanded = false;
+  // Whether it's the tab of its favorite split view focused last. A favorite's split view is with
+  // the favorite of its profile, or its Space under Each Space, saved before it.
+  bool focused = false;
   // A pinned tab's folder, among its Space's saved folders, else -1.
   int folder = -1;
   // A pinned tab's node, or none if it was saved before pinned tabs had them.
   Space::Node node;
   // Whether it was muted, for a tab closed and reopened. The session file doesn't keep it.
   bool muted = false;
+  // The id of its page's sessionStorage in its profile, which the session file alone keeps, so the
+  // next launch gives the tab its own back (Tab::SessionStorageId), as Chrome's session does
+  // (#1934). A copy of a tab has none.
+  std::string session_storage;
   // A favorite's profile's directory. A Space's tabs are in the Space's.
   std::string profile;
   // What names a favorite's site, shared by its tabs in each profile under Every Space, or 0.
@@ -136,12 +146,21 @@ void KeepSession();
 // Writes a save still waiting, as Chrome shuts down.
 void FlushSession();
 
+// Whether the Spaces were saved for the next launch with the tabs closing now (KeepSession), as
+// they close with the last regular window or with the quit.
+bool SessionKept();
+
 // The docked sidebar's width the last launch saved for its front window, or 0.
 double SavedSidebarWidth();
 
 // The frames of the regular windows open when the browser last quit, front to back, as they were
-// out of full screen. One saved before frames were kept is empty. Read with the Spaces.
+// out of full screen and maximized. One saved before frames were kept is empty. Read with the
+// Spaces.
 std::vector<gfx::Rect> SavedWindowFrames();
+
+// Whether saved window |index| (SavedWindowFrames) was maximized, its frame the one it un-maximizes
+// to. Never on the Mac.
+bool SavedWindowMaximized(size_t index);
 
 // Has |window| show what the saved window |index| showed, the first being RestoreSession's: its
 // Space, its sidebar's width, and full screen if it was the front one. Returns whether there's such a window
@@ -156,6 +175,8 @@ struct Settings {
   // How long a Little ilo window that isn't active waits before it closes into the archive (Arc's
   // default).
   base::TimeDelta little_archive_after = base::Hours(6);
+  // Whether Little ilo is on: off, nothing opens a Little ilo window (bc_little_windows).
+  bool little_windows = true;
   // Whether the app taps the trackpad at its detents.
   bool haptics = true;
   // Whether the app asks before the user's Quit quits.
@@ -175,6 +196,8 @@ struct Settings {
   bool ad_blocking = true;
   // Whether the browser sends its crash reports (crash_reports.h).
   bool send_crash_reports = false;
+  // Whether WebRTC goes only through TURN relays in every profile, proxy or not (webrtc.h).
+  bool relay_calls = false;
   // Whether a link to another site in a pinned tab or a favorite opens in a link preview.
   bool link_previews = true;
   // Whether a page may take its video or call into Picture in Picture as its tab is hidden, in
@@ -190,6 +213,12 @@ struct Settings {
   // Whether the user said yes to Google's Widevine module, which the component updater then keeps
   // up to date (widevine.h), until they remove it.
   bool widevine = false;
+  // Chromium's own, which the core writes into every profile (ApplyEveryday): whether each
+  // download asks where to save it, the pages' zoom (1 for 100%), and whether sites may ask to
+  // send notifications.
+  bool ask_where_to_save = false;
+  double page_zoom = 1;
+  bool notification_prompts = true;
 };
 
 // The user's settings. Call SessionChanged after changing them.

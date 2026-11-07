@@ -6,8 +6,11 @@
 use std::{f32::consts::PI, time::Instant};
 
 use gpui::{
-    Bounds, BoxShadow, Context, Hsla, PathBuilder, Window, canvas, div, fill, hsla,
-    linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    Bounds, BoxShadow, Context, Hsla, PathBuilder, Window,
+    accesskit::{Live, Role},
+    canvas, div, fill, hsla, linear_color_stop, linear_gradient, point,
+    prelude::*,
+    px, size,
 };
 
 use super::{Command, Shell, Swipe};
@@ -76,7 +79,7 @@ impl Shell {
     /// window makes none.
     pub(super) fn new_space_beside(&self, space: u64) -> bool {
         let last = self.spaces.last().is_some_and(|last| last.id == space);
-        last && !self.private && self.form.is_none()
+        last && !self.one_space() && self.form.is_none()
     }
 
     /// Readies a new Space as the fingers' pull reaches it and lets it go as they go back, with a
@@ -239,6 +242,23 @@ impl Shell {
                     .children(plus(across, PLUS * scale, PLUS_STROKE * scale, accent))
             }
         };
+        // VoiceOver says when letting go makes the Space, as the trackpad's click does, while the
+        // fingers pull, and nothing once it's made.
+        let said = match look {
+            _ if self.circle_exit.is_some() => None,
+            Look::Readying(_) => Some("Let go to make it"),
+            _ => Some("Pull further to make one"),
+        };
+        let disc =
+            disc.id("new-space-circle")
+                .when_some(said.filter(|_| self.a11y), |disc, said| {
+                    disc.role(Role::Status)
+                        .aria_label("New Space")
+                        .aria_value(said)
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().set_live(Live::Polite)
+                        })
+                });
         let width = self.width();
         let centre = width + CIRCLE_START - travel;
         Some(

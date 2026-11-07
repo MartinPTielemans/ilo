@@ -33,6 +33,8 @@ pub struct Card {
     revealing: Rc<Cell<bool>>,
     /// What the top held when last drawn, logged once a change.
     logged: RefCell<Option<SharedString>>,
+    /// Where the card shows a row whole, as `reveal` has it, logged once a change.
+    sight_logged: Rc<Cell<Option<(i32, i32)>>>,
 }
 
 /// The card's colours: its fill, the held title's hairline, its name's and its heading's ink.
@@ -182,11 +184,23 @@ impl Card {
                 ))
         });
         let (top, height) = (self.top.clone(), self.height.clone());
+        let sight_logged = self.sight_logged.clone();
         let at = canvas(
             |_, _, _| {},
             move |bounds, _, _, _| {
                 top.set(f32::from(bounds.origin.y));
                 height.set(f32::from(bounds.size.height));
+                // Under the held title and over the fade, in the window's points, where a press
+                // on a control lands: one drawn past them is under the card's edge, or behind
+                // them. check.sh reads this line, to scroll a control into sight first (#1950).
+                let card = f32::from(bounds.origin.y);
+                let sight = (
+                    (card + HELD_TITLE).round() as i32,
+                    (card + f32::from(bounds.size.height) - FADE).round() as i32,
+                );
+                if sight_logged.replace(Some(sight)) != Some(sight) {
+                    crate::log!("browser: settings card shows {} to {}", sight.0, sight.1);
+                }
             },
         )
         .absolute()
@@ -217,6 +231,10 @@ impl Card {
             .child(
                 div()
                     .id("card")
+                    .tab_group()
+                    .tab_index(2)
+                    // Its controls are the stops, not the scrolling page they're on.
+                    .tab_stop(false)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)

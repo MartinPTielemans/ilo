@@ -10,25 +10,26 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DispatchPhase, Div, Entity, Focusable, FontWeight,
-    HitboxBehavior, Hsla, Image, ListAlignment, ListState, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, SharedString, Stateful,
-    StyledText, Subscription, WeakEntity, Window, canvas, div, img, linear_color_stop,
-    linear_gradient, list, prelude::*, px, relative, svg,
+    AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
+    FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage,
+    SharedString, Stateful, StyledText, Subscription, WeakEntity, Window, canvas, div, img,
+    linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
 };
 
 use super::{
     Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
     MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE,
-    URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
+    SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
+    UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
     clean_link, dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
-    host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn, split_plate,
-    spring_to, still_clear,
+    host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
+    space_order::{Along, DraggedSpace},
+    split_plate, spring_to, still_clear,
     task_cards::number as task_number,
     title,
 };
@@ -268,6 +269,10 @@ pub struct Download {
     pub held: bool,
     /// When it started, in milliseconds since the Unix epoch.
     pub started: f64,
+    /// The profile it's of, and whether it's of that profile's private session, which only that
+    /// profile's private windows list, as only the regular windows list the rest.
+    pub profile: u64,
+    pub private: bool,
 }
 
 /// What `Browser::act_on_download` does.
@@ -354,12 +359,14 @@ fn download_menu_items(
 }
 
 /// A section of the Library.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Section {
     Media,
     Downloads,
     Spaces,
     Archive,
+    /// The past tasks and sessions of the window's profile's agents (#1080).
+    Agents,
 }
 
 impl Section {
@@ -369,6 +376,7 @@ impl Section {
             Section::Downloads => "downloads",
             Section::Spaces => "spaces",
             Section::Archive => "archive",
+            Section::Agents => "agents",
         }
     }
 }
@@ -408,6 +416,8 @@ pub(super) struct Library {
     list: ListState,
     /// What Archived Tabs lists, the Filter button's choice.
     only: Only,
+    /// The downloads the log last said Downloads lists, for check.sh.
+    logged: Option<String>,
     _search: Subscription,
 }
 
@@ -442,6 +452,10 @@ enum Item {
     Tab(usize),
     /// The task at this index of `Shell::archived_tasks`.
     Task(usize),
+    /// The past task at this index of `Shell::agent_history`.
+    Past(usize),
+    /// Agents' Clear, over its list.
+    Clear,
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -485,7 +499,7 @@ impl Shell {
     /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
     /// window, which offers no tasks, lists none.
     pub fn set_archived_tasks(&mut self, mut tasks: Vec<ArchivedTask>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             tasks.clear();
         }
         if tasks == self.archived_tasks {
@@ -497,8 +511,34 @@ impl Shell {
         }
     }
 
-    /// The downloads changed, all of them, newest first.
+    /// Whether the window lists `download`: a private window its own session's, as nothing else
+    /// may see them, and a regular window those of every profile's own (#669).
+    pub(super) fn lists_download(&self, download: &Download) -> bool {
+        match self.private {
+            true => download.private && Some(download.profile) == self.private_profile(),
+            false => !download.private,
+        }
+    }
+
+    /// A private window's profile, whose session it's of; none for a regular window.
+    pub(super) fn private_profile(&self) -> Option<u64> {
+        self.private
+            .then(|| self.spaces.first().map(|space| space.profile))
+            .flatten()
+    }
+
+    /// The Library's sections the window has: a private window's own downloads and their media,
+    /// but none of the Spaces or archived tabs the regular windows keep (#669).
+    pub(super) fn has_section(&self, section: Section) -> bool {
+        !self.private || matches!(section, Section::Media | Section::Downloads)
+    }
+
+    /// The downloads changed, all of them, newest first: the window keeps those it lists.
     pub fn set_downloads(&mut self, downloads: Vec<Download>, cx: &mut Context<Self>) {
+        let downloads: Vec<Download> = downloads
+            .into_iter()
+            .filter(|download| self.lists_download(download))
+            .collect();
         // check.sh waits for these lines: a download's state, and how many there are.
         for download in &downloads {
             let before = self.downloads.iter().find(|each| each.id == download.id);
@@ -535,8 +575,10 @@ impl Shell {
         }
     }
 
-    /// The captures saved to the Library changed, all of them, newest first.
+    /// The captures saved to the Library changed, all of them, newest first. A private window lists
+    /// none, as it saves none and the regular windows' aren't its session's.
     pub fn set_captures(&mut self, captures: Vec<Captured>, cx: &mut Context<Self>) {
+        let captures = if self.private { Vec::new() } else { captures };
         self.download_previews.retain(|id, _| {
             id & CAPTURE_BIT == 0 || captures.iter().any(|each| capture_id(&each.path) == *id)
         });
@@ -717,9 +759,15 @@ impl Shell {
 
     /// Opens the Library, or closes it, from wherever the card is, the sidebar fading.
     pub(super) fn set_library(&mut self, open: bool, cx: &mut Context<Self>) {
-        // A private window has no Library: what it shows is the regular windows'.
-        if open == self.library_open || (open && (self.page_fullscreen || self.private)) {
+        // A Blank Window has no Library: what it shows is the regular windows'. A private window's is
+        // its own session's (#669).
+        if open == self.library_open || (open && (self.page_fullscreen || self.blank)) {
             return;
+        }
+        // A private window's Library opens on its downloads where it last showed a section it
+        // hasn't.
+        if open && !self.has_section(self.section) {
+            self.section = Section::Downloads;
         }
         if open {
             self.hide_link(cx);
@@ -754,7 +802,11 @@ impl Shell {
     }
 
     /// Opens the Library on `section`, or shows it there, or closes it if it's there already.
+    /// Nothing for a section the window hasn't.
     pub(super) fn view_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if !self.has_section(section) {
+            return;
+        }
         if !self.library_open {
             self.section = section;
             return self.set_library(true, cx);
@@ -775,6 +827,11 @@ impl Shell {
     /// Opens the Library on its Spaces, for the preview, which has no pointer to pick it with.
     pub fn show_spaces(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Spaces, cx);
+    }
+
+    /// Opens the Library on its Agents, for the preview.
+    pub fn show_agents(&mut self, cx: &mut Context<Self>) {
+        self.view_section(Section::Agents, cx);
     }
 
     /// Shows the Library's Downloads for Chrome, which asks after the user stopped a quit to let
@@ -798,6 +855,7 @@ impl Shell {
             Section::Downloads => "Search Downloads…",
             Section::Spaces => "",
             Section::Archive => "Search Archive…",
+            Section::Agents => "Search Agents…",
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
@@ -812,11 +870,12 @@ impl Shell {
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
             only: Only::All,
+            logged: None,
             _search: observe,
         });
         // check.sh waits for these lines.
         log!("browser: library section {}", section.name());
-        if section == Section::Media {
+        if section == Section::Media && !self.private {
             self.browser.list_captures(cx);
         }
         if section == Section::Spaces {
@@ -891,6 +950,9 @@ impl Shell {
     /// Lists the archived tabs, downloads or media the search finds, under their headings. With
     /// `changed` false, only if the search did.
     fn filter(&mut self, changed: bool, cx: &mut Context<Self>) {
+        if self.section == Section::Agents && self.library.is_some() {
+            self.read_agent_history();
+        }
         let Some(library) = &mut self.library else {
             return;
         };
@@ -923,6 +985,14 @@ impl Shell {
                 listed.sort_by(|a, b| b.1.total_cmp(&a.1));
                 listed
             }
+            Section::Agents => (self.agent_history.iter().enumerate())
+                .filter(|(_, past)| {
+                    query.is_empty()
+                        || found(&past.title.clone().into())
+                        || found(&past.agent.clone().into())
+                })
+                .map(|(index, past)| (Item::Past(index), past.ended as f64 * 1000.)) // The Library's times are milliseconds.
+                .collect(),
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
                 .map(|(index, download)| (Item::Download(index), download.started))
@@ -946,6 +1016,9 @@ impl Shell {
         };
         let starts = self.browser.day_starts();
         let mut items = Vec::new();
+        if self.section == Section::Agents && !found.is_empty() {
+            items.push(Item::Clear);
+        }
         let mut heading = None;
         for (item, time) in found {
             let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
@@ -965,12 +1038,65 @@ impl Shell {
         }
         // Reset only for other lines, as it scrolls back to the top, and a running download
         // reports twice a second.
+        if self.section == Section::Downloads {
+            let names: Vec<&str> = (items.iter())
+                .filter_map(|item| match item {
+                    Item::Download(index) => Some(self.downloads[*index].name.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            let names = names.join(", ");
+            if library.logged.as_deref() != Some(names.as_str()) {
+                // check.sh waits for this line: what the window's Downloads lists, once each time
+                // that changes.
+                log!("browser: library lists downloads: {names}");
+                library.logged = Some(names);
+            }
+        }
         if items != library.items {
             library.list.reset(items.len());
             library.items = items;
         }
         library.query = query;
         cx.notify();
+    }
+
+    /// A click on the archived tab `id`'s row, at `at` in the window. It opens in a link preview
+    /// beside the Library, which stays, as Arc's archive previews its tabs (the owner, 2026-10-29,
+    /// #696): ⌘W, Esc or its Close leave it in the archive, and ⌘↩ or its Open as Tab restore it
+    /// (link_preview). With ⌘, Ctrl off the Mac, it's restored at once, as before, and so it is
+    /// where no preview can show it: a page that isn't http(s), previews off, or no tab whose page
+    /// the window lays out for the preview to go over.
+    fn open_archived(
+        &mut self,
+        id: u64,
+        at: Point<Pixels>,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(url) = (self.archive.iter())
+            .find(|tab| tab.id == id)
+            .map(|tab| tab.url.clone())
+        else {
+            return;
+        };
+        let web = url.starts_with("https://") || url.starts_with("http://");
+        let page = self.preview_page().filter(|_| {
+            web && self.selected != 0 && !modifiers.secondary(cx) && self.browser.link_previews()
+        });
+        let Some(page) = page else {
+            return self.restore_archived(id, cx);
+        };
+        // check.sh waits for this line.
+        log!("browser: archived {id} in preview");
+        self.browser
+            .open_archived_preview(self.selected, id, url, at, page, cx);
+    }
+
+    /// The archived tab a preview showed is the window's tab now, kept from the preview, and the
+    /// Library closes as it does for one restored from its row.
+    pub fn restored_from_preview(&mut self, cx: &mut Context<Self>) {
+        self.set_library(false, cx);
     }
 
     /// Opens the archived tab `id` at the top of the Space's Today tabs and closes the Library.
@@ -1213,6 +1339,8 @@ impl Shell {
             (Section::Archive, false) if tasks => "No tasks match.",
             (Section::Archive, true) => "Closed Today tabs stay here for 30 days.",
             (Section::Archive, false) => "No archived tabs match.",
+            (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
+            (Section::Agents, false) => "No tasks match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
             (Section::Media, true) => "Saved captures and downloaded media show here.",
@@ -1240,8 +1368,18 @@ impl Shell {
             .mb(px(10.))
             .child(self.section_button(Section::Media, color, cx))
             .child(self.section_button(Section::Downloads, color, cx))
-            .child(self.section_button(Section::Spaces, color, cx))
-            .child(self.section_button(Section::Archive, color, cx));
+            .children(
+                self.has_section(Section::Spaces)
+                    .then(|| self.section_button(Section::Spaces, color, cx)),
+            )
+            .children(
+                self.has_section(Section::Archive)
+                    .then(|| self.section_button(Section::Archive, color, cx)),
+            )
+            .children(
+                self.has_section(Section::Agents)
+                    .then(|| self.section_button(Section::Agents, color, cx)),
+            );
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
         let past = self.library_past();
@@ -1441,10 +1579,17 @@ impl Shell {
     /// order, and the + after them, which scroll across together if they don't fit (`card_strip`),
     /// clipped at the Library's edge.
     fn space_cards(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // A card dragged by its handle dims in its place, and the cards glide to their places once
+        // the Spaces' order changes, as the switcher's dots do (#1580).
         let cards: Vec<_> = self
             .spaces
             .iter()
-            .map(|space| self.space_card(space, cx))
+            .map(|space| {
+                let id = space.id;
+                self.space_card(space, cx)
+                    .left(px(self.space_slide(Along::Cards, id)))
+                    .when(self.space_dragged(id), |card| card.opacity(SPACE_DRAGGED))
+            })
             .collect();
         let plus = div()
             .id("library-new-space")
@@ -1498,11 +1643,18 @@ impl Shell {
                     .children(cards)
                     .child(plus),
             )
+            .on_drag_move(
+                cx.listener(|shell, event: &DragMoveEvent<DraggedSpace>, _, cx| {
+                    shell.drag_space_over(Along::Cards, event, cx)
+                }),
+            )
+            .children(self.space_drop_line(Along::Cards))
+            .child(self.space_drop_listener(Along::Cards, cx))
     }
 
     /// A Space's card: its name's field over the rows the sidebar would show, in its colour. A
     /// click shows the Space, and a right-click shows its menu.
-    fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn space_card(&self, space: &Space, cx: &mut Context<Self>) -> Stateful<Div> {
         let id = space.id;
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
@@ -1637,6 +1789,67 @@ impl Shell {
             .child(field)
             .child(div().children(rows))
             .child(more)
+            .child(self.card_handle(id, &palette, cx))
+    }
+
+    /// The handle at the card's foot, on the •••'s line and as far in from the card's left (Arc),
+    /// that drags the card along the others to move the Space (#1580), shown with the pointer on
+    /// the card as the ••• is. Its press stops there, so the card sees no click to pick the Space,
+    /// and a tab's row still drags the tab.
+    fn card_handle(
+        &self,
+        id: u64,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let half = URL_BUTTON_SIZE / 2.;
+        let shell = cx.weak_entity();
+        div()
+            .id(("space-card-handle", id))
+            .absolute()
+            .left(px(CARD_MORE_X - half))
+            .bottom(px(CARD_MORE_Y - half))
+            .size(px(URL_BUTTON_SIZE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(NAV_RADIUS))
+            .opacity(0.)
+            .group_hover("space-card", |style| style.opacity(1.))
+            .hover(|style| style.bg(palette.plate(STATE_HOVERED)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // GPUI holds the handle where it was pressed; the card is held that far into it.
+            .on_drag(DraggedSpace, move |_, grab, _, cx| {
+                let grab = CARD_MORE_X - half + f32::from(grab.x);
+                Shell::start_space_drag(&shell, id, Along::Cards, CARD_WIDTH, grab, cx)
+            })
+            .child(
+                svg()
+                    .path("icons/grip-vertical.svg")
+                    .size(px(URL_BUTTON_GLYPH))
+                    .text_color(palette.glyph(NAV)),
+            )
+    }
+
+    /// The card dragged by its handle, whole, as it follows the pointer, lifted with a popover's
+    /// shadow as a card's dragged tab is. GPUI draws the drag from the handle's corner, so the
+    /// card hangs from there.
+    pub(super) fn space_card_ghost(
+        &self,
+        space: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let space = self.spaces.iter().find(|each| each.id == space)?;
+        let height = f32::from(self.viewport.height) - 2. * SPACES_INSET;
+        let half = URL_BUTTON_SIZE / 2.;
+        let card = self
+            .space_card(space, cx)
+            .absolute()
+            .left(px(half - CARD_MORE_X))
+            .top(px(CARD_MORE_Y + half - height))
+            .h(px(height))
+            .shadow(Level::Popover.shadow());
+        Some(div().child(card).into_any_element())
     }
 
     /// The field across the top of a Space's card (Arc): its icon in a dashed slot, which the icon
@@ -1879,8 +2092,8 @@ impl Shell {
         self.set_library(false, cx);
     }
 
-    /// A line of the archive's list: a heading, or an archived tab, which reopens on a click and
-    /// shows its menu on a right-click.
+    /// A line of the archive's list: a heading, or an archived tab, which a click opens in a
+    /// preview and a right-click shows the menu of.
     fn archive_item(
         &mut self,
         index: usize,
@@ -1918,6 +2131,8 @@ impl Shell {
             }
             Item::Tab(tab) => tab,
             Item::Task(task) => return self.archived_task_item(task, cx),
+            Item::Past(past) => return self.past_task_item(past, cx),
+            Item::Clear => return self.agents_clear_item(cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -1954,7 +2169,9 @@ impl Shell {
                     .block_mouse_except_scroll()
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
-                    .on_click(cx.listener(move |shell, _, _, cx| shell.restore_archived(id, cx)))
+                    .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                        shell.open_archived(id, event.position(), event.modifiers(), cx)
+                    }))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
@@ -2066,6 +2283,150 @@ impl Shell {
                                 self.palette.text(SECONDARY),
                             )),
                     ),
+            )
+            .into_any_element()
+    }
+
+    /// Reads the window's profile's past tasks, as Library › Agents shows them, leaving those that
+    /// ended 30 days ago or more, which go from the file too. None in a private window.
+    fn read_agent_history(&mut self) {
+        let Some(profile) = self.learning_profile() else {
+            self.agent_history = Vec::new();
+            return;
+        };
+        let read = crate::agent_history::read(&self.browser.agent_history(profile));
+        let count = read.len();
+        let living = crate::agent_history::living(read, crate::usage::now());
+        if living.len() != count {
+            self.browser
+                .set_agent_history(profile, &crate::agent_history::write(&living));
+        }
+        self.agent_history = living;
+    }
+
+    /// Delete on a past task: it goes from Library › Agents and its file.
+    pub(super) fn delete_past_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agents history delete {id}");
+        let entries = crate::agent_history::read(&self.browser.agent_history(profile));
+        let entries = crate::agent_history::deleted(entries, id);
+        self.browser
+            .set_agent_history(profile, &crate::agent_history::write(&entries));
+        self.filter(true, cx);
+    }
+
+    /// Agents' Clear: the profile's past tasks all go.
+    pub(super) fn clear_agent_history(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agents history cleared");
+        self.browser.set_agent_history(profile, "");
+        self.filter(true, cx);
+    }
+
+    /// A past task's row: its title over its agent, when it ended and what it did, as its receipt
+    /// said, with ✕ at its end under the pointer, which deletes it.
+    fn past_task_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let id = past.id.clone();
+        let group: SharedString = format!("past-{index}").into();
+        let mark = self.status_mark(crate::agents::task::Dot::Done);
+        let close = div()
+            .id(("past-delete", index))
+            .absolute()
+            .right(px(8.))
+            .top_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .invisible()
+            .group_hover(group.clone(), |style| style.visible())
+            .child(
+                svg()
+                    .path("icons/x.svg")
+                    .size(px(14.))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                shell.delete_past_task(&id, cx)
+            }));
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("past-task", index))
+                    .group(group)
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X + (FAVICON_SIZE - TASK_GLYPH) / 2.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(mark),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(30.))
+                            .child(text_line(
+                                past.title.clone().into(),
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                past.about().into(),
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    )
+                    .child(close),
+            )
+            .into_any_element()
+    }
+
+    /// Agents' Clear, at the end of a line over its list.
+    fn agents_clear_item(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w_full()
+            .h(px(ARCHIVED_PITCH))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .flex()
+            .items_center()
+            .justify_end()
+            .child(
+                div()
+                    .id("agents-clear")
+                    .px(px(8.))
+                    .py(px(3.))
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .text_size(px(text::SMALL))
+                    .text_color(self.palette.text(SECONDARY))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .child("Clear")
+                    .on_click(cx.listener(|shell, _, _, cx| shell.clear_agent_history(cx))),
             )
             .into_any_element()
     }
@@ -2331,6 +2692,7 @@ impl Shell {
             Section::Downloads => ("icons/arrow-down-to-line.svg", "Downloads"),
             Section::Spaces => ("icons/spaces.svg", "Spaces"),
             Section::Archive => ("icons/archive.svg", "Archived Tabs"),
+            Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
         };
         div()
             .id(label)
@@ -2569,7 +2931,7 @@ impl Shell {
                     DownloadChoice::Trash => shell.trash_download(id, cx),
                     DownloadChoice::Clear => {
                         log!("browser: command clear-downloads via download menu");
-                        shell.browser.clear_downloads(cx);
+                        shell.browser.clear_downloads(shell.private_profile(), cx);
                     }
                 }
             }),
@@ -2878,7 +3240,7 @@ fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::D
 }
 
 /// A size as Finder writes it, in powers of 1000.
-fn bytes(bytes: i64) -> String {
+pub(crate) fn bytes(bytes: i64) -> String {
     let bytes = bytes.max(0) as f64;
     match bytes {
         b if b < 1e3 => format!("{b} bytes"),
@@ -2897,7 +3259,13 @@ pub(super) fn of(received: i64, total: i64) -> String {
 }
 
 #[cfg(test)]
+mod agents_tests;
+#[cfg(test)]
 mod drag_tests;
+#[cfg(test)]
+mod peek_tests;
+#[cfg(test)]
+mod private_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
@@ -3080,8 +3448,8 @@ mod tests {
         });
         cx.run_until_parked();
         let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fourth button, the column's four centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 145.));
+        // The fourth button, Archived Tabs, the column's five centred 5 above its middle, 100 apart.
+        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());
@@ -3566,6 +3934,8 @@ mod tests {
             open_when_done: false,
             held,
             started: 0.,
+            profile: 0,
+            private: false,
         }
     }
 

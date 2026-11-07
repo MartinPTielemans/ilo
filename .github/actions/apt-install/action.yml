@@ -1,0 +1,86 @@
+# Installs Ubuntu packages from the .debs a run on the same runner image kept in the Actions cache,
+# so a warm run reads neither the mirror's index nor its packages: azure.archive.ubuntu.com stalls
+# for up to an hour on some (#1969). The key is the image's own version, which GitHub bumps about
+# weekly, so the cached .debs are exactly what apt chose on that image and install without an index.
+# A miss installs from the mirror as before, starting from the last image's .debs, and keeps what it
+# fetched. A self-hosted runner installs from its mirror as before, with no cache.
+name: Install Ubuntu packages
+description: apt-get install through a cache of the .debs, keyed on the runner image and the list.
+inputs:
+  packages:
+    description: The packages, separated by spaces or lines
+    required: true
+  options:
+    description: More options for apt-get install, such as --no-install-recommends
+    default: ''
+runs:
+  using: composite
+  steps:
+    - id: key
+      if: runner.environment == 'github-hosted'
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+      run: |
+        list=$(printf '%s\n' $OPTIONS -- $(printf '%s\n' $PACKAGES | sort -u) | sha256sum | cut -c1-16)
+        echo "dir=$RUNNER_TEMP/apt-$list" >> "$GITHUB_OUTPUT"
+        echo "prefix=apt-$list-$ImageOS-" >> "$GITHUB_OUTPUT"
+        echo "key=apt-$list-$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+
+    - id: restore
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+        HOSTED: ${{ runner.environment == 'github-hosted' }}
+        HIT: ${{ steps.restore.outputs.cache-hit }}
+        DIR: ${{ steps.key.outputs.dir }}
+      run: |
+        set -euo pipefail
+        # A stalled download times out in 20 s and is retried, rather than hanging the run.
+        apt=(sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+        if [ "$HOSTED" != true ]; then
+          "${apt[@]}" update -q
+          "${apt[@]}" install -yq $OPTIONS $PACKAGES
+          exit 0
+        fi
+        shopt -s nullglob
+        fix=
+        if [ "$HIT" = true ]; then
+          # The .debs apt fetched on this image when the cache was made, and none if it fetched
+          # nothing. dpkg, as apt would fetch a cached .deb again whose version the index also has.
+          debs=("$DIR"/*.deb)
+          echo "${#debs[@]} packages from the cache, $(du -sh "$DIR" | cut -f1)"
+          if [ "${#debs[@]}" = 0 ] || sudo DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}"; then
+            exit 0
+          fi
+          echo "::warning::The cached packages didn't install on their own, so apt fetches what they lack."
+          fix=-f
+        fi
+        mkdir -p "$DIR/partial"
+        # Once a job: a second install in the job reads the index the first fetched.
+        if [ ! -e "$RUNNER_TEMP/apt-updated" ]; then
+          "${apt[@]}" update -q
+          touch "$RUNNER_TEMP/apt-updated"
+        fi
+        # apt takes a restored .deb whose version and hash match the index, and fetches the rest.
+        "${apt[@]}" -o Dir::Cache::Archives="$DIR" install -yq $fix $OPTIONS $PACKAGES
+        # The last image's .debs that the mirror no longer has go, and the rest stay with the new.
+        sudo apt-get -o Dir::Cache::Archives="$DIR" autoclean -q
+        sudo rm -rf "$DIR/partial" "$DIR/lock"
+        sudo chown -R "$(id -u):$(id -g)" "$DIR"
+        echo "$(ls "$DIR" | wc -l) packages to cache, $(du -sh "$DIR" | cut -f1)"
+
+    - if: runner.environment == 'github-hosted' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}

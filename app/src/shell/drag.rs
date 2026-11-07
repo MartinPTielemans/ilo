@@ -15,9 +15,8 @@ use gpui::{
 
 use super::{
     Closing, Curve, DRAG_START, Drag, Edit, FOLDER_INDENT, HeldRow, LIST_GLIDE, LIST_GLIDE_POWER,
-    ListGlide, NAME_HEIGHT, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE,
-    PRESS_TIME, Place, ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What,
-    files, slots,
+    ListGlide, Opened, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, PRESS_SCALE, PRESS_TIME, Place,
+    ROW_HEIGHT, ROW_PITCH, Shape, Shell, Slot, TILE_HEIGHT, TILE_RADIUS, What, files, slots,
 };
 
 /// The tab that links or files dragged in stand for until they're dropped: none, as the core
@@ -250,9 +249,14 @@ impl Shell {
     }
 
     /// How much of the list's top stays put while its rows scroll under it: the Space's name row,
-    /// as Arc 1.170's, unless the tiles scroll with the list, which takes the row along.
+    /// as Arc 1.170's, or what a lone unnamed Space leaves of it, unless the tiles scroll with the
+    /// list, which takes the row along.
     pub(super) fn fixed_head(&self) -> f32 {
-        if self.tiles_scroll() { 0. } else { NAME_HEIGHT }
+        if self.tiles_scroll() {
+            0.
+        } else {
+            self.list_head()
+        }
     }
 
     /// Whether `y`, down from the sidebar's top, is on the part of the list's top that stays put.
@@ -403,7 +407,8 @@ impl Shell {
     /// nearest it. Over the list it's a row, which goes up and down over rows that stay put, and a
     /// line marks the place, in the pinned tabs or Today, nearest where it's drawn. Where that's
     /// at the end of folders or after one, the pointer moved right takes it into them, a row in for
-    /// each FOLDER_INDENT. A split view's row stays in the list, and a folder's in the pinned tabs.
+    /// each FOLDER_INDENT. A split view's row over the favorites is its tile, as it becomes one
+    /// favorite, and a folder's row stays in the pinned tabs.
     pub(super) fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(drag) = self
             .drag
@@ -454,7 +459,6 @@ impl Shell {
         let over_favorites = !incoming
             && !away
             && !folder
-            && self.panes(tab).len() == 1
             && self.has_room_for(tab)
             && pointer.y < self.list_top_with(favorites + 1) - self.tiles_scrolled();
         let mut depth = 0;
@@ -485,7 +489,7 @@ impl Shell {
                     let (mut pinned, mut today) = (pinned.clone(), today.clone());
                     let tabs = if in_pinned { &mut pinned } else { &mut today };
                     tabs.insert(index, tab);
-                    let layout = slots(&pinned, &today);
+                    let layout = slots(self.list_head(), &pinned, &today);
                     ((in_pinned, index), layout[&Slot::Tab(tab)], layout)
                 })
                 .collect();
@@ -606,7 +610,7 @@ impl Shell {
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
             && self.panes(tab).len() == 1
-            && !self.private;
+            && !self.one_space();
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
         if drag.edge.map(|(right, _)| right) == side {
             return;
@@ -728,9 +732,8 @@ impl Shell {
             (false, at) => Some(at.map_or(Slot::NewTab, |at| Slot::Tab(today[at]))),
         };
         let layout = self.layout();
-        let below = above.map_or(Some(NAME_HEIGHT), |slot| {
-            Some(layout.get(&slot)? + ROW_PITCH)
-        })?;
+        let head = self.list_head();
+        let below = above.map_or(Some(head), |slot| Some(layout.get(&slot)? + ROW_PITCH))?;
         Some(below - (ROW_PITCH - ROW_HEIGHT) / 2.)
     }
 

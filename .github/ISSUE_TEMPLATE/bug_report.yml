@@ -87,7 +87,7 @@ body:
     id: version
     attributes:
       label: ilo version
-      description: Help › Report a Problem… fills this and the two below. Built from source, the commit (`git rev-parse --short HEAD`).
+      description: "Report a Problem… fills this, the Chromium version and the system: Help › Report a Problem… on the Mac, the command bar elsewhere. Settings › About shows it too, and Copy Build Info copies it with the Chromium version, the system and the chip: Help › Troubleshooting on the Mac, the command bar elsewhere. Built from source, the commit (`git rev-parse --short HEAD`)."
       placeholder: 0.1.0 (4321)
     validations:
       required: true
@@ -96,17 +96,42 @@ body:
     id: chromium
     attributes:
       label: Chromium version
-      description: "Help › Troubleshooting › Copy Build Info has it, as has `chromium.version` in `engine/pins.ini` at that commit."
+      description: "Copy Build Info has it. Built from source, `chromium.version` in `engine/pins.ini` at that commit."
       placeholder: 156.0.7600.12
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
 
   - type: input
     id: os
     attributes:
       label: System and chip
-      description: "The macOS version and chip, such as `sw_vers -productVersion` and `sysctl -n machdep.cpu.brand_string` say."
+      description: "The system's version and the chip, as Copy Build Info gives them. By hand: on the Mac `sw_vers -productVersion` and `uname -m`; on Linux the distribution (`PRETTY_NAME` in `/etc/os-release`) and `uname -m`; on Windows the version `winver` shows."
       placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true
+
+  - type: input
+    id: linux
+    attributes:
+      label: On Linux, how ilo is installed, the session and the desktop
+      description: "The Flatpak from ilo's releases, or built from source; Wayland or X11 (`echo $XDG_SESSION_TYPE`); and the desktop or compositor (`echo $XDG_CURRENT_DESKTOP`), such as GNOME, KDE Plasma, or Hyprland on Omarchy."
+      placeholder: Flatpak, Wayland, Hyprland (Omarchy)
+
+  - type: input
+    id: windows
+    attributes:
+      label: On Windows, how ilo is installed
+      description: "The installer (ilo-windows-x64-setup.exe), winget, the Microsoft Store, or built from source."
+      placeholder: ilo-windows-x64-setup.exe
 
   - type: textarea
     id: setup

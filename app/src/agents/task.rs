@@ -105,6 +105,9 @@ pub struct Conversation {
     pub title: SharedString,
     /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
     pub about: SharedString,
+    /// How far it has got while it works, after where it is, from its own steps: "step 5 · 4
+    /// pages", or empty.
+    pub progress: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
     pub page: Option<AskedOn>,
@@ -254,6 +257,13 @@ pub struct Task {
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
+    /// When it started, and when it ended as Library › Agents last kept it.
+    pub started: SystemTime,
+    pub(super) kept: Option<SystemTime>,
+    /// The orders it placed and the messages it sent, each once the user allowed it and the page
+    /// did it, for Library › Agents. A session counts its own, for its receipt.
+    pub(super) orders: usize,
+    pub(super) sent: usize,
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
@@ -589,9 +599,13 @@ impl Agents {
                 });
             }
         }
-        let tabs = (self.pages(task, cx).into_iter())
+        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
+        let progress = match task.state == State::Working && !self.waits_on_user(task) {
+            true => progress(turn_steps(task).len(), tabs.len()),
+            false => String::new(),
+        };
         let about = match &task.state {
             State::Working if self.waits_on_user(task) => "Waiting for you".to_string(),
             State::Working => "Working".to_string(),
@@ -614,6 +628,7 @@ impl Agents {
             name: task.name.clone(),
             title: task.title.clone(),
             about: about.into(),
+            progress: progress.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
@@ -739,13 +754,12 @@ impl Agents {
         let question = self.task_question(task);
         let asks = self.ask_shown(task);
         let (status, dot) = match (&task.state, &question) {
-            (State::Working | State::Asking { .. }, Some(question)) => match question.handoff {
-                Some(_) => ("Waiting for you".into(), Dot::Waiting),
-                None => ("Waiting for your OK".into(), Dot::Waiting),
-            },
+            (State::Working | State::Asking { .. }, Some(question)) => {
+                (needs_you(question), Dot::Waiting)
+            }
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
-            (State::Asking { .. }, None) => ("Waiting for you".into(), Dot::Waiting),
+            (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
             // A session has no result to say, so its receipt says what it did, or with nothing to
             // count, when it ended.
             (State::Done { .. }, _) if let Some(session) = &task.session => {
@@ -766,7 +780,7 @@ impl Agents {
                 Dot::Done,
             ),
             (State::Limit { resets }, _) => (limit_words(&task.name, resets).into(), Dot::Ended),
-            (State::Stopped, _) => ("Stopped".into(), Dot::Ended),
+            (State::Stopped, _) => (stopped(task), Dot::Ended),
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
@@ -979,6 +993,10 @@ impl Agents {
             model,
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1448,6 +1466,8 @@ impl Agents {
         // Each goes to the top, so the last goes first.
         for &tab in open.iter().rev() {
             self.browser.move_tab(tab, home, cx);
+            // Kept, it's the user's tab, with its sound (#1080).
+            self.browser.set_muted(tab, false);
             // check.sh reads this line.
             log!("browser: task {agent} opens {tab} in space {home}");
         }
@@ -1479,7 +1499,7 @@ impl Agents {
                 .flat_map(|other| other.tabs.clone())
                 .collect::<Vec<_>>();
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
-                self.browser.close_tab(tab, cx);
+                self.browser.close_user_tab(tab, cx);
             }
             return;
         }
@@ -1758,6 +1778,10 @@ impl Agents {
             model: SharedString::default(),
             state: State::Working,
             ended: None,
+            started: SystemTime::now(),
+            kept: None,
+            orders: 0,
+            sent: 0,
             messages: Vec::new(),
             trace: Vec::new(),
             dismissed: false,
@@ -1786,18 +1810,80 @@ impl Agents {
         }
     }
 
-    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt.
+    /// `agent`'s call `call` did what asked first, allowed: its session counts it for its receipt,
+    /// or, for a task of the user's, the task, for Library › Agents.
     pub(super) fn counted(&mut self, agent: &str, call: u64, did: super::Did) {
-        let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
+        let Some(key) = self.tracer(agent, call) else {
             return;
         };
-        let Some(session) = self.task_mut(&key).and_then(|task| task.session.as_mut()) else {
+        let Some(task) = self.task_mut(&key) else {
             return;
         };
-        match did {
-            super::Did::Order => session.orders += 1,
-            super::Did::Message => session.messages += 1,
+        match (did, task.session.as_mut()) {
+            (super::Did::Order, Some(session)) => session.orders += 1,
+            (super::Did::Message, Some(session)) => session.messages += 1,
+            (super::Did::Order, None) => task.orders += 1,
+            (super::Did::Message, None) => task.sent += 1,
         }
+    }
+
+    /// Each task that has ended since Library › Agents last kept it, as its receipt shows it, with
+    /// its home Space, or a session's own, whose profile keeps it. A later turn of a task ends
+    /// again, and is kept again in its earlier one's place.
+    pub fn take_ended(&mut self, cx: &App) -> Vec<(u64, crate::agent_history::Past)> {
+        let finished = |task: &Task| {
+            matches!(
+                task.state,
+                State::Done { .. } | State::Stopped | State::Failed { .. }
+            )
+        };
+        let ended: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| finished(task) && task.ended.is_some() && task.ended != task.kept)
+            .map(|task| task.agent.clone())
+            .collect();
+        let mut kept = Vec::new();
+        for key in ended {
+            let Some(task) = self.task(&key) else {
+                continue;
+            };
+            let tabs = match &task.session {
+                Some(session) => session.tabs.clone(),
+                None => self.browser.space_tab_ids(task.space, cx),
+            };
+            let pages = (tabs.iter())
+                .map(|&tab| self.browser.tab(tab, cx))
+                .filter(|page| !page.url.is_empty())
+                .map(|page| (page.title.to_string(), page.url.to_string()))
+                .collect();
+            let past = crate::agent_history::Past {
+                id: format!("{}-{}", task.agent, seconds(task.started)),
+                title: task.title.to_string(),
+                agent: task.name.to_string(),
+                started: seconds(task.started),
+                ended: task.ended.map(seconds).unwrap_or_default(),
+                pages,
+                orders: task
+                    .session
+                    .as_ref()
+                    .map_or(task.orders, |session| session.orders),
+                messages: task
+                    .session
+                    .as_ref()
+                    .map_or(task.sent, |session| session.messages),
+            };
+            // A session has no home of the user's, so its agent's Space says its profile.
+            let home = if task.home != 0 {
+                task.home
+            } else {
+                task.space
+            };
+            kept.push((home, past));
+            let ended = task.ended;
+            if let Some(task) = self.task_mut(&key) {
+                task.kept = ended;
+            }
+        }
+        kept
     }
 
     /// The client's Space was made again, as the core lost it: its sessions' Space.
@@ -1961,20 +2047,30 @@ impl Agents {
                     did.text = typed;
                 }
             }
+            "select" => {
+                did.target = element.as_ref().map(named).unwrap_or_default();
+                did.text = page::clip(&string("option"), tools::TYPED_SHOWN);
+            }
             "press_key" => did.target = string("key"),
+            "request" => did.target = super::request::described(arguments),
             "scroll" => {
                 did.target = match &element {
                     Some(element) => named(element),
                     None => string("direction"),
+                };
+                if element.is_some() {
+                    did.text = string("direction");
                 }
             }
             "wait" => {
-                let text = string("text");
+                let (text, gone) = (string("text"), string("gone"));
                 let seconds = arguments.get("seconds").and_then(Value::as_f64);
-                did.target = match (text.is_empty(), seconds) {
-                    (false, _) => format!("“{}”", page::clip(&text, 40)),
-                    (true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
-                    (true, None) => String::new(),
+                did.target = match (text.is_empty(), gone.is_empty(), seconds) {
+                    (false, _, _) => format!("“{}”", page::clip(&text, 40)),
+                    (true, false, _) => format!("“{}” to go", page::clip(&gone, 40)),
+                    _ if string("until") == "quiet" => tools::SETTLE.into(),
+                    (true, true, Some(seconds)) => duration(seconds.round().max(1.) as u64),
+                    (true, true, None) => String::new(),
                 };
             }
             "list_tabs" | "ask" => {
@@ -2246,16 +2342,88 @@ fn first_words(result: &str) -> SharedString {
         None => "Finished".into(),
     }
 }
-/// A task's status while it works: the step of the turn it's on, else the last it took, and
-/// Thinking until it takes one.
+/// What a card's status leads with when a confirmation or a handoff waits on the user, the one
+/// status the card sets heavier (`status_lead`).
+pub const NEEDS_YOU: &str = "Needs you";
+const NEEDS_OK: &str = "Needs your OK";
+
+/// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
+/// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps
+/// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
+/// step comes, never on a clock.
 fn working(task: &Task) -> SharedString {
+    let taken = turn_steps(task);
+    match taken.first() {
+        Some(step) => format!(
+            "Step {} · {}",
+            taken.len(),
+            tools::step_title(&step.did, tense(step))
+        )
+        .into(),
+        None => "Thinking · no steps yet".into(),
+    }
+}
+
+/// The steps of the turn under way, newest first, its thoughts left out: what the card and the
+/// conversation's header count.
+fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
-    let last = (task.trace.iter().rev())
+    (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .find(|step| step.did.tool != "thought");
-    match last {
-        Some(step) => tools::step_title(&step.did, tense(step)).into(),
-        None => "Thinking".into(),
+        .filter(|step| step.did.tool != "thought")
+        .collect()
+}
+
+/// The header's progress while the task works: its steps this turn and its pages, each left out
+/// while there are none.
+fn progress(steps: usize, pages: usize) -> String {
+    let steps = (steps > 0).then(|| format!("step {steps}"));
+    let pages = match pages {
+        0 => None,
+        1 => Some("1 page".to_string()),
+        pages => Some(format!("{pages} pages")),
+    };
+    steps
+        .into_iter()
+        .chain(pages)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// A stopped task's status: how far it got before the user stopped it, by its steps, its thoughts
+/// left out.
+fn stopped(task: &Task) -> SharedString {
+    match (task.trace.iter())
+        .filter(|step| step.did.tool != "thought")
+        .count()
+    {
+        0 => "Stopped".into(),
+        1 => "Stopped after 1 step".into(),
+        steps => format!("Stopped after {steps} steps").into(),
+    }
+}
+
+/// The status while a confirmation or a handoff waits: what the user is needed for, after the
+/// words that say they are. A handoff says why, as the agent gave it; a confirmation, what the
+/// agent would do.
+fn needs_you(question: &Question) -> SharedString {
+    match question.handoff {
+        Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
+        Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
+        None => format!("{NEEDS_OK} · {}", question.what).into(),
+    }
+}
+
+/// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
+/// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
+/// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
+/// rolling out has left its card's state behind.
+pub fn status_lead(status: &str) -> usize {
+    let counts = (status.strip_prefix("Step "))
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    match counts || status.starts_with(NEEDS_YOU) {
+        true => status.find(" · ").unwrap_or(status.len()),
+        false => 0,
     }
 }
 

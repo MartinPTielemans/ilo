@@ -32,7 +32,11 @@ actions!(
         /// ⌘F, Ctrl+F off the Mac: the keyboard goes to the field.
         Search,
         /// Esc: the field empties and the section shows again.
-        EndSearch
+        EndSearch,
+        /// ⇥: the keyboard goes to the next control, in reading order.
+        NextControl,
+        /// ⇧⇥: the keyboard goes to the control before.
+        PreviousControl
     ]
 );
 
@@ -42,6 +46,8 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         shell::view_binding("cmd-f", Box::new(Search), "Settings", cx),
         gpui::KeyBinding::new("escape", EndSearch, Some("Settings")),
+        gpui::KeyBinding::new("tab", NextControl, Some("Settings")),
+        gpui::KeyBinding::new("shift-tab", PreviousControl, Some("Settings")),
     ]);
 }
 
@@ -63,11 +69,16 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Mini Player" => &["picture in picture", "pip"],
         concat!("Little ", env!("APP_NAME")) => &["little arc", "small window"],
         "Block ads and trackers" => &["ad blocker", "content blocker"],
+        "Relay calls" => &["webrtc", "ip leak"],
         "Reopen your windows and tabs" => &["restore session"],
+        "Page zoom" => &["text size", "font size"],
+        "Let sites ask to send notifications" => &["notifications"],
+        "Ask where to save each file" => &["downloads"],
         "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
         "Show what's new after an update" => &["release notes", "changelog"],
+        "Check for updates automatically" => &["auto update", "software update"],
         "Dock icon takes the Space's color" => &["dock dot"],
         _ => &[],
     }

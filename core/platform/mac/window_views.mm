@@ -500,6 +500,13 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+bool FocusSettledOnActivation() {
+  // AppKit can be part way through moving the keyboard, as when a committing page hides the view
+  // that had it and Chromium makes the window key: a page view focused inside that move believes
+  // it has the keyboard after AppKit has given it elsewhere.
+  return false;
+}
+
 bool PageDialogsInOwnWindow() {
   // A child NSWindow either way.
   return false;
@@ -527,6 +534,20 @@ bool KeyboardForPage(views::Widget* widget) {
 
 void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  if (!widget) {
+    return false;
+  }
+  NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
+  // A submenu's window is the menu's child.
+  for (NSWindow* over = NSApp.keyWindow.parentWindow; over; over = over.parentWindow) {
+    if (over == window) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {

@@ -25,6 +25,8 @@ pub struct MenuBar {
     pub developer_mode: Option<bool>,
     /// Whether a trace is recording, which Help › Troubleshooting's item stops.
     pub tracing: bool,
+    /// Little ilo is off in Settings › Features, so File has no New Little ilo Window.
+    pub little_off: bool,
     /// Window › Stay On Top's tick, or None where the window can't stay on top.
     pub on_top: Option<bool>,
     /// Spaces › Change Profile: each profile by id and name, whether the Space shown can change to
@@ -121,7 +123,7 @@ impl Shell {
             .cloned()
             .collect();
         let spaces = (self.spaces.iter())
-            .filter(|_| !self.private)
+            .filter(|_| !self.one_space())
             .map(|space| space_menu_label(&space.icon, &space.name))
             .collect();
         let pinned = (self.selected != 0).then(|| self.pinned().contains(&self.selected));
@@ -137,11 +139,14 @@ impl Shell {
                 || self.offers(Command::ExpandPinned),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
+            little_off: !self.little_windows,
             on_top: self.browser.can_stay_on_top().then_some(self.on_top),
-            profiles: self.profile_choices(self.space).filter(|_| !self.private),
+            profiles: self
+                .profile_choices(self.space)
+                .filter(|_| !self.one_space()),
             appearance: self.app_appearance,
             sidebar_backups: (self.shown_space())
-                .filter(|space| !self.private && space.agent.is_empty())
+                .filter(|space| !self.one_space() && space.agent.is_empty())
                 .and_then(|space| self.sidebar_backups.get(&space.profile))
                 .cloned()
                 .unwrap_or_default(),

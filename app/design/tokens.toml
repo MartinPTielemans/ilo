@@ -65,6 +65,12 @@ input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
 hint-end = 22.0
 hint-gap = 11.0
+# The hint's key, "Ask Claude ⇥": a key's chip on the bar's chip plate with a hairline of the ink
+# at `hint-key-rim` inside its edge, as the dialog's return key has, its glyph `hint-key-x` in from
+# each side, `hint-key-gap` after the words, so the two read as one (#1080).
+hint-key-rim = 0.2
+hint-key-x = 6.0
+hint-key-gap = 6.0
 # A long ask scrolls to keep the caret in view, and an edge with more text past it fades over this
 # far into the bar (ours).
 field-fade = 24.0
@@ -81,6 +87,11 @@ field-radius = 20.0
 field-input-text = 13.0
 # Over a new pane of a split view, the bar's right edge stays this far inside the card's (Arc).
 beside-end = 70.0
+# In a Little ilo window, ⌘L and ⌘T open the bar inside the window, this wide, centred across it,
+# its top this far down the window (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407).
+little-width = 500.0
+little-down = 0.333_333
 # The bar is the palette's overlay, opaque, and what's on it the palette's ink at these alphas
 # (Arc's white ones over its #191919), text raised to the overlay's floor (palette.rs).
 line-color = 0.1
@@ -101,6 +112,28 @@ chip = 0.08
 arrow-tile = 0.04
 # A command's keys, as chips.
 chip-radius = 6.0
+
+[command-bar.site-colors]
+# In the site searches a new profile has, the chip and the selected row are in the site's own
+# colour, as Arc's are (#1397), and the palette moves each along its lightness until it reads on
+# the bar and Ink or Paper reads on it (ours: Arc's colours and glow aren't ilo's look). GitHub's,
+# X's and Wikipedia's marks are black and white, so they keep the chip and the Space's accent, as
+# a site search the user adds does.
+google-drive = 0xfbbc04
+gmail = 0xea4335
+google-maps = 0x34a853
+google-calendar = 0x4285f4
+google-docs = 0x4285f4
+dropbox = 0x0061ff
+amazon = 0xff9900
+figma = 0xa259ff
+youtube = 0xff0033
+reddit = 0xff4500
+soundcloud = 0xff5500
+asana = 0xf06a6a
+linkedin = 0x0a66c2
+apple-music = 0xfa243c
+spotify = 0x1ed760
 
 [dialog]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Renaming and deleting). The card is centred
@@ -311,6 +344,11 @@ picture-default = 0.625
 # A tab with no picture shows its favicon on a ground of the ink at this.
 ground = 0.05
 favicon = 24.0
+# A favorite split's card shows its pages side by side in the picture's box, as the window does
+# with the split's gap scaled down to this, and the page focused last ringed this wide in the
+# Space's colour (ours, from the mock the owner took, #689).
+split-gap = 4.0
+split-ring = 1.0
 # The card starts this far right of the row's plate, and stays this far inside the window.
 gap = 8.0
 edge = 8.0
@@ -323,6 +361,9 @@ title-line = 18.0
 title = 0.9
 host-size = 11.0
 host = 0.55
+# A page Battery Saver froze says so in the host's place (#686): Lucide's pause at the host's size,
+# then the words, this far after it.
+paused-gap = 5.0
 # The actions, beside the host: control-sized buttons, inset from the card's right and bottom
 # edges by as much as keeps their corners concentric with its: 16 - 10.
 button = 28.0
@@ -336,24 +377,34 @@ rim = 0.5
 
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
-# Preview, #690). Arc's isn't measured, so it takes the hover card's look: the panel radius in the
-# palette's overlay with the popover level's rim, and rows at the row radius inside its padding,
-# concentric: 16 - 4.
-width = 272.0
+# Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
+# with its glyph centred 20 in and its text from 36, a 1 pt line under it, then rows 4 below it on
+# a 45 pitch, each a 44 fill 4 in from the sides with the favicon centred 20 in and the title over
+# its age from 36, at most 320 tall. Ours: the hover card's look, the panel radius in the palette's
+# overlay with the popover level's rim, the rows at the row radius, concentric: 16 - 4, so 3 more
+# under the last row than Arc's 1.
+width = 240.0
 radius = 16.0
 padding = 4.0
 rim = 0.5
-# The search, a line of body type after the magnifying glass, as tall as a sidebar row.
-search = 32.0
+tallest = 320.0
+search = 48.0
 search-glyph = 14.0
-# Each tab a row: its icon, then its title, at these alphas of the ink. The selected row has the
-# selected state's plate, a hovered one the hovered state's.
-row = 32.0
+# The line under the search, at this alpha of the ink, as the sidebar's dividers.
+divider = 1.0
+divider-alpha = 0.15
+# Each tab a row: its icon, then its title over how long ago it was seen, at these alphas of the
+# ink. The selected row and the one under the pointer both have the selected state's plate.
+row = 45.0
+row-fill = 44.0
 row-radius = 12.0
 icon = 16.0
-icon-x = 10.0
-title-x = 34.0
+icon-x = 8.0
+title-x = 32.0
 title-size = 13.0
+title-line = 16.0
+age-size = 11.0
+age-line = 14.0
 title = 0.9
 hint = 0.55
 
@@ -608,22 +659,24 @@ section-glyph-gap = 9.0
 foot-bottom = 8.0
 foot-glyph = 15.0
 # A section's name and glyph, the selected one's plate (the sidebar's, white with its shadow in
-# light), and the foot's quieter name and glyph.
+# light), and the foot's quieter name and glyph: the name at the headings' alpha, the least that
+# reads at 4.5:1 on the light stand-in too (#1636).
 section-text = 0.78
 section-glyph-alpha = 0.66
 section-selected = 0.2
 section-selected-light = 0xffffffd9
 section-shadow = 0x00000033
 section-hovered = 0.12
-foot-text = 0.55
+foot-text = 0.66
 foot-glyph-alpha = 0.45
 # Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
-# 8 in, with the sections 12 under it. ⌘F sits at its end, quiet, until typing starts; then ✕ on an
-# 18 circle empties it. While it finds rows, the sections with none dim to 0.35, so where things
-# live stays readable, and a row a click on its section's name goes to flashes once: a plate under
-# it up to the sidebar's hovered 0.12 and back over 600 ms.
+# 8 in, with the sections 12 under it, and "Search" in the rows' grey. ⌘F sits at its end, at the
+# headings' alpha, as 0.4 read at 2.4:1 on the light field, until typing starts; then ✕ on an 18
+# circle empties it. While it finds rows, the sections with none dim to 0.35, so where things live
+# stays readable, and a row a click on its section's name goes to flashes once: a plate under it up
+# to the sidebar's hovered 0.12 and back over 600 ms.
 search-gap = 12.0
-search-hint = 0.4
+search-hint = 0.66
 search-clear = 18.0
 search-clear-glyph = 10.0
 search-clear-fill = 0.2
@@ -645,11 +698,11 @@ page-bottom = 36.0
 page-width = 632.0
 text-x = 14.0
 # The page's name, in the display face as the Library's heading (shell.library title-size and
-# title-line), then one sentence under it, and a heading over a group where it needs one.
+# title-line), then one sentence under it in the rows' grey (`detail`), and a heading over a group
+# where it needs one.
 title = 0.96
 lede-top = 4.0
 lede-line = 18.0
-lede = 0.55
 heading-top = 20.0
 heading-bottom = 7.0
 heading = 0.66
@@ -660,18 +713,23 @@ group = 0.04
 group-light = 0.035
 group-gap = 10.0
 first-group = 20.0
-# A row: at least 42 tall, its text 14 in and 10 from its top and bottom, a hairline between rows
-# from its text to 14 short of the plate's end; its name, then a grey line 2 under it, and its
-# controls 20 after the text, 8 apart.
-row-height = 42.0
+# A row: its text 14 in and 12 from its top and bottom, the agent card's padding
+# (shell.permission), so at least 48 tall, a control's 24 with that padding, and even with and
+# without one; a hairline between rows from its text to 14 short of the plate's end; its name, then
+# a grey line 4 under it, as the page's sentence is under its name, at the dialog's sub-line 16,
+# and its controls 20 after the text, 8 apart (#1636: at 10, 2 and 14 the line crowded its name).
+row-height = 48.0
 row-x = 14.0
-padding = 10.0
+padding = 12.0
 line = 0.07
 name = 0.92
 name-off = 0.7
-detail = 0.52
-detail-top = 2.0
-detail-line = 14.0
+# The grey of a row's line, the page's sentence and the lines between groups, in dark and light:
+# a task card's status (shell.task status), the same 11 on 14 under a name, at 8:1 on Settings'
+# boxes, where 0.52 read at 4.7:1 on the dark card (#1636).
+detail = 0.75
+detail-top = 4.0
+detail-line = 16.0
 end-gap = 20.0
 control-gap = 8.0
 # A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
@@ -733,8 +791,9 @@ header-gap = 7.0
 section-gap = 20.0
 box-gap = 10.0
 # Keys in chips as the command bar shows them, at least 56 wide so they line up, with a command's
-# way back to its default 6 before its chip. A key that can't change is quieter, and None quieter
-# still.
+# way back to its default 6 before its chip. A key that can't change is quieter, on a quieter
+# plate, and None is the same grey on the keys' plate, both at the headings' alpha, as 0.4 and 0.3
+# read under 3.3:1 (#1636).
 chip-height = 20.0
 chip-padding = 6.0
 chip-width = 56.0
@@ -742,12 +801,12 @@ chip-gap = 6.0
 chip = 0.08
 chip-fixed = 0.04
 chip-text = 0.85
-chip-fixed-text = 0.4
-chip-none-text = 0.3
+chip-fixed-text = 0.66
+chip-none-text = 0.66
 chip-radius = 6.0
 restore-radius = 6.0
 # Rows as tall as a button's with their padding, so they're even with and without one.
-profile-row = 42.0
+profile-row = 48.0
 # Ours, for the Links section: a rule's row holds the pop-up of what its URL does, the field of
 # its text, 6 in, an arrow and the pop-up of its Space, 8 apart, and the trash at its end; + sits
 # under the rules, 4 in.
@@ -765,6 +824,12 @@ short-padding = 8.0
 words-columns = 4
 word-number = 24.0
 word-gap = 6.0
+# Ours: the account's status line starts with a dot, ilo green while it syncs and the destructive
+# red while something stops it, 6 before the line, which says what stops it in that red, 4 before
+# the rest.
+status-dot = 7.0
+status-dot-gap = 6.0
+word-space = 4.0
 # Ours: rows drawn on another view's ground, the first launch's, take its fill and text colour,
 # and their lines, controls and grey text are that text over the fill by as much as Settings' are
 # over its boxes.
@@ -823,24 +888,41 @@ tile-gap = 8.0
 tile-min = 47.0
 tile-columns = 4
 tile-radius = 12.0
+# A favorite split's tile holds each tab's favicon in a segment of its own behind the split row's
+# line; a segment narrower than a favicon and 6, as three in a 47 pt tile are, takes this smaller
+# one (ours, from the mock the owner took, #689: Arc's tile isn't recorded).
+split-tile-favicon = 12.0
 # A favorite's mark in its tile's top right, while its page uses the camera or microphone, shares
 # or is shared, or plays sound (ours).
 tile-mark = 12.0
 tile-mark-inset = 4.0
-# The players at the sidebar's foot for tabs playing out of sight, as Arc's mini player and media
-# tray (ours: Arc's aren't measured): each a row's height on a tile's fill, 6 apart and over the
-# footer, its title 13 pt over its artist at 11, and buttons a row's ✕ square holding 14 pt glyphs.
-media-height = 40.0
+# The players at the sidebar's foot for tabs playing out of sight, as Arc 1.171's stack (an outside
+# measurement, #700): at rest only the newest card shows, this tall, 8 in from the sidebar's sides
+# and its bottom where the list ends, and up to two older ones peek out behind it, each this much
+# higher, this much narrower on each side and this much fainter. Under the pointer every card grows
+# to media-open, this far apart, the oldest on top. Ours: the list ends media-gap over the stack at
+# rest; the title row's 12 pt title and artist and its buttons, a row's ✕ square; the controls'
+# plates and 14 pt glyphs.
+media-rest = 33.0
+media-peek = 7.0
+media-peek-inset = 5.0
+media-peek-fade = 0.2
+media-open = 65.5
+media-open-gap = 5.0
 media-gap = 6.0
-media-title = 13.0
-media-artist = 11.0
+media-title = 12.0
 media-button = 24.0
+media-control = 28.0
 media-glyph = 14.0
 # Favorites taller than this much of the window scroll with the list instead of staying put
 # (Ardia), so they never leave the rows too little room.
 tall-favorites = 0.4
 # The Space's name, over its tabs.
 name-height = 44.0
+# With one Space, unnamed and with no icon, the name row hides (Arc 1.171), and what's under it
+# rises as Arc's does, 39 under the URL field or 36 under the favorites, leaving this much of it.
+name-hidden = 5.0
+name-hidden-under-favorites = 8.0
 name-x = 41.0
 space-icon-slot = 20.0
 # The sidebar's icon takes clicks on Arc's frame, which lights with the header's plate (ours).
@@ -966,6 +1048,12 @@ space-swatch-hovered = 12.0
 space-shown-least = 22.0
 space-clear = 4.0
 space-least = 4.0
+# A Space's dot dragged along the switcher, or its card by its handle along the Library's: its place
+# dims to half while its copy follows the pointer, and the gap it would go into shows the rows' drop
+# line stood up, among the dots 16 tall on their middle without the ring, which would be a dot's
+# size, and among the cards with it, as the rows' (ours: Arc's isn't recorded).
+space-dragged = 0.5
+space-drop-line = 16.0
 form-title-top = 140.0
 form-title-height = 20.0
 form-inset = 14.0
@@ -1105,6 +1193,27 @@ windows-close-hovered = 0xc42b1c
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
 little-glyph = 18.0
+# Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
+# *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
+# little-open-pad in from its half's sides and little-open-gap apart, the half no wider than
+# little-open-max; a line little-split tall; then the chevron's half, whose plate ends where the last
+# button's did. Copy Link's plate ends little-copy-gap before the words' half.
+little-open = 0.85
+little-open-key = 0.45
+little-open-pad = 10.0
+little-open-gap = 6.0
+little-open-max = 200.0
+little-split = 16.0
+little-split-line = 0.16
+little-chevron = 28.0
+little-chevron-glyph = 12.0
+little-copy-gap = 2.0
+# The chevron's Spaces menu is the compact command bar this wide, its top this far under the
+# button, and its right edge the button's, but no nearer the window's than every overlay keeps
+# (host_show_overlay), so no host narrows or moves it.
+little-spaces-width = 240.0
+little-spaces-below = 4.0
+little-spaces-edge = 8.0
 
 [shell.agent-pointer]
 # Ours (#365), as Arc and Dia have no agents in pages: while an agent clicks or types in the page
@@ -1133,6 +1242,10 @@ tag-radius = 6.0
 # words say who works and what it does; the chips are the toast's, its key after its words.
 strip = 40.0
 page-room = 46.0
+# Its chips are quiet while the agent works, and only when it waits on the user is the answer it
+# waits for, Hand Back, the one primary, in the Space's accent, its key in the accent's label at
+# this (#1080). The card's glyph leads the words, `gap` from back and from them.
+primary-key = 0.75
 gap = 10.0
 back = 26.0
 back-glyph = 16.0
@@ -1439,8 +1552,6 @@ import-surface = 0.05
 # it goes on by itself (#1673); the history and addresses the core adds then go on under the steps
 # after it, in the line at the bottom left.
 import-hold = 0.6
-# The line saying where the favorites go is this far under their tiles.
-tiles-line-gap = 12.0
 # The opt-ins step's switches, Settings' own, in one box under its line, a row each of the switch's
 # name over its one sentence, at body, and the switch at the box's right edge; Settings' padding
 # and lines between rows.
@@ -1517,12 +1628,19 @@ buttons-top = 12.0
 close = 22.0
 close-inset = 7.0
 close-glyph = 12.0
+# Above each change a request card lists, and above why it asks, so each reads as one.
+change-gap = 6.0
 
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a
-# row in it, its glyph before its name over what it's doing.
+# row in it, its glyph before its name over what it's doing. A page's device chooser has the same
+# rows (#1649). The list starts `list-top` under the card's words, and a row's glyph sits on the
+# card's text column, so its plate, at a tab row's radius, hangs `row-inset` outside it.
 row = 40.0
 row-gap = 2.0
+list-top = 6.0
+row-inset = 8.0
+glyph-gap = 10.0
 glyph = 16.0
 name = 13.0
 status = 11.0
@@ -1631,6 +1749,15 @@ check-box = 24.0
 # The check is Lucide's, so it draws at the icons' one stroke, `shell::assets::ICON_STROKE`.
 check-stroke = 2.25
 
+[shell.media.motion]
+# Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
+# out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
+# rested on it `wait` (ours, as the sidebar's reveal waits), and a card put away folds and fades
+# over `fold` as the ones above close up (ours).
+open = 0.2
+wait = 0.1
+fold = 0.2
+
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media
 # players, each a plate of a player's shape and fill, oldest lowest, the list's rows above never
@@ -1672,6 +1799,11 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
+# The status line's ink, above the sidebar's secondary so its 11 pt reads at 4.5:1 or more on the
+# card's plate over a white backdrop, where secondary's 0.62 measured 4.3:1 (#1080). What leads it
+# while the agent works, its step count, and while it needs the user, "Needs you", is in the title's
+# ink at medium.
+status = 0.75
 # The status while it works: a highlight sweeping along it, from the status's own colour to the
 # ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
 # goes from `shimmer-from` to `shimmer-to` of the width from the line's start, so it rests past
@@ -1765,6 +1897,10 @@ crossfade = 0.2
 column = 640.0
 inset = 24.0
 top = 16.0
+# The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
+# 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
+# the toast's 0.6 read 3.75:1 (#1080).
+chip-key = 0.68
 title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
@@ -1781,8 +1917,18 @@ pictures-row-gap = 24.0
 pictures-columns = 3.0
 site = 16.0
 site-gap = 3.0
-# Its header's Talk and Pages, a chip each, the one shown filled, this far apart.
+# A page with no picture yet has its site's globe in its tile's middle at this size, over "No
+# picture yet", in the card status's ink (#1080), and once the core had none to give, when the
+# next comes.
+picture-empty-glyph = 16.0
+picture-empty-gap = 6.0
+# Its header's Talk and Pages, one switch: a track of the ink at `views-track`, the view shown on
+# the sidebar's light selected plate (palette light-selected) `views-inset` inside it, at the
+# control radius less the inset, the two `views-gap` apart. Stop stands apart on a card button's
+# plate, the URL field's.
 views-gap = 4.0
+views-track = 0.07
+views-inset = 2.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -1847,9 +1993,14 @@ shimmer-band = 0.3
 # The question's answers, and the result's Open, under its text.
 chips-top = 10.0
 chips-below = 16.0
+# The reply field: the ink at `reply-fill` with a hairline of it at `reply-rim` inside its edge, so
+# it reads as a field (#1080), and the key that sends it in a chip at its end, the command bar's
+# hint key, `reply-key-end` in from it.
 reply-height = 34.0
 reply-inset = 12.0
-reply-fill = 0.07
+reply-fill = 0.1
+reply-rim = 0.14
+reply-key-end = 7.0
 reply-bottom = 16.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:
@@ -2032,6 +2183,9 @@ radius = 20.0
 gap = 2.5
 # Kept off the browser window's top and bottom, when the card can't centre on its arrow (ours).
 margin = 8.0
+# From the Space's menu, Arc 1.171's picker has no arrow, its card this far inside a window 382 × 534
+# against the sidebar's edge at the browser window's top.
+edge-inset = 14.0
 # The square field, 8.5 inside the card's top and sides.
 field-inset = 8.5
 field = 340.0

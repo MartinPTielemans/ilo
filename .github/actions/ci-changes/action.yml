@@ -7,6 +7,8 @@ outputs:
     value: ${{ steps.detect.outputs.core_linux }}
   app_linux:
     value: ${{ steps.detect.outputs.app_linux }}
+  app_mac:
+    value: ${{ steps.detect.outputs.app_mac }}
   engine_windows:
     value: ${{ steps.detect.outputs.engine_windows }}
 runs:

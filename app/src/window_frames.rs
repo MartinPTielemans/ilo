@@ -107,9 +107,75 @@ pub fn on_screen_of(pointer: (f64, f64), size: (f64, f64), screens: &[Frame]) ->
     ))
 }
 
+/// Where a page's pop-up opens from a Little ilo window at `opener`, as a window of its own (#1919):
+/// its page gets the `content` size the page asked for, under a Little ilo bar, a side it didn't
+/// ask for the opener's, at least 100 as Blink's least. At `asked`, the screen point the page asked
+/// for its content's top-left, else centred on the opener and 10 under its top, as Chrome puts
+/// one near the window that opened it. Kept on a screen, as `place` keeps one.
+pub fn popup(
+    opener: Frame,
+    content: (f64, f64),
+    asked: Option<(f64, f64)>,
+    screens: &[Frame],
+) -> Frame {
+    use crate::tokens::shell::{CARD_INSET, LITTLE_BAR};
+    let (bar, inset) = (f64::from(LITTLE_BAR), f64::from(CARD_INSET));
+    let side = |asked: f64, opener: f64| match asked > 0. {
+        true => asked.max(MINIMUM),
+        false => opener,
+    };
+    let width = side(content.0, opener.width - 2. * inset) + 2. * inset;
+    let height = side(content.1, opener.height - bar - inset) + bar + inset;
+    let (x, y) = match asked {
+        Some((x, y)) => (x - inset, y - bar),
+        None => (
+            opener.x + (opener.width - width) / 2.,
+            opener.y + POPUP_DROP,
+        ),
+    };
+    let (x, y) = whole_point((x, y));
+    let frame = Frame {
+        x,
+        y,
+        width,
+        height,
+    };
+    place(frame, screens).unwrap_or(frame)
+}
+
+/// The least a page's pop-up is on a side, as Blink makes a window.open() asking for less.
+const MINIMUM: f64 = 100.;
+/// How far under its opener's top a page's pop-up opens, Chrome's cascade (kWindowTilePixels).
+const POPUP_DROP: f64 = 10.;
+
+/// The saved window a browser window opens as, at its frame, which comes back in the state it quit
+/// in: with no window it opens from (`first`), the launch's first, the front one, and `saved`, one
+/// behind it. None for a window that isn't `regular`: a private or Little ilo window, or one at a
+/// frame of its own.
+pub fn saved_at(first: bool, regular: bool, saved: Option<usize>) -> Option<usize> {
+    match (regular, saved) {
+        (false, _) => None,
+        (true, Some(index)) => Some(index),
+        (true, None) => first.then_some(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launch's first window is the front one saved, and those it opens behind it the others,
+    /// each by its index, so each comes back maximized if it quit so (#1454). A window opened from
+    /// another, a private or Little ilo window, or one at a frame of its own is none of them.
+    #[test]
+    fn each_window_a_launch_brings_back_is_the_one_saved_at_its_place() {
+        assert_eq!(saved_at(true, true, None), Some(0));
+        assert_eq!(saved_at(false, true, Some(1)), Some(1));
+        assert_eq!(saved_at(false, true, Some(3)), Some(3));
+        assert_eq!(saved_at(false, true, None), None);
+        assert_eq!(saved_at(true, false, None), None);
+        assert_eq!(saved_at(false, false, Some(1)), None);
+    }
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
         Frame {
@@ -276,5 +342,40 @@ mod tests {
         };
         let opened = on_screen_of((500., 300.), (900., 640.), &[SMALL]);
         assert_eq!(opened, Some(frame(62., 45., 900., 640.)));
+    }
+
+    /// A sign-in's pop-up from a Little ilo window gets the size its page asked for, its bar
+    /// over that, centred on the opener 10 under its top; where the page asked, there; a side it
+    /// didn't ask, the opener's; and on a screen, however far off the page asked (#1919).
+    #[test]
+    fn a_popup_gets_its_pages_size_over_its_opener() {
+        use crate::tokens::shell::{CARD_INSET, LITTLE_BAR};
+        let (bar, inset) = (f64::from(LITTLE_BAR), f64::from(CARD_INSET));
+        let opener = frame(300., 200., 900., 640.);
+        let screens = [LAPTOP];
+        let asked = popup(opener, (500., 600.), None, &screens);
+        assert_eq!(
+            (asked.width, asked.height),
+            (500. + 2. * inset, 600. + bar + inset)
+        );
+        assert_eq!(asked.x + asked.width / 2., opener.x + opener.width / 2.);
+        assert_eq!(asked.y, opener.y + 10.);
+
+        let placed = popup(opener, (500., 600.), Some((100., 150.)), &screens);
+        assert_eq!((placed.x, placed.y), (100. - inset, 150. - bar));
+
+        let unasked = popup(opener, (0., 0.), None, &screens);
+        assert_eq!(
+            (unasked.width, unasked.height),
+            (opener.width, opener.height)
+        );
+        let tiny = popup(opener, (20., 20.), None, &screens);
+        assert_eq!(tiny.width, 100. + 2. * inset);
+
+        let off = popup(opener, (500., 600.), Some((5000., -400.)), &screens);
+        assert!(
+            off.x + off.width <= LAPTOP.x + LAPTOP.width && off.y >= LAPTOP.y,
+            "{off:?}"
+        );
     }
 }

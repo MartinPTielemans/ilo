@@ -21,6 +21,7 @@ use std::{
 
 #[cfg(target_os = "linux")]
 use browser::flatpak;
+use browser::little_launch;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
@@ -32,8 +33,8 @@ use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
     account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, link_preview, link_target, log, log_in, menu, offer, passwords,
-    site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
+    icon_picker, launch, launch_picture, link_preview, link_target, log, log_in, menu, offer,
+    passwords, site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -52,6 +53,9 @@ mod browser_windows;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/drive.rs"]
 mod drive;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/drive_drags.rs"]
+mod drive_drags;
 #[cfg(target_os = "windows")]
 #[path = "../platform/windows/drive_menus.rs"]
 mod drive_menus;
@@ -96,6 +100,9 @@ mod needs_you;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/overlays.rs"]
 mod overlays;
+#[cfg(target_os = "linux")]
+#[path = "../platform/linux/page_presses.rs"]
+mod page_presses;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/panels.rs"]
 mod panels;
@@ -164,7 +171,10 @@ use capture_host::*;
 mod updates_host;
 use updates_host::*;
 mod quitting;
+mod scripting_host;
 use quitting::*;
+mod battery_saver_host;
+use battery_saver_host::*;
 
 use browser::bc;
 
@@ -388,10 +398,11 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 }
             },
             // The page is in the window's own surface, so GPUI's focus doesn't see it take the
-            // keyboard.
+            // keyboard, nor the Shell hear the press (page_pressed).
             page_pressed: |surface| {
                 if let Some(window) = window_in(surface) {
                     ui_keyboard_left_in(window);
+                    page_pressed_in(window);
                 }
             },
             is_ui: |surface| {
@@ -464,13 +475,12 @@ unsafe extern "C" fn started(_: *mut c_void) {
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_appearance(cx);
+        settings::read_lone_header(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
-        if !wayland {
-            held_escape::watch(cx);
-        }
+        held_escape::watch(wayland, cx);
         cx.set_global(menu::field_menu(Rc::new(|window, request, cx| {
             // A browser window's field by the view the host knows the window by, as its other
             // menus are, which on Linux isn't GPUI's own: Chromium's surface or the X window GPUI
@@ -513,8 +523,26 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
+        // which the host writes as the first window opens, under its AppUserModelID.
+        if let (Ok(title), Ok(switch)) = (
+            CString::new(little_launch::NEW_LITTLE_WINDOW),
+            CString::new(little_launch::NEW_LITTLE_SWITCH),
+        ) {
+            unsafe { platform::host_set_little_task(title.as_ptr(), switch.as_ptr()) };
+        }
         needs_you_host::start(cx);
         open_window(None, None, cx);
+        // Launched by New Incognito Window while ilo wasn't running, the private window opens
+        // over the first.
+        if launch_asks_private_window() {
+            cx.defer(|cx| new_window_in_front(true, "launch", cx));
+        }
+        // A launch for a new Little ilo window, from the jump list or the launcher, once there's a
+        // window for it to open from; a later one comes through the core (window_open_little).
+        if little_launch::asks_for_little(std::env::args()) {
+            cx.defer(|cx| new_little_window("command line", cx));
+        }
     });
     // On Chromium's Wayland display, GPUI's windows and their surfaces are on a display Chromium
     // has closed by the time the thread-locals go at exit, and dropping them there crashes (#474).
@@ -538,7 +566,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
 /// AppKit has finished launching the app, and so has handed over the links that launched it.
 extern "C" fn finished_launching() {
     unsafe { platform::host_add_dock_items(dock_little, dock_chosen) };
-    if little_in_menu_bar() {
+    // AppleScript, once the windows it reads can be there.
+    scripting_host::answer_scripts();
+    if little_in_menu_bar() && unsafe { bc::bc_little_windows() } {
         unsafe { platform::host_set_little_status_item(Some(status_item_clicked)) };
     }
     if !FINISHED_LAUNCHING.replace(true)
@@ -548,9 +578,77 @@ extern "C" fn finished_launching() {
     }
 }
 
-thread_local! {
-    /// The launch window is maximized, as the first browser window opens (open_window_as).
-    static LAUNCH_MAXIMIZED: Cell<bool> = const { Cell::new(false) };
+/// A download a page in an agent's Space started, which the core holds for the user's answer, or
+/// how one it let go on ended.
+unsafe extern "C" fn agent_download(_: *mut c_void, d: *const bc::bc_agent_download) {
+    use browser::agents::{Download, DownloadEnd};
+    let d = unsafe { &*d };
+    let text = |text: *const c_char| {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let (id, name) = (d.download, text(d.name));
+    // check.sh reads this line.
+    let (tab, request, state, bytes) = (d.tab, d.request, d.state, d.bytes);
+    log!("browser: agent download {id} {tab} {request} state {state} {bytes} bytes: {name}");
+    let end = match d.state as u32 {
+        bc::BC_DOWNLOAD_PAUSED => None,
+        bc::BC_DOWNLOAD_DONE => Some(DownloadEnd::Done {
+            name,
+            bytes: d.bytes,
+            path: text(d.path),
+        }),
+        bc::BC_DOWNLOAD_CANCELLED => Some(DownloadEnd::Cancelled),
+        _ => Some(DownloadEnd::Failed),
+    };
+    let Some(end) = end else {
+        let download = Download {
+            agent: text(d.agent),
+            tab: d.tab,
+            request: d.request,
+            id,
+            name: text(d.name),
+            url: text(d.url),
+            tab_empty: d.tab_empty,
+        };
+        return agents_core::update(move |agents, cx| agents.download_started(download, cx));
+    };
+    agents_core::update(move |agents, cx| agents.download_ended(id, end, cx));
+}
+
+/// The core's answer to an agent's HTTP request (bc_agent_request).
+unsafe extern "C" fn agent_request_done(
+    _: *mut c_void,
+    request: u64,
+    response: *const bc::bc_agent_response,
+) {
+    let response = unsafe { &*response };
+    let text = |text: *const c_char| {
+        (!text.is_null()).then(|| {
+            unsafe { CStr::from_ptr(text) }
+                .to_string_lossy()
+                .into_owned()
+        })
+    };
+    let body = match response.size {
+        0 => Vec::new(),
+        size => unsafe { std::slice::from_raw_parts(response.body.cast::<u8>(), size) }.to_vec(),
+    };
+    let response = browser::agents::request::Response {
+        status: u16::try_from(response.status).unwrap_or(0),
+        kind: text(response.type_).unwrap_or_default(),
+        body,
+        cut: response.cut,
+        error: text(response.error),
+    };
+    // check.sh reads this line.
+    log!(
+        "browser: agent request {request} answered {} {}",
+        response.status,
+        response.body.len()
+    );
+    agents_core::update(move |agents, cx| agents.request_done(request, response, cx));
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
@@ -559,7 +657,9 @@ unsafe extern "C" fn launching(_: *mut c_void) {
         return;
     };
     // Where the front window was, which the browser window opens at again, and whether it was
-    // maximized, which only Windows saves (save_launch_frame).
+    // maximized, which only Windows saves (save_launch_frame): the launch window shows before the
+    // core has read the windows it saved, whose state the browser window opens in
+    // (bc_saved_window_maximized).
     let saved = std::fs::read_to_string(launch_frame_path())
         .ok()
         .and_then(|text| {
@@ -602,8 +702,36 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             false,
         )
     });
-    LAUNCH_MAXIMIZED.set(maximized);
-    unsafe { platform::host_show_launch_window(profile.as_ptr(), x, y, width, height, maximized) };
+    // The sidebar's picture, taken in a window near enough this one's size to show in it. A
+    // maximized one is another size, kept by none.
+    let taken = std::fs::read_to_string(launch_layout_path())
+        .ok()
+        .and_then(|line| launch_picture::read(&line));
+    if let Some(taken) = taken {
+        // check.sh reads this line.
+        log!(
+            "browser: launch picture taken at {:.0}x{:.0}",
+            taken.width,
+            taken.height
+        );
+    }
+    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
+        (taken.width, taken.height, taken.foot_top)
+    });
+    unsafe {
+        platform::host_show_launch_window(
+            profile.as_ptr(),
+            x,
+            y,
+            width,
+            height,
+            maximized,
+            taken_width,
+            taken_height,
+            foot_top,
+        )
+    };
     // check.sh reads this line.
     let state = if maximized { " maximized" } else { "" };
     log!("browser: launch window frame {x:.0} {y:.0} {width:.0} {height:.0}{state}");
@@ -764,7 +892,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         };
         #[cfg(target_os = "windows")]
         unsafe {
-            platform::drive_watch_menus(drive_menus::run)
+            platform::drive_watch_menus(drive_menus::run, drive_menus::choose)
         };
     }
     let host = bc::bc_host {
@@ -783,6 +911,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         window_selected: Some(window_selected),
         window_page_elsewhere: Some(window_page_elsewhere),
         tab_opened: Some(tab_opened),
+        tab_popup: Some(tab_popup),
         tab_closed: Some(tab_closed),
         tab_loaded: Some(tab_loaded),
         tab_state_changed: Some(tab_state_changed),
@@ -804,6 +933,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_find_changed: Some(tab_find_changed),
         tab_permission_asked: Some(tab_permission_asked),
         tab_cast: Some(tab_cast),
+        tab_chooser: Some(tab_chooser),
         tab_site_controls: Some(tab_site_controls),
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),
@@ -813,6 +943,9 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         window_suggestions: Some(window_suggestions),
         tab_key_before_page: Some(tab_key_before_page),
         tab_key_unhandled: Some(tab_key_unhandled),
+        tab_press_before_page: Some(tab_press_before_page),
+        tab_press_moved: Some(tab_press_moved),
+        tab_press_released: Some(tab_press_released),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),
@@ -839,19 +972,25 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         #[cfg(target_os = "linux")]
         ui_committed: Some(ui_committed),
         history_added: Some(history_added),
+        history_deleted: Some(history_deleted),
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),
         tab_text: Some(tab_text),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),
+        agent_download: Some(agent_download),
+        agent_request_done: Some(agent_request_done),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),
         #[cfg(target_os = "linux")]
         window_activated: Some(window_activated),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         window_option_tapped: Some(window_option_tapped),
         addresses_added: Some(addresses_added),
+        battery_saver_changed: Some(battery_saver_changed),
+        tab_frozen: Some(tab_frozen),
+        app_new_window: Some(app_new_window),
         ..Default::default()
     };
     (args, host)

@@ -73,6 +73,9 @@ pub trait Host {
     fn close(&self, tab: u64);
     /// Makes `tab` a Today tab of the Space `window` shows, and shows it there, as it is.
     fn keep(&self, window: u64, tab: u64);
+    /// The kept preview was of the archived tab `archived`, which is the window's tab now and
+    /// leaves the archive, as a tab restored from it does.
+    fn kept_archived(&self, _window: u64, _archived: u64, _cx: &mut App) {}
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
     fn closed(&self, window: u64, closed: Closed, undone: bool, cx: &mut App);
@@ -453,6 +456,9 @@ struct Preview {
     favicon: Option<Arc<Image>>,
     /// Redo closed it, so ⌘Z's history has it already.
     undone: bool,
+    /// The archived tab it previews, from the Library, which keeping it restores and closing it
+    /// leaves in the archive.
+    archived: Option<u64>,
     /// Where the link was clicked in the browser window.
     link: Point<Pixels>,
     /// When the app asked for it, from which its first frame is timed.
@@ -603,8 +609,9 @@ fn update<R>(
 }
 
 /// Shows `tab`'s page, at `url`, over the browser window `window`, whose page is at `page` with
-/// corners of that radius, growing from `link` there, where the link in `over`'s page was clicked.
-/// A preview showing goes at once.
+/// corners of that radius, growing from `link` there, where the link in `over`'s page was clicked,
+/// or the row of the archived tab `archived` it previews. A preview showing goes at once.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     window: u64,
     tab: u64,
@@ -612,6 +619,7 @@ pub fn show(
     url: SharedString,
     (page, radius): (Bounds<Pixels>, f32),
     link: Point<Pixels>,
+    archived: Option<u64>,
     cx: &mut App,
 ) {
     update(cx, |preview, gpui_window, cx| {
@@ -627,6 +635,7 @@ pub fn show(
             url,
             favicon: None,
             undone: false,
+            archived,
             link,
             asked: Instant::now(),
             shown: None,
@@ -816,11 +825,16 @@ impl LinkPreview {
                 // check.sh reads this line.
                 log!("browser: link preview kept {}", shown.tab);
                 self.host.hide();
+                if let Some(archived) = shown.archived {
+                    self.host.kept_archived(shown.window, archived, cx);
+                }
             }
             leaving => {
                 self.host.hide();
                 self.host.close(shown.tab);
-                if leaving.is_some() {
+                // An archived tab's preview leaves it in the archive, which is how to get back to
+                // it: nothing for ⌘Z to reopen.
+                if leaving.is_some() && shown.archived.is_none() {
                     let Preview {
                         window,
                         over,

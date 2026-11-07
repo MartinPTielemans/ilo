@@ -34,17 +34,21 @@ pub(crate) fn split_tab(window: bc::bc_id, tab: u64, with: u64, opened: bool, cx
 
 /// `tab`, opened to join a split view in `window`, joined it: that window's ⌘Z closes it.
 pub(crate) fn split_opened(window: bc::bc_id, tab: u64, cx: &mut App) {
-    let shell = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .find(|each| each.id == window)
-            .map(|each| each.shell.clone())
-    });
-    if let Some(shell) = shell {
+    if let Some(shell) = shell_of(window) {
         shell
             .update(cx, |shell, cx| shell.split_opened(tab, cx))
             .ok();
     }
+}
+
+/// The shell of browser window `window`, if it's open.
+pub(crate) fn shell_of(window: bc::bc_id) -> Option<WeakEntity<Shell>> {
+    WINDOWS.with_borrow(|windows| {
+        windows
+            .iter()
+            .find(|each| each.id == window)
+            .map(|each| each.shell.clone())
+    })
 }
 
 /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`.
@@ -367,6 +371,9 @@ pub(crate) unsafe extern "C" fn tab_opened(
         "background"
     };
     log!("browser: tab {tab} opened by {opener} in the {side}");
+    if opener != 0 {
+        agents_core::update(move |agents, _| agents.tab_opened(tab, opener));
+    }
     let little = WINDOWS.with_borrow(|windows| {
         windows
             .iter()
@@ -374,9 +381,16 @@ pub(crate) unsafe extern "C" fn tab_opened(
             .and_then(|each| each.little)
     });
     if let Some(home) = little.filter(|_| opener != 0) {
-        update_app_later(move |_| little_tab_opened(window, tab, home));
+        match take_popup(tab) {
+            Some(asked) => {
+                update_app_later(move |cx| little_popup_opened(window, tab, home, asked, cx))
+            }
+            None => update_app_later(move |cx| little_tab_opened(window, tab, home, cx)),
+        }
         return;
     }
+    // A pop-up elsewhere is a tab of its window, as decision 3 has it.
+    take_popup(tab);
     // A link ⌥⌘-clicked, or opened in a split view from the page's menu, joined its page's split,
     // which ⌘Z takes back as it does the user's other ways in.
     let mut split = [0; 3];
@@ -396,6 +410,8 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
         let executor = cx.foreground_executor().clone();
         executor
             .spawn(async move {
+                // Outside the update, as closing the pop-up's window calls back into GPUI.
+                popup_closed(tab);
                 cx.update(|cx| {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);

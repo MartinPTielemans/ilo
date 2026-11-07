@@ -64,6 +64,8 @@ cleanup() {
   [ -z "${others:-}" ] || kill $others 2>/dev/null || true
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
+  # A run's own way back, named in run_undo, such as policies' taking its policies off the system.
+  [ -z "${run_undo:-}" ] || $run_undo || true
   # A run's temp dir, such as the updates run's with its key.
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
@@ -107,6 +109,12 @@ fail() {
 gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
+}
+# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so.
+engine_has() {
+  local commit
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
@@ -355,13 +363,45 @@ settings_drew() {
   expect "^browser: settings drew ${1:-.*}\$" "Settings didn't draw ${1:-its tab}"
 }
 # Where Settings last drew its control $1, "x y" for clickkey, once it has: it logs each place it
-# draws one ("browser: settings $1 at x y").
+# draws one ("browser: settings $1 at x y"). That can be a frame from before the state a run just
+# waited for, which drawn_after leaves out.
 drawn() {
   for _ in $(seq 100); do
     sed -n "s/^browser: settings $1 at //p" "$log" | tail -1 | grep . && return 0
     sleep 0.1
   done
   return 1
+}
+# As drawn, from a frame drawn after the last line that matches $2, the state the run waited for:
+# a point drawn before it is the old layout's, where a press lands on whatever was there (#1885).
+drawn_after() {
+  for _ in $(seq 100); do
+    awk -v state="$2" -v name="browser: settings $1 at " '
+      $0 ~ state { at = "" }
+      index($0, name) == 1 { at = substr($0, length(name) + 1) }
+      END { if (at == "") exit 1; print at }' "$log" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# Sets at to where Settings drew its control $1, as drawn does, in the card's sight: between its
+# held title and its fade, where the card shows a row whole ("browser: settings card shows <top> to
+# <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
+# foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
+# sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
+# if it never drew it.
+in_sight() {
+  at=$(drawn "$1") || return 1
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ -n "$sight" ] || return 0
+  top=${sight%% to *}
+  bottom=${sight##* to }
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  # Past it by its row's half, 24, and a little more.
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
@@ -722,6 +762,15 @@ start_with_cdp() {
 # and no server (#1369).
 serve() {
   [ -n "${site:-}" ] || . check/site.sh
+}
+# Waits for the tab $3, or any, to start loading the default engine's search for $1, the query as
+# its URL has it, failing with $2, and sets $searched to the tab. The app logs where a page goes as
+# its load starts, so this proves the search without DuckDuckGo's page, which a runner may never
+# get an answer for (#1875).
+searching() {
+  local line="^browser: page ${3:-[0-9]*} back [0-9]* forward [0-9]* loading [01] https://duckduckgo\.com/?q=$1\$"
+  expect "$line" "$2"
+  searched=$(grep "$line" "$log" | tail -1 | cut -d' ' -f3)
 }
 # Of the addresses on stdin, one a line, those of Google's servers, with ungoogled-chromium's
 # substitutes for its domains, but the security components' updates that engine/README.md › What

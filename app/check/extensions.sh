@@ -7,7 +7,9 @@
 # for the tab shown as it changes. A click on a pinned action runs
 # it, its popup hanging from it, and its right-click menu unpins it, opens its options or its
 # details on Chrome's extensions page, or removes it once the user confirms. The actions that don't
-# fit are behind an overflow button in the last place, whose menu runs them. Manage Extensions…
+# fit are behind an overflow button in the last place, whose menu runs them. In a Little ilo window
+# they end its bar's title, and a click on one runs it there, its popup hanging from it (#693).
+# Manage Extensions…
 # opens Chrome's extensions page. The Site Controls list every turned-on extension, unpinned ones
 # too, and a click on one's tile runs it, its popup hanging from the tile. A right-click on a tile
 # gives its menu: Move to Top pins it first, Unpin puts it back by name, and Remove asks first. An
@@ -34,10 +36,7 @@ script='chrome.action.onClicked.addListener(async tab => {
   chrome.tabs.create({url: "clicked.html"});
 });
 chrome.commands.onCommand.addListener(() => chrome.tabs.create({url: "command.html"}));'
-# Chrome keeps running the script it first registered for an extension, so a changed script is a
-# new extension, in a folder of its own. In a profile the check ran in before, the old one still
-# holds ⇧⌘Y and the new one gets no key, so what changes goes in its page's script instead.
-clicked_dir="$extensions/clicked-$(printf %s "$script" | cksum | cut -d' ' -f1)"
+clicked_dir="$extensions/clicked"
 mkdir -p "$clicked_dir" "$extensions/popup" "$extensions/third" "$extensions/panel"
 printf '%s\n' "$script" > "$clicked_dir/background.js"
 cat > "$clicked_dir/manifest.json" << 'EOF'
@@ -115,10 +114,14 @@ echo '<title>the tab panel</title><body style="font:16px system-ui">the tab pane
   "$extensions/panel/tab.html"
 page='data:text/html,<title>loading</title>
 <script>requestAnimationFrame(() => setTimeout(() => document.title = "ready"));</script>'
+# A profile of the run's own, new each time: an unpacked extension's id comes from its folder's
+# path, so one that loaded them from another checkout would keep its copies in the menu (#1890).
+profile_dir="$extensions/profile"
+rm -rf "$profile_dir"
+mkdir -p "$profile_dir"
 log="$out/extensions.log"
 step=0
-rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
   --load-extension="$(app_path "$clicked_dir"),$(app_path "$extensions/popup"),$(app_path "$extensions/third"),$(app_path "$extensions/panel")" \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
@@ -215,6 +218,37 @@ fi
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
 close_popup
+# In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
+# click on one runs it there, its popup hanging from its button (#693).
+send key n cmd alt
+expect '^browser: little window opened [0-9]* ' "⌥⌘N didn't open a Little ilo window"
+little=$(grep '^browser: little window opened ' "$log" | tail -1 | cut -d' ' -f5)
+expect "^browser: window opened $little\$" "the Little ilo window didn't open"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Little ilo window"
+send insert "data:text/html,<title>little</title>A page in Little ilo"
+send key return
+expect "^browser: extension actions $popup[^ ]* $clicked" "the Little ilo window didn't list the pinned actions"
+# Logged as the window first drew its bar, before its page.
+await '^browser: little bar title ends at ' || fail "the Little ilo window's bar didn't say where its title ends"
+read -r end_x end_y << EOF
+$(sed -n 's/^browser: little bar title ends at //p' "$log" | tail -1)
+EOF
+# Check Popup, before Check Clicked, which ends the title.
+send click $((end_x - 45)) "$end_y"
+expect "^browser: run extension $popup ran\$" "a click on Check Popup's action in Little ilo didn't run it"
+expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from Little ilo"
+../tools/window-screenshot.sh "$pid" "$out/little-extension-popup.png" all || fail "no window to capture"
+if [ "$(uname)" = Linux ]; then
+  send click $((end_x - 45)) "$end_y"
+else
+  send key escape
+fi
+expect '^browser: extension popup none$' "Check Popup's popup in Little ilo didn't close"
+send key w cmd
+expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window"
+send window 1
 # A right-click on an action shows its menu: Manage Extension opens its details, and Unpin
 # unpins it. Check Clicked has no options.
 post rightclick $second_place
@@ -603,11 +637,11 @@ fi
 echo "ok: an extension reaches a native messaging host that only Chrome Beta's folder has, or on Windows only Edge's key, and hears its answer. Window: $out/native-host.png"
 
 # An extension's .crx from the served page, which Chrome installs from off the Web Store with
-# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, which the
-# check starts without, so no other run ever has it. Chrome takes a .crx signed with the key its id
-# comes from.
+# ungoogled-chromium's flag, asking first. It's added in a profile of the launch's own, new each
+# time, so no other run ever has it. Chrome takes a .crx signed with the key its id comes from.
 serve
 crx="$PWD/$out/install"
+rm -rf "$crx"
 mkdir -p "$crx/source" "$crx/profile/Default"
 cat > "$crx/source/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Install", "version": "1", "permissions": ["tabs"],

@@ -7,7 +7,7 @@ use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
 
 use gpui::{
-    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
+    App, Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
     prelude::*, px, size, svg,
 };
@@ -143,6 +143,18 @@ impl Shell {
                     .on_mouse_up(MouseButton::Left, cx.listener(release))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(release))
             })
+            // Reload's lists its kinds of reload, right-clicked, also while it's stop (menus.rs).
+            .when(
+                matches!(command, Command::Reload | Command::Stop),
+                |button| {
+                    button.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.reload_menu(event.position, cx)
+                        }),
+                    )
+                },
+            )
             .when(enabled && lists, |button| {
                 button.on_mouse_down(
                     MouseButton::Right,
@@ -461,10 +473,10 @@ impl Shell {
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
     /// command bar's placeholder, there from the frame the card's mark is, or at once with a
     /// task's conversation, which shows at once.
-    pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
+    pub(super) fn url_field_words(&self, url: &str, cx: &App) -> (SharedString, Hsla) {
         let shown = match self.task_area {
             Some(_) => 1.,
-            None => self.empty_opacity(Instant::now()),
+            None => self.empty_opacity(cx.background_executor().now()),
         };
         self.url_words(self.field_tab(), url, shown)
     }
@@ -488,7 +500,7 @@ impl Shell {
 
     pub(super) fn url_field(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let url = self.url(self.field_tab());
-        let (words, color) = self.url_field_words(&url);
+        let (words, color) = self.url_field_words(&url, cx);
         if *self.url_field_drawn.borrow() != words {
             // check.sh reads this line.
             log!("browser: url field {words}");
@@ -573,6 +585,55 @@ impl Shell {
                         .text_color(self.palette.glyph(NAV)),
                 )
         });
+        // While Battery Saver is on, its leaf, before the tools and in that place while they're
+        // gone, so it says so whether or not the pointer's over the sidebar. A press shows its
+        // toast again, with Turn Off (battery.rs).
+        let slots = if self.page(self.field_tab()).developer_mode {
+            3.
+        } else {
+            2.
+        };
+        let leaf_end = end + slots * TOOL_PITCH;
+        let leaf = self.battery_saver.map(|_| {
+            let drawn = self.battery_leaf_drawn.clone();
+            let frame = canvas(
+                move |bounds, _, _| {
+                    if drawn.replace(Some(bounds)) != Some(bounds) {
+                        let (origin, size) = (bounds.origin, bounds.size);
+                        // check.sh reads this line.
+                        log!(
+                            "browser: battery saver leaf at {} {} {} {}",
+                            f32::from(origin.x),
+                            f32::from(origin.y),
+                            f32::from(size.width),
+                            f32::from(size.height),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full();
+            self.field_tool("battery-saver", leaf_end)
+                .opacity(1.)
+                .when(self.a11y, |button| button.button_named("Battery Saver"))
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.show_battery_notice(cx);
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("icons/leaf.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.accent),
+                )
+                .child(frame)
+        });
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -608,6 +669,10 @@ impl Shell {
             true => end + TOOL_PITCH + URL_BUTTON_SIZE,
             false if actions.is_empty() => URL_FIELD_TEXT_X - PLATE_INSET,
             false => URL_BUTTON_INSET + buttons_width,
+        };
+        let text_end = match leaf {
+            Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
+            None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
@@ -650,6 +715,7 @@ impl Shell {
             )
             .children(engine)
             .children(key)
+            .children(leaf)
             .children(devtools)
             .children(copy)
             .children(site_controls)

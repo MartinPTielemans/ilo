@@ -1,11 +1,11 @@
 //! Settings › Sync: the browser's account on an ilo server, which syncs the Spaces, and the
-//! first profile's bookmarks, passwords and open tabs, across the user's devices (the core's
-//! bc_sync_ calls). Signed out, it offers to sign in, and the server to sign in to. Once signed in,
-//! the account's first device shows the recovery words once. A new device waits for another to add
-//! it, with the code both show, or takes the words. Signed in, it lists the devices. The core signs
-//! in, keeps the keys and syncs; this view says where the account is and asks. Each state has its
-//! way out: Cancel while it waits, Sign Out, Remove, and Not me on the other device. Agents get
-//! none of it.
+//! first profile's bookmarks and passwords, across the user's devices (the core's bc_sync_
+//! calls). Signed out, it offers to sign in, and the server to sign in to. Once signed in, the
+//! account's first device shows the recovery words once. A new device waits for another to add it,
+//! with the code both show, or takes the words. Signed in, it says when it last synced and what
+//! stops it, lists the devices, and deletes the account. The core signs in, keeps the keys and
+//! syncs; this view says where the account is and asks. Each state has its way out: Cancel while it
+//! waits, Sign Out, Remove, Delete Account, and Not me on the other device. Agents get none of it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -19,11 +19,12 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, button, group};
+use crate::settings_rows::{Look, button, detailed_row, group, named_button};
 use crate::text_input::TextInput;
+use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::settings::{
     BUTTONS_TOP, END_GAP, HEADER_GAP, HEADING_BOTTOM, HEADING_TOP, PADDING, ROW_HEIGHT, ROW_X,
-    WORD_GAP, WORD_NUMBER, WORDS_COLUMNS,
+    STATUS_DOT, STATUS_DOT_GAP, WORD_GAP, WORD_NUMBER, WORD_SPACE, WORDS_COLUMNS,
 };
 use crate::tokens::text;
 
@@ -99,6 +100,25 @@ pub fn synced(cx: &App) -> State {
         .unwrap_or_default()
 }
 
+/// What stops sync from keeping up with the server (BC_SYNC_TROUBLE_).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Trouble {
+    /// The last try couldn't reach the server, or it answered with an error.
+    Unreachable,
+    /// The server asked the device to wait.
+    Throttled,
+    /// Sync stopped after an error, until the browser starts again.
+    Stopped,
+}
+
+/// How sync is keeping up with the server, as the core said when the view last asked.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct Activity {
+    /// When it last synced, as `synced_when` says it, or "" if it hasn't.
+    pub synced: SharedString,
+    pub trouble: Option<Trouble>,
+}
+
 /// What the view tells the window it's in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccountEvent {
@@ -149,6 +169,10 @@ pub trait Host {
     fn request_pairing(&self);
     fn read_devices(&self);
     fn remove_device(&self, id: &str);
+    /// How sync is keeping up, asked as the view shows, never on a timer.
+    fn activity(&self) -> Activity;
+    /// Deletes the account, its synced data and its devices on the server, and signs out.
+    fn delete_account(&self);
     /// Puts the account's secret on this device's clipboard, marked for clipboard histories and
     /// cloud clipboards to skip where the system has a way, and takes it off after `kept` unless
     /// something replaced it.
@@ -188,6 +212,8 @@ pub struct Account {
     state: State,
     /// As the core last listed them, once asked while the account shows.
     devices: Option<Vec<Device>>,
+    /// As the core said when the view last showed.
+    activity: Activity,
     words: Option<Words>,
     server: Option<Field>,
     entering: Option<Field>,
@@ -201,6 +227,8 @@ pub struct Account {
     /// It's the first launch's step, whose title, line and button say what its signed-out box
     /// would.
     step: bool,
+    /// An assistive app reads the window, as its last draw found: its controls are named then.
+    a11y: bool,
 }
 
 impl EventEmitter<AccountEvent> for Account {}
@@ -303,6 +331,27 @@ pub fn since(past: f64) -> String {
     format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 
+/// When sync last finished, `at` in milliseconds since the Unix epoch, as the status line puts it
+/// after "Synced": "at 15:04" today, "yesterday at 15:04", or "3 days ago", with `day_starts` the
+/// starts of today and the days before it in the user's calendar (host_day_starts). A clock time
+/// rather than "5 minutes ago", which would go stale while Settings stays open, as the line is read
+/// only as it shows. "" for 0, when it hasn't synced.
+pub fn synced_when(at: f64, day_starts: [f64; 4]) -> String {
+    if at <= 0. {
+        return String::new();
+    }
+    let [today, yesterday, ..] = day_starts;
+    if at >= today {
+        format!("at {}", clock(at, today))
+    } else if at >= yesterday {
+        format!("yesterday at {}", clock(at, yesterday))
+    } else {
+        // Whole days back from the start of yesterday: the day before it is 2 days ago.
+        let days = ((yesterday - at) / 86_400_000.).floor() as u64 + 2;
+        format!("{days} days ago")
+    }
+}
+
 /// The time of day `at` is, in milliseconds since the Unix epoch, as "15:04", with `today` the
 /// start of today in the user's calendar. Off by an hour after a clock change, the day it changes.
 pub fn clock(at: f64, today: f64) -> String {
@@ -328,11 +377,13 @@ impl Account {
             focus: cx.focus_handle(),
             state: State::default(),
             devices: None,
+            activity: Activity::default(),
             words: None,
             server: None,
             entering: None,
             asked: false,
             drawn: Rc::default(),
+            a11y: false,
             look: Look::settings(true),
             step: false,
         }
@@ -359,6 +410,19 @@ impl Account {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    /// Asks the core again how sync is keeping up, as Settings shows the account: the line it
+    /// says is read then, not kept up to date while it shows, which would wake the browser.
+    pub fn read_activity(&mut self, cx: &mut Context<Self>) {
+        let activity = match self.state.status {
+            Status::On => self.host.activity(),
+            _ => Activity::default(),
+        };
+        if activity != self.activity {
+            self.activity = activity;
+            cx.notify();
+        }
     }
 
     /// The account as the core says it is now.
@@ -390,6 +454,7 @@ impl Account {
         let had_server = !self.state.server.is_empty();
         let finished = state.status == Status::On && was != Status::On && self.words.is_none();
         self.state = state;
+        self.read_activity(cx);
         if finished {
             cx.emit(AccountEvent::Finished);
         }
@@ -480,6 +545,7 @@ impl Account {
         let server = self.state.server.clone();
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
+                .spoken("Sync Server Address")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
                 .with_text(server)
@@ -518,6 +584,7 @@ impl Account {
         }
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
+                .spoken("Recovery Words")
                 .placeholder_color(self.look.detail)
                 .caret_color(self.look.ink)
         });
@@ -640,7 +707,8 @@ impl Account {
         );
     }
 
-    /// A button that records where it's drawn, by `name`.
+    /// A button that records where it's drawn, by `name`, which an assistive app calls by its
+    /// `title`.
     fn button(
         &self,
         name: impl Into<String>,
@@ -648,8 +716,23 @@ impl Account {
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        let title = title.into();
+        self.button_said(name, title.clone(), title, cx, clicked)
+    }
+
+    /// As `button`, called `spoken` where its title alone doesn't say what it does, as a device's
+    /// Remove doesn't say which.
+    fn button_said(
+        &self,
+        name: impl Into<String>,
+        title: impl Into<SharedString>,
+        spoken: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+        clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
         let name = name.into();
         button(&self.look, SharedString::from(name.clone()), title)
+            .when(self.a11y, |button| named_button(button, spoken))
             .relative()
             .child(self.place(name))
             .on_click(cx.listener(move |account, _, window, cx| clicked(account, window, cx)))
@@ -657,16 +740,19 @@ impl Account {
 
     /// A quiet link in a line of small grey text, brightening under the pointer, that records where
     /// it's drawn, by `name`.
+    /// An assistive app reads it as a button called `spoken`, as it acts here, not elsewhere.
     fn link(
         &self,
         name: &'static str,
         title: &'static str,
+        spoken: &'static str,
         cx: &mut Context<Self>,
         clicked: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
         let ink = self.look.ink;
         div()
             .id(name)
+            .when(self.a11y, |link| named_button(link, spoken))
             .relative()
             .hover(move |link| link.text_color(ink))
             .child(title)
@@ -701,10 +787,16 @@ impl Account {
     fn signed_out(&self, cx: &mut Context<Self>) -> gpui::Div {
         let signing_in = self.state.status == Status::SigningIn;
         let control = match signing_in {
-            true => self.button("cancel", "Cancel", cx, |account, _, cx| {
-                account.host.cancel();
-                cx.notify();
-            }),
+            true => self.button_said(
+                "cancel",
+                "Cancel",
+                "Cancel Sign In",
+                cx,
+                |account, _, cx| {
+                    account.host.cancel();
+                    cx.notify();
+                },
+            ),
             false => self.button("sign-in", "Sign In", cx, |account, window, cx| {
                 account.sign_in(window, cx)
             }),
@@ -729,9 +821,13 @@ impl Account {
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
                     .when(!signing_in, |row| {
-                        row.child(self.link("change-server", "Change…", cx, |account, _, cx| {
-                            account.change_server(cx)
-                        }))
+                        row.child(self.link(
+                            "change-server",
+                            "Change…",
+                            "Change Server…",
+                            cx,
+                            |account, _, cx| account.change_server(cx),
+                        ))
                     })
             }
         };
@@ -742,7 +838,7 @@ impl Account {
             }),
             false => Some(lines(
                 &self.look,
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices.",
+                "Sync Spaces, bookmarks and passwords across your devices.",
                 detail.map(SharedString::from),
                 Some(control.into_any_element()),
             )),
@@ -824,7 +920,13 @@ impl Account {
         let now = cx.background_executor().now();
         let copied = words.copied.is_some_and(|at| now - at < COPIED);
         let title = if copied { "Copied" } else { "Copy" };
-        let copy = self.button("copy", title, cx, |account, _, cx| account.copy_words(cx));
+        let spoken = match copied {
+            true => "Recovery Words Copied",
+            false => "Copy Recovery Words",
+        };
+        let copy = self.button_said("copy", title, spoken, cx, |account, _, cx| {
+            account.copy_words(cx)
+        });
         // Copied says it happened, with a check, until it's Copy again.
         let check = svg()
             .path("icons/check.svg")
@@ -911,20 +1013,20 @@ impl Account {
                         .child(self.link(
                             "start-over",
                             "Start over…",
+                            "Start Over…",
                             cx,
                             |account, window, cx| account.start_over(window, cx),
                         )),
                 );
         }
         let pairing = self.state.status == Status::Pairing;
-        let waiting =
-            match pairing {
-                true => {
-                    let code = match self.state.code.is_empty() {
-                        true => div().text_color(self.look.detail).child("––– –––"),
-                        false => div().child(grouped(&self.state.code)),
-                    };
-                    lines(
+        let waiting = match pairing {
+            true => {
+                let code = match self.state.code.is_empty() {
+                    true => div().text_color(self.look.detail).child("––– –––"),
+                    false => div().child(grouped(&self.state.code)),
+                };
+                lines(
                     &self.look,
                     format!(
                         "On a device signed in to {}, {} asks to add this one. Add it there if it \
@@ -933,33 +1035,41 @@ impl Account {
                         env!("APP_NAME"),
                     ),
                     None,
-                    Some(self.button("cancel", "Cancel", cx, |account, _, cx| {
-                        account.host.cancel();
-                        cx.notify();
-                    })
-                    .into_any_element()),
+                    Some(
+                        self.button_said(
+                            "cancel",
+                            "Cancel",
+                            "Cancel Request",
+                            cx,
+                            |account, _, cx| {
+                                account.host.cancel();
+                                cx.notify();
+                            },
+                        )
+                        .into_any_element(),
+                    ),
                 )
                 .child(
                     code.mt(px(PADDING))
                         .text_size(px(text::HEADING))
                         .font_weight(FontWeight::SEMIBOLD),
                 )
-                }
-                false => lines(
-                    &self.look,
-                    self.state.problem.map_or(
-                        "Ask a device already signed in to add this one.",
-                        problem_text,
-                    ),
-                    None,
-                    Some(
-                        self.button("ask-again", "Ask Again", cx, |account, _, cx| {
-                            account.ask_again(cx)
-                        })
-                        .into_any_element(),
-                    ),
+            }
+            false => lines(
+                &self.look,
+                self.state.problem.map_or(
+                    "Ask a device already signed in to add this one.",
+                    problem_text,
                 ),
-            };
+                None,
+                Some(
+                    self.button("ask-again", "Ask Again", cx, |account, _, cx| {
+                        account.ask_again(cx)
+                    })
+                    .into_any_element(),
+                ),
+            ),
+        };
         div()
             .child(header(&self.look, "Approve on another device", true))
             .child(group(&self.look, [waiting]))
@@ -980,6 +1090,7 @@ impl Account {
                         }),
                     ),
             )
+            .child(self.delete_group(cx))
     }
 
     /// Signed in: the account, its devices, and the way to see the words again.
@@ -987,12 +1098,21 @@ impl Account {
         let sign_out = self.button("sign-out", "Sign Out", cx, |account, window, cx| {
             account.sign_out(window, cx)
         });
-        let account = lines(
-            &self.look,
-            self.state.email.clone(),
-            Some(format!("Syncing through {}", self.server_name()).into()),
-            Some(sign_out.into_any_element()),
+        let account = div().px(px(ROW_X)).py(px(PADDING)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(END_GAP))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.state.email.clone())
+                        .child(self.status_line()),
+                )
+                .child(div().flex_none().child(sign_out)),
         );
+
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
                 true => div()
@@ -1006,8 +1126,15 @@ impl Account {
                             account.host.remove_device(&id);
                             cx.notify();
                         };
-                    self.button(format!("remove {}", device.id), "Remove", cx, remove)
-                        .into_any_element()
+                    let spoken = format!("Remove {}", device.name);
+                    self.button_said(
+                        format!("remove {}", device.id),
+                        "Remove",
+                        spoken,
+                        cx,
+                        remove,
+                    )
+                    .into_any_element()
                 }
             };
             div()
@@ -1047,6 +1174,132 @@ impl Account {
                 cx,
                 |account, window, cx| account.show_recovery_words(window, cx),
             )))
+            .child(self.delete_group(cx))
+    }
+
+    /// Delete Account, under the rest while signed in, with or without the secret: someone who
+    /// lost their words and devices can delete the account rather than start it over.
+    fn delete_group(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let delete = self.button("delete-account", "Delete…", cx, |account, window, cx| {
+            account.delete_account(window, cx)
+        });
+        let delete = detailed_row(
+            &self.look,
+            "Delete Account",
+            format!(
+                "Deletes your account and its encrypted data on {}, and signs out every device. \
+                 What's on this device stays.",
+                self.server_phrase()
+            ),
+            Some(delete.into_any_element()),
+        );
+        div().mt(px(HEADING_TOP)).child(group(&self.look, [delete]))
+    }
+
+    /// The server as a sentence names it: "ilo's server", or its host.
+    fn server_phrase(&self) -> String {
+        match self.state.default_server {
+            true => format!("{}'s server", env!("APP_NAME")),
+            false => host_of(&self.state.server).to_owned(),
+        }
+    }
+
+    /// What the line under the account's email says: what stops sync, if anything, which shows in
+    /// red, then when it last synced or what happens next.
+    fn status_words(&self) -> (Option<String>, String) {
+        let app = env!("APP_NAME");
+        let synced = &self.activity.synced;
+        let last = match synced.is_empty() {
+            true => String::new(),
+            false => format!("Last synced {synced}; "),
+        };
+        match (self.state.problem, self.activity.trouble) {
+            (Some(problem), _) => (Some(problem_text(problem).into()), String::new()),
+            (None, Some(Trouble::Unreachable)) => (
+                Some(format!("Can't reach {}.", self.server_phrase())),
+                format!("{last}{app} keeps trying."),
+            ),
+            (None, Some(Trouble::Throttled)) => (
+                Some("The server asked to wait.".into()),
+                format!("{last}{app} syncs again soon."),
+            ),
+            (None, Some(Trouble::Stopped)) => (
+                Some("Sync stopped after an error.".into()),
+                format!("Quit and reopen {app} to start it again."),
+            ),
+            (None, None) if synced.is_empty() => {
+                (None, format!("Syncing through {}", self.server_name()))
+            }
+            (None, None) => (
+                None,
+                format!("Synced {synced}, through {}", self.server_name()),
+            ),
+        }
+    }
+
+    /// The line under the account's email, after a dot: green while it syncs, red, as what stops
+    /// it is, while something does.
+    fn status_line(&self) -> gpui::Div {
+        let (trouble, rest) = self.status_words();
+        let red = match self.look.light() {
+            true => gpui::rgba(LIGHT_DESTRUCTIVE),
+            false => gpui::rgba(DARK_DESTRUCTIVE),
+        };
+        let dot = if trouble.is_some() {
+            red
+        } else {
+            self.look.accent
+        };
+        let mut text = vec![];
+        if let Some(trouble) = trouble {
+            text.push(div().text_color(red).child(trouble));
+        }
+        if !rest.is_empty() {
+            text.push(div().child(rest));
+        }
+        div()
+            .flex()
+            .items_center()
+            .text_size(px(text::SMALL))
+            .text_color(self.look.detail)
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(STATUS_DOT))
+                    .mr(px(STATUS_DOT_GAP))
+                    .rounded_full()
+                    .bg(dot),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(px(WORD_SPACE))
+                    .children(text),
+            )
+    }
+
+    /// Deletes the account, once the user confirms, as nothing brings it back: the core then signs
+    /// the browser out.
+    fn delete_account(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let host = self.host.clone();
+        self.host.confirm(
+            format!("Delete the account {}?", self.state.email),
+            format!(
+                "This deletes the account and everything {} keeps of it: its synced data, which \
+                 is encrypted, and its devices, which are all signed out. This browser keeps its \
+                 Spaces, bookmarks and passwords.",
+                self.server_phrase()
+            ),
+            "Delete Account",
+            // Nothing brings the account back, so only a click deletes it.
+            Return::Nothing,
+            Box::new(move |_| host.delete_account()),
+            window,
+            cx,
+        );
     }
 
     /// Gives a field just shown the keyboard.
@@ -1122,6 +1375,7 @@ impl Focusable for Account {
 
 impl Render for Account {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.a11y = window.is_a11y_active();
         self.ask_what_shows();
         self.focus_field(window, cx);
         self.drawn.borrow_mut().clear();

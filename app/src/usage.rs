@@ -50,6 +50,15 @@ impl<K: PartialEq> Usage<K> {
             .map_or(0.0, |(_, times)| decayed(times, now))
     }
 
+    /// Forgets the uses from `begin` to `end`, in seconds since 1970, as history cleared for a
+    /// time takes them, and the things with no use left.
+    pub fn forget_between(&mut self, begin: u64, end: u64) {
+        for (_, times) in &mut self.uses {
+            times.retain(|time| !(begin..end).contains(time));
+        }
+        self.uses.retain(|(_, times)| !times.is_empty());
+    }
+
     /// Keeps only the things `keep` says to, as a closed tab's switches go with it.
     pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
         self.uses.retain(|(key, _)| keep(key));
@@ -149,6 +158,20 @@ mod tests {
         assert!(usage.score(&0, 2 * DAY) > 1.0);
         assert_eq!(usage.score(&(CAP as u64), 2 * DAY), 1.0);
         assert_eq!(usage.score(&1, 2 * DAY), 0.0);
+    }
+
+    #[test]
+    fn a_span_of_time_forgets_the_uses_in_it() {
+        let mut usage = Usage::default();
+        usage.used("kept", 1);
+        usage.used("both", 2);
+        usage.used("both", 6);
+        usage.used("gone", 5);
+        usage.forget_between(4, 8);
+        assert_eq!(usage.len(), 2);
+        assert_eq!(usage.score(&"both", 2), 1.0);
+        assert_eq!(usage.score(&"gone", 5), 0.0);
+        assert_eq!(usage.score(&"kept", 1), 1.0);
     }
 
     #[test]

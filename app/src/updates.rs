@@ -1,5 +1,5 @@
 //! Where ilo's update stands, as the system's updater says (docs/ux-spec.md › Updates): Sparkle on
-//! the Mac, WinSparkle on Windows, Flatpak's portal on Linux. Settings › About's version row says
+//! the Mac, ilo's own on Windows (platform/windows/updates.cc), Flatpak's portal on Linux. Settings › About's version row says
 //! it in plain words and finishes it, and Check for Updates… reads Restart to Update once one is
 //! ready. There's no updater here: each OS's own says what happened, through its delegate or
 //! callbacks, and this keeps what it last said and asks it to check or to restart. Where the build
@@ -15,7 +15,9 @@ use gpui::{
 };
 
 use crate::palette::NO_THEME_ACCENT;
-use crate::settings_rows::{Look, SLIDE, button, detailed_row, drawn, switch};
+use crate::settings_rows::{
+    Look, SLIDE, button, detailed_row, drawn, named_button, named_switch, switch,
+};
 use crate::tokens::settings::CONTROL_GAP;
 
 /// What updates this copy.
@@ -26,7 +28,7 @@ pub enum Updater {
     None,
     /// The Microsoft Store, which updates a copy installed from it.
     Store,
-    /// ilo's own: Sparkle, WinSparkle or Flatpak's portal.
+    /// ilo's own: Sparkle, Windows' (platform/windows/updates.cc) or Flatpak's portal.
     Own,
 }
 
@@ -154,6 +156,12 @@ pub fn built(cx: &App) -> Track {
 
 /// The builds the updater takes, where About offers the choice: a copy that updates itself and
 /// carries a nightly feed.
+/// Whether the app updates itself, with its own updater, rather than the Store or nothing.
+pub fn own_updater(cx: &App) -> bool {
+    cx.try_global::<Updates>()
+        .is_some_and(|updates| updates.updater == Updater::Own)
+}
+
 pub fn followed(cx: &App) -> Option<Track> {
     let updates = cx.try_global::<Updates>()?;
     if updates.updater != Updater::Own {
@@ -186,6 +194,9 @@ pub fn follow(track: Track, cx: &mut App) {
 
 /// The nightly switch's name in the log and where it's drawn.
 const NIGHTLY: &str = "nightly builds";
+
+/// Its row's title, which an assistive app calls its switch.
+const NIGHTLY_NAME: &str = "Get nightly builds";
 
 /// What the nightly row says under its name: what a nightly is, or, turned off on one, that this
 /// build stays until a release is newer.
@@ -493,9 +504,10 @@ impl VersionRow {
 }
 
 impl Render for VersionRow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (said, action) = words(updater(cx), &stage(cx));
         let look = self.look;
+        let a11y = window.is_a11y_active();
         self.drawn.set(None);
         let button = action.map(|(action, title)| {
             let drawn_at = self.drawn.clone();
@@ -505,7 +517,13 @@ impl Render for VersionRow {
             )
             .absolute()
             .inset_0();
+            // Try Again says what it tries again, as the line before it may not be read.
+            let spoken = match title {
+                "Try Again" => "Check for Updates Again",
+                title => title,
+            };
             button(&look, "update", title)
+                .when(a11y, |button| named_button(button, spoken))
                 .relative()
                 .when(said.is_some(), |button| button.ml(px(CONTROL_GAP)))
                 .child(drawn(
@@ -585,6 +603,9 @@ impl Render for NightlyRow {
         .inset_0();
         let control = div()
             .id(NIGHTLY)
+            .when(window.is_a11y_active(), |control| {
+                named_switch(control, NIGHTLY_NAME, on)
+            })
             .relative()
             .child(switch(&self.look, on, slid, rgb(NO_THEME_ACCENT)))
             .child(drawn(format!("switch {NIGHTLY}"), self.logged.clone()))
@@ -596,7 +617,7 @@ impl Render for NightlyRow {
             }));
         let words = nightly_words(built(cx), followed);
         let control = Some(control.into_any_element());
-        detailed_row(&self.look, "Get nightly builds", words, control).into_any_element()
+        detailed_row(&self.look, NIGHTLY_NAME, words, control).into_any_element()
     }
 }
 

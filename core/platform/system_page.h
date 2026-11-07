@@ -26,6 +26,9 @@ struct NativeWebKeyboardEvent;
 
 namespace browser_core::platform {
 
+// What a site's data clearing deletes (ClearSiteAndReload, SystemPage::ClearSite).
+enum class SiteData { kCookies, kCache, kAll };
+
 // Where a system page keeps its cookies and site data: one store a profile, apart from Chromium's
 // and from Safari's. |id| is a UUID for a profile's, or for a private session's, whose store keeps
 // nothing on disk and goes once ReleaseStore lets it go.
@@ -102,11 +105,11 @@ class SystemPage {
   static void DeleteStore(const std::string& id);
   // Lets a private session's store go. Never loads the system's engine.
   static void ReleaseStore(const std::string& id);
-  // Deletes |domain|'s cookies, or else its cache, from |store|, then runs |done|. Loads the
-  // system's engine, as DeleteStore.
+  // Deletes |domain|'s |what| from |store|, then runs |done|. Loads the system's engine, as
+  // DeleteStore.
   static void ClearSite(const SystemStore& store,
                         const std::string& domain,
-                        bool cookies,
+                        SiteData what,
                         base::OnceClosure done);
 
   SystemPage(const SystemPage&) = delete;
