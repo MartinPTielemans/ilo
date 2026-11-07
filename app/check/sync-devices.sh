@@ -21,48 +21,6 @@ fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
 . check/ilo-server.sh
 
-# The device the helpers drive from now, $1: its process, log, driver and step.
-on=
-device() {
-  case $on in
-  a) a_step=$step ;;
-  b) b_step=$step ;;
-  c) c_step=$step ;;
-  esac
-  on=$1
-  eval "pid=\$${1}_pid log=\$${1}_log step=\$${1}_step"
-  case $1 in
-  a) exec 3>&5 ;;
-  b) exec 3>&6 ;;
-  c) exec 3>&7 ;;
-  esac
-}
-# Starts device $1, in the profile directory $2, on driver fd $3, and drives it.
-start() {
-  eval "${1}_log=\$out/sync-devices-$1.log ${1}_step=0"
-  mkdir -p "$2"
-  mkfifo "$out/drive-$1"
-  BROWSER_DRIVE=1 BROWSER_URL="data:text/html,<title>device $1</title>" BROWSER_PROFILE_DIR="$2" \
-    "$browser" --sync-url="$server_url" < "$out/drive-$1" > "$out/sync-devices-$1.log" 2>&1 \
-    3>&- 5>&- 6>&- 7>&- &
-  eval "${1}_pid=\$!"
-  others="$others $!"
-  eval "exec $3> \"\$out/drive-$1\""
-  device "$1"
-  await_load
-}
-# Shows Settings › Sync and starts signing in.
-open_sign_in() {
-  send menu Settings…
-  expect '^browser: settings shown ' "Settings… didn't show Settings on $on"
-  send clickkey $(drawn "toolbar Sync")
-  expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab on $on"
-  at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In on $on"
-  send clickkey $at
-  expect '^browser: account SigningIn None$' "Sign In didn't start signing in on $on"
-  await 'browser: sync sign-in loaded /authorize$' ||
-    fail "the sign-in window didn't load the server's page on $on"
-}
 # The Spaces the device's window has, by the last list it logged.
 spaces() {
   grep '^browser: spaces ' "$log" | tail -1 | awk '{ print NF - 2 }'
