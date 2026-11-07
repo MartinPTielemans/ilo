@@ -473,6 +473,7 @@ fn separating_a_favorite_split_undoes(cx: &mut TestAppContext) {
     let (shell, cx, host) = with_split_tile(cx);
     shell.update(cx, |shell, cx| shell.separate_favorite(10, cx));
     host.take_edits();
+    host.take();
     // The core has left 10 the favorite and put 11 at the top of Today.
     shell.update(cx, |shell, cx| {
         shell.set_tabs(
@@ -494,6 +495,8 @@ fn separating_a_favorite_split_undoes(cx: &mut TestAppContext) {
             "favorite split 10 0"
         ]
     );
+    // Tab 1 stays shown, where the core shows the split it joins.
+    assert_eq!(host.take().last().map(String::as_str), Some("select 1"));
     // The core has made them the favorite split again.
     shell.update(cx, |shell, cx| {
         shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
