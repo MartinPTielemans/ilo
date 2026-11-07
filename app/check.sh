@@ -79,7 +79,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc"
-named="store adblock-live widevine updates nightly update-checks keychain shots tab-drag"
+named="store adblock-live widevine updates nightly update-checks keychain shots tab-drag scale"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
