@@ -17,6 +17,7 @@
 #include "base/values.h"
 #include "browser_core/agent_download_hold.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/auto_archive.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
@@ -98,6 +99,7 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
     notifiers_.push_back(
         std::make_unique<download::AllDownloadItemNotifier>(manager, this));
     Changed();
+    ScheduleAutoArchive();
   }
 
   // The ones Chrome's downloads page lists, of every profile the core uses and of their private
@@ -156,7 +158,11 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
 
  private:
   // download::AllDownloadItemNotifier::Observer:
-  void OnManagerInitialized(content::DownloadManager* manager) override { Changed(); }
+  // The history read, its ended downloads wait to leave the list.
+  void OnManagerInitialized(content::DownloadManager* manager) override {
+    Changed();
+    ScheduleAutoArchive();
+  }
   // A deleted profile's downloads leave the list.
   void OnManagerGoingDown(content::DownloadManager* manager) override { Changed(); }
   void OnDownloadCreated(content::DownloadManager* manager,
@@ -194,6 +200,10 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
                            .state = state,
                            .bytes = done ? item->GetReceivedBytes() : 0,
                            .path = done ? item->GetTargetFilePath().AsUTF8Unsafe() : ""});
+    }
+    // One that ended waits to leave the list.
+    if (state != BC_DOWNLOAD_RUNNING && state != BC_DOWNLOAD_PAUSED) {
+      ScheduleAutoArchive();
     }
     Changed();
   }
@@ -428,6 +438,20 @@ void ClearDownloads(bc_id profile, bool off_the_record) {
     if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
       item->Remove();
     }
+  }
+}
+
+void ForEachEndedDownload(
+    base::FunctionRef<void(bc_id id, Profile* profile, base::Time ended)> each) {
+  for (download::DownloadItem* item : TheDownloads().Listed()) {
+    if (item->GetState() == download::DownloadItem::IN_PROGRESS) {
+      continue;
+    }
+    Profile* profile = ProfileOf(item);
+    // From its start where Chrome kept no end.
+    const base::Time ended =
+        item->GetEndTime().is_null() ? item->GetStartTime() : item->GetEndTime();
+    each(IdOf(item), profile ? profile->GetOriginalProfile() : nullptr, ended);
   }
 }
 
