@@ -571,6 +571,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
                        .Set("title", tab.title)
                        .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
                        .Set("little", tab.little));
+    if (tab.space.is_valid()) {
+      archive.back().GetDict().Set("space", tab.space.AsLowercaseString());
+    }
   }
   root.Set("archive", std::move(archive));
   // A string, as JSON's numbers can't hold every id.
@@ -826,11 +829,13 @@ std::optional<Saved> Read(const base::FilePath& path) {
       const std::string* title = tab ? tab->FindString("title") : nullptr;
       std::optional<double> archived = tab ? tab->FindDouble("archived") : std::nullopt;
       if (url && title && archived && GURL(*url).is_valid()) {
+        const std::string* space = tab->FindString("space");
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
              .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
-             .little = tab->FindBool("little").value_or(false)});
+             .little = tab->FindBool("little").value_or(false),
+             .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid()});
       }
     }
   }
@@ -1426,7 +1431,7 @@ Space* RestoreSpace(Window& window,
       if (!saved_space.agent && saved_tab.current >= 0 &&
           static_cast<size_t>(saved_tab.current) < saved_tab.history.size()) {
         const sessions::SerializedNavigationEntry& entry = saved_tab.history[saved_tab.current];
-        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()));
+        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()), space->node().id);
       }
       continue;
     }

@@ -172,6 +172,19 @@ Space* Space::FromId(bc_id id) {
 }
 
 // static
+Space* Space::WithNode(const base::Uuid& node) {
+  if (!node.is_valid()) {
+    return nullptr;
+  }
+  for (Space* space : All()) {
+    if (!space->agent() && space->node().id == node) {
+      return space;
+    }
+  }
+  return nullptr;
+}
+
+// static
 std::vector<Space*> Space::All() {
   std::vector<Space*> all;
   for (bc_id id : SpaceOrder()) {

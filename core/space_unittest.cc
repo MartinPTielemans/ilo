@@ -71,6 +71,23 @@ class SpaceTest : public testing::Test {
   bc_id notes_ = 0;
 };
 
+// What an archived tab goes back to: the user's Space it closed in, while there's one.
+TEST_F(SpaceTest, ASpaceIsFoundByItsNodeWhileItIsTheUsers) {
+  const base::Uuid work = work_->node().id;
+  ASSERT_TRUE(work.is_valid());
+  EXPECT_EQ(Space::WithNode(work), work_);
+  EXPECT_EQ(Space::WithNode(base::Uuid()), nullptr);
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  const base::Uuid agents = agent->node().id;
+  EXPECT_EQ(Space::WithNode(agents), nullptr);
+  Space::Delete(agent->id());
+
+  Space::Delete(work_->id());
+  EXPECT_EQ(Space::WithNode(work), nullptr);
+  work_ = Space::Create("Work");
+}
+
 TEST_F(SpaceTest, AFolderMovesWholeAndInOrderToTheBottomOfThePinnedTabs) {
   Fill();
   const base::Uuid node = work_->NodeOf(docs_)->id;
