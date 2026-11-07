@@ -12,8 +12,9 @@
 # its page opens, by a link or window.open, goes in its Space, behind, and the click's answer names
 # it. A page with fields gives its prose and none of their values: typed, filled in or a password, in its
 # text and in its outline, and the agent can't type into the password field. It types into another.
-# A frame nested two sites deep and one the page adds after its load are in the page's outline
-# and text too, and an empty helper frame is in neither.
+# A frame nested two sites deep, one the page adds after its load and one it fills by posting a
+# form into it are in the page's outline and text too, an empty helper frame is in neither, and a
+# click two frames deep lands.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
 # activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
@@ -621,8 +622,10 @@ painted(() => document.title = "fields");
   # password field in a frame is as off limits as one in the page. The page names itself once the
   # other site's frame has painted: until then Chromium hasn't the frame's drawing to find what's
   # under a click in, and gives the click to the page around it. A third site's frame inside the
-  # other site's, and a frame the page adds after it has loaded, are in the outline and the text
-  # too, in the page's order, and an empty helper frame is in neither (#1444).
+  # other site's, a frame the page adds after it has loaded and one it fills by posting a form into
+  # it, as SharePoint posts Word's editor into its frame, are in the outline and the text too, in
+  # the page's order, and an empty helper frame is in neither. A click two frames deep lands
+  # (#1444).
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
   printf '%s' '<p>Cross text</p>
@@ -632,21 +635,29 @@ painted(() => document.title = "fields");
 <script>painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/cross.html"
   printf '%s' "<iframe src=http://nested.localhost:$port/deep.html></iframe>" \
     >> "$out/site/cross.html"
-  printf '%s' '<p>Deep text</p>' > "$out/site/deep.html"
+  printf '%s' '<p>Deep text</p>
+<button onclick="document.body.append(&quot;deep clicked&quot;)">Deep button</button>' \
+    > "$out/site/deep.html"
   printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' \
     > "$out/site/late.html"
+  printf '%s' '<p>Posted text</p><script>top.postMessage("posted", "*")</script>' \
+    > "$out/site/posted.html"
   : > "$out/site/empty.html"
   printf '%s' "<title>loading</title><p>Top text</p><iframe src=inner.html></iframe>
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
 <iframe title='Helper frame' src=empty.html width=1 height=1></iframe>
-<script>addEventListener('message', (event) => {
+<iframe name=posted></iframe><form target=posted action=http://127.0.0.1:$port/posted.html></form>
+<script>const heard = new Set();
+addEventListener('message', (event) => {
   if (event.data === 'painted') {
     document.title = 'frames';
     const late = document.createElement('iframe');
     late.src = 'http://127.0.0.1:$port/late.html';
     document.body.append(late);
+    document.forms[0].submit();
   }
-  if (event.data === 'late') document.title = 'frames late';
+  if (event.data === 'late' || event.data === 'posted') heard.add(event.data);
+  if (heard.size === 2) document.title = 'frames late';
   if (event.data === 'extension frame') document.title = 'frames with extension';
 });</script>" > "$out/site/frames.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/frames.html\"}")
@@ -687,20 +698,27 @@ painted(() => document.title = "fields");
   # and not that one's.
   await_log "^browser: title $frames_tab frames with extension\$" \
     "the check's extension didn't put its frame in the frames page"
-  await_log "^browser: title $frames_tab frames late\$" "the frame added after the load didn't load"
+  await_log "^browser: title $frames_tab frames late\$" \
+    "the frames added and filled after the load didn't load"
   later=$(call snapshot "{\"tab\":$frames_tab}")
   printf '%s\n' "$later" > "$out/mcp-frames-later.txt"
   case "$later" in
     *"Helper frame"*) fail "the outline had the empty helper frame: $later" ;;
-    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Late text"*) ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
     *) fail "the frames page was outlined later as: $later" ;;
   esac
   read=$(call read_page "{\"tab\":$frames_tab}")
   printf '%s\n' "$read" > "$out/mcp-frames-text.txt"
   case "$read" in
     *"Extension text"*) fail "reading the frames page gave the extension's frame's text: $read" ;;
-    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Late text"*) ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
+  esac
+  outline=$later
+  clicked=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of button "Deep button")\"}")
+  case "$clicked" in
+    "Clicked button “Deep button”."*"deep clicked"*) ;;
+    *) fail "clicking two frames deep answered: $clicked" ;;
   esac
 
   # select chooses an option by its text: in a select through the option's own action, and in a
