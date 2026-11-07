@@ -1,0 +1,15 @@
+# Probe for #1358, never for main: whether a hosted Windows runner's display changes its scale live.
+name: DPI probe
+on:
+  push:
+    branches: [fix/windows-dpi-1358-2]
+    paths: [.github/workflows/dpi-probe.yml, app/check/dpi-probe.py]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -I -u app/check/dpi-probe.py
