@@ -364,8 +364,28 @@ impl Shell {
             ));
             items.push((MenuEntry::line(), Box::new(|_, _| {})));
         }
-        // Ours, where Arc shares and exports a Space into a folder: Arc exports every Space at
-        // once, from Settings.
+        // Every one of the user's Spaces, its own dimmed as Arc's is, while one can take it.
+        let targets = self.folder_targets(space);
+        if targets.iter().any(|&(_, _, can)| can) {
+            let name = entry.map_or_else(SharedString::default, |each| each.name.clone());
+            let at = items.len();
+            // The name the user gave keeps its case; ilo's words around it take the platform's.
+            let folder = if super::OFF_THE_MAC { "folder" } else { "Folder" };
+            let title = format!("Export “{name}” into {folder}");
+            items.push((MenuEntry::named(title, true), Box::new(|_, _| {})));
+            for (into, name, can) in targets {
+                let swatch = self.space_swatch(into);
+                items.push((
+                    MenuEntry::named(name, can).swatch(swatch).under(at),
+                    Box::new(move |shell, cx| {
+                        // check.sh waits for this line.
+                        log!("browser: command export-into-folder {space} {into} via space menu");
+                        shell.export_into_folder(space, into, cx)
+                    }),
+                ));
+            }
+        }
+        // Ours, after Arc's: Arc exports every Space at once, from Settings.
         items.push((
             MenuEntry::new("Export as Markdown…", true),
             Box::new(move |shell, cx| {

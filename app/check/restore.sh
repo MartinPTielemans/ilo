@@ -163,7 +163,7 @@ e=$(today)
 expect "^browser: loaded $e https://example.com/\$" "example.com didn't load in the new Space's tab"
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
 # The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
 choose_drawn "$(cased 'Edit Theme Color…')"
@@ -183,7 +183,7 @@ expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
 # search and picked with ↩, which a relaunch brings back.
 post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "the Space's menu didn't offer Change Icon…"
 choose_drawn "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $second on icon\$" "Change Icon… didn't open the icon picker"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"

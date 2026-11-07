@@ -36,6 +36,10 @@ swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
 profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+# A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
+# itself, as Spaces come and go (spaces checks it). It goes in a menu's line before Export as
+# Markdown…, through cased.
+into='\(Export “[^”]*” into Folder › [^,]*, \)*'
 empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)

@@ -8,7 +8,8 @@
 # wheel's tick across pages once. A right-click on a row as a Space's rows slide in shows its
 # tab's menu. A tab's menu moves the tab to another Space, which the window shows with it, and
 # into another Space's folder, listed under its Today, which ⌘Z undoes, and a folder's menu moves
-# it whole to another Space, which ⌘Z undoes too. Return
+# it whole to another Space, which ⌘Z undoes too. Export “name” into Folder › another Space makes
+# the Space a folder there, which one ⌘Z takes back. Return
 # with no name does nothing, New Space from the footer's + shows a form
 # already open, and Cancel, or two fingers back, deletes its Space and goes back to the Space it
 # was made from; fingers going on rubber-band the form. A right-click on the Space's name, a
@@ -466,7 +467,7 @@ expect "^browser: library field $second at rest drawn\$" "the pointer leaving th
 # the colour it was given, and leaves the Library open on the Space shown.
 post rightclick 524 $((${content#*x} / 2))
 card_menu="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$"
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
 expect "$card_menu" "a right-click on the second Space's card didn't show its menu"
 none_since '^browser: library space ' || fail "a right-click on a card showed its Space"
 send dismiss
@@ -800,7 +801,7 @@ expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 # New Tab, New Folder… and the Space's menu, and New Tab opens the command bar, as ⌘T does.
 post rightclick $(row 3)
 expect "^browser: menu shown $(cased "New Tab, New Folder…, Change Space Icon…, Rename Space…, $colors, $profile, \
-Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click under the Space's rows didn't show New Tab, New Folder… and the Space's menu"
 ../tools/window-screenshot.sh "$pid" "$out/space-empty-menu.png" || fail "no window to capture"
 send choose "$(cased 'New Tab')"
@@ -813,7 +814,7 @@ expect '^browser: command bar hidden$' "escape didn't close the command bar New 
 name_point="100 112"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/space-menu.png" || fail "no window to capture"
 send dismiss
@@ -829,7 +830,7 @@ for holder in ui page; do
   send move $edit_point
   send click $edit_point
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
     "a click on the … didn't show the Space's menu, the $holder holding the keyboard"
   expect '^browser: menu drawn ' "the Space's menu from a click on the … didn't come on screen ($holder)"
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-click-$holder.png" || fail "no window to capture"
@@ -864,7 +865,7 @@ for how in tap press rightclick; do
       ;;
   esac
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
     "a $how on the sidebar out over the page didn't show the Space's menu"
   expect '^browser: menu drawn ' "the Space's menu from a $how on the sidebar out didn't come on screen"
   if [ $how = press ]; then send release $reveal_edit; fi
@@ -895,7 +896,7 @@ for where in second-window full-screen; do
   ../tools/window-screenshot.sh "$pid" "$out/space-edit-$where-before.png" || fail "no window to capture"
   send click $edit_point
   shown="^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$"
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$"
   for _ in $(seq 100); do logged "$shown" && break; sleep 0.1; done
   # The issue asks whether a second click works when the first does nothing.
   if ! logged "$shown"; then
@@ -921,7 +922,7 @@ send window 1
 send move $edit_point
 send press $edit_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a press on the … at the end of the Space's name didn't show its menu"
 expect '^browser: menu drawn ' "the Space's menu from the … didn't come on screen"
 send release $edit_point
@@ -973,7 +974,7 @@ expect '^browser: rename cancelled$' \
 # and the menu offers Remove Icon only once there is an icon.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Change Icon…"
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on icon\$" "Change Icon… didn't open the icon picker"
@@ -988,7 +989,7 @@ expect '^browser: icon picker hidden$' "escape didn't close the icon picker"
 none_since '^browser: iconed space' || fail "escape in the icon picker gave the Space an icon"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name offered Remove Icon without an icon"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
@@ -1021,7 +1022,7 @@ expect '^browser: icon picker hidden$' "an emoji picked on the Emoji tab didn't 
 # takes the icon away.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
 send choose "$(cased 'Change Space Icon…')"
 expect "^browser: icon picker for $first on emoji\$" \
   "Change Icon… didn't open the picker on the Emoji tab for a Space with an emoji"
@@ -1056,7 +1057,7 @@ expect '^browser: icon picker hidden$' "the icon picker's trash didn't close it"
 # Remove Icon in the menu does the same.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Icon after the trash"
 send choose "$(cased 'Change Space Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker"
@@ -1066,7 +1067,7 @@ expect "^browser: iconed space $first glyph:bolt\$" \
   "a click on a glyph didn't become the Space's icon"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Remove Icon, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" "a right-click on the Space's name didn't offer Remove Icon"
 send choose "$(cased 'Remove Icon')"
 expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space's icon away"
 # Edit Theme Color… in the Space's menu opens the theme picker too. A swatch is the Space's colour,
@@ -1075,7 +1076,7 @@ expect "^browser: iconed space $first none\$" "Remove Icon didn't take the Space
 # A click outside the picker closes it.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Edit Theme Color…"
 record space-theme-open 2
 send choose "$(cased 'Edit Theme Color…')"
@@ -1139,7 +1140,7 @@ expect '^browser: theme picker hidden$' "a click outside the theme picker didn't
 # menu offers it no more.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on the Space's name didn't offer Remove Theme Color"
 send choose "$(cased 'Remove Theme Color')"
 expect "^browser: colored space $first none\$" \
@@ -1148,7 +1149,7 @@ expect "^browser: themed space $first none\$" \
   "Remove Theme Color didn't take the Space's theme away"
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu offered Remove Theme Color without a colour"
 send choose Rename Space…
 send key escape
@@ -1159,7 +1160,7 @@ expect '^browser: rename cancelled$' \
 # here.
 post rightclick 131 $dots_y
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog shown Delete “reading 日本語”?$' "Delete Space didn't ask first"
@@ -1172,7 +1173,7 @@ send state
 none_since '^browser: spaces' || fail "a click around the dialog deleted the Space"
 post rightclick 131 $dots_y
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog settled$' "Delete Space didn't ask again"
@@ -1201,10 +1202,38 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't bring the Space back whe
 expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the Space it brought back"
 expect "^browser: loaded [0-9]* https://example.com/\$" "the Space came back without its tab"
 expect "^browser: settled space $second\$" "the Space ⌘Z brought back didn't settle"
+# Export “reading 日本語” into Folder › Work, its own dimmed, makes the Space a folder at the bottom
+# of Work's pinned tabs and its tab the top of Work's Today, shows Work and deletes the Space, and a
+# toast offers the Undo. ⌘Z brings the Space back where it was, with its tab, and shows it (#1400).
+t=$(today)
+post rightclick 131 $dots_y
+expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
+New Folder…, Export “reading 日本語” into Folder › Work, \
+Export “reading 日本語” into Folder › reading 日本語 (disabled), Export as Markdown…, Manage Spaces…, \
+Delete Space")\$" "a right-click on a dot didn't offer Export into Folder › Work"
+../tools/window-screenshot.sh "$pid" "$out/space-export-menu.png" || fail "no window to capture"
+post choose Work
+expect "^browser: command export-into-folder $second $first via space menu\$" \
+  "Export into Folder › Work didn't run"
+expect "^browser: space $first\( in .*\)\{0,1\}\$" "Export into Folder didn't show Work"
+expect "^browser: space $second exported into folder [0-9][0-9]* in $first\$" \
+  "Export into Folder didn't make the Space a folder"
+f=$(sed -n "s/^browser: space $second exported into folder \([0-9]*\) in $first\$/\1/p" "$log" | tail -1)
+expect "^browser: spaces $first\$" "Export into Folder didn't delete the Space"
+expect '^browser: toast shown Space Exported into Folder \[undo\]$' "Export into Folder didn't offer Undo"
+expect "^browser: today $t $a\$" "the Space's tab didn't go to the top of Work's Today: Today is \"$(today)\""
+expect "^browser: outline \(.* \)\{0,1\}$f+\[\]\$" "the folder isn't at the bottom of Work's pinned tabs, open"
+../tools/window-screenshot.sh "$pid" "$out/space-exported.png" || fail "no window to capture"
+send key z cmd
+expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Export into Folder"
+expect "^browser: spaces $first $second\$" "⌘Z didn't bring the exported Space back where it was"
+expect "^browser: space $second\( in .*\)\{0,1\}\$" "⌘Z didn't show the exported Space"
+expect "^browser: today $t\$" "⌘Z didn't put the exported Space's tab back: Today is \"$(today)\""
+expect "^browser: settled space $second\$" "the exported Space ⌘Z brought back didn't settle"
 # Deleted again, its tab reopens here with ⇧⌘T, and ⌘Z brings back the Space without it.
 post rightclick 131 $dots_y
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 post choose Delete Space
 expect '^browser: dialog shown Delete “reading 日本語”?$' "the Space came back without its name"
@@ -1237,7 +1266,7 @@ send window 1
 post rightclick 131 $dots_y
 # ⌘Z brought the Space back with its theme.
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot in the first window didn't show its Space's menu"
 send choose Delete Space
 expect "^browser: spaces $first\$" "Delete in the first window didn't delete the Space"
@@ -1291,7 +1320,7 @@ expect '^browser: library hidden$' "escape didn't close the Library after the ca
 # Empty, it goes without asking, and says so too.
 post rightclick 131 $dots_y
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $themed, $empty_profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click on a dot didn't show its Space's menu"
 send choose Delete Space
 expect "^browser: spaces $first\$" "Delete didn't delete the empty Space"
@@ -1300,7 +1329,7 @@ expect "$deleted" "the toast didn't say the empty Space went"
 # The last Space can't go.
 post rightclick $name_point
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
-New Folder…, Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
+New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space (disabled)")\$" \
   "the last Space's menu offered Delete"
 send choose Rename Space…
 send key escape
@@ -1355,5 +1384,5 @@ paged=$(sed -n '/^browser: paged frames /s/[^0-9.][^0-9.]*/ /gp' "$log" | sort -
   awk '{ n += $1; m[NR] = $2; if ($3 > x) x = $3 }
     END { if (NR) printf "%d page changes, %d frames, median %.2f ms, max %.2f ms",
       NR, n, m[int((NR + 1) / 2)], x }')
-echo "ok: New Space makes an empty Space whose form takes the keyboard and Japanese input, and names it, and ⌘T opens a tab in it; ⌃1 ⌃2 ⌥⌘← ⌥⌘→ with the page or the UI focused, and the switcher's dots, show each Space with the tab it showed last; a dot dragged along the switcher, or a Library card by its handle, moves its Space, which ⌘Z undoes; two fingers across the sidebar page to the Space a flick or the pages' place points at, never past the last, and a wheel's tick across pages once; past the first Space, fingers and a wheel's tick bring the Library out and put it back, its Spaces section as wide as its cards, and fingers let go short of halfway put it back, and past where it opens take it on a little, its column's fill at the window's edge; a right-click on a row as the Space's rows slide in shows its tab's menu; a tab's menu moves it to another Space, which shows with it; a row held at the sidebar's edge pages to the next Space without joining the row under it in a split, and let go there moves to it; fingers held past the last Space ready a new Space and let go make it, with its form, and let go short of that don't; Cancel, and two fingers back, delete a new Space and go back to the Space it was made from, and fingers going on past its form rubber-band it. The first launch's lone Space, unnamed, hides its name row with Hide Space Header in the sidebar's empty space's menu, its rows rising into its place, and Show Space Header brings it back. A right-click on a Space's name, dot or Library card shows Change Space Icon…, Rename Space…, Edit Theme Color…, Set Profile, New Folder…, Manage Spaces… and Delete Space, as its ••• does, and one on the sidebar's empty space New Tab before them, which opens the command bar; the theme picker, from the form's row and the menu, the menu's against the sidebar's edge at the window's top, gives a Space its colours from its field, a swatch's own, + and the wave, and a colour dragged alone to a place of its own, the window taking them as they're made, and Remove Theme Color, offered once it has one, takes them away; an emoji picked in its icon picker, by a search and ↩, is its icon, in its dot's place in the switcher, until Remove Icon, and escape leaves it as it was; Done in the •••'s place keeps the name typed, as return does, a right-click in its field shows the field's menu, and escape cancels; a Library card's field lights with the pointer on its brush or icon slot, the brush opens the theme picker beside itself, which makes the Space light and dark, and the slot the icon picker, which another card's slot moves, both over the Library, which stays open until escape closes the picker and then it, and a click on the card's name edits it in the card with the Library left open; in a window too narrow for its cards they scroll across under two fingers and spring back from past their last. Delete asks first for a Space with tabs, in a dialog a click around cancels and return confirms, closes them once it has gone, and the toast says so until ⌘Z brings the Space back where it was with its name and tabs, ⇧⌘T reopens them in the Space shown, and ⌘Z then leaves those out; the last Space can't go. The Spaces menu names each Space and shows it, and its Rename Space opens the name's field. Move to Space offers Undo, ⌘Z takes the tab back to its Space and ⇧⌘Z moves it again. Move to › lists the other Space's Today and its folder, and moves the tab into the folder, which ⌘Z undoes. The folder's Move to Space › moves it with its tab to the other Space, the window going with it, and ⌘Z takes it back. With two windows, each one's ⌘Z undoes only what was done in it: a Space deleted in one, the archive cleared in the other. A page behind another tab, in a Space not shown, in a minimized window or a hidden app is hidden and runs no animation frames, and is visible once back. Paging, the sidebar a frame: ${paged:-not logged}. Windows: $out/swipe.png, $out/library-swipe.png, $out/library-end.png, $out/library-spaces.png, $out/library-field-hover.png, $out/library-theme-picker.png, $out/library-icon-picker.png, $out/library-space-drag.png and its motion in $out/library-space-drag.mp4, $out/library-rename.png, $out/library-cards.png and its motion in $out/library-cards.mp4, $out/new-space-pull.png, $out/space-empty-menu.png, $out/space-menu.png, $out/space-edit-menu.png, $out/space-done.png, $out/space-delete.png, $out/space-deleted.png"
+echo "ok: New Space makes an empty Space whose form takes the keyboard and Japanese input, and names it, and ⌘T opens a tab in it; ⌃1 ⌃2 ⌥⌘← ⌥⌘→ with the page or the UI focused, and the switcher's dots, show each Space with the tab it showed last; a dot dragged along the switcher, or a Library card by its handle, moves its Space, which ⌘Z undoes; two fingers across the sidebar page to the Space a flick or the pages' place points at, never past the last, and a wheel's tick across pages once; past the first Space, fingers and a wheel's tick bring the Library out and put it back, its Spaces section as wide as its cards, and fingers let go short of halfway put it back, and past where it opens take it on a little, its column's fill at the window's edge; a right-click on a row as the Space's rows slide in shows its tab's menu; a tab's menu moves it to another Space, which shows with it; a row held at the sidebar's edge pages to the next Space without joining the row under it in a split, and let go there moves to it; fingers held past the last Space ready a new Space and let go make it, with its form, and let go short of that don't; Cancel, and two fingers back, delete a new Space and go back to the Space it was made from, and fingers going on past its form rubber-band it. The first launch's lone Space, unnamed, hides its name row with Hide Space Header in the sidebar's empty space's menu, its rows rising into its place, and Show Space Header brings it back. A right-click on a Space's name, dot or Library card shows Change Space Icon…, Rename Space…, Edit Theme Color…, Set Profile, New Folder…, Manage Spaces… and Delete Space, as its ••• does, and one on the sidebar's empty space New Tab before them, which opens the command bar; the theme picker, from the form's row and the menu, the menu's against the sidebar's edge at the window's top, gives a Space its colours from its field, a swatch's own, + and the wave, and a colour dragged alone to a place of its own, the window taking them as they're made, and Remove Theme Color, offered once it has one, takes them away; an emoji picked in its icon picker, by a search and ↩, is its icon, in its dot's place in the switcher, until Remove Icon, and escape leaves it as it was; Done in the •••'s place keeps the name typed, as return does, a right-click in its field shows the field's menu, and escape cancels; a Library card's field lights with the pointer on its brush or icon slot, the brush opens the theme picker beside itself, which makes the Space light and dark, and the slot the icon picker, which another card's slot moves, both over the Library, which stays open until escape closes the picker and then it, and a click on the card's name edits it in the card with the Library left open; in a window too narrow for its cards they scroll across under two fingers and spring back from past their last. Delete asks first for a Space with tabs, in a dialog a click around cancels and return confirms, closes them once it has gone, and the toast says so until ⌘Z brings the Space back where it was with its name and tabs, ⇧⌘T reopens them in the Space shown, and ⌘Z then leaves those out; the last Space can't go. The Spaces menu names each Space and shows it, and its Rename Space opens the name's field. Move to Space offers Undo, ⌘Z takes the tab back to its Space and ⇧⌘Z moves it again. Move to › lists the other Space's Today and its folder, and moves the tab into the folder, which ⌘Z undoes. The folder's Move to Space › moves it with its tab to the other Space, the window going with it, and ⌘Z takes it back. Export “name” into Folder › another Space makes the Space a folder there, its Today tab going too, and ⌘Z brings it back whole ($out/space-export-menu.png, $out/space-exported.png). With two windows, each one's ⌘Z undoes only what was done in it: a Space deleted in one, the archive cleared in the other. A page behind another tab, in a Space not shown, in a minimized window or a hidden app is hidden and runs no animation frames, and is visible once back. Paging, the sidebar a frame: ${paged:-not logged}. Windows: $out/swipe.png, $out/library-swipe.png, $out/library-end.png, $out/library-spaces.png, $out/library-field-hover.png, $out/library-theme-picker.png, $out/library-icon-picker.png, $out/library-space-drag.png and its motion in $out/library-space-drag.mp4, $out/library-rename.png, $out/library-cards.png and its motion in $out/library-cards.mp4, $out/new-space-pull.png, $out/space-empty-menu.png, $out/space-menu.png, $out/space-edit-menu.png, $out/space-done.png, $out/space-delete.png, $out/space-deleted.png"
 echo "  Space switch, key to the core's report: $spaces_ms. Windows: $out/space-header-hidden.png, $out/space-form.png, $out/space-form-ime.png, $out/theme-picker.png, $out/space-theme.png and its opening in $out/space-theme-open.mp4, $out/new-space.png, $out/spaces.png, $out/space-drag.png, $out/space-icon-picker.png, $out/space-icon.png, $out/space-emoji.png, $out/move-to-folder.png, $out/folder-move-menu.png, $out/folder-moved.png, $out/library-card-drag.png"
