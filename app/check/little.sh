@@ -738,6 +738,18 @@ settings_drew Features
 send clickkey $(drawn "switch little windows")
 expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"
 send key w cmd
+exec 3>&-
+quit
+
+# The steps below run without the 4 s: a Little ilo window whose pop-up has the keyboard isn't
+# the active window, so it would close under its pop-up if the sign-in took longer.
+log="$out/little-page.log"
+step=0
+BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await_load
+await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
 
 # A page in a Little ilo window goes full screen there, as a video's full-screen button takes it,
 # not into the main window: its window takes the page full screen, and the page's escape brings it
