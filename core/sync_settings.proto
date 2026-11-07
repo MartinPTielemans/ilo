@@ -1,0 +1,17 @@
+// What ILO_SETTING's specifics hold, in their one bytes field (engine/patches/ours/
+// chromium-sync-ilo-types.patch): one of ilo's settings that follow the account (sync_settings.h).
+
+syntax = "proto2";
+
+option optimize_for = LITE_RUNTIME;
+
+package browser_core.sync_settings_pb;
+
+message SettingEntity {
+  // As the core names it, such as "ad_blocking". One this version doesn't know is kept as it came.
+  optional string name = 1;
+  // A switch's value.
+  optional bool on = 2;
+  // A number's, such as a time in seconds.
+  optional double number = 3;
+}

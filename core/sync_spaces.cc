@@ -18,7 +18,6 @@
 #include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "browser_core/favorites.h"
-#include "browser_core/hooks.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
 #include "browser_core/space_default.h"
@@ -597,22 +596,18 @@ std::map<Profile*, Bridge*>& Bridges() {
 
 }  // namespace
 
-void Install() {
-  g_browser_core_sync_controllers = [](Profile* profile, syncer::SyncService* sync_service) {
-    std::vector<std::unique_ptr<syncer::DataTypeController>> controllers;
-    Bridge*& bridge = Bridges()[profile];
-    if (!bridge) {
-      bridge = new Bridge(profile);
-    }
-    syncer::DataTypeControllerDelegate* delegate =
-        bridge->change_processor()->GetControllerDelegate().get();
-    // The same in transport mode, as the account is always signed in that way.
-    controllers.push_back(std::make_unique<syncer::DataTypeController>(
-        syncer::ILO_SPACE,
-        std::make_unique<syncer::ForwardingDataTypeControllerDelegate>(delegate),
-        std::make_unique<syncer::ForwardingDataTypeControllerDelegate>(delegate)));
-    return controllers;
-  };
+std::unique_ptr<syncer::DataTypeController> Controller(Profile* profile) {
+  Bridge*& bridge = Bridges()[profile];
+  if (!bridge) {
+    bridge = new Bridge(profile);
+  }
+  syncer::DataTypeControllerDelegate* delegate =
+      bridge->change_processor()->GetControllerDelegate().get();
+  // The same in transport mode, as the account is always signed in that way.
+  return std::make_unique<syncer::DataTypeController>(
+      syncer::ILO_SPACE,
+      std::make_unique<syncer::ForwardingDataTypeControllerDelegate>(delegate),
+      std::make_unique<syncer::ForwardingDataTypeControllerDelegate>(delegate));
 }
 
 void Changed() {

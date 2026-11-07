@@ -15,6 +15,7 @@
 #include "base/base64.h"
 #include "base/base64url.h"
 #include "base/command_line.h"
+#include "base/containers/enum_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -46,6 +47,8 @@
 #include "browser_core/space.h"
 #include "browser_core/sync_guard.h"
 #include "browser_core/sync_pairing.h"
+#include "browser_core/sync_settings.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/sync_relay.h"
 #include "browser_core/sync_words.h"
 #include "browser_core/window.h"
@@ -77,6 +80,7 @@
 #include "components/sync/invalidations/sync_invalidations_service.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_invalidations_payload.pb.h"
+#include "components/sync/service/data_type_controller.h"
 #include "components/sync/service/sync_auth_manager.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_service_observer.h"
@@ -908,14 +912,18 @@ class Account : public syncer::SyncServiceObserver,
     const std::string email = SignedIn() ? email_ : std::string();
     const std::array<std::string, 3> now = {trimmed, email, code};
     const int status = Status();
+    const bool on = status == BC_SYNC_ON;
+    const std::array<bool, 2> chosen = {on && Chosen(syncer::UserSelectableType::kPreferences),
+                                        on && Chosen(syncer::UserSelectableType::kExtensions)};
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
-        now == notified_strings_) {
+        now == notified_strings_ && chosen == notified_chosen_) {
       return;
     }
     notified_ = true;
     notified_status_ = status;
     notified_problem_ = problem_;
     notified_strings_ = now;
+    notified_chosen_ = chosen;
     if (!Host().sync_changed) {
       return;
     }
@@ -924,8 +932,35 @@ class Account : public syncer::SyncServiceObserver,
                            .server = trimmed.c_str(),
                            .default_server = !server_.is_valid() && !server.empty(),
                            .email = email.c_str(),
-                           .code = code.c_str()};
+                           .code = code.c_str(),
+                           .settings = chosen[0],
+                           .extensions = chosen[1]};
     Host().sync_changed(Host().context, &state);
+  }
+
+  // Whether this device syncs |type|, one sync can: an engine without extensions has none.
+  bool Chosen(syncer::UserSelectableType type) const {
+    syncer::SyncService* service = Service();
+    return service && service->GetUserSettings()->GetSelectedTypes().Has(type);
+  }
+
+  void Choose(int what, bool on) {
+    using Type = syncer::UserSelectableType;
+    std::optional<Type> type;
+    if (what == BC_SYNC_SETTINGS) {
+      type = Type::kPreferences;
+    } else if (what == BC_SYNC_EXTENSIONS) {
+      type = Type::kExtensions;
+    }
+    syncer::SyncService* service = Service();
+    // Sync CHECKs that a type it's given has a controller.
+    if (type && service && Status() == BC_SYNC_ON &&
+        service->GetUserSettings()->GetRegisteredSelectableTypes().Has(*type)) {
+      service->GetUserSettings()->SetSelectedType(*type, on);
+    }
+    // The app's switch moved as it asked, so it hears what was chosen even when nothing changed.
+    notified_ = false;
+    Notify();
   }
 
   // The secret, which also keys passwords' client tags (sync_guard.h).
@@ -1340,10 +1375,14 @@ class Account : public syncer::SyncServiceObserver,
       settings->SetEncryptionPassphrase(words);
     }
     if (!settings->IsInitialSyncFeatureSetupComplete()) {
-      settings->SetSelectedTypes(/*sync_everything=*/false,
-                                 {syncer::UserSelectableType::kBookmarks,
-                                  syncer::UserSelectableType::kPasswords,
-                                  syncer::UserSelectableType::kTabs});
+      // Settings and extensions too, as a device signing in is meant to become the user's
+      // browser; each device can turn them off (bc_sync_choose).
+      using Type = syncer::UserSelectableType;
+      const syncer::UserSelectableTypeSet types = {Type::kBookmarks, Type::kPasswords, Type::kTabs,
+                                                   Type::kPreferences, Type::kExtensions};
+      settings->SetSelectedTypes(
+          /*sync_everything=*/false,
+          base::Intersection(types, settings->GetRegisteredSelectableTypes()));
       settings->SetInitialSyncFeatureSetupComplete();
     }
     setup_.reset();
@@ -1800,6 +1839,7 @@ class Account : public syncer::SyncServiceObserver,
   int notified_status_ = 0;
   int notified_problem_ = 0;
   std::array<std::string, 3> notified_strings_;
+  std::array<bool, 2> notified_chosen_ = {};
   std::string logged_state_;
 
   base::WeakPtrFactory<Account> weak_factory_{this};
@@ -1832,6 +1872,12 @@ void Install() {
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
   };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
+  g_browser_core_sync_controllers = [](Profile* profile, syncer::SyncService*) {
+    std::vector<std::unique_ptr<syncer::DataTypeController>> controllers;
+    controllers.push_back(sync_spaces::Controller(profile));
+    controllers.push_back(sync_settings::Controller(profile));
+    return controllers;
+  };
   // A tab of an agent's Space, held by the user or not, stays on its device (#1796); a page of no
   // Space's keeps Chrome's answer.
   g_browser_core_sync_tab = [](content::WebContents* contents) {
@@ -1905,6 +1951,10 @@ void RemoveDevice(const std::string& id) {
 
 void ReadActivity(bc_sync_activity* activity) {
   Account::Get().ReadActivity(activity);
+}
+
+void Choose(int what, bool on) {
+  Account::Get().Choose(what, on);
 }
 
 void DeleteAccount() {
