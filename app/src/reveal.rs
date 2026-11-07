@@ -90,7 +90,7 @@ pub fn open(shell: Entity<Shell>, ui_view: *mut c_void, cx: &mut App) -> Option<
         }),
         // A panel that doesn't take the keyboard when clicked.
         kind: WindowKind::PopUp,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
+        // Off the Mac, GPUI holds a window that isn't the key one to 30 fps, and this one never is.
         inactive_frame_interval: None,
         show: false,
         focus: false,

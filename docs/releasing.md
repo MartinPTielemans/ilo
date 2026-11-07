@@ -66,7 +66,7 @@ Publish each draft before building the next: a Linux build doesn't follow a draf
 
   A nightly is marked as one (`APP_TRACK=nightly`), so About says "Nightly 0.2.0 (1688)".
 - **What it publishes**, to release `nightly`, a prerelease made with `--latest=false`, so the site's buttons never offer it:
-  - `ilo-mac-arm64-<build>.dmg` and `ilo-windows-x64-setup-<build>.exe`, uploaded before `appcast.xml`, which names each entry "0.2.0 (<build>)";
+  - `ilo-mac-arm64-<build>.dmg`, its deltas from the three nightlies before it, and `ilo-windows-x64-setup-<build>.exe`, uploaded before `appcast.xml`, which names each entry "0.2.0 (<build>)";
   - each OS's newest three builds stay, and packages the appcast no longer names go.
 - **A failure** opens or comments on one issue, "Release fails on main", and the next night that publishes closes it (`.github/scripts/main-check.sh`).
 - **To try it** from a branch, `gh workflow run release.yml --ref <branch> -f tag=nightly-<name>` publishes the same to a release `nightly-<name>`. It needs no feed file. Delete the release and its tag when done. `-f tag=nightly` runs only from main.
@@ -82,6 +82,7 @@ A draft release whose files keep their names, so `releases/latest/download/<name
 - `ilo-windows-x64-setup.exe`: unsigned, for winget and direct downloads.
 - `ilo-linux-x86_64.flatpak` and `ilo.flatpakref`.
 - `SHA256SUMS` and `appcast.xml`.
+- `ilo-mac-arm64-<a>-to-<b>.delta`: Sparkle's deltas to the DMG's app from the feed's three Mac builds before it, made from their releases' DMGs. A copy on one downloads a few MB instead of the DMG; any other copy, or one a delta doesn't match, takes the DMG.
 - `ilo-demo.tar.gz`, the site's live demo built from the same commit (`.github/workflows/demo.yml`), when the commit has one.
 
 Once the draft is published:

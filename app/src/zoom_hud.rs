@@ -177,7 +177,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<ZoomHud>> {
         is_minimizable: false,
         // The pill and its shadow are drawn.
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
+        // Off the Mac, GPUI holds a window that isn't the key one to 30 fps, and this one never is.
         inactive_frame_interval: None,
         ..Default::default()
     };
