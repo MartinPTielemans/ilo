@@ -370,7 +370,11 @@ impl Shell {
             let name = entry.map_or_else(SharedString::default, |each| each.name.clone());
             let at = items.len();
             // The name the user gave keeps its case; ilo's words around it take the platform's.
-            let folder = if super::OFF_THE_MAC { "folder" } else { "Folder" };
+            let folder = if super::OFF_THE_MAC {
+                "folder"
+            } else {
+                "Folder"
+            };
             let title = format!("Export “{name}” into {folder}");
             items.push((MenuEntry::named(title, true), Box::new(|_, _| {})));
             for (into, name, can) in targets {

@@ -74,7 +74,8 @@ impl What {
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     /// The Space leaving the switcher isn't where the eye is, at the folder it became.
-    pub const EXPORT_INTO_FOLDER: What = What::said("Export into Folder", "Space Exported into Folder");
+    pub const EXPORT_INTO_FOLDER: What =
+        What::said("Export into Folder", "Space Exported into Folder");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from

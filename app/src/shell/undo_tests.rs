@@ -1870,7 +1870,14 @@ fn a_space_exported_into_a_folder_comes_back_whole_with_one_undo(cx: &mut TestAp
             cx,
         );
         shell.set_space(2, cx);
-        shell.set_tabs(2, vec![10, 1001, 4, 5, 6, 7, 8], vec![9, 11], Vec::new(), folders, cx);
+        shell.set_tabs(
+            2,
+            vec![10, 1001, 4, 5, 6, 7, 8],
+            vec![9, 11],
+            Vec::new(),
+            folders,
+            cx,
+        );
     });
 
     assert!(undo(&shell, cx));
@@ -1910,7 +1917,9 @@ fn a_space_with_nowhere_to_go_offers_no_export_into_folder(cx: &mut TestAppConte
     shell.update(cx, |shell, cx| shell.space_menu(3, at, cx));
     let entries = host.entries.borrow().clone();
     assert!(
-        !entries.iter().any(|entry| entry.title.starts_with("Export “")),
+        !entries
+            .iter()
+            .any(|entry| entry.title.starts_with("Export “")),
         "Three, the only Space of its profile, offered Export into Folder"
     );
 }
