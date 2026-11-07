@@ -36,6 +36,10 @@ swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
 profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+# A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
+# itself, as Spaces come and go (spaces checks it). It goes in a menu's line before Export as
+# Markdown…, through cased.
+into='\(Export “[^”]*” into Folder › [^,]*, \)*'
 empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
@@ -230,6 +234,17 @@ quit_app() {
     kill -INT "$(app_pid)"
   else
     osascript -e "tell application id \"$app_id\" to quit"
+  fi
+}
+# Ends the session as the system does at a logout or restart. The Mac and Linux send SIGTERM, which
+# Chromium takes for the session ending. Windows asks the app's windows and then tells them it ends
+# (app-windows.py end-session, #1990): Git Bash's kill would end the app's children first, and then
+# the app from a thread of its own, which no sign-out does.
+end_session() {
+  if windows; then
+    python3 -I check/app-windows.py end-session "$(cat "/proc/$pid/winpid")"
+  else
+    kill -TERM "$pid"
   fi
 }
 # The app's own process: the one started, or in the Flatpak, where that's flatpak's, the browser

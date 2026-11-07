@@ -14,9 +14,9 @@ use gpui::{
 use crate::site_controls;
 
 use super::{
-    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLATE_INSET, PRESSED, Shell,
-    URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP, UserKeys,
-    user_keys, written_as,
+    Command, MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLATE_INSET, PRESSED,
+    Shell, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    UserKeys, user_keys, written_as,
 };
 
 use crate::tokens::shell::extensions::ACTION_DIMMED;
@@ -90,6 +90,26 @@ struct RunExtension(SharedString);
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = browser, no_json)]
 struct PinExtension(SharedString);
+
+/// `id` as a number a `Command` can carry, as Chrome's ids are 32 letters from a to p, four bits
+/// each. None for any other id.
+pub(super) fn id_number(id: &str) -> Option<u128> {
+    if id.len() != 32 {
+        return None;
+    }
+    id.bytes().try_fold(0u128, |number, letter| {
+        let nibble = letter.checked_sub(b'a').filter(|&nibble| nibble < 16)?;
+        Some(number << 4 | nibble as u128)
+    })
+}
+
+/// The id `id_number` made `number` from.
+pub(super) fn id_text(number: u128) -> String {
+    (0..32)
+        .rev()
+        .map(|place| (b'a' + (number >> (place * 4) & 0xf) as u8) as char)
+        .collect()
+}
 
 /// The menu bar's item that runs `extension`.
 pub fn menu_item(extension: &Extension) -> MenuItem {
@@ -252,6 +272,28 @@ impl Shell {
             Bounds::new(corner, Default::default())
         });
         self.run_extension_from(id, anchor, cx);
+    }
+
+    /// The command bar's row for each extension that runs in the window, found by its name, which
+    /// runs its action on the tab shown as the Extensions menu does (Arc's webContentExtension).
+    /// None with no tab shown, which an action needs. No hidden words, so "ext" doesn't lift every
+    /// extension above Manage Extensions….
+    pub(super) fn extension_bar_rows(&self) -> Vec<super::commands::NamedRow> {
+        if self.selected == 0 {
+            return Vec::new();
+        }
+        let profile = self.shown_space().map_or(0, |space| space.profile);
+        (self.extensions.get(&profile).into_iter().flatten())
+            .filter(|extension| extension.runs(self.private))
+            .filter_map(|extension| {
+                let id = id_number(&extension.id)?;
+                Some((
+                    extension.name.clone(),
+                    Vec::new(),
+                    Command::RunExtension(id),
+                ))
+            })
+            .collect()
     }
 
     /// Runs the extension's action on the tab shown, its popup hanging from `anchor` in the
@@ -1074,6 +1116,77 @@ mod tests {
                 "pin 7 beta true"
             ]
         );
+    }
+
+    /// The command bar finds an extension that runs in the window by its name, and its row runs its
+    /// action on the tab shown, as Arc's bar does; one that's off, or with no tab shown, has none.
+    #[gpui::test]
+    fn the_command_bar_runs_an_extension_by_its_name(cx: &mut TestAppContext) {
+        const DARK: &str = "eimadpbcbfnmbkopoojfekhnkhdbieeh";
+        const OFF: &str = "cjpalhdlnbpafiamejdnhcphjbkeiagm";
+        let host = Rc::new(Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(
+                vec![(1, "One".into(), None, 4, "".into(), "".into(), "".into())],
+                cx,
+            );
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+            let named = |id: &str, name: &str, enabled| Extension {
+                name: name.to_string().into(),
+                ..extension(id, enabled, &[])
+            };
+            let extensions = vec![
+                named(DARK, "Dark Reader", true),
+                named(OFF, "Dark Mode Off", false),
+                // Not an id Chrome gives, so nothing could run it.
+                named("notes", "Dark Notes", true),
+            ];
+            shell.set_extensions(4, extensions, cx);
+        });
+        let found = |typed: &str, cx: &mut TestAppContext| {
+            shell.read_with(cx, |shell, _| {
+                let keys = UserKeys::default();
+                let rows = shell.extension_bar_rows();
+                crate::shell::with_named_rows(Vec::new(), typed, &rows, &keys)
+                    .into_iter()
+                    .map(|row| (row.name.to_string(), row.command))
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(found("dark", cx), [], "no tab is shown yet");
+
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        let run = Command::RunExtension(super::id_number(DARK).unwrap());
+        assert_eq!(found("dark", cx), [("Dark Reader".to_string(), run)]);
+        assert_eq!(found("reader", cx), [("Dark Reader".to_string(), run)]);
+        assert_eq!(found("ext", cx), [], "only its name finds it");
+
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(run, "command-bar", cx));
+        let ran = host.take();
+        let prefix = format!("run extension {DARK} from ");
+        assert!(ran.iter().any(|call| call.starts_with(&prefix)), "{ran:?}");
+    }
+
+    /// A Chrome extension id goes into a command and comes back out as it was; anything else
+    /// doesn't go in.
+    #[test]
+    fn an_extension_id_fits_in_a_command() {
+        for id in [
+            "eimadpbcbfnmbkopoojfekhnkhdbieeh",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(super::id_text(super::id_number(id).unwrap()), id);
+        }
+        assert_eq!(
+            super::id_number("pppppppppppppppppppppppppppppppp"),
+            Some(u128::MAX)
+        );
+        assert_eq!(super::id_number("notes"), None);
+        assert_eq!(super::id_number("qimadpbcbfnmbkopoojfekhnkhdbieeh"), None);
+        assert_eq!(super::id_number("Eimadpbcbfnmbkopoojfekhnkhdbieeh"), None);
     }
 
     /// Every pinned action has a place to be run from: its own, or the overflow button's.

@@ -2187,6 +2187,10 @@ void host_set_window_shown(void* ui_view, bool shown) {
   }
 }
 
+bool host_window_is_key(void* ui_view) {
+  return ((__bridge NSView*)ui_view).window.isKeyWindow;
+}
+
 bool host_window_shown(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   return browser && browser->window.visible;

@@ -160,8 +160,6 @@ fn open(overlay: c_int, cx: &mut App) {
         is_resizable: false,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let Ok(window) = cx.open_window(options, |_, cx| cx.new(|_| Shadow(overlay))) else {

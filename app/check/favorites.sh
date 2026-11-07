@@ -483,8 +483,10 @@ expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
 # A split's row dragged onto the tiles is one favorite, a split, its tile showing each page's
 # favicon (#689, ours: Arc's tile isn't recorded). It shows focused where it was focused last: a
 # click in its right page focuses that one, and ⌘2 from another tab shows the split focused there.
-# Resting on it, its card has its pages. Remove from Favorites puts it whole at the top of Today,
-# where Separate All Tabs leaves the rows as they were for the steps after.
+# Resting on it, its card has its pages. Separate All Tabs on its tile leaves its first page the
+# favorite and its other at the top of Today, and ⌘Z makes it the favorite split again (#1776).
+# Remove from Favorites puts it whole at the top of Today, where Separate All Tabs leaves the rows
+# as they were for the steps after.
 send click $(tiled_row 0)
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today row didn't show it"
 send click $(tiled_row 1) alt
@@ -516,6 +518,21 @@ send move $page_point
 post rightclick 169 113
 expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace Favorite URL with Current (disabled), Duplicate Tab, Separate All Tabs, Remove from Favorites, Change Icon…, Close Tab')\$" \
   "a right-click on the split's tile didn't show its menu"
+send choose "$(cased 'Separate All Tabs')"
+expect '^browser: favorite splits $' "Separate All Tabs on the split's tile left it a split"
+expect "^browser: today $y\$" \
+  "Separate All Tabs on the split's tile didn't put its other page in Today: \"$(today)\""
+[ "$(favorites)" = "$a $x" ] ||
+  fail "Separate All Tabs on the split's tile didn't leave its first page the favorite: \"$(favorites)\""
+send key z cmd
+expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo Separate All Tabs on the tile"
+expect "^browser: favorite splits $x+$y\$" "⌘Z didn't make the favorite split again"
+expect '^browser: today $' "⌘Z left a page of the favorite split in Today: \"$(today)\""
+[ "$(favorites)" = "$a $x" ] || fail "⌘Z didn't put the favorite split back second: \"$(favorites)\""
+send move $page_point
+post rightclick 169 113
+expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace Favorite URL with Current (disabled), Duplicate Tab, Separate All Tabs, Remove from Favorites, Change Icon…, Close Tab')\$" \
+  "a right-click on the split's tile made again didn't show its menu"
 send choose "$(cased 'Remove from Favorites')"
 expect "^browser: favorites $a\$" "Remove from Favorites left the split a favorite: \"$(favorites)\""
 expect "^browser: today $x $y\$" "Remove from Favorites didn't put the split at the top of Today"

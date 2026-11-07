@@ -38,7 +38,7 @@ utensils, vibrate, video, volume-2, volume-x, wrench, x, zap, zoom-in and zoom-o
 and x scaled as nav-reload and nav-stop; and camera's path, drawn as Capture's pointer, in
 app/platform/mac/host.mm; at commit 7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke
 width is 2.25 where Lucide's is 2 (app/design/tokens.toml); palette's four dots and key-round's one
-lose their fill.
+lose their fill; folder-ellipsis is folder with three dots of ours in it.
 
   ISC License
 

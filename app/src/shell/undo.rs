@@ -58,6 +58,7 @@ impl What {
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
+    pub const SEPARATE_ALL: What = What::quiet("Separate All Tabs");
     pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
     pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
@@ -72,6 +73,9 @@ impl What {
     pub const CLEAR: What = What::quiet("Clear");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
+    /// The Space leaving the switcher isn't where the eye is, at the folder it became.
+    pub const EXPORT_INTO_FOLDER: What =
+        What::said("Export into Folder", "Space Exported into Folder");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
@@ -214,6 +218,16 @@ pub(super) enum Edit {
         look: Look,
         spot: Spot,
     },
+    /// Makes a favorite split's `tabs` that Separate All Tabs separated one favorite split again,
+    /// looking as `look` says, at `index` of the favorites: its first tab, still the favorite, goes
+    /// to the top of Today, where the others are, to be joined to them, and the split goes back.
+    RejoinFavorite {
+        tabs: Vec<u64>,
+        look: Look,
+        index: usize,
+    },
+    /// Separates the favorite split `tab` is the first of again, as Separate All Tabs does.
+    SeparateFavorite(u64),
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
     Unsplit {
@@ -238,6 +252,18 @@ pub(super) enum Edit {
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
+    /// Makes the Space `space` a folder in the Space `into`, as Export into Folder does.
+    Export {
+        space: u64,
+        into: u64,
+    },
+    /// Takes back what an `Export` did with `back`, which brings the Space back, puts each of its
+    /// rows back and deletes the folder. Redo exports it again, from the lists as they are then.
+    UndoExport {
+        space: u64,
+        into: u64,
+        back: Box<Edit>,
+    },
     /// Moves the Space to right after the Space `after`, or first if it's 0.
     MoveSpace {
         space: u64,
@@ -341,7 +367,8 @@ impl Edit {
                 id(tab);
                 id(with);
             }
-            Edit::Separate(tab) | Edit::Stack { tab, .. } => id(tab),
+            Edit::Separate(tab) | Edit::Stack { tab, .. } | Edit::SeparateFavorite(tab) => id(tab),
+            Edit::RejoinFavorite { tabs, .. } => ids(tabs),
             Edit::Split { tab, with, .. } => {
                 id(tab);
                 id(with);
@@ -376,10 +403,12 @@ impl Edit {
             | Edit::Clear(_)
             | Edit::UndoDeleteSpace(_)
             | Edit::DeleteSpace(_)
+            | Edit::Export { .. }
             | Edit::MoveSpace { .. }
             | Edit::UndoArchive { .. }
             | Edit::Archive(_) => {}
             Edit::Many(edits) => edits.iter_mut().for_each(|edit| edit.rekey(from, to)),
+            Edit::UndoExport { back, .. } => back.rekey(from, to),
         }
     }
 
@@ -398,7 +427,7 @@ impl Edit {
     }
 
     /// Does the step, and returns the one that undoes it.
-    fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
+    pub(super) fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
             Edit::RestoreTask(agent) => {
                 shell
@@ -547,6 +576,23 @@ impl Edit {
                 shell.browser.separate(tab, cx);
                 Some(join)
             }
+            Edit::RejoinFavorite { tabs, look, index } => {
+                if !tabs.iter().all(|&tab| shell.has_tab(tab)) {
+                    return None;
+                }
+                let first = tabs[0];
+                let shown = shell.selected;
+                shell.browser.move_tab(first, false, 0, 0, cx);
+                shell.join_again(&tabs, &look, cx);
+                shell.browser.move_split_to_favorites(first, index, cx);
+                // The core shows the split it joins again, where the user had another tab. The
+                // shell still has that one selected, so this goes past its check.
+                if !tabs.contains(&shown) && shell.has_tab(shown) {
+                    shell.browser.select(shown, cx);
+                }
+                Some(Edit::SeparateFavorite(first))
+            }
+            Edit::SeparateFavorite(tab) => shell.separate_favorite_now(tab, cx),
             Edit::Split {
                 tab,
                 with,
@@ -624,6 +670,18 @@ impl Edit {
                 .browser
                 .delete_space(space, cx)
                 .then_some(Edit::UndoDeleteSpace(space)),
+            Edit::Export { space, into } => {
+                let back = shell.export_now(space, into, cx)?;
+                Some(Edit::UndoExport {
+                    space,
+                    into,
+                    back: Box::new(back),
+                })
+            }
+            Edit::UndoExport { space, into, back } => {
+                back.apply(shell, cx)?;
+                Some(Edit::Export { space, into })
+            }
             Edit::MoveSpace { space, after } => {
                 let back = shell.move_space(space, after, cx)?;
                 Some(Edit::MoveSpace { space, after: back })
@@ -1133,7 +1191,13 @@ impl Shell {
 
     /// Moves a split view's `tabs` to `space` and joins them again there, in their order, as it
     /// looked, at even sizes.
-    fn move_split(&mut self, tabs: &[u64], look: &Look, space: u64, cx: &mut Context<Self>) {
+    pub(super) fn move_split(
+        &mut self,
+        tabs: &[u64],
+        look: &Look,
+        space: u64,
+        cx: &mut Context<Self>,
+    ) {
         for &tab in tabs {
             self.browser.move_to_space(tab, space, cx);
         }
@@ -1187,17 +1251,34 @@ impl Shell {
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
 
-    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
-    /// the pages keep their order in the list.
     /// Takes the favorite split `tab`'s pages but its first out of it, to the top of Today, its
-    /// first staying the favorite.
+    /// first staying the favorite. ⌘Z makes them the favorite split again.
     pub(super) fn separate_favorite(&mut self, tab: u64, cx: &mut Context<Self>) {
-        for &each in self.panes(tab)[1..].iter().rev() {
+        let rejoin = self.separate_favorite_now(tab, cx);
+        self.keep(What::SEPARATE_ALL, rejoin, cx);
+    }
+
+    /// Separates the favorite split `tab` is in, and returns the step that makes it again.
+    fn separate_favorite_now(&mut self, tab: u64, cx: &mut Context<Self>) -> Option<Edit> {
+        let split = self.favorite_split(tab)?;
+        let tabs = split.tabs.clone();
+        let look = Look {
+            stacked: split.stacked,
+            name: split.name.clone(),
+            icon: split.icon.clone(),
+        };
+        let Some(At::Favorite(index)) = self.spot_of(tabs[0]).map(|spot| spot.at) else {
+            return None;
+        };
+        for &each in tabs[1..].iter().rev() {
             self.browser.separate(each, cx);
             self.browser.move_tab(each, false, 0, 0, cx);
         }
+        Some(Edit::RejoinFavorite { tabs, look, index })
     }
 
+    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
+    /// the pages keep their order in the list.
     pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
         for &each in self.panes(tab)[1..].iter().rev() {
             self.separate_tab(each, cx);
@@ -1389,7 +1470,7 @@ impl Shell {
     // What the steps need to know of the windows' tabs.
 
     /// Where `tab` is, in the Space that has it, else among the favorites shown.
-    fn spot_of(&self, tab: u64) -> Option<Spot> {
+    pub(super) fn spot_of(&self, tab: u64) -> Option<Spot> {
         if let Some(index) = self.favorites.iter().position(|&each| each == tab) {
             return Some(Spot {
                 space: self.space,
@@ -1656,7 +1737,7 @@ impl Space {
     }
 
     /// What `folder` holds directly, in order: the first tab of each split view, and folders.
-    fn children(&self, folder: u64) -> Vec<u64> {
+    pub(super) fn children(&self, folder: u64) -> Vec<u64> {
         let later = |tab: &u64| {
             self.splits
                 .iter()
