@@ -41,7 +41,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Edit> {
         let from = self.spaces.iter().find(|each| each.id == space)?;
-        let can = self.folder_targets(space).iter().any(|&(each, _, can)| each == into && can);
+        let can = self
+            .folder_targets(space)
+            .iter()
+            .any(|&(each, _, can)| each == into && can);
         if !can || !from.agent.is_empty() {
             return None;
         }
@@ -52,7 +55,12 @@ impl Shell {
             .filter(|&tab| !from.later(tab))
             .collect();
         let mut back = vec![Edit::UndoDeleteSpace(space)];
-        back.extend(pinned.iter().chain(&today).filter_map(|&row| self.back_from(row)));
+        back.extend(
+            pinned
+                .iter()
+                .chain(&today)
+                .filter_map(|&row| self.back_from(row)),
+        );
         // There first, so the Space goes from a window that no longer shows it, and the user sees
         // where its rows went.
         self.show_space(into, cx);
