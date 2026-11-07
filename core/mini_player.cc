@@ -8,13 +8,17 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/mini_player_place.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -81,8 +85,25 @@ KeyboardWatch& Watching() {
   return *watch;
 }
 
-// Where the last Mini Player was left, for the next, while ilo runs.
-std::optional<gfx::Rect> g_left;
+// Where the last Mini Player was left, for the next, across launches as Arc's LastPiPPosition:
+// app-wide, in local state, so every profile's and a private window's share it.
+constexpr char kLeftPref[] = "browser_core.mini_player_left";
+
+void RegisterPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kLeftPref);
+}
+
+std::optional<gfx::Rect> LastLeft() {
+  const base::DictValue& left = g_browser_process->local_state()->GetDict(kLeftPref);
+  const std::optional<int> x = left.FindInt("x");
+  const std::optional<int> y = left.FindInt("y");
+  const std::optional<int> width = left.FindInt("width");
+  const std::optional<int> height = left.FindInt("height");
+  if (!x || !y || !width || !height || *width <= 0 || *height <= 0) {
+    return std::nullopt;
+  }
+  return gfx::Rect(*x, *y, *width, *height);
+}
 
 // Where |window| goes, given Chrome's |bounds| for it at its present place.
 gfx::Rect Placed(VideoOverlayWindowViews* window,
@@ -101,9 +122,11 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
     placed.AdjustToFit(work_area);
     return placed;
   }
+  const std::optional<gfx::Rect> left = LastLeft();
+  // A kept place's screen, or the nearest, if the screens changed since.
   const gfx::Rect on =
-      g_left ? display::Screen::Get()->GetDisplayMatching(*g_left).work_area() : work_area;
-  placed = FirstMiniPlayerPlace(bounds.size(), g_left, on);
+      left ? display::Screen::Get()->GetDisplayMatching(*left).work_area() : work_area;
+  placed = FirstMiniPlayerPlace(bounds.size(), left, on);
   // check.sh reads this line.
   LOG(ERROR) << "browser: mini player placed at " << placed.x() << " " << placed.y() << " "
              << placed.width() << " " << placed.height() << " on " << on.x() << " " << on.y()
@@ -116,10 +139,15 @@ void Left(VideoOverlayWindowViews* window) {
   if (!window->IsVisible()) {
     return;
   }
-  g_left = window->GetWindowBoundsInScreen();
+  const gfx::Rect left = window->GetWindowBoundsInScreen();
+  g_browser_process->local_state()->SetDict(kLeftPref, base::DictValue()
+                                                           .Set("x", left.x())
+                                                           .Set("y", left.y())
+                                                           .Set("width", left.width())
+                                                           .Set("height", left.height()));
   // check.sh reads this line.
-  LOG(ERROR) << "browser: mini player left at " << g_left->x() << " " << g_left->y() << " "
-             << g_left->width() << " " << g_left->height();
+  LOG(ERROR) << "browser: mini player left at " << left.x() << " " << left.y() << " "
+             << left.width() << " " << left.height();
 }
 
 // Puts |window| at |bounds|, moved onto the display it's mostly on.
@@ -236,6 +264,7 @@ void SetUpMiniPlayer() {
   g_browser_core_mini_player_event = &OnEvent;
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
+  g_browser_core_register_local_state = &RegisterPrefs;
 }
 
 bool MiniPlayerHasKeyboard() {

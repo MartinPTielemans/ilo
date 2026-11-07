@@ -235,6 +235,8 @@ source_set("browser_core") {
     "clear_site.h",
     "crash_reports.cc",
     "crash_reports.h",
+    "daily_count.cc",
+    "daily_count.h",
     "developer_mode.cc",
     "developer_mode.h",
     "device_chooser.cc",

@@ -75,6 +75,8 @@ pub(crate) unsafe extern "C" fn tab_key_before_page(
     }
     let (kept, route) = key_before_page(tab, key);
     log_key(key, "before the page", route);
+    #[cfg(target_os = "linux")]
+    drive::page_key_answered();
     kept
 }
 
