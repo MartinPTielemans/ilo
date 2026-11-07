@@ -75,6 +75,7 @@ mod header;
 mod help_tests;
 mod history;
 mod hover_cards;
+mod into_folder;
 mod keys;
 mod launch_room;
 mod library;

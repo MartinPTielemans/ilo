@@ -72,6 +72,8 @@ impl What {
     pub const CLEAR: What = What::quiet("Clear");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
+    /// The Space leaving the switcher isn't where the eye is, at the folder it became.
+    pub const EXPORT_INTO_FOLDER: What = What::said("Export into Folder", "Space Exported into Folder");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
     /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
@@ -238,6 +240,18 @@ pub(super) enum Edit {
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
+    /// Makes the Space `space` a folder in the Space `into`, as Export into Folder does.
+    Export {
+        space: u64,
+        into: u64,
+    },
+    /// Takes back what an `Export` did with `back`, which brings the Space back, puts each of its
+    /// rows back and deletes the folder. Redo exports it again, from the lists as they are then.
+    UndoExport {
+        space: u64,
+        into: u64,
+        back: Box<Edit>,
+    },
     /// Moves the Space to right after the Space `after`, or first if it's 0.
     MoveSpace {
         space: u64,
@@ -376,10 +390,12 @@ impl Edit {
             | Edit::Clear(_)
             | Edit::UndoDeleteSpace(_)
             | Edit::DeleteSpace(_)
+            | Edit::Export { .. }
             | Edit::MoveSpace { .. }
             | Edit::UndoArchive { .. }
             | Edit::Archive(_) => {}
             Edit::Many(edits) => edits.iter_mut().for_each(|edit| edit.rekey(from, to)),
+            Edit::UndoExport { back, .. } => back.rekey(from, to),
         }
     }
 
@@ -398,7 +414,7 @@ impl Edit {
     }
 
     /// Does the step, and returns the one that undoes it.
-    fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
+    pub(super) fn apply(self, shell: &mut Shell, cx: &mut Context<Shell>) -> Option<Edit> {
         match self {
             Edit::RestoreTask(agent) => {
                 shell
@@ -624,6 +640,18 @@ impl Edit {
                 .browser
                 .delete_space(space, cx)
                 .then_some(Edit::UndoDeleteSpace(space)),
+            Edit::Export { space, into } => {
+                let back = shell.export_now(space, into, cx)?;
+                Some(Edit::UndoExport {
+                    space,
+                    into,
+                    back: Box::new(back),
+                })
+            }
+            Edit::UndoExport { space, into, back } => {
+                back.apply(shell, cx)?;
+                Some(Edit::Export { space, into })
+            }
             Edit::MoveSpace { space, after } => {
                 let back = shell.move_space(space, after, cx)?;
                 Some(Edit::MoveSpace { space, after: back })
@@ -1133,7 +1161,13 @@ impl Shell {
 
     /// Moves a split view's `tabs` to `space` and joins them again there, in their order, as it
     /// looked, at even sizes.
-    fn move_split(&mut self, tabs: &[u64], look: &Look, space: u64, cx: &mut Context<Self>) {
+    pub(super) fn move_split(
+        &mut self,
+        tabs: &[u64],
+        look: &Look,
+        space: u64,
+        cx: &mut Context<Self>,
+    ) {
         for &tab in tabs {
             self.browser.move_to_space(tab, space, cx);
         }
@@ -1389,7 +1423,7 @@ impl Shell {
     // What the steps need to know of the windows' tabs.
 
     /// Where `tab` is, in the Space that has it, else among the favorites shown.
-    fn spot_of(&self, tab: u64) -> Option<Spot> {
+    pub(super) fn spot_of(&self, tab: u64) -> Option<Spot> {
         if let Some(index) = self.favorites.iter().position(|&each| each == tab) {
             return Some(Spot {
                 space: self.space,
@@ -1656,7 +1690,7 @@ impl Space {
     }
 
     /// What `folder` holds directly, in order: the first tab of each split view, and folders.
-    fn children(&self, folder: u64) -> Vec<u64> {
+    pub(super) fn children(&self, folder: u64) -> Vec<u64> {
         let later = |tab: &u64| {
             self.splits
                 .iter()
