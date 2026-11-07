@@ -126,6 +126,17 @@ expect '^browser: command select via favorite$' "a click on the tile didn't run"
 expect '^browser: hover card hidden$' "a click on the tile didn't hide its card"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the tile didn't show the favorite"
 ../tools/window-screenshot.sh "$pid" "$out/favorites.png" || fail "no window to capture"
+# Probe for #1321, not for main: the URL field's bar over the tile under it, then after it closes
+# and after a click on the page, each captured to see whether the tile draws black.
+send click 110 64
+expect '^browser: command bar shown$' "a click on the URL field didn't open the command bar"
+expect '^browser: command bar drew ' "the URL field's command bar didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/probe-1321-bar.png" || fail "no window to capture"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the URL field's command bar"
+../tools/window-screenshot.sh "$pid" "$out/probe-1321-closed.png" || fail "no window to capture"
+send click $page_point
+../tools/window-screenshot.sh "$pid" "$out/probe-1321-page.png" || fail "no window to capture"
 # The footer's Library button names itself beside it, with its shortcut's keys on chips (Arc), and
 # the header's sidebar button under it; each goes when the pointer leaves.
 check_layout "before the buttons' tooltips"
