@@ -836,6 +836,25 @@ class Account : public syncer::SyncServiceObserver,
     }
   }
 
+  void Choose(int what, bool on) {
+    using Type = syncer::UserSelectableType;
+    std::optional<Type> type;
+    if (what == BC_SYNC_SETTINGS) {
+      type = Type::kPreferences;
+    } else if (what == BC_SYNC_EXTENSIONS) {
+      type = Type::kExtensions;
+    }
+    syncer::SyncService* service = Service();
+    // Sync CHECKs that a type it's given has a controller.
+    if (type && service && Status() == BC_SYNC_ON &&
+        service->GetUserSettings()->GetRegisteredSelectableTypes().Has(*type)) {
+      service->GetUserSettings()->SetSelectedType(*type, on);
+    }
+    // The app's switch moved as it asked, so it hears what was chosen even when nothing changed.
+    notified_ = false;
+    Notify();
+  }
+
  private:
   friend class base::NoDestructor<Account>;
   Account() = default;
@@ -942,25 +961,6 @@ class Account : public syncer::SyncServiceObserver,
   bool Chosen(syncer::UserSelectableType type) const {
     syncer::SyncService* service = Service();
     return service && service->GetUserSettings()->GetSelectedTypes().Has(type);
-  }
-
-  void Choose(int what, bool on) {
-    using Type = syncer::UserSelectableType;
-    std::optional<Type> type;
-    if (what == BC_SYNC_SETTINGS) {
-      type = Type::kPreferences;
-    } else if (what == BC_SYNC_EXTENSIONS) {
-      type = Type::kExtensions;
-    }
-    syncer::SyncService* service = Service();
-    // Sync CHECKs that a type it's given has a controller.
-    if (type && service && Status() == BC_SYNC_ON &&
-        service->GetUserSettings()->GetRegisteredSelectableTypes().Has(*type)) {
-      service->GetUserSettings()->SetSelectedType(*type, on);
-    }
-    // The app's switch moved as it asked, so it hears what was chosen even when nothing changed.
-    notified_ = false;
-    Notify();
   }
 
   // The secret, which also keys passwords' client tags (sync_guard.h).
