@@ -58,6 +58,7 @@ impl What {
     pub const DELETE_FOLDER: What = What::said("Delete Folder", "Folder Deleted");
     pub const REMOVE_FROM_SPLIT: What = What::quiet("Remove from Split");
     pub const SPLIT: What = What::quiet("Split View");
+    pub const SEPARATE_ALL: What = What::quiet("Separate All Tabs");
     pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
     pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
@@ -214,6 +215,16 @@ pub(super) enum Edit {
         look: Look,
         spot: Spot,
     },
+    /// Makes a favorite split's `tabs` that Separate All Tabs separated one favorite split again,
+    /// looking as `look` says, at `index` of the favorites: its first tab, still the favorite, goes
+    /// to the top of Today, where the others are, to be joined to them, and the split goes back.
+    RejoinFavorite {
+        tabs: Vec<u64>,
+        look: Look,
+        index: usize,
+    },
+    /// Separates the favorite split `tab` is the first of again, as Separate All Tabs does.
+    SeparateFavorite(u64),
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
     /// place, or the `Join` back to the split it was in. The tab shown stays shown.
     Unsplit {
@@ -341,7 +352,8 @@ impl Edit {
                 id(tab);
                 id(with);
             }
-            Edit::Separate(tab) | Edit::Stack { tab, .. } => id(tab),
+            Edit::Separate(tab) | Edit::Stack { tab, .. } | Edit::SeparateFavorite(tab) => id(tab),
+            Edit::RejoinFavorite { tabs, .. } => ids(tabs),
             Edit::Split { tab, with, .. } => {
                 id(tab);
                 id(with);
@@ -547,6 +559,17 @@ impl Edit {
                 shell.browser.separate(tab, cx);
                 Some(join)
             }
+            Edit::RejoinFavorite { tabs, look, index } => {
+                if !tabs.iter().all(|&tab| shell.has_tab(tab)) {
+                    return None;
+                }
+                let first = tabs[0];
+                shell.browser.move_tab(first, false, 0, 0, cx);
+                shell.join_again(&tabs, &look, cx);
+                shell.browser.move_split_to_favorites(first, index, cx);
+                Some(Edit::SeparateFavorite(first))
+            }
+            Edit::SeparateFavorite(tab) => shell.separate_favorite_now(tab, cx),
             Edit::Split {
                 tab,
                 with,
@@ -1187,17 +1210,34 @@ impl Shell {
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
 
-    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
-    /// the pages keep their order in the list.
     /// Takes the favorite split `tab`'s pages but its first out of it, to the top of Today, its
-    /// first staying the favorite.
+    /// first staying the favorite. ⌘Z makes them the favorite split again.
     pub(super) fn separate_favorite(&mut self, tab: u64, cx: &mut Context<Self>) {
-        for &each in self.panes(tab)[1..].iter().rev() {
+        let rejoin = self.separate_favorite_now(tab, cx);
+        self.keep(What::SEPARATE_ALL, rejoin, cx);
+    }
+
+    /// Separates the favorite split `tab` is in, and returns the step that makes it again.
+    fn separate_favorite_now(&mut self, tab: u64, cx: &mut Context<Self>) -> Option<Edit> {
+        let split = self.favorite_split(tab)?;
+        let tabs = split.tabs.clone();
+        let look = Look {
+            stacked: split.stacked,
+            name: split.name.clone(),
+            icon: split.icon.clone(),
+        };
+        let Some(At::Favorite(index)) = self.spot_of(tabs[0]).map(|spot| spot.at) else {
+            return None;
+        };
+        for &each in tabs[1..].iter().rev() {
             self.browser.separate(each, cx);
             self.browser.move_tab(each, false, 0, 0, cx);
         }
+        Some(Edit::RejoinFavorite { tabs, look, index })
     }
 
+    /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
+    /// the pages keep their order in the list.
     pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
         for &each in self.panes(tab)[1..].iter().rev() {
             self.separate_tab(each, cx);
