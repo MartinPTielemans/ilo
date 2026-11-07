@@ -1299,6 +1299,18 @@ pub const KEY_CONTEXT: &str = "Browser";
 /// the page has it.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(keys::key_bindings(cx));
+    // Proof for #2019 only, never merged: what each key reached, and whether its window was active.
+    cx.observe_keystrokes(|event, window, cx| {
+        log!(
+            "browser: proof key {:?} action {:?} active {} focused {} contexts {:?}",
+            (&event.keystroke.key, &event.keystroke.modifiers),
+            event.action.as_ref().map(|action| action.name()),
+            window.is_window_active(),
+            window.focused(cx).is_some(),
+            event.context_stack,
+        );
+    })
+    .detach();
     cx.bind_keys([
         KeyBinding::new("enter", CreateSpace, Some("SpaceForm")),
         KeyBinding::new("enter", KeepName, Some("Naming")),

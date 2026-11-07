@@ -101,7 +101,11 @@ impl Shell {
         if self.window_watches.is_empty() {
             self.window_watches = vec![
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
-                cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+                cx.observe_window_activation(window, |_, window, cx| {
+                    // Proof for #2019 only, never merged.
+                    log!("browser: proof window active {}", window.is_window_active());
+                    cx.notify()
+                }),
             ];
         }
     }
