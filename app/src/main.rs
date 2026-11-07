@@ -976,6 +976,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         sync_changed: Some(sync_changed),
         sync_pairing_asked: Some(sync_pairing_asked),
         sync_devices_changed: Some(sync_devices_changed),
+        settings_synced: Some(settings_synced),
         tab_text: Some(tab_text),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),

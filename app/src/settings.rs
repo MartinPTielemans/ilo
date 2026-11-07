@@ -582,6 +582,14 @@ impl account::Host for CoreAccount {
         unsafe { bc::bc_sync_remove_device(id.as_ptr()) };
     }
 
+    fn choose(&self, what: account::Choice, on: bool) {
+        let what = match what {
+            account::Choice::Settings => bc::BC_SYNC_SETTINGS,
+            account::Choice::Extensions => bc::BC_SYNC_EXTENSIONS,
+        };
+        unsafe { bc::bc_sync_choose(what as i32, on) };
+    }
+
     fn activity(&self) -> account::Activity {
         let mut activity = bc::bc_sync_activity::default();
         unsafe { bc::bc_sync_read_activity(&mut activity) };

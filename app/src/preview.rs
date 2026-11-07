@@ -2990,6 +2990,8 @@ fn preview_account(state: &str, cx: &mut App) {
         } else {
             "".into()
         },
+        settings: true,
+        extensions: false,
     };
     let device = |id: &str, name: &str, os: &str, current| Device {
         id: id.to_string().into(),
@@ -3147,6 +3149,7 @@ impl account::Host for PreviewAccount {
     fn request_pairing(&self) {}
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
+    fn choose(&self, _: account::Choice, _: bool) {}
     // PREVIEW_SYNC=never, unreachable, throttled or stopped shows that line, else synced at 15:04.
     fn activity(&self) -> account::Activity {
         let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
