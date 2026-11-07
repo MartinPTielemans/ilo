@@ -127,3 +127,13 @@ Revisit if Sentry stops taking minidumps or keeping them in the EU.
 WebRTC gathers on the default route's public interface only (`default_public_interface_only`), so calls and peer-to-peer pages connect directly without telling a page a local address. While a profile uses a proxy, WebRTC goes only through it and TURN relays (`disable_non_proxied_udp`, ungoogled-chromium's default), so the proxy hides the real address. Settings › Privacy › Relay calls makes every profile relay-only, for those who want it always. Chrome's `default` isn't ours: ungoogled-chromium builds without mDNS (`enable_mdns=false`), so it would hand pages the raw local addresses that Chrome's own hides. Evidence: #1774.
 
 Revisit if the engine builds with mDNS again, or if a full-tunnel VPN is found to leak its real address under `default_public_interface_only`.
+
+## 11. A daily usage count: anonymous, on, with a switch
+
+Once a UTC day a copy sends one count, unless Settings › Privacy › Send a Daily Usage Count is off (owner, 2026-11-06, #1977). It's how we know how many use ilo; crash reports count only copies that crash and opt in.
+
+- **Sent:** version, channel, OS and its major version, chip, and the flags daily, first run, first this ISO week and first this month.
+- **Never sent:** an ID, a cookie, the time of day, or anything about pages, tabs, Spaces, profiles, agents, accounts or settings. The copy keeps only its last count's date; the server keeps each day's totals, never the address or user agent.
+- **How:** about 30 s after launch or on coming back on a new day, with no timer after; through the core and Chromium's network stack, without credentials, to the one endpoint the build names (`app/branding/daily-count`, prod only), never a general fetch. A build naming none sends nothing.
+
+Revisit if the totals stop telling releases apart without telling copies apart.

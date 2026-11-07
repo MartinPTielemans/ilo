@@ -36,6 +36,7 @@ class VideoOverlayWindowViews;
 class RenderViewContextMenuBase;
 class GURL;
 class LoginHandler;
+class PrefRegistrySimple;
 class Profile;
 struct NavigateParams;
 
@@ -315,6 +316,10 @@ extern gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* wi
                                                      bool shown,
                                                      const gfx::Rect& work_area);
 extern void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window);
+
+// chrome/browser/prefs/browser_prefs.cc: registers the core's local state prefs, app-wide ones,
+// such as where the Mini Player was left, with Chrome's.
+extern void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry);
 
 // chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc: |contents|
 // asked to be the tab shown, as Picture in Picture's way back to its tab, a page's window.focus()
