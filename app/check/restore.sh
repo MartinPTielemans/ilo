@@ -857,6 +857,17 @@ else
     "s in the session sign-in page didn't set its session cookie and sessionStorage"
   exec 3>&-
   quit
+  # Proof for #1998 only, never merged: what the quit left in the profile's cookie store.
+  if windows; then
+    cookies="$(dirname "$saved")/Default/Network"
+    ls -la "$cookies" > "$out/sign-in-cookies.txt" 2>&1
+    python3 -I -c '
+import sqlite3, sys
+db = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+for row in db.execute("select host_key, name, is_persistent, has_expires, length(encrypted_value), length(value), creation_utc from cookies"):
+    print(row)
+' "$(cygpath -w "$cookies/Cookies")" >> "$out/sign-in-cookies.txt" 2>&1
+  fi
   log="$out/sign-in-b.log"
   step=0
   BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &

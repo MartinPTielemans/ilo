@@ -377,17 +377,27 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     if (ProfileManager* manager = g_browser_process->profile_manager()) {
       profiles = manager->GetLoadedProfiles();
     }
-    base::OnceClosure end = base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr());
+    // Proof for #1998 only, never merged.
+    fprintf(stderr, "browser: diag: flushing cookies of %zu profiles\n", profiles.size());
+    base::OnceClosure end = base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr(), "written");
     base::RepeatingClosure written = base::BarrierClosure(profiles.size(), std::move(end));
     for (Profile* profile : profiles) {
+      fprintf(stderr, "browser: diag: flushing %s\n", profile->GetBaseName().AsUTF8Unsafe().c_str());
       profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()->FlushCookieStore(
-          written);
+          base::BindOnce([](base::RepeatingClosure written) {
+            fprintf(stderr, "browser: diag: a profile's cookies written\n");
+            written.Run();
+          }, written));
     }
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr()), base::Seconds(1));
+        FROM_HERE, base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr(), "timed out"),
+        base::Seconds(1));
   }
 
-  void End() { keep_alive_.reset(); }
+  void End(const char* why) {
+    fprintf(stderr, "browser: diag: end, %s, keep-alive %s\n", why, keep_alive_ ? "held" : "gone");
+    keep_alive_.reset();
+  }
 
   std::unique_ptr<ScopedKeepAlive> keep_alive_;
   base::CallbackListSubscription app_terminating_;
