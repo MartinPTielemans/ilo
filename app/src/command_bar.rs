@@ -520,9 +520,9 @@ pub trait Host {
 struct Site {
     keyword: String,
     name: SharedString,
-    /// Tab entered it and nothing has been typed since, so leaving puts the keyword back without
-    /// the space after it, as Chrome does.
-    tabbed: bool,
+    /// The word typed before Tab, which leaving puts back in the keyword's place, as Arc's
+    /// `queryBeforeEnteringScopedSearch` (#1397): "yout" comes back as "yout", not youtube.com.
+    word: String,
     /// The site's own colour, which its chip and the selected row are in, if it has one.
     color: Option<u32>,
 }
@@ -941,24 +941,8 @@ fn reset(
             bar.input.update(cx, |input, cx| {
                 input.set_placeholder(placeholder.into(), cx)
             });
-            bar.asked = text.to_string();
-            // Its answer, for nothing typed, is timed from here, not from the last ask (#1072).
-            bar.asked_at = Instant::now();
-            bar.complete = false;
-            bar.completion.clear();
-            bar.before = (text.len(), 0);
-            // The tabs show at once, in the frame the bar opens with.
-            let rows = if text.is_empty() {
-                bar.tab_rows()
-            } else {
-                Vec::new()
-            };
-            bar.set_rows(String::new(), rows, window, cx);
-            bar.input
-                .update(cx, |input, cx| input.reset(text, window, cx));
+            bar.as_opened(window, cx);
             bar.keep_focus(window, cx);
-            // The last query's suggestions are of no use now.
-            bar.host.suggest(None, "", false);
             bar.host.clone()
         })
         .ok()
@@ -1409,9 +1393,6 @@ impl CommandBar {
         if slashed && self.site.is_none() && self.lists_commands() {
             return self.enter_commands("/ ", window, cx);
         }
-        if let Some(site) = self.site.as_mut().filter(|_| !text.is_empty()) {
-            site.tabbed = false;
-        }
         // While what's typed follows the completion, the rest of it stays until the core answers,
         // so it doesn't flicker.
         let completion = shown
@@ -1601,6 +1582,7 @@ impl CommandBar {
         &mut self,
         keyword: String,
         name: SharedString,
+        word: String,
         query: String,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1617,7 +1599,7 @@ impl CommandBar {
         self.site = Some(Site {
             keyword,
             name,
-            tabbed: true,
+            word,
             color,
         });
         self.completion.clear();
@@ -1628,22 +1610,47 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// Leaves the site search, if the bar is in one, putting its keyword back before what was
-    /// typed, with the caret after it, as Chrome does. Returns whether it was in one.
+    /// Leaves the site search, if the bar is in one, putting the word typed before Tab back before
+    /// what's typed now, with the caret after it, as Arc does: left untouched, the field reads as
+    /// it did before Tab. Returns whether it was in one.
     fn leave_site(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(site) = self.site_left(cx) else {
             return false;
         };
         // check.sh reads this line.
         log!("browser: command bar leaves site search");
-        let space = if site.tabbed { "" } else { " " };
-        let prefix = format!("{}{space}", site.keyword);
-        let text = format!("{prefix}{}", self.input.read(cx).text());
+        let typed = self.input.read(cx).text().to_string();
+        let space = if typed.is_empty() { "" } else { " " };
+        let prefix = format!("{}{space}", site.word);
+        let text = format!("{prefix}{typed}");
         self.input.update(cx, |input, cx| {
             input.set_text(text.into(), prefix.len(), window, cx)
         });
         cx.notify();
         true
+    }
+
+    /// Puts the field and rows back as the bar opened: the URL it edits, selected, or nothing typed
+    /// and the Space's tabs.
+    fn as_opened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.page.clone();
+        self.asked = text.clone();
+        // Its answer, for nothing typed, is timed from here, not from the last ask (#1072).
+        self.asked_at = Instant::now();
+        self.complete = false;
+        self.completion.clear();
+        self.before = (text.len(), 0);
+        // The tabs show at once, in the frame the bar opens with.
+        let rows = if text.is_empty() {
+            self.tab_rows()
+        } else {
+            Vec::new()
+        };
+        self.set_rows(String::new(), rows, window, cx);
+        self.input
+            .update(cx, |input, cx| input.reset(text.into(), window, cx));
+        // The last query's suggestions are of no use now.
+        self.host.suggest(None, "", false);
     }
 
     /// Takes the bar out of its site search, if it's in one, and returns it.
@@ -1669,10 +1676,13 @@ impl CommandBar {
             .filter(|row| !row.keyword.is_empty() && self.site.is_none());
         if let Some((keyword, name)) = hint.map(|row| (row.keyword.clone(), row.site.clone())) {
             let typed = self.typed(cx);
-            let query = typed
+            let (word, query) = typed
                 .split_once(char::is_whitespace)
-                .map_or("", |(_, rest)| rest.trim_start());
-            return self.enter_site(keyword, name, query.to_string(), window, cx);
+                .map_or((typed.as_str(), ""), |(word, rest)| {
+                    (word, rest.trim_start())
+                });
+            let (word, query) = (word.to_string(), query.to_string());
+            return self.enter_site(keyword, name, word, query, window, cx);
         }
         if self.may_ask(cx) {
             return self.enter_ask(window, cx);
@@ -2619,12 +2629,15 @@ impl CommandBar {
         self.host.dismiss();
     }
 
-    /// Esc leaves the site search, the commands-only list or the ask first, then the bar.
+    /// Esc leaves the site search, the commands-only list or the ask first, then the bar. Out of a
+    /// site search the bar is as it opened, as Arc's `postScopedSearchRestoration` (#1397).
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.leave_site(window, cx)
-            && !self.leave_commands(window, cx)
-            && !self.leave_ask(window, cx)
-        {
+        if self.site_left(cx).is_some() {
+            // check.sh reads this line.
+            log!("browser: command bar leaves site search as it opened");
+            return self.as_opened(window, cx);
+        }
+        if !self.leave_commands(window, cx) && !self.leave_ask(window, cx) {
             self.open.set(false);
             self.host.dismiss();
         }

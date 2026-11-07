@@ -1142,6 +1142,59 @@ fn a_space_after_the_hinted_keyword_is_only_a_space(cx: &mut TestAppContext) {
     );
 }
 
+/// Leaving a site search puts back what was typed before Tab, as Arc's ⌫ and ⇧Tab do, not the
+/// keyword it completed to: "duck" with a hint for duck.test comes back "duck", before what's typed
+/// since. Esc puts the bar back as it opened, the Space's tabs or the URL ⌘L edits, selected, and
+/// it stays open (#1397).
+#[gpui::test]
+fn leaving_a_site_search_puts_back_what_was_there_before(cx: &mut TestAppContext) {
+    let duck = || Suggestion {
+        completion: ".test".into(),
+        ..hinting("duck.test")
+    };
+    for leave in ["backspace", "shift-tab"] {
+        let mut bar = Bar::new(cx);
+        bar.type_text("duck");
+        bar.suggest("duck", vec![duck()]);
+        bar.keys("tab");
+        bar.keys(leave);
+        assert_eq!(bar.input(), ("duck".into(), 4..4), "{leave}");
+
+        bar.suggest("duck", vec![duck()]);
+        bar.keys("tab");
+        bar.type_text("cats");
+        bar.keys(&format!("home {leave}"));
+        assert_eq!(bar.input(), ("duck cats".into(), 5..5), "{leave}");
+    }
+
+    let tabs = vec![tab(4, "https://a.test/")];
+    let mut bar = Bar::with_tabs(cx, tabs);
+    bar.type_text("duck");
+    bar.suggest("duck", vec![duck()]);
+    bar.keys("tab");
+    bar.type_text("cats");
+    bar.keys("escape");
+    assert_eq!(bar.input(), (String::new(), 0..0));
+    assert_eq!(bar.rows(), [("https://a.test/".to_string(), 4)]);
+    assert!(
+        bar.is_open(),
+        "Esc closed the bar rather than leaving the site search"
+    );
+    // Out of it, Esc closes the bar.
+    bar.keys("escape");
+    assert_eq!(bar.calls(), ["dismiss"]);
+
+    let mut bar = Bar::new(cx);
+    bar.edit("https://a.test/page", None);
+    bar.type_text("duck");
+    bar.suggest("duck", vec![duck()]);
+    bar.keys("tab escape");
+    assert_eq!(bar.input(), ("https://a.test/page".into(), 0..19));
+    // ↩ then does what it does on the bar ⌘L opened: loads the page again.
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["hide", "reload 1"]);
+}
+
 /// A site search a new profile has is in its site's colour, which reads on the bar with its label
 /// in both tones; one whose site has none, as GitHub's, or one the user added, keeps the Space's
 /// accent (#1397).
