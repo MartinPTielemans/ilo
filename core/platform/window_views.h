@@ -10,6 +10,7 @@
 #include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
 
@@ -78,6 +79,11 @@ void ShowPages(views::Widget* widget,
 // ShowPages lays them out, until it's 1 again. Clicks go to the UI around them on Linux, and to
 // their frames on the Mac. On Windows it does nothing yet.
 void ScalePages(views::Widget* widget, double scale);
+
+// |point|, from the top-left of |page|, a page's view, as Chromium gives it, from where that
+// top-left is laid out: as the app put it, whatever ScalePages draws. On Linux, where the scale is
+// the view's own, Chromium gives it in the page drawn smaller; elsewhere it's unchanged.
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point);
 
 // Keeps the pages shown in |widget|'s window where they are as it resizes, until ShowPages lays
 // them out again: for a page going full screen, or back, which the app lays out once, at the

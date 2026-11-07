@@ -24,6 +24,7 @@
 #include "browser_core/page_press.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/developer_mode.h"
@@ -283,8 +284,11 @@ bool Tab::LinkDragged(content::WebContents* contents,
   }
   const int dragged =
       phase == content::PageLinkDrag::kDrop ? BC_LINK_DRAG_DROP : BC_LINK_DRAG_OVER;
+  // From where the app laid the page out, as it draws its targets there, though the page is
+  // drawn smaller under the drag.
+  const gfx::PointF at = platform::LaidOutPagePoint(contents->GetNativeView(), point);
   return Host().tab_link_dragged(Host().context, tab->id_, dragged,
-                                 data.url_infos.front().url.spec().c_str(), point.x(), point.y());
+                                 data.url_infos.front().url.spec().c_str(), at.x(), at.y());
 }
 
 // static

@@ -1154,6 +1154,23 @@ void ScalePages(views::Widget* widget, double scale) {
   views->ShowThrough();
 }
 
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point) {
+  aura::Window* root = page ? page->GetRootWindow() : nullptr;
+  if (!root) {
+    return point;
+  }
+  // Where it's drawn, through the holder's scale, less where the page is laid out.
+  gfx::PointF drawn = point;
+  aura::Window::ConvertPointToTarget(page, root, &drawn);
+  float x = 0;
+  float y = 0;
+  for (aura::Window* each = page; each && each != root; each = each->parent()) {
+    x += each->bounds().x();
+    y += each->bounds().y();
+  }
+  return gfx::PointF(drawn.x() - x, drawn.y() - y);
+}
+
 void HoldPagesForResize(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->set_held(true);

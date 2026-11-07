@@ -518,6 +518,11 @@ void ScalePages(views::Widget* widget, double scale) {
   [view scalePages];
 }
 
+// AppKit gives a view's points from its frame, which the layer's scale doesn't move.
+gfx::PointF LaidOutPagePoint(gfx::NativeView, const gfx::PointF& point) {
+  return point;
+}
+
 void HoldPagesForResize(views::Widget*) {}
 
 bool PagesHeldForResize(views::Widget*) {
