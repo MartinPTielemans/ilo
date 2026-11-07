@@ -184,7 +184,7 @@ if windows; then
   page_rect() {
     send layout
     rect=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' | sed -n \
-      's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*WebContentsViewCocoa \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
+      's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*WebContentsViewCocoa \(-*[0-9]*\),\(-*[0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
   }
   page_rect
   at_100=$rect
@@ -212,6 +212,78 @@ if any(abs(a - b) > 1 for a, b in zip(want, got)):
 PY
       fail "the page didn't fill the content area at the new display's scale"
   done
+fi
+
+# On Windows, the display's own scale goes up a step and back while the app runs, as Settings'
+# Scale changes it. GPUI's window, a child of the browser window, hears no WM_DPICHANGED of its own,
+# and drew on at the old scale, giving the core a frame for the page in the old scale's points, so
+# the page ran off the window (#1358). Now it lays out at the new scale with its parent, and the
+# page keeps its insets in DIPs. The command bar's window keeps its size in points. The display goes
+# back to its scale even if the run fails.
+if windows; then
+  read -r scale_at scale_least scale_most << EOF
+$(python3 -I check/scale.py get)
+EOF
+  if [ -z "$scale_most" ] || [ "$scale_most" -le "$scale_at" ]; then
+    echo "SKIP: the display's scale is at its largest ($scale_at of $scale_least to $scale_most)"
+  else
+    run_undo="python3 -I check/scale.py set $scale_at"
+    # The page's insets from $rect, in DIPs: left, bottom, right and top.
+    insets() {
+      set -- $rect
+      echo "$3 $4 $(($1 - $3 - $5)) $(($2 - $4 - $6))"
+    }
+    # Whether the insets $1 and $2 are the same, to a DIP, as the core floors the content's size.
+    same_insets() {
+      echo "$1 $2" | awk '{ for (i = 1; i <= 4; i++) if ((d = $i - $(i + 4)) > 1 || d < -1) exit 1 }'
+    }
+    # The overlays' sizes in points, in $bar.
+    bar_now() {
+      send overlays
+      bar=$(grep '^browser: overlays shown ' "$log" | tail -1 | cut -d' ' -f4- |
+        sed 's/ at [0-9-]*,[0-9-]*//g')
+    }
+    # Lays out until the page is inset by $1 and the content isn't $2 in DIPs, for up to 10 s, as
+    # the UI lays out once it has heard the scale.
+    page_inset() {
+      for _ in $(seq 20); do
+        page_rect
+        set -- "$1" "$2" $rect
+        [ "$3x$4" != "$2" ] && same_insets "$1" "$(insets)" && return 0
+        sleep 0.5
+      done
+      return 1
+    }
+    send key l cmd
+    expect '^browser: command bar shown$' "⌘L didn't open the command bar before the scale changed"
+    page_rect
+    rect_before=$rect insets_before=$(insets)
+    set -- $rect
+    content_before="$1x$2"
+    bar_now
+    bar_before=$bar
+    python3 -I check/scale.py set $((scale_at + 1)) > /dev/null
+    page_inset "$insets_before" "$content_before" ||
+      fail "a step up the display's scale left the page at $rect in the content, not inset by $insets_before"
+    ../tools/window-screenshot.sh "$pid" "$out/display-scaled.png" || fail "no window to capture"
+    bar_now
+    [ "$bar" = "$bar_before" ] ||
+      fail "the command bar's window was $bar at the display's new scale, not $bar_before"
+    python3 -I check/scale.py set "$scale_at" > /dev/null
+    run_undo=
+    for _ in $(seq 20); do
+      page_rect
+      [ "$rect" = "$rect_before" ] && break
+      sleep 0.5
+    done
+    [ "$rect" = "$rect_before" ] ||
+      fail "back at the display's scale the page was at $rect in the content, not $rect_before"
+    bar_now
+    [ "$bar" = "$bar_before" ] ||
+      fail "the command bar's window was $bar back at the display's scale, not $bar_before"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  fi
 fi
 
 # A page shows black until its first frame while websites are told the appearance is dark, and
