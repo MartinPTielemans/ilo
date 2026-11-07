@@ -525,6 +525,17 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
     assert_eq!(host.take(), ["folder preview left 5"]);
 }
 
+/// A press that opens a closed folder, with the pointer heard coming onto its row after it, as a
+/// click that moves the pointer is, doesn't rest for the preview, which would show over the folder
+/// opened, or gone by then.
+#[gpui::test]
+fn a_press_opening_a_folder_doesnt_rest_for_its_preview(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_folders(cx);
+    shell.update(cx, |shell, cx| shell.press_folder(5, cx));
+    preview_on(&shell, cx, 5);
+    assert_eq!(host.take(), ["folder open 5 true"]);
+}
+
 #[gpui::test]
 fn a_preview_lists_the_tab_seen_last_first_with_how_long_ago(cx: &mut TestAppContext) {
     let (shell, cx, host) = with_folders(cx);

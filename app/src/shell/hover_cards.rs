@@ -78,7 +78,7 @@ impl Shell {
 
     /// The pointer came onto `row` or left it: a closed folder's row rests for its preview of the
     /// tabs in it, and leaving it lets the preview go. None shows while a row is dragged, has its
-    /// menu up or is being named.
+    /// menu up or is being named, or a folder is opening or closing.
     pub(super) fn folder_preview(&mut self, row: Row, hovered: bool, cx: &mut Context<Self>) {
         let Row::Tab(folder) = row else {
             return;
@@ -97,7 +97,12 @@ impl Shell {
             return self.browser.folder_preview(Ask::Left(folder), cx);
         }
         self.preview_row = None;
-        let busy = self.dragging().is_some() || self.menu_row.is_some() || self.renaming.is_some();
+        // Nor while a press opens or closes a folder, as the pointer that came with the press is
+        // heard after it, with the folder still closed until the core says.
+        let busy = self.dragging().is_some()
+            || self.menu_row.is_some()
+            || self.renaming.is_some()
+            || self.folding.is_some();
         let items = self.previewed(folder);
         if busy || items.is_empty() {
             return;

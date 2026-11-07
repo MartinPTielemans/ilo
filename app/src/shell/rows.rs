@@ -222,7 +222,7 @@ impl Shell {
     }
 
     /// Opens or closes the folder as it's pressed, as Arc's does, even if the press becomes a drag.
-    fn press_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
+    pub(super) fn press_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
         let head = self.list_head();
         let Some(space) = self.spaces.iter_mut().find(|space| space.id == self.space) else {
             return;
