@@ -689,6 +689,10 @@ if [ "$action" = Maximize ]; then
   # On Windows the UI lays out at the maximized size after Windows has zoomed the window, and a
   # press before it draws there is lost.
   ! windows || expect '^browser: drawn at ' "the UI didn't draw the zoomed window"
+  # A click on the same spot within the double-click time (500 ms by default) goes on counting, so
+  # the second pair would be a third and fourth click, which no title bar takes for a double-click.
+  # The zoomed window can draw sooner than that.
+  sleep 0.6
   send doubleclick 115 24
   expect '^browser: window zoomed 0$' "a second double-click on the header didn't zoom it back"
   zoom="zooms it"
