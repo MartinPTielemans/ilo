@@ -1998,6 +1998,13 @@ BC_EXPORT void bc_window_set_page_color(bc_id window, uint32_t color);
 // its last. A page full screen keeps Chrome's way.
 BC_EXPORT void bc_window_page_moving(bc_id window, bool moving);
 
+// Draws the window's pages, their docked DevTools and a split view's ring at |scale| of their size,
+// about the centre of the page frame, without laying them out again: for the app's motion, as the
+// pages shrink back under a tab dragged over them, as Arc's do. 1, the default, is their own size.
+// Between 0.5 and 1. The rest of the frame shows the app's UI, and clicks there go to it. The side
+// panel's page keeps its size. On Windows it does nothing yet.
+BC_EXPORT void bc_window_set_page_scale(bc_id window, double scale);
+
 // Shows |tab| at the window's page frame, in place of the page shown before, and its Space if the
 // window shows another. It takes the keyboard if that page had it. A tab in a split view shows with
 // the rest of its split, focused. A click in another page of the split focuses that one. A page
