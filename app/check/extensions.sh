@@ -217,7 +217,8 @@ fi
 # The Extensions menu runs a pinned one too, its popup hanging from its action.
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
-close_popup
+# On Linux a click on its action would run it again, so the page's click closes it, for the bar.
+close_popup "$page_point"
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
 send key l cmd
@@ -233,7 +234,7 @@ expect '^browser: command run-extension via command bar$' "Check Popup didn't ru
 expect "^browser: run extension $popup ran\$" "the bar's Check Popup didn't run its action"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the bar"
 ../tools/window-screenshot.sh "$pid" "$out/bar-extension-popup.png" || fail "no window to capture"
-close_popup
+close_popup "$page_point"
 # In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
 # click on one runs it there, its popup hanging from its button (#693).
 send key n cmd alt
