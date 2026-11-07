@@ -895,6 +895,7 @@ impl Shell {
         let Some(drag) = self.drag.as_ref().filter(|_| outside) else {
             return false;
         };
+        log!("browser: probe 1583 outside at {position:?} of {size:?}, press {:?} origin {:?}", drag.press, drag.origin);
         let tab = drag.tab;
         let listed = matches!(drag.from, Place::List(..)) && !self.sidebar_hidden;
         let own = self.private || self.little.is_some();
@@ -1400,6 +1401,7 @@ impl Shell {
                 let moved = shell.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
+                        log!("browser: probe 1583 move {:?} {:?}", event.position, event.pressed_button);
                         moved
                             .update(cx, |shell, cx| shell.drag_to(event.position, cx))
                             .ok();

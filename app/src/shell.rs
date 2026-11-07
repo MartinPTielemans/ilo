@@ -2753,6 +2753,7 @@ impl Shell {
                 self.move_tiles(tiles, Curve::Slide, cx);
             } else if let Some(position) = self.drag_position() {
                 // A row carried over the new lists finds its place in them where the pointer is.
+                log!("browser: probe 1583 lists {position:?}");
                 self.drag_to(position, cx);
             }
         }
