@@ -1139,9 +1139,10 @@ send key escape
 expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
 none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
 # The pair goes back to back, the page's answer to its first read after, as a slow runner can take
-# 500 ms between two steps (#2009). It waits out the 500 ms from the press above first, which would
-# otherwise make the pair's first press the second.
-sleep 0.6
+# 500 ms between two steps (#2009). It waits out the second press's 1 s (SECOND_PRESS in
+# shell/keys.rs) from the press above first, which would otherwise take the pair's first press
+# out of full screen as a second press of a key the page kept.
+sleep 1.1
 send key escape
 first=$step
 send key escape
