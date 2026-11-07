@@ -11,12 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/barrier_closure.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/scoped_multi_source_observation.h"
@@ -82,7 +80,6 @@
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/prefs/pref_service.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
@@ -336,7 +333,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     // own (bc_quit) logs its reason before this, and the system's Apple Event on the Mac too.
     fprintf(stderr, "browser: terminating, %s\n",
             ShutdownName(browser_shutdown::GetShutdownType()));
-    EndOnceCookiesWritten();
+    keep_alive_.reset();
     // A remote-debugging switch, with the window Chrome doesn't open at startup, has Chrome hold
     // the browser up until a client closes it over the protocol, so the user's quit never ended.
     ChromeDevToolsManagerDelegate::AllowBrowserToClose();
@@ -368,33 +365,11 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     return "an unknown shutdown type";
   }
 
-  // Lets the browser end once each profile's cookies are on disk, or a second on. The network
-  // service writes them in batches, 30 s apart, and on Windows it ends with the browser before it
-  // writes what it still holds, so a sign-in kept in a session cookie set just before a quit went
-  // (#1998). An off-the-record profile keeps none on disk.
-  void EndOnceCookiesWritten() {
-    std::vector<Profile*> profiles;
-    if (ProfileManager* manager = g_browser_process->profile_manager()) {
-      profiles = manager->GetLoadedProfiles();
-    }
-    base::OnceClosure end = base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr());
-    base::RepeatingClosure written = base::BarrierClosure(profiles.size(), std::move(end));
-    for (Profile* profile : profiles) {
-      profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()->FlushCookieStore(
-          written);
-    }
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, base::BindOnce(&ExtraParts::End, weak_factory_.GetWeakPtr()), base::Seconds(1));
-  }
-
-  void End() { keep_alive_.reset(); }
-
   std::unique_ptr<ScopedKeepAlive> keep_alive_;
   base::CallbackListSubscription app_terminating_;
   base::TimeTicks stopped_;
   base::ScopedObservation<ProfileManager, ProfileManagerObserver> manager_observation_{this};
   base::ScopedMultiSourceObservation<Profile, ProfileObserver> profile_observations_{this};
-  base::WeakPtrFactory<ExtraParts> weak_factory_{this};
 };
 
 class ContentBrowserClient : public ChromeContentBrowserClient {
