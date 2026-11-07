@@ -177,8 +177,10 @@ done
 none_since "^browser: title $moved live ada paused " || fail "the move paused the page's music"
 [ "$(grep -c "^browser: loaded $moved " "$log")" = 1 ] || fail "the move reloaded the page"
 # Out of Developer Mode, the main window's URL field says the host alone and the row has no outline.
-expect '^browser: url field 127\.0\.0\.1$' \
-  "the moved page's URL field in the main window didn't say the host, as out of Developer Mode"
+# Developer Mode is the site's, so the main window's own page on it left it too, and its field
+# said the host already.
+[ "$(grep '^browser: url field ' "$log" | tail -1)" = "browser: url field 127.0.0.1" ] ||
+  fail "the moved page's URL field in the main window isn't the host, as out of Developer Mode: $(grep '^browser: url field ' "$log" | tail -1)"
 none_since "^browser: page $moved developer mode 1\$" ||
   fail "the moved page went back into Developer Mode"
 none_since "^browser: developer outline $moved at " || fail "the moved page's row has the Developer Mode outline"
