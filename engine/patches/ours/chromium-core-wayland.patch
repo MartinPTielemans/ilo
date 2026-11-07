@@ -2,8 +2,9 @@ Lets the app's UI share Chromium's Wayland display on Linux (decision 3), as a s
 browser window: chrome exports its libwayland's client API, so the app's calls reach the copy the
 display came from; Chromium tags its surfaces, so pointer events on the UI's aren't taken for its
 own, and a drag over them keeps Chromium's offer of it, as wlroots ends a drag whose offer goes;
-the core can reach a window's surface through the WaylandProxy, made outside tests too; and a hook
-runs the core after each dispatch of Chromium's events, for the UI's that its reads queued.
+the core can reach a window's surface through the WaylandProxy, made outside tests too, and ask
+it whether the compositor's answer to the state a window has is latched; and a hook runs the
+core after each dispatch of Chromium's events, for the UI's that its reads queued.
 Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
 --- a/build/linux/chrome.map
 +++ b/build/linux/chrome.map
@@ -165,6 +166,46 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
    g_instance = instance;
  }
  
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy.h
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy.h
+@@ -87,6 +87,13 @@
+   virtual bool WindowHasPointerFocus(gfx::AcceleratedWidget widget) = 0;
+   virtual bool WindowHasKeyboardFocus(gfx::AcceleratedWidget widget) = 0;
+ 
++  // browser_core: whether the compositor's answer to the state the window
++  // backed by |widget| now has is latched, so its bounds for that state are in
++  // (browser_core/platform/linux/wayland.cc).
++  virtual bool IsWindowStateConfigured(gfx::AcceleratedWidget widget) {
++    return true;
++  }
++
+  protected:
+   static void SetInstance(WaylandProxy* instance);
+ };
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.cc
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.cc
+@@ -42,6 +42,11 @@
+   return window->root_surface()->surface();
+ }
+ 
++bool WaylandProxyImpl::IsWindowStateConfigured(gfx::AcceleratedWidget widget) {
++  auto* window = connection_->window_manager()->GetWindow(widget);
++  return !window || window->IsStateAnswered();
++}
++
+ ui::WaylandWindow* WaylandProxyImpl::GetWaylandWindowForAcceleratedWidget(
+     gfx::AcceleratedWidget widget) {
+   auto* window = connection_->window_manager()->GetWindow(widget);
+--- a/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.h
++++ b/ui/ozone/platform/wayland/host/proxy/wayland_proxy_impl.h
+@@ -38,6 +38,7 @@
+   ui::PlatformWindowType GetWindowType(gfx::AcceleratedWidget widget) override;
+   bool WindowHasPointerFocus(gfx::AcceleratedWidget widget) override;
+   bool WindowHasKeyboardFocus(gfx::AcceleratedWidget widget) override;
++  bool IsWindowStateConfigured(gfx::AcceleratedWidget widget) override;
+ 
+  private:
+   // ui::WaylandWindowObserver overrides:
 --- a/ui/ozone/platform/wayland/host/wayland_connection.cc
 +++ b/ui/ozone/platform/wayland/host/wayland_connection.cc
 @@ -286,8 +286,8 @@ bool WaylandConnection::Initialize(bool use_threaded_polling) {
@@ -220,3 +261,46 @@ Hooks only: the logic is in browser_core/platform/linux/wayland.cc.
  };
  
  }  // namespace ui
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -721,6 +721,13 @@
+   return xdg_toplevel() ? xdg_toplevel()->IsConfigured() : false;
+ }
+ 
++bool WaylandToplevelWindow::IsStateAnswered() const {
++  // browser_core: and the compositor's last configure carries that state, as
++  // a configure can latch with another state than the one it carried.
++  return WaylandWindow::IsStateAnswered() &&
++         last_configured_window_state_ == applied_state().window_state;
++}
++
+ void WaylandToplevelWindow::SetWindowGeometry(
+     const PlatformWindowDelegate::State& state) {
+   DCHECK(connection()->SupportsSetWindowGeometry());
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+@@ -78,6 +78,7 @@
+   bool OnInitialize(PlatformWindowInitProperties properties,
+                     PlatformWindowDelegate::State* state) override;
+   bool IsActive() const override;
++  bool IsStateAnswered() const override;
+   bool IsSuspended() const override;
+   void SetWindowGeometry(const PlatformWindowDelegate::State& state) override;
+   base::WeakPtr<WaylandWindow> AsWeakPtr() override;
+--- a/ui/ozone/platform/wayland/host/wayland_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_window.h
+@@ -313,6 +313,14 @@
+     return latched_state_;
+   }
+ 
++  // browser_core: whether the compositor's answer to the state the window has
++  // is latched, with no configure in flight after it
++  // (browser_core/platform/linux/wayland.cc).
++  virtual bool IsStateAnswered() const {
++    return latched_state_.window_state == applied_state_.window_state &&
++           in_flight_requests_.empty();
++  }
++
+   // Tells if the surface has already been configured. This will be true after
+   // the first set of configure event and ack request, meaning that wl_surface
+   // can attach buffers.

@@ -1,0 +1,27 @@
+Reads being on battery from the battery's sample too, not only from the system's power status
+(#686). Linux's PowerMonitor never says the computer is on battery, and the Mac's on mains never
+does for the check's battery (//browser_core/battery_saver.h), so Battery Saver, which turns on below
+20 % on battery, never could there. On a computer's own battery the two agree.
+
+--- a/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
++++ b/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
+@@ -341,6 +341,19 @@
+       manager_->NotifyOnDeviceHasBatteryChanged(has_battery_);
+     }
+ 
++    // browser_core: on battery as the sample says too, where the system's power status doesn't:
++    // Linux's PowerMonitor never says it, nor does the Mac's on mains for a check's battery
++    // (//browser_core/battery_saver.h). On a computer's own battery they agree.
++    if (has_battery_ &&
++        on_battery_power_ == battery_state->is_external_power_connected) {
++      on_battery_power_ = !battery_state->is_external_power_connected;
++      // Plugging in ends "turn off for now", as the power status's change does.
++      if (!on_battery_power_) {
++        battery_saver_mode_disabled_for_session_ = false;
++      }
++      manager_->NotifyOnExternalPowerConnectedChanged(on_battery_power_);
++    }
++
+     // Log the unplugged battery usage to local pref if the previous value is
+     // more than a day old.
+     if (has_battery_ && !battery_state->is_external_power_connected &&

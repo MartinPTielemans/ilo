@@ -856,14 +856,23 @@ void SystemPage::ReleaseStore(const std::string& id) {
 // static
 void SystemPage::ClearSite(const SystemStore& store,
                            const std::string& domain,
-                           bool cookies,
+                           SiteData what,
                            base::OnceClosure done) {
   WKWebsiteDataStore* data =
       Available() && LoadWebKit("clearing a site") ? StoreFor(store) : nil;
-  NSSet<NSString*>* types =
-      cookies ? [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeCookies"), nil]
-              : [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeDiskCache"),
-                                      WebKitConstant("WKWebsiteDataTypeMemoryCache"), nil];
+  NSSet<NSString*>* types = nil;
+  switch (what) {
+    case SiteData::kCookies:
+      types = [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeCookies"), nil];
+      break;
+    case SiteData::kCache:
+      types = [NSSet setWithObjects:WebKitConstant("WKWebsiteDataTypeDiskCache"),
+                                    WebKitConstant("WKWebsiteDataTypeMemoryCache"), nil];
+      break;
+    case SiteData::kAll:
+      types = [WebKitClass(@"WKWebsiteDataStore") allWebsiteDataTypes];
+      break;
+  }
   if (!data || types.count == 0) {
     std::move(done).Run();
     return;

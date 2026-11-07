@@ -8,6 +8,12 @@ pub(crate) fn launch_frame_path() -> String {
     format!("{}/launch-frame", profile_dir())
 }
 
+/// Where the launch picture's size and layout are kept (launch_picture::line), beside it and
+/// named as the hosts name it, so they and forget_launch_pictures delete it with it.
+pub(crate) fn launch_layout_path() -> String {
+    format!("{}/launch-picture-layout", profile_dir())
+}
+
 /// Quits the browser, saying what asked, as each way the browser ends logs a line that names it:
 /// this, Chromium's shutdown (main_delegate.cc) and, on the Mac, a quit Apple Event (host.mm).
 pub(crate) fn quit_because(why: &str) {
@@ -30,6 +36,7 @@ pub(crate) unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: boo
         "browser: quit going ahead{}",
         if restarting { ", restarting" } else { "" }
     );
+    shell::quit_goes_ahead();
     restarting && relaunch_into_update()
 }
 
@@ -117,10 +124,24 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
         log!("browser: launch picture not taken");
         return;
     }
-    let width = window
-        .shell
-        .upgrade()
+    let shell = window.shell.upgrade();
+    let width = shell
+        .as_ref()
         .map_or(0., |shell| shell.read(cx).card_left());
+    // The frame the hosts name the picture by.
+    let (mut x, mut y, mut frame_width, mut frame_height) = (0., 0., 0., 0.);
+    let framed = unsafe {
+        platform::host_window_frame(
+            window.ui_view,
+            &mut x,
+            &mut y,
+            &mut frame_width,
+            &mut frame_height,
+        )
+    };
+    let layout = shell
+        .filter(|_| framed)
+        .map(|shell| shell.read(cx).launch_picture(frame_width, frame_height));
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
     };
@@ -141,6 +162,10 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
             )
         }
     });
+    // Once the host has deleted the pictures before, and only for one it took.
+    if let Some(layout) = layout.filter(|_| taken) {
+        _ = std::fs::write(launch_layout_path(), launch_picture::line(&layout));
+    }
     // check.sh reads this line.
     log!(
         "browser: launch picture {}",
@@ -162,9 +187,11 @@ pub(crate) fn forget_launch_pictures() {
     }
 }
 
-/// Keeps the frame of the browser window of `ui_view` for the next launch's first window to open
-/// at. Out of full screen only: the core keeps the frame a window in full screen comes back at.
-/// Maximized on Windows, the frame it un-maximizes to and "maximized" after it (launching).
+/// Keeps the frame of the browser window of `ui_view` for the next launch's launch window to show
+/// at, before the core has read the windows it saved. Out of full screen only: the core keeps the
+/// frame a window in full screen comes back at. Maximized on Windows, the frame it un-maximizes to
+/// and "maximized" after it (launching), for the launch window alone: the browser window opens
+/// maximized as the core saved it (bc_saved_window_maximized).
 pub(crate) fn save_launch_frame(ui_view: *mut c_void) {
     let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
     if unsafe { platform::host_window_frame(ui_view, &mut x, &mut y, &mut width, &mut height) } {

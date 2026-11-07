@@ -176,6 +176,44 @@ resized_once() {
 check_layout "at launch"
 check_buttons "at launch"
 
+# On Windows, moved to a display of another scale, as Windows tells it (WM_DPICHANGED) with its
+# size in pixels kept, the page fills the content area at that scale: its insets, in DIPs, scaled
+# by the new display's, not the old one's (#1823). 100% to 150% and back, then to 125% and back.
+if windows; then
+  # The content's size and the page's rect, in pixels, in $rect.
+  page_rect() {
+    send layout
+    rect=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' | sed -n \
+      's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*WebContentsViewCocoa \([0-9]*\),\([0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
+  }
+  page_rect
+  at_100=$rect
+  [ -n "$at_100" ] || fail "the layout named no page at launch"
+  for percent in 150 100 125 100; do
+    send dpi "$percent"
+    page_rect
+    python3 -I - "$percent" $at_100 $rect << 'PY' ||
+import math, sys
+s = int(sys.argv[1]) / 100
+cw, ch, x, y, w, h = map(int, sys.argv[2:8])
+cw2, ch2, x2, y2, w2, h2 = map(int, sys.argv[8:14])
+# The insets at 100%, in DIPs: the layout's y counts from the content's bottom.
+left, bottom, right, top = x, y, cw - x - w, ch - y - h
+# The core's layout: the content in DIPs at the scale, floored, inset, and scaled to pixels.
+fw = math.floor(cw2 / s) - left - right
+fh = math.floor(ch2 / s) - top - bottom
+px_left, px_top = math.floor(left * s), math.floor(top * s)
+px_right, px_bottom = math.ceil((left + fw) * s), math.ceil((top + fh) * s)
+want = (px_left, ch2 - px_bottom, px_right - px_left, px_bottom - px_top)
+got = (x2, y2, w2, h2)
+if any(abs(a - b) > 1 for a, b in zip(want, got)):
+    sys.exit(f"at {sys.argv[1]}% the page is {got[0]},{got[1]} {got[2]}x{got[3]} in {cw2}x{ch2}, "
+             f"not {want[0]},{want[1]} {want[2]}x{want[3]}")
+PY
+      fail "the page didn't fill the content area at the new display's scale"
+  done
+fi
+
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
 # from the start. The page's w opens one whose server never answers, so it never commits, and its
@@ -566,24 +604,33 @@ send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
 # by the page, as its button leaves, and then by escape. The steps run from the core's line to the
-# window's and the UI's, and the checks wait for the last of them.
+# window's and the UI's, and the checks wait for the last of them. Each key also waits for the page
+# to have heard the change before it: until it has, its document is still in the full screen it's
+# leaving, or not yet in the one it's entering, and requestFullscreen or exitFullscreen does nothing.
+page_heard() {
+  expect "^browser: title [0-9]* fullscreen $1\$" "the page didn't hear its full screen $2"
+}
 timed_from=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key x
   expect '^browser: page left full screen$' "exitFullscreen didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_escape=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key escape
   expect '^browser: page left full screen$' "escape didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_to=$(($(wc -l < "$log")))
 enter_ms=$(full_screen_times "$timed_from" "$timed_to" enter)
@@ -784,65 +831,108 @@ reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
+# Settings › Tabs & Sidebar's edge switch off (#1636): the pointer moving along the edge of the
+# window with its sidebar hidden brings nothing out, and ⌘S still shows it. On again after.
+send menu Settings…
+expect '^browser: settings shown ' "Settings… didn't show Settings"
+settings_drew
+send clickkey $(drawn "toolbar General")
+../tools/window-screenshot.sh "$pid" "$out/settings-general.png" || fail "no window to capture"
+send clickkey $(drawn "toolbar About")
+settings_drew About
+../tools/window-screenshot.sh "$pid" "$out/settings-about.png" || fail "no window to capture"
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+settings_drew "Tabs & Sidebar"
+../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
+send clickkey $(drawn "switch edge reveals sidebar")
+expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key s cmd
+toggle ui hidden "⌘S with the edge off"
+send move 400 300
+from=$((step + 1))
+send move 3 300
+send move 3 306
+send move 3 312
+# Past the wait the edge would have before the sidebar came out.
+sleep 1
+! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+  fail "the pointer at the edge brought the sidebar out with the edge off"
+send key s cmd
+toggle ui shown "⌘S with the edge off"
+send menu Settings…
+expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
+settings_drew "Tabs & Sidebar"
+send clickkey $(drawn "switch edge reveals sidebar")
+expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 # ⌥ pressed and let go alone brings the hidden sidebar out with the pointer over the page, which
 # keeps it out, and again sends it away. ⌥ held with ⌘, as for a shortcut, or let go after a key,
 # as for a typed character, doesn't, and with the sidebar docked it does nothing.
+# On Windows ⌥ is Alt, which the driver presses alone as winalt: its alt is the Mac's ⌥, Ctrl+Alt
+# there, as AltGr is. The key after it there is Shift, as Alt+← goes back.
+alone=alt
+after_key() { send key left alt; }
 if windows; then
-  # Windows' core doesn't tell the app of an Alt let go alone (bc_option_reveals_sidebar's tap,
-  # which the Mac's and Linux's cores detect). Alt alone shows the hidden sidebar there too, as
-  # Chrome's Alt goes to its own menu, once the core detects it (#1847).
-  echo "skip: ⌥ alone bringing the hidden sidebar out: Windows' core doesn't detect Alt let go alone yet (#1847)."
-  send click $page_point
-else
-  send flags alt
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
-  send key s cmd
-  toggle ui hidden "⌘S before ⌥"
-  send move 600 300
-  send flags alt
-  send flags
-  expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
-  expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
-  check_reveal "with the sidebar out for ⌥" shown
-  ../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
-  # Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
-  # out again.
-  send move 650 320
-  send flags alt
-  send flags
-  expect '^browser: reveal away by option$' \
-    "the pointer over the page, or a second ⌥, sent the sidebar away"
-  expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
-  send flags alt
-  send flags alt cmd
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
-  send flags alt
-  send key left alt
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
-  # The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
-  # and on the Mac come through the app again when the page doesn't use them.
-  send click $page_point
-  in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
-  send flags alt
-  send flags
-  expect '^browser: reveal by option$' \
-    "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
-  expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
-  send flags alt
-  send flags
-  expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
-  expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
-  send flags alt
-  send key left alt
-  send flags
-  none_since '^browser: reveal by option$' ||
-    fail "⌥ let go after a key with the page focused brought the sidebar out"
-  send key s cmd
-  toggle page shown "⌘S from the page after ⌥"
+  alone=winalt
+  after_key() { send flags winalt shift; }
 fi
+send flags $alone
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
+send key s cmd
+toggle ui hidden "⌘S before ⌥"
+send move 600 300
+send flags $alone
+send flags
+expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
+check_reveal "with the sidebar out for ⌥" shown
+../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
+# Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
+# out again.
+send move 650 320
+send flags $alone
+send flags
+expect '^browser: reveal away by option$' \
+  "the pointer over the page, or a second ⌥, sent the sidebar away"
+expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
+send flags $alone
+send flags $alone cmd
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
+if windows; then
+  send flags cmd
+  send flags cmd winalt
+  send flags
+  none_since '^browser: reveal by option$' || fail "AltGr, Ctrl then Alt, brought the sidebar out"
+fi
+send flags $alone
+after_key
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
+# The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
+# and on the Mac come through the app again when the page doesn't use them.
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
+send flags $alone
+send flags
+expect '^browser: reveal by option$' \
+  "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
+send flags $alone
+send flags
+expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
+expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
+send flags $alone
+after_key
+send flags
+none_since '^browser: reveal by option$' ||
+  fail "⌥ let go after a key with the page focused brought the sidebar out"
+send key s cmd
+toggle page shown "⌘S from the page after ⌥"
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
 # reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on

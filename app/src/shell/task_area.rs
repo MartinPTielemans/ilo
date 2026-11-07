@@ -13,30 +13,31 @@ use std::time::{Duration, Instant};
 use std::f32::consts::FRAC_PI_2;
 
 use gpui::{
-    AnyElement, AnyView, Bounds, Context, Corners, FontWeight, MouseButton, Pixels, Radians, Size,
-    Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
+    AnyElement, AnyView, Bounds, Context, Corners, FontWeight, Hsla, MouseButton, Pixels, Radians,
+    SharedString, Size, Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
 };
 
 use super::{
-    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, SECONDARY, Shell, Space, SpaceEntry,
-    TITLE, Theme,
+    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space,
+    SpaceEntry, TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     card,
-    conversation::page_chip,
+    conversation::{page_chip, page_chip_keyed},
     cubic_bezier,
     keys::user_keys,
-    permission::card_listener,
+    permission::{Look, card_listener},
     picture::next_request,
     task_cards::act,
 };
-use crate::agents::task::{Card, Dot, TaskAction};
+use crate::agents::task::{Card, Dot, TaskAction, status_lead};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::permission::LINE;
-use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, STRIP};
+use crate::tokens::shell::task::STATUS;
+use crate::tokens::shell::task_area::{BACK, BACK_GLYPH, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP};
 use crate::tokens::text;
-use crate::tokens::toast::CHIP_GAP;
+use crate::tokens::toast::{CHIP_FILL, CHIP_GAP, CHIP_GLYPH, CHIP_HEIGHT, CHIP_RADIUS};
 
 /// What the page area shows of a task, at most one per window.
 pub(super) struct TaskArea {
@@ -708,6 +709,7 @@ impl Shell {
             }
             Command::NewWindow
             | Command::NewPrivateWindow
+            | Command::NewBlankWindow
             | Command::NewLittleWindow
             | Command::ToggleSidebar
             | Command::RecordTrace
@@ -924,7 +926,12 @@ impl Shell {
         let name = card.name.clone();
         match card.dot {
             Dot::Working => (format!("{name} is working"), card.status.to_string()),
-            Dot::Waiting => (format!("{name} is waiting"), card.status.to_string()),
+            // What it needs the user for, without the card's "Needs you", which the title says.
+            Dot::Waiting => {
+                let lead = status_lead(&card.status);
+                let why = card.status[lead..].trim_start_matches(" · ");
+                (format!("{name} needs you"), why.to_string())
+            }
             Dot::Done => (
                 format!("{name} finished"),
                 crate::agents::site(&self.page(tab).url).to_string(),
@@ -942,6 +949,37 @@ impl Shell {
         (card.open.iter())
             .find(|(each, _)| *each == tab)
             .map(|(_, site)| format!("Open {site}"))
+    }
+
+    /// The page watched's speaker, before the strip's chips while it plays: crossed while it's
+    /// muted, as an agent's tabs start (#1080), and a click unmutes or mutes it, as a row's does.
+    fn strip_sound(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        let page = self.page(tab);
+        page.audible.then_some(())?;
+        let palette = self.palette;
+        Some(
+            div()
+                .id("task-sound")
+                .flex_none()
+                .size(px(CHIP_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(CHIP_RADIUS))
+                .bg(palette.plate(CHIP_FILL))
+                .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
+                .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+                .child(
+                    svg()
+                        .path(super::rows::speaker_glyph(page.muted))
+                        .size(px(CHIP_GLYPH))
+                        .text_color(palette.text(TITLE)),
+                )
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    cx.stop_propagation();
+                    shell.toggle_mute(tab, cx);
+                })),
+        )
     }
 
     /// Whether the task the page area shows is at work, which its page's ring says.
@@ -966,38 +1004,39 @@ impl Shell {
         let agent = card.map(|card| card.agent.clone()).unwrap_or_default();
         // ⌘↩, or off the Mac Ctrl+Enter, as a menu spells it.
         let take_over = |cx: &mut Context<Self>| user_keys(cx).label(Command::BackToPinnedUrl);
-        let mut chips = Vec::new();
-        match (self.agent_bar(), card.map(|card| card.dot)) {
-            (Some(Bar::Held { .. }), _) => chips.push(
-                page_chip(palette, "task-hand-back", "Hand Back", take_over(cx))
-                    .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
-            ),
-            (bar, Some(Dot::Working | Dot::Waiting)) => {
-                if matches!(bar, Some(Bar::Working { .. })) {
-                    chips.push(
-                        page_chip(palette, "task-take-over", "Take Over", take_over(cx))
-                            .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx))),
-                    );
-                }
-                let stop = page_chip(palette, "task-stop", "Stop", Some(stop_keys()));
-                chips.push(stop.on_click(act(agent.clone(), TaskAction::Stop, cx)));
-            }
-            (_, Some(Dot::Done)) => {
-                if let Some(words) = self.task_strip_open(tab) {
-                    let open = page_chip(palette, "task-open", words, None)
-                        .child(self.strip_open_listener());
-                    let agent = agent.clone();
-                    chips.push(open.on_click(cx.listener(move |shell, _, _, cx| {
-                        cx.stop_propagation();
-                        let from = shell.foot.strip_open.get();
-                        // check.sh reads this line.
-                        log!("browser: command open-task-pages via strip");
-                        shell.open_task_pages(agent.clone(), Some(tab), from, cx);
-                    })));
-                }
-            }
-            _ => {}
-        }
+        let bar = self.agent_bar();
+        let dot = card.map(|card| card.dot);
+        let open = self.task_strip_open(tab);
+        let held = matches!(bar, Some(Bar::Held { .. }));
+        let chips: Vec<_> =
+            (strip_chips(held, dot, open.is_some()).into_iter())
+                .map(|(chip, look)| match chip {
+                    StripChip::HandBack => {
+                        strip_chip(palette, "task-hand-back", "Hand Back", take_over(cx), look)
+                            .on_click(cx.listener(|shell, _, _, cx| shell.agent_bar_primary(cx)))
+                    }
+                    StripChip::Stop => {
+                        strip_chip(palette, "task-stop", "Stop", Some(stop_keys()), look)
+                            .on_click(act(agent.clone(), TaskAction::Stop, cx))
+                    }
+                    StripChip::Open => {
+                        let words = open.clone().unwrap_or_default();
+                        let agent = agent.clone();
+                        strip_chip(palette, "task-open", words, None, look)
+                            .child(self.strip_open_listener())
+                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                cx.stop_propagation();
+                                let from = shell.foot.strip_open.get();
+                                // check.sh reads this line.
+                                log!("browser: command open-task-pages via strip");
+                                shell.open_task_pages(agent.clone(), Some(tab), from, cx);
+                            }))
+                    }
+                })
+                .collect();
+        // Only a strip whose agent needs the user is heavier, as its card is.
+        let needs_you = dot == Some(Dot::Waiting);
+        let glyph = card.map(|card| self.task_glyph(&card.agent, card.dot));
         // The back's chevron lines up with the page's edge, its plate hanging outside.
         let left = card_frame.left() - px((BACK - BACK_GLYPH) / 2.);
         let back = div()
@@ -1035,6 +1074,7 @@ impl Shell {
             .line_height(px(LINE))
             .child(card_listener("task strip", &self.task_strip_drawn, tab))
             .child(back)
+            .children(glyph)
             .child(
                 div()
                     .flex_1()
@@ -1046,19 +1086,75 @@ impl Shell {
                         div()
                             .flex_none()
                             .text_color(palette.text(TITLE))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(match needs_you {
+                                true => FontWeight::SEMIBOLD,
+                                false => FontWeight::MEDIUM,
+                            })
                             .child(title),
                     )
                     .children(detail.map(|detail| {
                         div()
                             .min_w(px(0.))
                             .truncate()
-                            .text_color(palette.text(SECONDARY))
+                            .text_color(palette.text(if needs_you { TITLE } else { STATUS }))
                             .child(detail)
                     })),
             )
-            .child(div().flex_none().flex().gap(px(CHIP_GAP)).children(chips))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .gap(px(CHIP_GAP))
+                    .children(self.strip_sound(tab, cx))
+                    .children(chips),
+            )
             .into_any_element()
+    }
+}
+
+/// A chip of the strip under a page watched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StripChip {
+    HandBack,
+    Stop,
+    Open,
+}
+
+/// The strip's chips, in order, each with its look: Hand Back while the user holds the page,
+/// `held`; Stop while its task works or waits; Open once it's done and left the user the page, if
+/// it did. A press in the page takes it over, and ⌘↩ still does, so there's no Take Over (#1080).
+/// Quiet until the agent needs the user: only while its card waits on them is Hand Back, the
+/// answer it waits for, the one primary.
+pub(super) fn strip_chips(held: bool, dot: Option<Dot>, open: bool) -> Vec<(StripChip, Look)> {
+    match (held, dot) {
+        (true, Some(Dot::Waiting)) => vec![(StripChip::HandBack, Look::Primary)],
+        (true, _) => vec![(StripChip::HandBack, Look::Quiet)],
+        (false, Some(Dot::Working | Dot::Waiting)) => vec![(StripChip::Stop, Look::Quiet)],
+        (false, Some(Dot::Done)) if open => vec![(StripChip::Open, Look::Quiet)],
+        _ => Vec::new(),
+    }
+}
+
+/// A strip's chip in `look`: the conversation's, or for the primary the Space's accent with its
+/// label, its key fainter on it, darker under the pointer and pressed as every filled button goes.
+fn strip_chip(
+    palette: Palette,
+    id: &'static str,
+    words: impl Into<SharedString>,
+    key: Option<String>,
+    look: Look,
+) -> gpui::Stateful<gpui::Div> {
+    match look {
+        Look::Primary => {
+            let (hovered, pressed) = (palette.accent_hovered(), palette.accent_pressed());
+            let label = Hsla::from(palette.accent_label);
+            page_chip_keyed(palette, id, words, key, label.opacity(PRIMARY_KEY))
+                .bg(palette.accent)
+                .hover(move |style| style.bg(hovered))
+                .active(move |style| style.bg(pressed))
+                .text_color(label)
+        }
+        Look::Quiet | Look::Text => page_chip(palette, id, words, key),
     }
 }
 

@@ -40,8 +40,10 @@
 #include "base/uuid.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
+#include "browser_core/public/browser_core.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/sync_guard.h"
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_relay.h"
@@ -63,8 +65,12 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/base/user_selectable_type.h"
+#include "components/sync/engine/cycle/model_neutral_state.h"
+#include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/events/protocol_event.h"
 #include "components/sync/engine/events/protocol_event_observer.h"
+#include "components/sync/engine/sync_protocol_error.h"
+#include "components/sync/engine/syncer_error.h"
 #include "components/sync/invalidations/fcm_registration_token_observer.h"
 #include "components/sync/invalidations/interested_data_types_handler.h"
 #include "components/sync/invalidations/invalidations_listener.h"
@@ -768,6 +774,58 @@ class Account : public syncer::SyncServiceObserver,
         weak_factory_.GetWeakPtr(), url));
   }
 
+  void ReadActivity(bc_sync_activity* activity) const {
+    *activity = {};
+    syncer::SyncService* service = Service();
+    if (Status() != BC_SYNC_ON || !service) {
+      return;
+    }
+    const base::Time synced = service->GetLastSyncedTimeForDebugging();
+    activity->last_synced = synced.is_null() ? 0 : synced.InMillisecondsFSinceUnixEpoch();
+    if (service->HasUnrecoverableError()) {
+      activity->trouble = BC_SYNC_TROUBLE_STOPPED;
+      return;
+    }
+    // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.
+    const syncer::ModelNeutralState cycle =
+        service->GetLastCycleSnapshotForDebugging().model_neutral_state();
+    for (const syncer::SyncerError& error : {cycle.last_download_updates_result,
+                                             cycle.commit_result}) {
+      if (error.type() == syncer::SyncerError::Type::kSuccess) {
+        continue;
+      }
+      const bool throttled = error.type() == syncer::SyncerError::Type::kProtocolError &&
+                             error.GetProtocolErrorOrDie() == syncer::THROTTLED;
+      activity->trouble = throttled ? BC_SYNC_TROUBLE_THROTTLED : BC_SYNC_TROUBLE_UNREACHABLE;
+      return;
+    }
+  }
+
+  // The server deletes the account and signs out its devices, this one with them, so nothing is
+  // revoked: the core forgets the account as a sign-out does.
+  void DeleteAccount() {
+    if (!SignedIn() || deleting_) {
+      return;
+    }
+    deleting_ = true;
+    problem_ = BC_SYNC_PROBLEM_NONE;
+    Notify();
+    WithToken(base::BindOnce(
+        [](base::WeakPtr<Account> account, int generation, const std::string& token) {
+          if (!account || generation != account->generation_) {
+            return;
+          }
+          if (token.empty()) {
+            account->Undeleted();
+            return;
+          }
+          account->Fetch("DELETE", account->Server().Resolve("/api/account"), token,
+                         std::string(),
+                         base::BindOnce(&Account::AccountDeleted, account, generation));
+        },
+        weak_factory_.GetWeakPtr(), generation_));
+  }
+
   void WindowActivated() {
     if (asked_ && !asked_->accepted) {
       Accept();
@@ -1046,6 +1104,25 @@ class Account : public syncer::SyncServiceObserver,
     return true;
   }
 
+  void AccountDeleted(int generation, int status, std::optional<base::DictValue> json) {
+    if (generation != generation_) {
+      return;
+    }
+    if (status != 204 && status != 200) {
+      Undeleted();
+      return;
+    }
+    CloseSignInWindow();
+    signing_in_ = false;
+    Forget(BC_SYNC_PROBLEM_NONE);
+  }
+
+  void Undeleted() {
+    deleting_ = false;
+    problem_ = BC_SYNC_PROBLEM_SERVER;
+    Notify();
+  }
+
   void StartedOver(int generation, int status, std::optional<base::DictValue> json) {
     if (generation != generation_) {
       return;
@@ -1208,7 +1285,10 @@ class Account : public syncer::SyncServiceObserver,
     email_.clear();
     account_.clear();
     device_.clear();
-    problem_ = problem;
+    // The server signs this device out as it deletes the account, which the relay or a refresh
+    // can tell before the deletion's own answer does: that's no removal to report.
+    problem_ = deleting_ ? BC_SYNC_PROBLEM_NONE : problem;
+    deleting_ = false;
     Save();
     RunRefreshWaiters(false);
     AccountChanged();
@@ -1333,6 +1413,11 @@ class Account : public syncer::SyncServiceObserver,
     if (state != logged_state_) {
       logged_state_ = state;
       LOG(ERROR) << "browser: sync service " << state;
+      // check.sh reads it: what this device syncs, for the account's docs to say.
+      if (sync->GetTransportState() == State::ACTIVE) {
+        LOG(ERROR) << "browser: sync types "
+                   << syncer::DataTypeSetToDebugString(sync->GetActiveDataTypes());
+      }
     }
   }
 
@@ -1706,6 +1791,8 @@ class Account : public syncer::SyncServiceObserver,
   bool using_secret_ = false;
   // The server cleared the account's data for bc_sync_start_over, and the engine is yet to see.
   bool starting_over_ = false;
+  // bc_sync_delete_account asked the server, whose answer is yet to come.
+  bool deleting_ = false;
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver> sync_observation_{
       this};
 
@@ -1745,6 +1832,12 @@ void Install() {
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
   };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
+  // A tab of an agent's Space, held by the user or not, stays on its device (#1796); a page of no
+  // Space's keeps Chrome's answer.
+  g_browser_core_sync_tab = [](content::WebContents* contents) {
+    const Space* space = Window::SpaceOf(contents);
+    return !space || !space->agent();
+  };
   g_browser_core_passkey_normal_wording = [](content::WebContents* contents) {
     const Profile* profile =
         contents ? Profile::FromBrowserContext(contents->GetBrowserContext()) : nullptr;
@@ -1808,6 +1901,14 @@ void ReadDevices() {
 
 void RemoveDevice(const std::string& id) {
   Account::Get().RemoveDevice(id);
+}
+
+void ReadActivity(bc_sync_activity* activity) {
+  Account::Get().ReadActivity(activity);
+}
+
+void DeleteAccount() {
+  Account::Get().DeleteAccount();
 }
 
 }  // namespace browser_core::sync

@@ -84,6 +84,11 @@ bool MayUnload(const Tab& tab, DiscardReason reason) {
   if (!policy || !page) {
     return false;
   }
+  // A call is never let go, even one that takes no camera, microphone or screen and makes no sound,
+  // such as one listening alone, which Chrome's checks would let go (#686).
+  if (page->UsesWebRTC()) {
+    return false;
+  }
   std::vector<CannotDiscardReason> reasons;
   policy->CanDiscardWithCustomRecentVisibilityWindow(
       page.get(), reason, /*minimum_time_in_background=*/base::TimeDelta(), &reasons);

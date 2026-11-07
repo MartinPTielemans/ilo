@@ -2,8 +2,10 @@
 # run's own (ilo-server.sh). A signs in first and copies its recovery words, which the clipboard
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices
 # to add it, and A, once its window is active, asks the user, who adds it with a click: B syncs.
-# C signs in and recovers with the words instead, and syncs too. A saves a login, which B lists,
-# then removes, and A hears it go. 90 s after A's copy the
+# A Space A made reaches B, in place of B's own untouched first one, and one B makes reaches A. C
+# signs in and recovers with the words instead, with the account's Spaces. A's open tab reaches B's sync
+# store, and a tab of A's agent's Space never does (#1796). A saves a login, which
+# B lists, then removes, and A hears it go. 90 s after A's copy the
 # clipboard holds the words no longer. B and C sign out without asking, as the account has other
 # devices, and the server forgets them. Linux's alone so far: the Mac's and Windows' clipboards
 # and two copies of the app at once there are unrun.
@@ -61,12 +63,46 @@ open_sign_in() {
   await 'browser: sync sign-in loaded /authorize$' ||
     fail "the sign-in window didn't load the server's page on $on"
 }
+# The Spaces the device's window has, by the last list it logged.
+spaces() {
+  grep '^browser: spaces ' "$log" | tail -1 | awk '{ print NF - 2 }'
+}
+# Waits up to 30 s for the device to have $1 Spaces, and fails with $2.
+await_spaces() {
+  for _ in $(seq 300); do
+    [ "$(spaces)" = "$1" ] && return 0
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  fail "$2: $(spaces) Spaces"
+}
+# Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does.
+new_space() {
+  had=$(spaces)
+  send window 1
+  send menu New Space…
+  expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space on $on"
+  await_spaces $((had + 1)) "New Space didn't make a Space on $on"
+  send type "$1"
+  send key return
+}
 # What the X server's clipboard holds, as target $1 (text if none).
 clipboard() {
   timeout 5 xclip -selection clipboard -o ${1:+-t "$1"} 2>/dev/null || true
 }
 others=
 
+# A's list ends with none once B removes the login A saves, so A starts with none: the check's
+# profile keeps the logins an earlier run saved, as import's. The app isn't running, so the files
+# are free.
+for logins in "$profile_dir/Default/Login Data" "$profile_dir/Default/Login Data For Account"; do
+  [ ! -e "$logins" ] || python3 -I -c '
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("delete from logins")
+db.commit()
+' "$logins" || fail "the check's profile kept its logins"
+done
 start a "$profile_dir" 5
 open_sign_in
 sign_in first
@@ -88,6 +124,8 @@ clipboard TARGETS | grep -qx 'x-kde-passwordManagerHint' ||
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
+# A Space A makes reaches the devices it adds, and theirs reach it.
+new_space "from A"
 
 start b "$PWD/$out/sync-devices-b" 6
 open_sign_in
@@ -109,6 +147,11 @@ expect '^browser: dialog confirmed$' "a click on Add didn't add B"
 device b
 await '^browser: account On None$' || fail "B, added by A, didn't turn sync on"
 await 'browser: sync service active$' || fail "B's sync didn't become active"
+# B's own first Space, untouched, gives way to the account's, as Arc's does on a new device.
+await_spaces 2 "B, synced, doesn't have A's two Spaces"
+new_space "from B"
+device a
+await_spaces 3 "A doesn't have the Space B made"
 
 start c "$PWD/$out/sync-devices-c" 7
 open_sign_in
@@ -121,12 +164,36 @@ send type $words
 send key return
 await '^browser: account On None$' || fail "C didn't turn sync on with the recovery words"
 await 'browser: sync service active$' || fail "C's sync didn't become active"
+await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
 [ "$(stored "SELECT count(*) FROM devices")" = 3 ] ||
   fail "the server doesn't know the account's three devices: $(stored "SELECT group_concat(name, '|') FROM devices")"
 
+# A's open tabs reach B, as the account's other computer's, but a tab of an agent's Space never
+# does, as an agent's Space stays on its device (#1796): B's sync store gets the user's tab A
+# opened, and never the agent's, though A's agent opened it first.
+serve
+device a
+send agentspace claude-code Claude Code
+expect '^browser: made space [1-9][0-9]* for agent claude-code$' "A's driver didn't make the agent's Space"
+send agentopen claude-code "${site}login.html?agents-own"
+expect '^browser: agent claude-code opened [1-9][0-9]*$' "A's agent didn't open a tab in its Space"
+agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
+await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's agent's tab didn't load"
+send window 1
+go_from_bar "${site#http://}login.html?users-own"
+expect '^browser: title [0-9]* login$' "A's own tab didn't load"
+store_b="$out/sync-devices-b/Default/Sync Data/LevelDB"
+synced=
+for _ in $(seq 900); do
+  grep -rqa 'login.html?users-own' "$store_b" 2>/dev/null && synced=1 && break
+  sleep 0.1
+done
+[ -n "$synced" ] || fail "A's open tab never reached B's sync store, so an agent's couldn't be told apart"
+grep -rqa 'login.html?agents-own' "$store_b" &&
+  fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
+
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
-serve
 device a
 send window 1
 go_from_bar "${site#http://}login.html"
@@ -209,10 +276,15 @@ others=
 device a
 exec 5>&- 3>&-
 quit
+# What A's sync carries, as the core names its data types once sync is active.
+types=$(grep -h 'browser: sync types ' "$a_log" | tail -1 | sed 's/.*browser: sync types //')
+[ -n "$types" ] || fail "A's sync never said what it carries"
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
 ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
+  "A's own open tab reached B and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
-  "and B and C signed out, on a local ilo-server as $email. Logs: $out/sync-devices-*.log"
+  "and B and C signed out, on a local ilo-server as $email. A synced: $types." \
+  "Logs: $out/sync-devices-*.log"

@@ -1,14 +1,15 @@
-//! The folder preview, Arc's (#690): resting the pointer on a closed folder's row shows a list of
-//! the tabs in it beside the row, with those of the folders inside it, by the titles the sidebar
-//! gives them, under a search. Typing narrows the list and selects the first match, ↑ and ↓ move
-//! the selection, and ↩ or a click shows the tab, which then peeks under the closed folder, as the
-//! tab shown does, without opening it. It crosses the sidebar's edge onto the page, which GPUI
-//! can't draw over, so it's a window of its own that the host shows over the browser window, as
-//! its child, with the keyboard for the search. Until something is typed in it, it goes as the
-//! hover card does, once the pointer has left it and its row; after that, with escape, a choice or
-//! a click outside it. What it asks of its window goes through `Host`.
+//! The folder preview, Arc's (#690, #1405): resting the pointer on a closed folder's row shows a
+//! list of the tabs in it beside the row, with those of the folders inside it, by the titles the
+//! sidebar gives them, the one seen last first, each over how long ago that was, under a search.
+//! The first is selected, so ↩ shows it. Typing narrows the list and selects the first match, ↑
+//! and ↓ move the selection, and ↩ or a click shows the tab, which then peeks under the closed
+//! folder, as the tab shown does, without opening it. It crosses the sidebar's edge onto the page,
+//! which GPUI can't draw over, so it's a window of its own that the host shows over the browser
+//! window, as its child, with the keyboard for the search. Until something is typed in it, it goes
+//! once the pointer has left it and its row; after that, with escape, a choice or a click outside
+//! it. What it asks of its window goes through `Host`.
 
-use std::{ops::Range, rc::Rc};
+use std::{ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight, Global,
@@ -18,28 +19,38 @@ use gpui::{
 };
 
 use crate::elevation::Level;
-use crate::hover_card::{Anchor, DWELL, EDGE, GAP, Icon, LEAVE};
-use crate::palette::{Palette, STATE_HOVERED, STATE_SELECTED};
+use crate::hover_card::{Anchor, Icon};
+use crate::palette::{Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
 use crate::tokens::folder_preview::{
-    HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_RADIUS, SEARCH, SEARCH_GLYPH, TITLE, TITLE_SIZE,
-    TITLE_X,
+    AGE_LINE, AGE_SIZE, DIVIDER, DIVIDER_ALPHA, HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_FILL,
+    ROW_RADIUS, SEARCH, SEARCH_GLYPH, TALLEST, TITLE, TITLE_LINE, TITLE_SIZE, TITLE_X,
 };
 pub use crate::tokens::folder_preview::{RADIUS, WIDTH};
+use crate::tokens::shell::PLATE_INSET;
 
 actions!(folder_preview, [Dismiss, Choose, Up, Down]);
 
-/// How many rows show before the list scrolls (ours): a long folder's preview stays beside the
-/// rows rather than reaching down the window.
-pub const MOST_ROWS: usize = 8;
+/// Arc 1.171's timing (outside measurement, #1405): the preview starts 0.45 s after the pointer
+/// comes onto the folder's row, and goes within 40 ms of it leaving both, fading out over 80 ms.
+/// It comes in over 90 ms, fading in as it grows from 0.85 of its size about the middle of its left
+/// edge. The host grows and fades its window, as the host draws its blur and shadow.
+pub const DWELL: Duration = Duration::from_millis(450);
+pub const LEAVE: Duration = Duration::from_millis(40);
+pub const FROM: f32 = 0.85;
+pub const IN: Duration = Duration::from_millis(90);
+pub const OUT: Duration = Duration::from_millis(80);
+/// It's 4 right of the sidebar, and kept 18 inside the window (Arc 1.171).
+const BESIDE: f32 = 4.;
+const INSIDE: f32 = 18.;
 
 /// What the preview asks of its window.
 pub trait Host {
     /// Shows the preview's window, `height` tall, with its top left at (`left`, `top`) in browser
     /// window `window`, the one whose row it's for, with the keyboard, or moves it there if it
-    /// shows.
-    fn show(&self, window: u64, left: f32, top: f32, height: f32);
+    /// shows. It comes in over IN, growing from `from` of its size, and goes over OUT.
+    fn show(&self, window: u64, left: f32, top: f32, height: f32, from: f32);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
 }
@@ -52,6 +63,8 @@ pub struct Item {
     pub title: SharedString,
     pub url: SharedString,
     pub icon: Icon,
+    /// How long ago a window last showed it, in words, or empty when that isn't known.
+    pub age: SharedString,
 }
 
 /// The pointer rests on a closed folder's row: in which browser window, what its preview lists,
@@ -103,24 +116,27 @@ pub fn matches(items: &[Item], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// How tall the preview of `count` tabs is: the search, then a row for each, MOST_ROWS at most,
-/// inside its padding. It keeps that height as a search narrows the list.
+/// How tall the preview of `count` tabs is: the search and the line under it, then a row for each,
+/// with the padding above the first's fill and under the last's, TALLEST at most, past which the
+/// list scrolls. It keeps that height as a search narrows the list.
 pub fn height(count: usize) -> f32 {
-    2. * PADDING + SEARCH + count.clamp(1, MOST_ROWS) as f32 * ROW
+    let rows = count.max(1) as f32 * ROW - (ROW - ROW_FILL);
+    (SEARCH + DIVIDER + 2. * PADDING + rows).min(TALLEST)
 }
 
-/// Where a preview `height` tall has its top left: as the hover card's, GAP right of its row, its
-/// top at the row's, and EDGE inside the window, the top and left first if it can't be both.
+/// Where a preview `height` tall has its top left: BESIDE right of the sidebar, whose edge is
+/// PLATE_INSET past its row's plate, centred on the row, and INSIDE the window, the top and left
+/// first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + GAP;
-    let top = f32::from(anchor.row.top());
+    let left = f32::from(anchor.row.right()) + PLATE_INSET + BESIDE;
+    let top = (f32::from(anchor.row.center().y) - height / 2.).round();
     (
-        left.min(width - WIDTH - EDGE).max(EDGE),
-        top.min(tall - height - EDGE).max(EDGE),
+        left.min(width - WIDTH - INSIDE).max(INSIDE),
+        top.min(tall - height - INSIDE).max(INSIDE),
     )
 }
 
@@ -151,6 +167,8 @@ pub struct FolderPreview {
     wait: Option<Task<()>>,
     /// The pointer is on the preview, which keeps it.
     on_card: bool,
+    /// The pointer is on the shown preview's row, which keeps it too.
+    on_row: bool,
 }
 
 struct PreviewWindow(WindowHandle<FolderPreview>);
@@ -166,10 +184,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
         KeyBinding::new("up", Up, Some("FolderPreview")),
         KeyBinding::new("down", Down, Some("FolderPreview")),
     ]);
-    let bounds = Bounds::new(
-        point(px(0.), px(0.)),
-        size(px(WIDTH), px(height(MOST_ROWS))),
-    );
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(TALLEST)));
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -198,6 +213,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
             resting: None,
             wait: None,
             on_card: false,
+            on_row: false,
         })
     });
     match window {
@@ -240,6 +256,7 @@ pub fn dismissed(cx: &mut App) {
     update(cx, |preview, _, cx| {
         preview.wait = None;
         preview.on_card = false;
+        preview.on_row = false;
         if preview.shown.take().is_some() {
             // check.sh reads this line.
             log!("browser: folder preview dismissed");
@@ -265,6 +282,7 @@ impl FolderPreview {
         if let Some(shown) = &self.shown {
             if shown.rest.folder == rest.folder {
                 self.wait = None;
+                self.on_row = true;
                 return;
             }
             self.resting = None;
@@ -305,8 +323,11 @@ impl FolderPreview {
             .shown
             .as_ref()
             .is_some_and(|shown| shown.rest.folder == folder);
-        if leaves && !self.on_card {
-            self.leave_after(cx);
+        if leaves {
+            self.on_row = false;
+            if !self.on_card {
+                self.leave_after(cx);
+            }
         }
     }
 
@@ -327,11 +348,13 @@ impl FolderPreview {
         }));
     }
 
+    /// The pointer came onto the preview or left it. Leaving it onto its row keeps it, as does
+    /// the window, as it comes up, hearing the pointer come and go at the place it last had.
     fn on_card(&mut self, hovered: bool, cx: &mut Context<Self>) {
         self.on_card = hovered && self.shown.is_some();
         match hovered {
             true => self.wait = None,
-            false if self.shown.is_some() => self.leave_after(cx),
+            false if self.shown.is_some() && !self.on_row => self.leave_after(cx),
             false => {}
         }
     }
@@ -358,21 +381,25 @@ impl FolderPreview {
             rest,
             query: String::new(),
             found,
-            selected: None,
+            selected: Some(0),
             kept: false,
             height,
             _edit: edit,
         });
+        // It shows for the row the pointer rests on.
+        self.on_row = true;
         self.scroll.scroll_to_item(0, ScrollStrategy::Top);
         window.focus(&self.search.focus_handle(cx), cx);
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
-        self.host.show(over, left, top, height);
+        // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
+        let from = if cx.reduce_motion() { 1. } else { FROM };
+        self.host.show(over, left, top, height, from);
         cx.notify();
     }
 
     /// The search has `text` in it: the list narrows to what matches, and the first is selected
-    /// for ↩, or none for an empty search.
+    /// for ↩.
     fn searched(&mut self, text: &str, cx: &mut Context<Self>) {
         let Some(shown) = &mut self.shown else {
             return;
@@ -383,7 +410,7 @@ impl FolderPreview {
         shown.query = text.to_string();
         shown.found = matches(&shown.rest.items, text);
         shown.kept = true;
-        shown.selected = (!text.trim().is_empty() && !shown.found.is_empty()).then_some(0);
+        shown.selected = (!shown.found.is_empty()).then_some(0);
         // check.sh waits for this line, to see what's typed reaches the search.
         log!(
             "browser: folder preview found {} for {text}",
@@ -402,11 +429,8 @@ impl FolderPreview {
             return;
         }
         let last = shown.found.len() - 1;
-        shown.selected = Some(match shown.selected {
-            None if by < 0 => last,
-            None => 0,
-            Some(at) => at.saturating_add_signed(by).min(last),
-        });
+        let moved = |at: usize| at.saturating_add_signed(by).min(last);
+        shown.selected = Some(shown.selected.map_or(0, moved));
         shown.kept = true;
         self.wait = None;
         if let Some(at) = shown.selected {
@@ -458,6 +482,7 @@ impl FolderPreview {
         self.wait = None;
         self.resting = None;
         self.on_card = false;
+        self.on_row = false;
         if self.shown.take().is_some() {
             self.host.hide();
             // check.sh reads this line.
@@ -472,25 +497,35 @@ impl FolderPreview {
             return Vec::new();
         };
         let palette = crate::palette::current(cx);
+        // The row under the pointer has the selected row's fill, both at once, and the pointer
+        // doesn't move the selection (Arc 1.171).
+        let fill = palette.plate(STATE_SELECTED);
+        let line = |text: SharedString, size: f32, height: f32, alpha: f32| {
+            div()
+                .h(px(height))
+                .flex()
+                .items_center()
+                .text_size(px(size))
+                .text_color(palette.on_overlay(alpha))
+                .child(div().truncate().child(text))
+        };
         rows.filter_map(|at| Some((at, &shown.rest.items[*shown.found.get(at)?])))
             .map(|(at, item)| {
                 let tab = item.tab;
                 let selected = shown.selected == Some(at);
-                div()
+                let plate = div()
                     .id(("folder-preview-row", tab))
-                    .h(px(ROW))
+                    .h(px(ROW_FILL))
                     .w_full()
                     .relative()
                     .rounded(px(ROW_RADIUS))
-                    .when(selected, |row| row.bg(palette.plate(STATE_SELECTED)))
-                    .when(!selected, |row| {
-                        row.hover(|style| style.bg(palette.plate(STATE_HOVERED)))
-                    })
+                    .when(selected, |row| row.bg(fill))
+                    .hover(|style| style.bg(fill))
                     .child(
                         div()
                             .absolute()
                             .left(px(ICON_X))
-                            .top(px((ROW - ICON) / 2.))
+                            .top(px((ROW_FILL - ICON) / 2.))
                             .size(px(ICON))
                             .flex()
                             .items_center()
@@ -503,16 +538,18 @@ impl FolderPreview {
                             .left(px(TITLE_X))
                             .right(px(ICON_X))
                             .top_0()
-                            .h(px(ROW))
+                            .h(px(ROW_FILL))
                             .flex()
-                            .items_center()
-                            .text_size(px(TITLE_SIZE))
-                            .text_color(palette.on_overlay(TITLE))
-                            .child(div().truncate().child(item.title.clone())),
+                            .flex_col()
+                            .justify_center()
+                            .child(line(item.title.clone(), TITLE_SIZE, TITLE_LINE, TITLE))
+                            .when(!item.age.is_empty(), |text| {
+                                text.child(line(item.age.clone(), AGE_SIZE, AGE_LINE, HINT))
+                            }),
                     )
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |preview, _, _, cx| preview.choose(tab, cx)))
-                    .into_any_element()
+                    .on_click(cx.listener(move |preview, _, _, cx| preview.choose(tab, cx)));
+                div().h(px(ROW)).w_full().child(plate).into_any_element()
             })
             .collect()
     }
@@ -552,13 +589,16 @@ impl Render for FolderPreview {
         };
         let palette = crate::palette::current(cx);
         let hint = palette.on_overlay(HINT);
+        // The glyph is centred over the rows' icons, and the text starts where their titles do.
+        let glyph_x = PADDING + ICON_X + (ICON - SEARCH_GLYPH) / 2.;
         let search = div()
+            .flex_none()
             .h(px(SEARCH))
             .flex()
             .items_center()
-            .gap(px(TITLE_X - ICON_X - SEARCH_GLYPH))
-            .pl(px(ICON_X + (ICON - SEARCH_GLYPH) / 2.))
-            .pr(px(ICON_X))
+            .gap(px(PADDING + TITLE_X - glyph_x - SEARCH_GLYPH))
+            .pl(px(glyph_x))
+            .pr(px(PADDING + ICON_X))
             .text_size(px(TITLE_SIZE))
             .text_color(palette.on_overlay(TITLE))
             .child(
@@ -569,15 +609,20 @@ impl Render for FolderPreview {
                     .text_color(palette.on_overlay_glyph(HINT)),
             )
             .child(div().flex_1().child(self.search.clone()));
+        let divider = div()
+            .flex_none()
+            .h(px(DIVIDER))
+            .bg(palette.plate(DIVIDER_ALPHA));
         let list = match shown.found.is_empty() {
+            // Arc's words, without its emoji.
             true => div()
-                .h(px(ROW))
+                .size_full()
                 .flex()
                 .items_center()
-                .pl(px(TITLE_X))
+                .justify_center()
                 .text_size(px(TITLE_SIZE))
                 .text_color(hint)
-                .child("No Matches")
+                .child("No tabs matching that search")
                 .into_any_element(),
             false => uniform_list(
                 "folder-preview-rows",
@@ -585,9 +630,18 @@ impl Render for FolderPreview {
                 cx.processor(|preview, rows, _, cx| preview.rows(rows, cx)),
             )
             .track_scroll(&self.scroll)
-            .flex_1()
+            .size_full()
             .into_any_element(),
         };
+        // The last row's fill is as far from the bottom as the first's from the line, and as each
+        // is from the sides.
+        let list = div()
+            .flex_1()
+            .min_h_0()
+            .px(px(PADDING))
+            .pt(px(PADDING))
+            .pb(px(PADDING - (ROW - ROW_FILL)))
+            .child(list);
         // The rim is its own layer, so the border doesn't shift what the fill's box holds.
         let rim = div()
             .absolute()
@@ -619,13 +673,13 @@ impl Render for FolderPreview {
                 .relative()
                 .w(px(WIDTH))
                 .h(px(shown.height))
-                .p(px(PADDING))
                 .flex()
                 .flex_col()
                 .rounded(px(RADIUS))
                 .bg(palette.overlay)
                 .font_weight(FontWeight::NORMAL)
                 .child(search)
+                .child(divider)
                 .child(list)
                 .child(rim),
         )

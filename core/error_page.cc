@@ -12,8 +12,9 @@ namespace {
 
 // The page's look is ours (docs/ux-spec.md › Pages that break): the words in the middle of the
 // pane, on its colour, which the tab gives the page (Tab::SetPageColor), at the sizes and colours of
-// the app's cards. One script draws it from Chromium's strings, at first and again when Chromium's
-// DNS probe sends new ones. Offline, it offers ilo's game (docs/ux-spec.md › Offline game).
+// the app's cards, in white, or in Light the palette's ink, as the pane is light then. One script
+// draws it from Chromium's strings, at first and again when Chromium's DNS probe sends new ones.
+// Offline, it offers ilo's game (docs/ux-spec.md › Offline game).
 constexpr char kPage[] = R"html(<!doctype html>
 <html dir="$dir" lang="$lang">
 <head>
@@ -21,10 +22,16 @@ constexpr char kPage[] = R"html(<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>$title</title>
 <style>
+/* The words' and plates' colour, at the alphas below: white, and in Light, as websites are told
+   it, the palette's ink (app/design/tokens.toml), as the pane is then (Tab::SetPageColor). */
+:root { --ink: 255 255 255; }
+@media (prefers-color-scheme: light) {
+  :root { --ink: 22 20 15; }
+}
 html, body { height: 100%; margin: 0; background: transparent; overflow: hidden; }
 body {
   display: flex; align-items: center; justify-content: center;
-  font: 14px system-ui; color: #fff; cursor: default; -webkit-user-select: none;
+  font: 14px system-ui; color: rgb(var(--ink)); cursor: default; -webkit-user-select: none;
 }
 main {
   display: flex; flex-direction: column; align-items: center;
@@ -32,22 +39,22 @@ main {
   transition: opacity 200ms 600ms;
 }
 h1 { margin: 0; font-size: 14px; font-weight: 500; }
-#note { margin-top: 4px; font-size: 13px; color: rgb(255 255 255 / 0.6); }
+#note { margin-top: 4px; font-size: 13px; color: rgb(var(--ink) / 0.6); }
 button {
   margin-top: 12px; height: 28px; padding: 0 12px; border: 0; border-radius: 6px;
-  background: rgb(255 255 255 / 0.1); color: #fff; font: 500 13px system-ui;
+  background: rgb(var(--ink) / 0.1); color: rgb(var(--ink)); font: 500 13px system-ui;
 }
-button:hover { background: rgb(255 255 255 / 0.12); }
-#play, #code { margin-top: 12px; font-size: 11px; color: rgb(255 255 255 / 0.32); }
+button:hover { background: rgb(var(--ink) / 0.12); }
+#play, #code { margin-top: 12px; font-size: 11px; color: rgb(var(--ink) / 0.32); }
 #field {
   position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none;
   opacity: 0; transition: opacity 200ms 600ms;
 }
 #corner {
   position: fixed; top: 14px; inset-inline-end: 16px; display: flex; gap: 12px;
-  font-size: 11px; font-variant-numeric: tabular-nums; color: rgb(255 255 255 / 0.32);
+  font-size: 11px; font-variant-numeric: tabular-nums; color: rgb(var(--ink) / 0.32);
 }
-#score { color: rgb(255 255 255 / 0.6); }
+#score { color: rgb(var(--ink) / 0.6); }
 #online { color: #0E9F55; }
 .running main { opacity: 0; transition: none; }
 .running #field { opacity: 1; transition: none; }
@@ -74,7 +81,8 @@ const game = (() => {
   const PITCH = 41, ROW = 36, ROUND = 12, COLUMN = 64, SPACING = 210, GAP = 3;
   const DOT = 6, GRAVITY = 1300, HOP = 360, FALL = 640, LEAD = 2.4;
   const SPEED = 150, TOP_SPEED = 300, EASE = 45, STEP = 1 / 120, REST = 0.4;
-  const GREEN = '#0E9F55', PLATE = 'rgb(255 255 255 / 0.12)', HIT = 'rgb(255 255 255 / 0.2)';
+  // The rows' fills are the ink at these (--ink in the style).
+  const GREEN = '#0E9F55', PLATE = 0.12, HIT = 0.2;
   const field = document.getElementById('field');
   const context = field.getContext('2d');
   const play = document.getElementById('play');
@@ -82,6 +90,14 @@ const game = (() => {
   let frame = 0, last = 0, lag = 0, ended = -Infinity;
   let width = 0, height = 0, scale = 1, rows = 0, top = 0, bottom = 0, x = 0;
   let columns = [], y = 0, velocity = 0, time = 0, score = 0, shown = -1, best = 0, hit = null;
+  let plate = '', struck = '';
+
+  // The rows' fills in the ink, again as the appearance changes.
+  function ink() {
+    const value = getComputedStyle(document.documentElement).getPropertyValue('--ink').trim();
+    plate = 'rgb(' + value + ' / ' + PLATE + ')';
+    struck = 'rgb(' + value + ' / ' + HIT + ')';
+  }
 
   // Fits the field to the pane, at a resize too: as many rows as fit, 5 to 11, centred, and the
   // dot a little left of the middle.
@@ -178,7 +194,7 @@ const game = (() => {
           continue;
         }
         // The row the dot hit takes the selected row's fill.
-        context.fillStyle = hit && hit.column == column && hit.row == row ? HIT : PLATE;
+        context.fillStyle = hit && hit.column == column && hit.row == row ? struck : plate;
         context.beginPath();
         context.roundRect(left, top + row * PITCH, COLUMN, ROW, ROUND);
         context.fill();
@@ -233,6 +249,7 @@ const game = (() => {
     hit = null;
     score = 0;
     time = 0;
+    ink();
     fit();
     y = (top + bottom) / 2;
     velocity = -HOP;
@@ -289,6 +306,12 @@ const game = (() => {
   addEventListener('resize', () => {
     if (played) {
       fit();
+      draw();
+    }
+  });
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (played) {
+      ink();
       draw();
     }
   });

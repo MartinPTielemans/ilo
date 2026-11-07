@@ -3,16 +3,19 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private little capture media
+#   split favorites cards extensions adblock adblock-lists windows private blank little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts
+#   appearance about sync sync-account sync-devices switch-frames devices filled scripting
+#   notifications calls battery policies hosts idle handback webrtc
 # The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
 # uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
 # need the network and run only when named: ./check.sh store.
-# Updates runs only when named too, until it passes on the Mac, and so does nightly, which builds a
-# check copy of its own (build.sh updates), on the Mac and Windows. So does keychain, which uses the
-# real Keychain, on the prod build and only in a check VM. Shots takes the Store's pictures from
-# pages on the internet, so it runs only when named too.
+# Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
+# which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
+# keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
+# the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
+# tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
+# runs only when named, and skips elsewhere, where the windows run checks it.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -40,6 +43,9 @@ set -e
 export BROWSER_DISPLAY="${BROWSER_DISPLAY:-builtin}"
 # Each run starts a new profile, which would play the onboarding first. Only its own run plays it.
 export BROWSER_ONBOARDING=skip
+# The runs place their clicks under the Space's name row, which a lone unnamed Space hides unless
+# Show Space Header keeps it, so theirs is kept; spaces' checks it hiding (#1400).
+export BROWSER_SPACE_HEADER=shown
 cd "$(dirname "$0")"
 if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   # Under Xvfb, as CI runs it (check-linux.yml): a 1280 by 800 screen, as the sway session's
@@ -68,10 +74,12 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
+runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts"
-named="store adblock-live widevine updates nightly keychain shots"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies hosts idle"
+runs="$runs everyday"
+runs="$runs handback webrtc"
+named="store adblock-live widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -166,7 +174,9 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # often it dismissed them, for sites whose ports a later run may get, and a failed clear run may
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
-# launch, so no later run's call floated (#1165).
+# launch, so no later run's call floated (#1165). A failed favorites run may have left the first
+# profile's archive at 24 hours, which the profile keeps as its own and no later run's menu then
+# showed at 12 (#1982); dropped, the profile takes Settings' default again.
 # Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
 # Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
@@ -185,7 +195,8 @@ for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_i
     exceptions.pop(kind, None)
 defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
 defaults.pop("auto_picture_in_picture", None)
-prefs.get("browser_core", {}).pop("developer_mode", None)
+for key in ("developer_mode", "archive_after"):
+    prefs.get("browser_core", {}).pop(key, None)
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
@@ -243,6 +254,12 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
+  # And without Hide Space Header's choice, which spaces' makes and takes back.
+  rm -f "$profile_dir/Space Header"
+  # And without the command bar's picks, which put a command picked first among equal matches
+  # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
+  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
+  rm -f "$profile_dir/Command bar picks"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites

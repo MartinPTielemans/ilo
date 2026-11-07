@@ -221,9 +221,14 @@ struct Recorder {
     menus: RefCell<Vec<String>>,
     /// The item the next menu's user picks.
     answer: Cell<Option<usize>>,
+    /// Little ilo is off in Settings › Features.
+    little_off: Cell<bool>,
 }
 
 impl Host for Recorder {
+    fn little_windows(&self) -> bool {
+        !self.little_off.get()
+    }
     fn spaces(&self) -> Vec<(u64, SharedString)> {
         self.spaces.clone()
     }
@@ -634,4 +639,140 @@ fn the_meet_rule_is_added_once() {
     let text = trashed.to_text(&spaces);
     assert_eq!(text, "seeded\tmeet\n");
     assert_eq!(Rules::parse(&text, &spaces), trashed);
+}
+
+/// With Little ilo off in Settings › Features, a rule to it and everything else to it send links
+/// to the Space in front, and the choice stays for when it's on again.
+#[test]
+fn off_little_ilo_sends_its_links_to_the_space_in_front() {
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "quick", LITTLE)],
+        otherwise: LITTLE,
+    };
+    let spaces = [WORK, HOME];
+    assert_eq!(
+        rules.route_with("https://quick.example/", &spaces, true),
+        (LITTLE, Some(0))
+    );
+    assert_eq!(
+        rules.route_with("https://news.example/", &spaces, true),
+        (LITTLE, None)
+    );
+    assert_eq!(
+        rules.route_with("https://quick.example/", &spaces, false),
+        (0, Some(0))
+    );
+    assert_eq!(
+        rules.route_with("https://news.example/", &spaces, false),
+        (0, None)
+    );
+    assert_eq!(rules.otherwise, LITTLE);
+}
+
+/// With Little ilo off, neither a rule's Space pop-up nor Everything else's offers it.
+#[gpui::test]
+fn off_the_pop_ups_have_no_little_ilo(cx: &mut TestAppContext) {
+    let rules = Rules {
+        rules: vec![rule(Condition::Contains, "work", WORK)],
+        otherwise: 0,
+    };
+    let (host, view, cx) = tab_view(rules, cx);
+    host.little_off.set(true);
+    click(cx, (SPACE_X, row_y(0)));
+    let everything = otherwise(&view, cx);
+    click(cx, everything);
+    let menus = host.menus.take();
+    assert_eq!(menus.len(), 2);
+    for menu in &menus {
+        assert!(
+            menu.ends_with("The Space in Front, Work (checked), Home")
+                || menu.ends_with("The Space in Front (checked), Work, Home"),
+            "{menu}"
+        );
+    }
+}
+
+/// Every control of the Links tab has a role and a name that says what it sets, and the pop-ups
+/// say what they show (#1911): each rule's by its place, its field too, which keeps it as the
+/// rules are dragged into another order.
+#[gpui::test]
+fn every_control_in_links_has_a_name(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, stops, unnamed};
+    use gpui::accesskit::Role;
+    let rules = Rules {
+        rules: vec![
+            rule(Condition::Contains, "meet.google.com", WORK),
+            rule(Condition::Is, "example.com", HOME),
+        ],
+        otherwise: LITTLE,
+    };
+    let (host, view, cx) = tab_view(rules, cx);
+    let pressable = pressable(cx);
+    assert_eq!(unnamed(&pressable), [], "{pressable:?}");
+    let said = |name: &str, value: Option<&str>| {
+        (Role::Button, name.to_string(), value.map(str::to_string))
+    };
+    let little = otherwise_name(LITTLE, &[]).to_string();
+    for expected in [
+        said("Rule 1 Condition", Some("URL contains")),
+        said("Rule 1 Space", Some("Work")),
+        said("Remove Rule 1", None),
+        said("Rule 2 Condition", Some("URL is equal to")),
+        said("Rule 2 Space", Some("Home")),
+        said("Remove Rule 2", None),
+        said("Add Rule", None),
+        said("Everything else opens in", Some(&little)),
+    ] {
+        assert!(
+            pressable.contains(&expected),
+            "{expected:?} in {pressable:?}"
+        );
+    }
+    // VoiceOver's press on a pop-up opens its menu, as a press does.
+    let tree = cx.a11y_tree().expect("a tree");
+    let condition = (tree.nodes.iter())
+        .find(|(_, node)| node.label() == Some("Rule 1 Condition"))
+        .map(|(id, _)| *id)
+        .expect("no Rule 1 Condition");
+    cx.simulate_a11y_action(condition, gpui::accesskit::Action::Click);
+    cx.run_until_parked();
+    let menus = host.menus.borrow().clone();
+    assert!(
+        menus
+            .iter()
+            .any(|menu| menu.ends_with("URL contains (checked), URL is equal to")),
+        "{menus:?}"
+    );
+    let stops = stops(cx);
+    assert_eq!(unnamed(&stops), [], "{stops:?}");
+    assert!(!stops.is_empty(), "⇥ reaches none of it");
+    let fields = |cx: &mut VisualTestContext| {
+        let tree = cx.a11y_tree().expect("a tree");
+        let mut fields: Vec<(String, String)> = (tree.nodes.iter())
+            .filter(|(_, node)| node.role() == Role::TextInput)
+            .map(|(_, node)| {
+                let name = node.label().unwrap_or_default().to_string();
+                (name, node.value().unwrap_or_default().to_string())
+            })
+            .collect();
+        fields.sort();
+        fields
+    };
+    assert_eq!(
+        fields(cx),
+        [
+            ("Rule 1 Text".into(), "meet.google.com".into()),
+            ("Rule 2 Text".into(), "example.com".into()),
+        ]
+    );
+    view.update(cx, |view, cx| view.move_rule(1, 0, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        fields(cx),
+        [
+            ("Rule 1 Text".into(), "example.com".into()),
+            ("Rule 2 Text".into(), "meet.google.com".into()),
+        ],
+        "a field kept its old place's name"
+    );
 }

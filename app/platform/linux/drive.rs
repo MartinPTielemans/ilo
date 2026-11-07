@@ -11,22 +11,26 @@
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
-//! clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
-//! rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
+//! clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
+//! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
-//! front, menu, menubar, choose, dismiss, window, agentspace, agentmayact,
-//! agentrelease, agentdisconnect, takeback, age and insert. The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs):
-//! cmd with Ctrl, ctrl and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads
-//! them, cmd with Ctrl and alt with Alt. flags presses and lets
-//! go of those keys, the last key's among them, and the keys after it go with what it holds. insert
-//! commits its text to a field of the UI's, not a page's. scroll turns the wheel a notch for each event,
+//! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
+//! agentopen, agentrelease, agentdisconnect, takeback, age, battery and insert, and Windows' stack.
+//! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
+//! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
+//! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
+//! it go with what it holds. insert commits its text to a field of the UI's, not a page's. Linux's
+//! own keyonreturn sends a key as key does, the moment the X input focus is back in a browser
+//! window from one of the app's own, such as a dialog that closes, as a key typed as it goes
+//! reaches the window, before Chromium has run what it posts on reading the focus come back
+//! (#1711). scroll turns the wheel a notch for each event,
 //! where the Mac's moves the content by points. choose works on ilo's menu and on ilo's dialog,
 //! whose buttons it presses by their labels as drive.mm does an alert's, and dismiss on the menu;
 //! Linux shows no alerts yet. fullscreen toggles the window's full screen through the core. ime on types as
 //! drive.mm's scripted input method does, in the UI's fields alone, as a page's input method is
 //! Chromium's, and it can't compose in a page. dragover and dragdrop are XDND's source, as
 //! another app's drag is, to the browser window's top-level window or its proxy, and wait for its
-//! answer. swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
+//! answer; under Wayland, the data device's, from a client of the driver's own (drive_drags.rs). swipe is Wayland's alone, as X11 sends no touchpad's phases. The others, such as
 //! displays, the driver can't do yet, and says so as drive.mm does. pip, which drive.mm doesn't
 //! have yet, finds a video's Picture in Picture window, the Mini Player, or a page's, as a call
 //! floats in, and logs "browser: pip at <x> <y> <width> <height>" as it is and each time it moves
@@ -56,6 +60,7 @@ use std::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use browser::log;
@@ -123,22 +128,47 @@ pub fn start() {
                     await_key_title(n, text.to_owned(), 100);
                     return;
                 }
-                if !run(&line) {
-                    log!("browser: drive {n}: can't do that");
-                }
-                if let Some(rest) = LATER.take() {
-                    rest(Box::new(move || settle(n)));
-                    return;
-                }
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                match (ACTIVATING.take(), RESIZING.take()) {
-                    (Some(window), _) => await_focus(n, window, until),
-                    (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
-                    (None, None) => settle(n),
-                }
+                attempt(n, line, None);
             }));
         }
     });
+}
+
+/// Runs command `n`, `line`, and again 10 ms on while it asks to be (`again`), until `until`.
+fn attempt(n: u64, line: String, until: Option<Instant>) {
+    RETRY_UNTIL.set(until);
+    let done = run(&line);
+    RETRY_UNTIL.set(None);
+    if !done {
+        if let Some(until) = AGAIN.take() {
+            after(10, Box::new(move || attempt(n, line, Some(until))));
+            return;
+        }
+        log!("browser: drive {n}: can't do that");
+    }
+    if let Some(rest) = LATER.take() {
+        rest(Box::new(move || settle(n)));
+        return;
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    match (ACTIVATING.take(), RESIZING.take()) {
+        (Some(window), _) => await_focus(n, window, until),
+        (_, Some((gpui, width, height))) => await_size(n, gpui, (width, height), until),
+        (None, None) => settle(n),
+    }
+}
+
+/// Has the command running, which can't yet, run again soon, as one naming a window the window
+/// manager hasn't listed yet. False once it has been trying for 2 s, when it can't.
+pub(super) fn again() -> bool {
+    let until = RETRY_UNTIL
+        .get()
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(2));
+    let trying = Instant::now() < until;
+    if trying {
+        AGAIN.set(Some(until));
+    }
+    trying
 }
 
 /// Runs `task` on the main thread once nothing more urgent is ready: the X events Chromium and GPUI
@@ -194,8 +224,13 @@ fn settle(n: u64) {
     sync();
     crate::drive_wayland::sync();
     // Until the drag's target has answered, which it does from the loop.
-    if drag_waits() {
+    if drag_waits() || crate::drive_drags::waits() {
         after(10, Box::new(move || settle(n)));
+        return;
+    }
+    // Until the clipboard's owner has answered `pasteboard`, which Chromium does from the loop.
+    if paste_waits() {
+        after(100, Box::new(move || settle(n)));
         return;
     }
     gpui_linux::sync_display();
@@ -260,7 +295,8 @@ thread_local! {
     /// The driver's own connection to the X server, with its root window.
     static X: RefCell<Option<Rc<(RustConnection, xproto::Window)>>> = const { RefCell::new(None) };
     /// Each browser window the app has made, in order, by its UI's X window (`host_ui_view`'s
-    /// order on the Mac): the window command's numbers.
+    /// order on the Mac): the window command's numbers. Numbered as it's made, so one that closes
+    /// before a command reaches it, as a pop-up that closes itself, still counts, as on the Mac.
     static MADE: RefCell<Vec<(bc::bc_id, xproto::Window)>> = const { RefCell::new(Vec::new()) };
     /// The window command's, from 0.
     static DRIVEN: Cell<usize> = const { Cell::new(0) };
@@ -273,6 +309,10 @@ thread_local! {
     /// The rest of a command that goes on after it returns, as a swipe that rests before the
     /// fingers lift (drive_wayland.rs), which reports it done (go_on).
     static LATER: Cell<Option<Box<dyn FnOnce(Box<dyn FnOnce()>)>>> = const { Cell::new(None) };
+    /// Until when the command running may run again, once it has asked to (`again`).
+    static RETRY_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// That the command running asked to run again, and until when.
+    static AGAIN: Cell<Option<Instant>> = const { Cell::new(None) };
     /// The window a press went to, which gets the drag's events until the release, as the X
     /// server's grab of the pointer does.
     static PRESSED: Cell<Option<Target>> = const { Cell::new(None) };
@@ -346,6 +386,7 @@ fn sync() {
     while let Ok(Some(event)) = connection.poll_for_event() {
         match event {
             Event::SelectionRequest(request) => serve_drag(&request),
+            Event::SelectionNotify(notify) => pasted(&notify),
             Event::ClientMessage(message) if message.format == 32 => drag_answered(&message),
             _ => {}
         }
@@ -364,24 +405,21 @@ struct Browser {
     gpui: xproto::Window,
 }
 
+/// Numbers the browser window the app just made, for the window command.
+pub(crate) fn window_made(id: bc::bc_id, ui_view: *mut std::ffi::c_void) {
+    match crate::drive_wayland::on() {
+        true => crate::drive_wayland::window_made(id),
+        false => MADE.with_borrow_mut(|made| made.push((id, ui_view as usize as u32))),
+    }
+}
+
 /// The browser window the app made `index`th, from 0, while it's open.
 fn browser(index: usize) -> Option<Browser> {
-    let open: Vec<(bc::bc_id, xproto::Window)> = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .map(|w: &BrowserWindow| (w.id, w.ui_view as usize as u32))
-            .collect()
+    let (id, ui) = MADE.with_borrow(|made| made.get(index).copied())?;
+    let open = WINDOWS.with_borrow(|windows| {
+        (windows.iter()).any(|w: &BrowserWindow| w.id == id && w.ui_view as usize as u32 == ui)
     });
-    let (id, ui) = MADE.with_borrow_mut(|made| {
-        let mut new: Vec<_> = (open.iter())
-            .filter(|each| !made.contains(each))
-            .copied()
-            .collect();
-        new.sort();
-        made.extend(new);
-        made.get(index).copied()
-    })?;
-    open.contains(&(id, ui)).then_some(())?;
+    open.then_some(())?;
     let x = server()?;
     let (connection, _) = &*x;
     // Under Wayland the view is a surface, which the X server knows nothing of.
@@ -1023,6 +1061,24 @@ fn hold_modifiers() -> Option<()> {
     Some(())
 }
 
+/// Runs `key`, a key command, once the X input focus is in a browser window, looking each
+/// millisecond until `until`: GLib's timeouts come before Chromium's posted tasks, so the key comes
+/// with the focus, before what Chromium posts on reading it.
+fn key_on_return(key: String, until: std::time::Instant, done: Box<dyn FnOnce()>) {
+    let back = matches!(keyboard_window(), Some(Keyboard::Browser(..)));
+    if !back && std::time::Instant::now() < until {
+        after(1, Box::new(move || key_on_return(key, until, done)));
+        return;
+    }
+    match back {
+        true => {
+            run(&key);
+        }
+        false => log!("browser: drive: the keyboard didn't come back to a browser window"),
+    }
+    done();
+}
+
 /// Sends the key `code`'s events of `kinds`, with the modifiers `state`, as `key_events` does.
 fn code_events(code: u8, state: u16, kinds: &[u8]) -> Option<()> {
     let x = server()?;
@@ -1081,6 +1137,81 @@ fn name_of(browser: &Browser) -> String {
     )
 }
 
+/// Logs the windows on screen over the driven browser window and overlapping it, front first, down
+/// to it, as the X server stacks them and Windows' driver lists them: a browser window by what
+/// order calls it, another of the app's as "ilo" and its title, and another app's as "other" and
+/// its title.
+fn stack() -> Option<()> {
+    let driven = driven()?;
+    let x = server()?;
+    let (connection, root) = &*x;
+    let tops = connection.query_tree(*root).ok()?.reply().ok()?.children;
+    let bounds = |window| {
+        let geometry = connection.get_geometry(window).ok()?.reply().ok()?;
+        let [x, y] = [geometry.x, geometry.y].map(i32::from);
+        Some([
+            x,
+            y,
+            x + i32::from(geometry.width),
+            y + i32::from(geometry.height),
+        ])
+    };
+    let own = tops
+        .iter()
+        .copied()
+        .find(|&top| within(connection, driven.window, top))?;
+    let over = bounds(own)?;
+    let browsers: Vec<Browser> = (0..MADE.with_borrow(Vec::len) + WINDOWS.with_borrow(Vec::len))
+        .filter_map(browser)
+        .collect();
+    let mut stack = Vec::new();
+    for &top in tops.iter().rev() {
+        if top == own {
+            stack.push("driven".to_string());
+            break;
+        }
+        let Some(at) = bounds(top) else { continue };
+        if !viewable(connection, top)
+            || at[0] >= over[2]
+            || over[0] >= at[2]
+            || at[1] >= over[3]
+            || over[1] >= at[3]
+        {
+            continue;
+        }
+        if let Some(browser) = browsers.iter().find(|b| within(connection, b.window, top)) {
+            stack.push(name_of(browser));
+            continue;
+        }
+        // The window manager's frame holds the client, which has the title and process.
+        let mut clients = vec![top];
+        clients.extend(connection.query_tree(top).ok()?.reply().ok()?.children);
+        let property = |window, name: &str| {
+            let reply = connection
+                .get_property(false, window, atom(name)?, xproto::AtomEnum::ANY, 0, 256)
+                .ok()?
+                .reply()
+                .ok()?;
+            (!reply.value.is_empty()).then_some(reply)
+        };
+        let title = clients.iter().find_map(|&client| {
+            let reply = property(client, "_NET_WM_NAME").or_else(|| property(client, "WM_NAME"))?;
+            Some(String::from_utf8_lossy(&reply.value).into_owned())
+        });
+        let pid = clients
+            .iter()
+            .find_map(|&client| property(client, "_NET_WM_PID")?.value32()?.next());
+        let whose = if pid == Some(std::process::id()) {
+            "ilo"
+        } else {
+            "other"
+        };
+        stack.push(format!("{whose} {}", title.unwrap_or_default()));
+    }
+    log!("browser: stack {}", stack.join(", "));
+    Some(())
+}
+
 /// The browser windows that are open, front to back, as the X server stacks them.
 fn stacked() -> Option<Vec<Browser>> {
     let x = server()?;
@@ -1101,11 +1232,35 @@ fn stacked() -> Option<Vec<Browser>> {
     )
 }
 
+/// Whether (`x`, `y`) in browser window `id`'s content is on one of its pages.
+/// shortcut: where the shell lays them out, as `pages` has them.
+pub(super) fn over_page(id: bc::bc_id, x: f64, y: f64) -> bool {
+    let shell =
+        WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.shell.clone()));
+    let (Some(shell), Some(cx)) = (shell, CX.with_borrow(Clone::clone)) else {
+        return false;
+    };
+    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+    cx.update(|cx| {
+        let Some(shell) = shell.upgrade() else {
+            return false;
+        };
+        shell
+            .read(cx)
+            .shown_pages()
+            .iter()
+            .any(|(_, page)| page.contains(&at))
+    })
+}
+
 /// The pages of browser window `id`, as drive.mm lists their views: from the bottom-left corner of
-/// content `width` by `height`, with the radius of their corners if they're round.
+/// content `width` by `height`, with the radius of their corners if they're round, and a pane's
+/// docked DevTools before its page, as the core reports them.
 /// shortcut: where the shell lays them out and the radius it gives their corners, which the core
 /// follows. They're Aura's windows in Chromium's one X window, and no core call says where they
-/// are or how round.
+/// are or how round. At the content's size now, which a resize lays the pages out at before the
+/// shell draws there: at the size it last drew, a page full screen in a window that had just
+/// grown read as the window before (#1903).
 pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
     let shell = WINDOWS
         .with_borrow(|windows| windows.iter().find(|w| w.id == id).map(|w| w.shell.clone()))?;
@@ -1114,17 +1269,21 @@ pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
     let (pages, (_, radius)) = cx.update(|cx| {
         let shell = shell.upgrade()?;
         let shell = shell.read(cx);
-        Some((shell.shown_pages(), shell.page_frame(viewport)))
+        Some((shell.shown_pages_at(viewport), shell.page_frame(viewport)))
     })?;
-    let views = pages.into_iter().map(|(_, page)| {
-        let [x, bottom, width, high] = [
-            page.left(),
-            page.bottom(),
-            page.size.width,
-            page.size.height,
-        ]
-        .map(f32::from);
-        let y = height - f64::from(bottom);
+    let docked = devtools(id);
+    let frames = pages.into_iter().flat_map(|(_, page)| {
+        let page = [page.left(), page.top(), page.size.width, page.size.height].map(f64::from);
+        // DevTools fill the pane they're docked in.
+        match docked {
+            Some((devtools, beside)) if (0..4).all(|i| (devtools[i] - page[i]).abs() <= 1.) => {
+                vec![devtools, beside]
+            }
+            _ => vec![page],
+        }
+    });
+    let views = frames.map(|[x, top, width, high]| {
+        let y = height - (top + high);
         let round = match radius > 0. {
             true => format!(" radius {radius:.0}"),
             false => String::new(),
@@ -1132,6 +1291,21 @@ pub(super) fn pages(id: bc::bc_id, width: f64, height: f64) -> Option<String> {
         format!(", WebContentsViewCocoa {x:.0},{y:.0} {width:.0}x{high:.0}{round}")
     });
     Some(views.collect())
+}
+
+/// Where DevTools docked in a page of `id` show, and the page beside them, from the content's
+/// top-left corner, which the core reports, as the X server can't see them.
+fn devtools(id: bc::bc_id) -> Option<([f64; 4], [f64; 4])> {
+    let mut devtools = bc::bc_rect {
+        x: 0.,
+        y: 0.,
+        width: 0.,
+        height: 0.,
+    };
+    let mut page = devtools;
+    unsafe { bc::bc_window_devtools(id, &mut devtools, &mut page) }.then_some(())?;
+    let frame = |r: bc::bc_rect| [r.x, r.y, r.width, r.height];
+    Some((frame(devtools), frame(page)))
 }
 
 /// The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver
@@ -1421,6 +1595,27 @@ fn full_screen(window: xproto::Window) -> Option<bool> {
     Some(property.value32()?.any(|atom| atom == full))
 }
 
+/// Whether the window manager has `window` maximized, both ways.
+fn maximized(window: xproto::Window) -> Option<bool> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let [state, vertical, horizontal] = [
+        "_NET_WM_STATE",
+        "_NET_WM_STATE_MAXIMIZED_VERT",
+        "_NET_WM_STATE_MAXIMIZED_HORZ",
+    ]
+    .map(atom);
+    let property = (connection.get_property(false, window, state?, xproto::AtomEnum::ATOM, 0, 64))
+        .ok()?
+        .reply()
+        .ok()?;
+    let atoms: Vec<_> = property
+        .value32()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    Some(atoms.contains(&vertical?) && atoms.contains(&horizontal?))
+}
+
 /// Logs "browser: window zoomed <0|1>" as the window manager maximizes `window` or restores it, as
 /// drive.mm logs AppKit's zoom. On a connection of the driver's own, whose thread waits on the X
 /// server's property changes, so it wakes only for one.
@@ -1557,8 +1752,11 @@ enum Waiting {
 
 thread_local! {
     static SOURCE: RefCell<Option<Source>> = const { RefCell::new(None) };
-    /// The driver's window that owns a drag's selection, made once.
-    static SOURCE_WINDOW: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    /// The driver's window, which owns a drag's selection and is handed the clipboard's text,
+    /// made once.
+    static DRIVER_WINDOW: Cell<Option<xproto::Window>> = const { Cell::new(None) };
+    /// Since when `pasteboard` waits for the clipboard's owner to hand its text to the driver.
+    static PASTE_ASKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
 }
 
 fn atom(name: &str) -> Option<xproto::Atom> {
@@ -1572,8 +1770,81 @@ fn atom(name: &str) -> Option<xproto::Atom> {
     )
 }
 
+/// The driver's own window, on its connection, which nobody sees.
+fn driver_window() -> Option<xproto::Window> {
+    if let Some(window) = DRIVER_WINDOW.get() {
+        return Some(window);
+    }
+    let x = server()?;
+    let (connection, root) = &*x;
+    let window = connection.generate_id().ok()?;
+    (connection.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        window,
+        *root,
+        -1,
+        -1,
+        1,
+        1,
+        0,
+        xproto::WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &xproto::CreateWindowAux::new(),
+    ))
+    .ok()?;
+    DRIVER_WINDOW.set(Some(window));
+    Some(window)
+}
+
+/// Asks the clipboard's owner for its text, on the driver's connection, which `sync` reads the
+/// answer from: the owner may be Chromium, such as DevTools after ⌘C, which answers on the main
+/// thread that GPUI's own read would block.
+fn ask_clipboard() -> Option<()> {
+    let x = server()?;
+    let (connection, _) = &*x;
+    let window = driver_window()?;
+    let names = ["CLIPBOARD", "UTF8_STRING", "BROWSER_DRIVE_PASTEBOARD"];
+    let [clipboard, utf8, into] = names.map(atom);
+    (connection.convert_selection(window, clipboard?, utf8?, into?, x11rb::CURRENT_TIME)).ok()?;
+    connection.flush().ok()?;
+    PASTE_ASKED.set(Some(std::time::Instant::now()));
+    Some(())
+}
+
+/// Logs the clipboard's text the owner handed over, or none if it had none.
+fn pasted(notify: &xproto::SelectionNotifyEvent) {
+    if PASTE_ASKED.get().is_none() || Some(notify.requestor) != DRIVER_WINDOW.get() {
+        return;
+    }
+    PASTE_ASKED.set(None);
+    let read = || {
+        let x = server()?;
+        let (connection, _) = &*x;
+        let any = xproto::AtomEnum::ANY;
+        let (window, property) = (notify.requestor, notify.property);
+        let reply = connection.get_property(true, window, property, any, 0, 1 << 20);
+        Some(String::from_utf8_lossy(&reply.ok()?.reply().ok()?.value).into_owned())
+    };
+    let text = (notify.property != x11rb::NONE).then(read).flatten();
+    log!("browser: pasteboard text {}", text.unwrap_or_default());
+}
+
+/// Whether `pasteboard` still waits for the clipboard's owner, which gets 4 s, as GPUI's own read
+/// gives it, before the driver logs no text.
+fn paste_waits() -> bool {
+    let Some(since) = PASTE_ASKED.get() else {
+        return false;
+    };
+    if since.elapsed() < std::time::Duration::from_secs(4) {
+        return true;
+    }
+    PASTE_ASKED.set(None);
+    log!("browser: pasteboard text ");
+    false
+}
+
 /// `path` as a file: URL's path, its bytes outside the unreserved ones escaped.
-fn file_url(path: &str) -> String {
+pub(super) fn file_url(path: &str) -> String {
     let mut url = String::from("file://");
     for byte in path.bytes() {
         match byte {
@@ -1590,7 +1861,7 @@ fn file_url(path: &str) -> String {
 /// as a URI list, a URL as text too, and text as text.
 fn start_drag(kind: &str, value: &str) -> Option<Source> {
     let x = server()?;
-    let (connection, root) = &*x;
+    let (connection, _) = &*x;
     let [uris, utf8, plain] =
         ["text/uri-list", "UTF8_STRING", "text/plain;charset=utf-8"].map(atom);
     let data = match kind {
@@ -1600,30 +1871,14 @@ fn start_drag(kind: &str, value: &str) -> Option<Source> {
         ],
         "file" => vec![(uris?, format!("{}\r\n", file_url(value)).into_bytes())],
         "text" => vec![(utf8?, value.into()), (plain?, value.into())],
+        // As host_drag_tab carries one from another of the app's windows.
+        "tab" => vec![(
+            atom("application/x-ilo-tab")?,
+            format!("{} {value}", std::process::id()).into_bytes(),
+        )],
         _ => return None,
     };
-    let window = match SOURCE_WINDOW.get() {
-        Some(window) => window,
-        None => {
-            let window = connection.generate_id().ok()?;
-            (connection.create_window(
-                x11rb::COPY_DEPTH_FROM_PARENT,
-                window,
-                *root,
-                -1,
-                -1,
-                1,
-                1,
-                0,
-                xproto::WindowClass::INPUT_ONLY,
-                x11rb::COPY_FROM_PARENT,
-                &xproto::CreateWindowAux::new(),
-            ))
-            .ok()?;
-            SOURCE_WINDOW.set(Some(window));
-            window
-        }
-    };
+    let window = driver_window()?;
     let types: Vec<u32> = data.iter().map(|(kind, _)| *kind).collect();
     (connection.change_property(
         xproto::PropMode::REPLACE,
@@ -1884,8 +2139,20 @@ fn run_command(line: &str) -> Option<()> {
         "window" => {
             let number: usize = words.next()?.parse().ok()?;
             let browser = browser(number.checked_sub(1)?)?;
+            let behind = match words.next() {
+                None => false,
+                Some("behind") => true,
+                Some(_) => return None,
+            };
             DRIVEN.set(number - 1);
-            log!("browser: drive window {number}");
+            log!(
+                "browser: drive window {number}{}",
+                if behind { " behind" } else { "" }
+            );
+            // With behind, it stays where it is, as drive.mm's does, for another app's window over it.
+            if behind {
+                return Some(());
+            }
             // To the front with the keyboard, as a click on it does.
             let x = server()?;
             let (connection, root) = &*x;
@@ -1920,6 +2187,23 @@ fn run_command(line: &str) -> Option<()> {
                 click(at, 1, none, true)?;
             }
             Some(())
+        }
+        // handclick <x> <y>: a click there with the display's own pointer, through XTest, as a hand
+        // clicks: the host hears the screen's presses (page_presses.rs), which a click sent to a
+        // window isn't. The pointer stays there, as a hand's does.
+        "handclick" => {
+            let (x, y) = point(&mut words)?;
+            let at = target_at(x, y)?;
+            let server = server()?;
+            let (connection, root) = &*server;
+            let fake = |kind: u8, button: u8, (x, y): (i16, i16)| {
+                (connection.xtest_fake_input(kind, button, x11rb::CURRENT_TIME, *root, x, y, 0))
+                    .ok()?;
+                connection.get_input_focus().ok()?.reply().ok().map(drop)
+            };
+            fake(xproto::MOTION_NOTIFY_EVENT, 0, (at.root_x, at.root_y))?;
+            fake(xproto::BUTTON_PRESS_EVENT, 1, (at.root_x, at.root_y))?;
+            fake(xproto::BUTTON_RELEASE_EVENT, 1, (at.root_x, at.root_y))
         }
         "clickkey" | "rightclickkey" | "doubleclickkey" => {
             let (x, y) = point(&mut words)?;
@@ -2012,11 +2296,16 @@ fn run_command(line: &str) -> Option<()> {
             motion(target_at(x, y)?, none)
         }
         // Each event moves the content up by <dy> points, as drive.mm's trackpad events do.
-        "scroll" => {
+        // scrollkey scrolls in the window with the keyboard, such as Settings', as clickkey
+        // clicks there.
+        "scroll" | "scrollkey" => {
             let (x, y) = point(&mut words)?;
             let dy: f64 = words.next()?.parse().ok()?;
             let count: usize = words.next()?.parse().ok()?;
-            let at = target_at(x, y)?;
+            let at = match action {
+                "scrollkey" => target_in_key(x, y)?,
+                _ => target_at(x, y)?,
+            };
             // A page, Chromium's, scrolls a notch of the wheel an event, the notches alone: with a
             // move before them, the window run's page stopped short of its 3000 points under Xvfb.
             if at.window == driven()?.window {
@@ -2071,6 +2360,12 @@ fn run_command(line: &str) -> Option<()> {
             }
             key(name, state)
         }
+        "keyonreturn" => {
+            let key = format!("key {rest}");
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            go_on(Box::new(move |done| key_on_return(key, until, done)));
+            Some(())
+        }
         // Each modifier going down or up as its key does, the left one, in the state held before
         // it, as the X server reports a key.
         // The modifiers the last key went with are held too, as the Mac's app takes them to be
@@ -2114,6 +2409,40 @@ fn run_command(line: &str) -> Option<()> {
         // green button.
         "fullscreen" => {
             unsafe { bc::bc_window_toggle_full_screen(driven_id()?) };
+            Some(())
+        }
+        // As the window manager's maximize key: it maximizes the driven window, or restores it
+        // once maximized, through the root window, as a pager asks (EWMH's _NET_WM_STATE). Chromium
+        // hears of it after the window manager has done it, as of the user's (#1454).
+        "maximize" => {
+            let browser = driven()?;
+            let maximized = maximized(browser.window)?;
+            let x = server()?;
+            let (connection, root) = &*x;
+            let [state, vertical, horizontal] = [
+                "_NET_WM_STATE",
+                "_NET_WM_STATE_MAXIMIZED_VERT",
+                "_NET_WM_STATE_MAXIMIZED_HORZ",
+            ]
+            .map(atom);
+            // 0 takes the state off and 1 puts it on, and 1 says it's from an application.
+            let data = [u32::from(!maximized), vertical?, horizontal?, 1, 0];
+            let message = xproto::ClientMessageEvent::new(32, browser.window, state?, data);
+            let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+            connection.send_event(false, *root, mask, message).ok()?;
+            connection.flush().ok()
+        }
+        // The driven window's state as the window manager has it and its frame now, as Windows'
+        // driver logs its placement: "browser: placement <maximized|normal> <x> <y> <width>
+        // <height>". The window manager keeps the frame a maximized window restores to itself.
+        "placement" => {
+            let browser = driven()?;
+            let state = match maximized(browser.window)? {
+                true => "maximized",
+                false => "normal",
+            };
+            let [x, y, width, height] = frame(browser.window)?;
+            log!("browser: placement {state} {x:.0} {y:.0} {width:.0} {height:.0}");
             Some(())
         }
         "resize" | "place" => {
@@ -2171,6 +2500,7 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: order{order}, key {key}");
             Some(())
         }
+        "stack" => stack(),
         "front" => {
             let driven = driven().map(|b| b.id);
             let describe = |browser: Option<Browser>| match browser {
@@ -2189,7 +2519,8 @@ fn run_command(line: &str) -> Option<()> {
         // The window's content and the views the X server has in it: GPUI's, and the overlays
         // and floats over it, with a tab's dialog, which the core reports, as the Mac's lists its
         // child windows. The floats, such as the zoom HUD, take no input, so they're left out of
-        // overlay_views. The pages are where the UI lays them out (pages).
+        // overlay_views. The pages are where the UI lays them out, and docked DevTools where the
+        // core says (pages).
         "layout" => {
             let browser = driven()?;
             let [_, _, width, height] = frame(browser.window)?;
@@ -2231,8 +2562,12 @@ fn run_command(line: &str) -> Option<()> {
             log!("browser: key window titled {title}");
             Some(())
         }
-        // The headless session's clipboard is the run's own, as drive.mm's pasteboard is.
+        // The headless session's clipboard is the run's own, as drive.mm's pasteboard is. Under X
+        // the driver asks for it on its own connection, and settle logs it.
         "pasteboard" => {
+            if ask_clipboard().is_some() {
+                return Some(());
+            }
             let cx = CX.with_borrow(Clone::clone)?;
             let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
             log!("browser: pasteboard text {}", text.unwrap_or_default());
@@ -2332,6 +2667,15 @@ fn run_command(line: &str) -> Option<()> {
             }
             Some(())
         }
+        "agentopen" => {
+            let agent = words.next()?;
+            let url = words.next()?;
+            let (agent_c, url_c) = (CString::new(agent).ok()?, CString::new(url).ok()?);
+            let tab = unsafe { bc::bc_agent_open_tab(agent_c.as_ptr(), url_c.as_ptr()) };
+            (tab != 0).then_some(())?;
+            log!("browser: agent {agent} opened {tab}");
+            Some(())
+        }
         "agentrelease" => {
             let agent = words.next()?;
             let tab: bc::bc_id = words.next()?.parse().ok()?;
@@ -2356,6 +2700,17 @@ fn run_command(line: &str) -> Option<()> {
         "age" => {
             let seconds: f64 = words.next()?.parse().ok()?;
             unsafe { bc::bc_age_tabs_for_testing(seconds) };
+            Some(())
+        }
+        // battery <percent> plugged|unplugged: the check's battery, with --battery-for-testing.
+        "battery" => {
+            let percent: i32 = words.next()?.parse().ok()?;
+            let plugged = match words.next()? {
+                "plugged" => true,
+                "unplugged" => false,
+                _ => return None,
+            };
+            unsafe { bc::bc_battery_for_testing(percent, plugged) };
             Some(())
         }
         "pip" => mini_player_command(words),

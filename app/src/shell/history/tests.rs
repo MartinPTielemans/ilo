@@ -153,3 +153,117 @@ fn cmd_and_middle_clicks_open_in_the_background(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(calls(&host).is_empty());
 }
+
+/// The titles of the reload button's menu, as this platform writes them.
+fn reload_titles() -> Vec<String> {
+    use crate::shell::MenuEntry;
+    ["Reload", "Hard Reload", "", "Clear Site Data and Reload"]
+        .map(|title| MenuEntry::label(title).to_string())
+        .into()
+}
+
+/// A right-click on reload lists Reload and Hard Reload with their keys, then the site's data
+/// cleared before a reload, and each runs its core call on the tab shown (#1959).
+#[gpui::test]
+fn right_click_on_reload_offers_its_kinds_of_reload(cx: &mut TestAppContext) {
+    let (_shell, cx, host) = shell(cx);
+    let calls_for = |title: &'static str, cx: &mut VisualTestContext| {
+        cx.simulate_mouse_down(button(RELOAD_X), MouseButton::Right, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(titles(&host), reload_titles());
+        let enabled: Vec<bool> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|item| item.1)
+            .collect();
+        assert_eq!(enabled, [true, true, false, true]);
+        let keys: Vec<bool> = host
+            .entries
+            .borrow()
+            .iter()
+            .map(|entry| entry.shortcut.is_some())
+            .collect();
+        assert_eq!(keys, [true, true, false, false]);
+        let title = crate::shell::MenuEntry::label(title);
+        cx.update(|_, cx| host.choose(&title, cx));
+        cx.run_until_parked();
+        calls(&host)
+    };
+    assert_eq!(calls_for("Reload", cx), ["reload 10"]);
+    assert_eq!(calls_for("Hard Reload", cx), ["reload 10 bypassing cache"]);
+    assert_eq!(
+        calls_for("Clear Site Data and Reload", cx),
+        ["clear site data 10"]
+    );
+}
+
+/// A page that isn't http(s) has no site whose data to clear: the menu still reloads it.
+#[gpui::test]
+fn a_page_with_no_site_dims_the_site_data(cx: &mut TestAppContext) {
+    let (shell, cx, host) = shell(cx);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "file:///Users/someone/notes.html".into(),
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    cx.simulate_mouse_down(button(RELOAD_X), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let enabled: Vec<bool> = host
+        .menus
+        .borrow()
+        .last()
+        .unwrap()
+        .iter()
+        .map(|item| item.1)
+        .collect();
+    assert_eq!(enabled, [true, true, false, false]);
+}
+
+/// While the page loads, the button is stop, and its menu still reloads.
+#[gpui::test]
+fn the_stop_button_has_the_reload_menu_too(cx: &mut TestAppContext) {
+    let (shell, cx, host) = shell(cx);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://example.org/c".into(),
+            loading: true,
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    cx.simulate_mouse_down(button(RELOAD_X), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(titles(&host), reload_titles());
+    let title = crate::shell::MenuEntry::label("Hard Reload");
+    cx.update(|_, cx| host.choose(&title, cx));
+    assert_eq!(calls(&host), ["reload 10 bypassing cache"]);
+}
+
+/// With no tab shown, as on a Space's empty card, the menu's items are dimmed, as the View menu's
+/// reloads are.
+#[gpui::test]
+fn with_no_tab_shown_the_menu_is_dimmed(cx: &mut TestAppContext) {
+    let (shell, cx, host) = shell(cx);
+    shell.update(cx, |shell, cx| shell.set_selected(0, cx));
+    cx.run_until_parked();
+    host.take();
+    cx.simulate_mouse_down(button(RELOAD_X), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    let menus = host.menus.borrow();
+    let enabled: Vec<bool> = menus
+        .last()
+        .expect("a menu")
+        .iter()
+        .map(|item| item.1)
+        .collect();
+    assert_eq!(enabled, [false, false, false, false]);
+}

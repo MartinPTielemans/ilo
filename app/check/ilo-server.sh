@@ -41,10 +41,11 @@ label="ilo on Linux"
 # Keys for the sign-in window, a window of Chromium's own, which the driver's keys don't reach on
 # Linux, as they go to the browser windows, overlays and Settings alone: there they're the X
 # server's, from xdotool, to the app's sign-in window, which it gives the keyboard first. The Mac's
-# go through the driver (unrun there).
+# go through the driver (unrun there), as do Wayland's, whose keys go to the window sway focuses,
+# the sign-in window as it opens.
 sign_in_window=
 sign_in_keys() {
-  if [ "$(uname)" != Linux ]; then
+  if [ "$(uname)" != Linux ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
     send "$@"
     return
   fi
@@ -93,9 +94,9 @@ sign_in() {
 }
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool, as Settings' window is titled by its tab; the Mac's AppKit
-# gives it.
+# gives it, and sway gives it back on Wayland as the sign-in window goes.
 settings_keyboard() {
-  [ "$(uname)" = Linux ] || return 0
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||

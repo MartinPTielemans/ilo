@@ -5,15 +5,22 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{App, BoxShadow, MouseButton, Rgba, Window, div, point, prelude::*, px, rgb, rgba, svg};
+use gpui::{
+    AnyElement, App, BoxShadow, MouseButton, Rgba, Window,
+    accesskit::{Orientation, Role},
+    div, point,
+    prelude::*,
+    px, rgb, rgba, svg,
+};
 
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::drawn;
+use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, FOOT_TEXT, NAME, PLATE_GAP,
-    SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_GROUP_GAP, SECTION_HOVERED,
-    SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW, SECTION_TEXT, SECTION_X,
+    SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP,
+    SECTION_GROUP_GAP, SECTION_HOVERED, SECTION_SELECTED, SECTION_SELECTED_LIGHT, SECTION_SHADOW,
+    SECTION_TEXT, SECTION_X,
 };
 use crate::tokens::shell::{PLATE_HEIGHT, PLATE_INSET};
 
@@ -98,15 +105,21 @@ impl Section {
 pub type Pick = Rc<dyn Fn(Section, &mut Window, &mut App)>;
 pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The column, 208 wide, `shown`'s plate lit, light or dark as the window is. Each section logs
-/// where it's drawn as "toolbar {name}", as the toolbar's tabs did, for check.sh to click, with
-/// `logged`. A press on the column's ground moves the window, as a title bar does.
+/// The column, 208 wide, the search `field` at its top and `shown`'s plate lit, light or dark as
+/// the window is. While a search shows what it `found`, no plate is lit and the sections with
+/// nothing found dim. Each section logs where it's drawn as "toolbar {name}", as the toolbar's
+/// tabs did, for check.sh to click, with `logged`. A press on the column's ground moves the
+/// window, as a title bar does. While an assistive app asks, `a11y`, the sections are a tab list, the one shown
+/// selected, and Chromium settings a button (#1381).
 pub fn column(
     shown: Section,
     dark: bool,
     logged: Rc<RefCell<Vec<String>>>,
+    field: AnyElement,
+    found: Option<&[Section]>,
     pick: Pick,
     foot: Foot,
+    a11y: bool,
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
     let groups = Section::GROUPS
@@ -114,10 +127,38 @@ pub fn column(
         .enumerate()
         .map(|(index, sections)| {
             let plates = sections.iter().map(|&section| {
-                let selected = section == shown;
+                let selected = found.is_none() && section == shown;
+                let dimmed = found.is_some_and(|found| !found.contains(&section));
                 let pick = pick.clone();
                 plate(base, selected, dark)
                     .id(section.name())
+                    .when(a11y, |plate| {
+                        plate
+                            .role(Role::Tab)
+                            .aria_label(section.name())
+                            .aria_selected(selected)
+                    })
+                    // ⇥ reaches the list, and ↑ and ↓ move in it, as in the sidebar; Space or
+                    // Return shows the section.
+                    .tab_index(0)
+                    .focus_from_keys_only()
+                    .focus_visible(ring(base))
+                    .on_key_down(move |event, window, cx| {
+                        let key = event.keystroke.key.as_str();
+                        if event.keystroke.modifiers.modified() {
+                            return;
+                        }
+                        let all: Vec<Section> = Section::all().collect();
+                        let at = all.iter().position(|&each| each == section).unwrap_or(0);
+                        match key {
+                            "down" if at + 1 < all.len() => window.focus_next(cx),
+                            "up" if at > 0 => window.focus_prev(cx),
+                            "down" | "up" => {}
+                            _ => return,
+                        }
+                        cx.stop_propagation();
+                    })
+                    .when(dimmed, |plate| plate.opacity(SEARCH_DIMMED))
                     .child(drawn(format!("toolbar {}", section.name()), logged.clone()))
                     // A press on a plate is its click's, not the window's move.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -141,6 +182,10 @@ pub fn column(
     let chromium = plate(base, false, dark)
         .mb_0()
         .id("chromium-settings")
+        .when(a11y, |foot| named_button(foot, "Chromium settings"))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(base))
         .text_color(base.opacity(FOOT_TEXT))
         .child(drawn("chromium settings".into(), logged))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -161,16 +206,40 @@ pub fn column(
         .flex()
         .flex_col()
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+        // ⇥ goes through the sections, then the field, then the card's controls, then the foot.
+        .child(
+            div()
+                .flex_none()
+                .mb(px(SEARCH_GAP))
+                .tab_group()
+                .tab_index(1)
+                .child(field),
+        )
         // At the window's least height the sections scroll above the foot, not under it.
         .child(
             div()
                 .id("sections")
+                .when(a11y, |sections| {
+                    let sections = sections.role(Role::TabList).aria_label("Sections");
+                    sections.aria_orientation(Orientation::Vertical)
+                })
+                .tab_group()
+                .tab_index(0)
+                // Its sections are the stops, not the list that scrolls them.
+                .tab_stop(false)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .children(groups),
         )
-        .child(div().flex_none().w(px(COLUMN)).child(chromium))
+        .child(
+            div()
+                .flex_none()
+                .w(px(COLUMN))
+                .tab_group()
+                .tab_index(3)
+                .child(chromium),
+        )
 }
 
 /// A section's plate: the sidebar's row, 8 in, lit under the pointer, and on the sidebar's

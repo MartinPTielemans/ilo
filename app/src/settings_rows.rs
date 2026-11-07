@@ -4,20 +4,29 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{BoxShadow, Rgba, SharedString, canvas, div, point, prelude::*, px, rgb, rgba, svg};
+use gpui::{
+    BoxShadow, Rgba, SharedString,
+    accesskit::{HasPopup, Role, Toggled},
+    canvas, div, point,
+    prelude::*,
+    px, rgb, rgba, svg,
+};
 
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
-    CHEVRONS_END, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED, CONTROL_HOVERED_LIGHT,
-    CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL,
-    DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL,
-    GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, LINE,
-    NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
-    ROW_HEIGHT, ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
+    CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
+    CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
+    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
+    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, HEADING, KNOB, KNOB_ALPHA,
+    KNOB_INSET, KNOB_SHADOW, LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE,
+    ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT,
+    SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
+use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
 
 /// Fills the relative element it's put in and logs where that is drawn, its centre in the window,
@@ -41,6 +50,239 @@ pub fn drawn(what: String, logged: Rc<RefCell<Vec<String>>>) -> gpui::Canvas<()>
     )
     .absolute()
     .inset_0()
+}
+
+/// What an assistive app reads of a button: a button called `name`, as Site Controls' are (#1381).
+/// Put on while one asks (`Window::is_a11y_active`).
+pub fn named_button<E: StatefulInteractiveElement>(control: E, name: impl Into<SharedString>) -> E {
+    control.role(Role::Button).aria_label(name)
+}
+
+/// What an assistive app reads of a switch: a switch called by its row's `name`, on or off.
+pub fn named_switch<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    on: bool,
+) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    control
+        .role(Role::Switch)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// What an assistive app reads of a box to tick: a checkbox called `name`, ticked or not, as the
+/// dialog's check row is.
+pub fn named_check<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    on: bool,
+) -> E {
+    let toggled = if on { Toggled::True } else { Toggled::False };
+    control
+        .role(Role::CheckBox)
+        .aria_label(name)
+        .aria_toggled(toggled)
+}
+
+/// A button called `name` that's dimmed and takes no click until `enabled`, as an assistive app
+/// says it is.
+pub fn named_dimmed<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    enabled: bool,
+) -> E {
+    let control = named_button(control, name);
+    match enabled {
+        true => control,
+        false => control.a11y_synthetic_children(|builder| builder.parent_node().set_disabled()),
+    }
+}
+
+/// What an assistive app reads of a pop-up button: a button called by its row's `name`, its value
+/// the item it shows, which says it opens a menu, as Site Controls' rows do.
+pub fn named_popup<E: StatefulInteractiveElement>(
+    control: E,
+    name: impl Into<SharedString>,
+    item: impl Into<SharedString>,
+) -> E {
+    control
+        .role(Role::Button)
+        .aria_label(name)
+        .aria_value(item)
+        .a11y_synthetic_children(|builder| builder.parent_node().set_has_popup(HasPopup::Menu))
+}
+
+/// The keyboard's ring, Focus Sidebar's: `shell.keyed-ring` wide inside the control's plate, in
+/// the ink `ink` is in at `shell.keyed`, while it has the keyboard from a key. A click shows none.
+pub fn ring(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let color = Rgba { a: KEYED, ..ink };
+    move |style| {
+        style.shadow(vec![BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(KEYED_RING),
+            inset: true,
+        }])
+    }
+}
+
+/// The same ring round a control whose own plate fills it, as a switch's pill does, which would
+/// cover a ring inside: just outside its edge, as Site Controls ring a round control.
+pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
+    let color = Rgba { a: KEYED, ..ink };
+    move |style| {
+        style.shadow(vec![BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(KEYED_RING),
+            inset: false,
+        }])
+    }
+}
+
+/// Settings' push button: a tab stop as every button here is, which an assistive app, while one
+/// asks (`a11y`), reads as a button called `title`.
+pub fn stop_button(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    title: impl Into<SharedString>,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let title = title.into();
+    button(look, id, title.clone()).when(a11y, |button| named_button(button, title))
+}
+
+/// Settings' switch, `on`, `slid` of the way there: ⇥ reaches it, Space or Return flips it as its
+/// caller's click does, and an assistive app reads it as a switch called by its row's `name`.
+pub fn stop_switch(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<SharedString>,
+    on: bool,
+    slid: f32,
+    accent: Rgba,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .when(a11y, |control| named_switch(control, name, on))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .rounded_full()
+        .focus_visible(ring_round(look.ink))
+        .relative()
+        .child(switch(look, on, slid, accent))
+}
+
+/// Settings' pop-up button showing `item`: ⇥ reaches it, its caller opens its menu on a press or
+/// on Space or Return, and an assistive app reads it by its row's `name`, with `item` its value.
+pub fn stop_popup(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<SharedString>,
+    item: SharedString,
+    width: f32,
+    open: bool,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    popup(look, item.clone(), width, open)
+        .relative()
+        .id(id)
+        .when(a11y, |control| named_popup(control, name, item))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+}
+
+/// What a Shortcuts chip holds: keys that can change, keys that can't, or none.
+#[derive(Clone, Copy)]
+pub enum Chip {
+    Keys,
+    Fixed,
+    None,
+}
+
+/// Keys as a chip, in `base`, the window's ink, as the command bar shows a command's: quieter for
+/// keys that can't change, and quieter still for None.
+pub fn chip(base: Rgba, keys: SharedString, kind: Chip) -> gpui::Div {
+    let (fill, text) = match kind {
+        Chip::Keys => (CHIP, CHIP_TEXT),
+        Chip::Fixed => (CHIP_FIXED, CHIP_FIXED_TEXT),
+        Chip::None => (CHIP, CHIP_NONE_TEXT),
+    };
+    div()
+        .flex_none()
+        .h(px(CHIP_HEIGHT))
+        .min_w(px(CHIP_WIDTH))
+        .px(px(CHIP_PADDING))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(CHIP_RADIUS))
+        .bg(base.opacity(fill))
+        .text_size(px(SMALL))
+        .text_color(base.opacity(text))
+        .child(keys)
+}
+
+/// A command's chip whose keys can change: ⇥ reaches it, Space or Return records new keys as its
+/// caller's click does, and an assistive app reads it as its row does, "New Tab, ⌘T", by the row's
+/// `name` and the `keys` it shows.
+pub fn stop_chip(
+    look: &Look,
+    base: Rgba,
+    id: impl Into<gpui::ElementId>,
+    name: &str,
+    keys: SharedString,
+    kind: Chip,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let (hovered, pressed) = (look.hovered, look.pressed);
+    let said = format!("{name}, {keys}");
+    chip(base, keys, kind)
+        .id(id)
+        .when(a11y, |chip| named_button(chip, said))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+        .hover(move |chip| chip.bg(hovered))
+        .active(move |chip| chip.bg(pressed))
+}
+
+/// ↺ beside a changed command's chip, which gives the command its row's `name` its own keys back:
+/// ⇥ reaches it, and an assistive app reads it as "Restore Defaults for New Tab", as the page's
+/// Restore Defaults does for every command.
+pub fn stop_restore(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    name: &str,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let (hovered, pressed) = (look.hovered, look.pressed);
+    let said = format!("Restore Defaults for {name}");
+    div()
+        .id(id)
+        .when(a11y, |restore| named_button(restore, said))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
+        .size(px(CHIP_HEIGHT))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(RESTORE_RADIUS))
+        .hover(move |restore| restore.bg(hovered))
+        .active(move |restore| restore.bg(pressed))
+        .relative()
+        .child(
+            svg()
+                .path("icons/rotate-ccw.svg")
+                .size(px(BUTTON_GLYPH))
+                .text_color(look.ink),
+        )
 }
 
 /// A switch's knob slides across over 150 ms (ours).
@@ -306,6 +548,11 @@ pub fn primary(
 fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
     let (hovered, pressed) = (look.hovered, look.pressed);
     control
+        // The keyboard reaches it with ⇥, and Space or Return clicks it. A press clicks it and
+        // leaves the keyboard where a press put it before it was a stop: with the view around it.
+        .tab_index(0)
+        .focus_from_keys_only()
+        .focus_visible(ring(look.ink))
         .flex_none()
         .h(px(CONTROL_HEIGHT))
         .flex()
@@ -412,6 +659,65 @@ pub fn checked_row(
 mod tests {
     use super::*;
 
+    /// A button, a switch and a pop-up, named as Settings names them while VoiceOver asks.
+    struct Named;
+
+    impl Render for Named {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let look = Look::settings(true);
+            let a11y = window.is_a11y_active();
+            let switch = div()
+                .id("switch")
+                .child(switch(&look, true, 1., rgb(0x2ea44f)));
+            let pop_up = popup(&look, "12 hours", 155., false).id("archive");
+            div()
+                .child(
+                    button(&look, "make-default", "Make Default")
+                        .when(a11y, |button| named_button(button, "Make Default")),
+                )
+                .child(switch.when(a11y, |switch| {
+                    named_switch(switch, "Ask before quitting", true)
+                }))
+                .child(pop_up.when(a11y, |pop_up| {
+                    named_popup(pop_up, "Archive Today tabs after", "12 hours")
+                }))
+        }
+    }
+
+    /// VoiceOver reads Settings' controls by their rows' names: a button by its title, a switch
+    /// on, and a pop-up with the item it shows, opening a menu (#1381). With no assistive app
+    /// asking, there's no tree to read.
+    #[gpui::test]
+    fn voiceover_reads_the_controls_by_their_rows(cx: &mut gpui::TestAppContext) {
+        use gpui::accesskit::{HasPopup, Role, Toggled};
+        let (_, cx) = cx.add_window_view(|_, _| Named);
+        cx.run_until_parked();
+        assert!(cx.a11y_tree().is_none(), "a tree with nothing asking");
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let find = |role: Role, label: &str| {
+            let found = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.role() == role && node.label() == Some(label));
+            found
+                .unwrap_or_else(|| panic!("no {role:?} called {label}"))
+                .1
+                .clone()
+        };
+        find(Role::Button, "Make Default");
+        let switch = find(Role::Switch, "Ask before quitting");
+        assert_eq!(switch.toggled(), Some(Toggled::True));
+        let pop_up = find(Role::Button, "Archive Today tabs after");
+        assert_eq!(pop_up.value(), Some("12 hours"));
+        assert_eq!(pop_up.has_popup(), Some(HasPopup::Menu));
+    }
+
     fn contrast(look: &Look, color: Rgba) -> f32 {
         let lum = |c: Rgba| c.r + c.g + c.b;
         (lum(color) - lum(look.surface)).abs()
@@ -441,6 +747,44 @@ mod tests {
         }
     }
 
+    /// Settings' quieter text still reads at WCAG AA's 4.5:1 for small text, in dark and light,
+    /// on what it's drawn over: a row's line on its group, the page's sentence and a heading on
+    /// the card, the keys that can't change and None on their chips, and in the column Chromium
+    /// settings, the sections and the field's "Search" and ⌘F (#1636, where 0.4 read at 2.4:1).
+    #[test]
+    fn the_quiet_text_reads_in_dark_and_light() {
+        use crate::palette::contrast;
+        use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use crate::tokens::settings::{FOOT_TEXT, SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::shell::library::LIBRARY_PLATE;
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            let (card, base, ground) = match dark {
+                true => (rgb(OVERLAY_DARK), rgb(PAPER), rgb(STAND_IN)),
+                false => (rgb(DIALOG_LIGHT), rgb(INK), rgb(LIGHT_STAND_IN)),
+            };
+            let on = |under: Rgba, alpha: f32| (under.blend(base.opacity(alpha)), under);
+            let chip = |fill: f32, text: f32| on(look.surface.blend(base.opacity(fill)), text);
+            let field = ground.blend(base.opacity(LIBRARY_PLATE));
+            let quiet = [
+                ("a row's line", (look.detail, look.surface)),
+                ("an off feature's name", (look.off(), look.surface)),
+                ("the page's sentence", on(card, DETAIL)),
+                ("a heading", (look.heading, card)),
+                ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
+                ("None", chip(CHIP, CHIP_NONE_TEXT)),
+                ("a section", on(ground, SECTION_TEXT)),
+                ("Chromium settings", on(ground, FOOT_TEXT)),
+                ("Search", on(field, DETAIL)),
+                ("⌘F", on(field, SEARCH_HINT)),
+            ];
+            for (what, (text, under)) in quiet {
+                let ratio = contrast(text, under);
+                assert!(ratio >= 4.5, "{what} reads at {ratio:.2}:1, dark {dark}");
+            }
+        }
+    }
+
     /// Dark is the paper over the dark card and light the ink over the light one.
     #[test]
     fn dark_is_light_on_dark() {
@@ -450,5 +794,80 @@ mod tests {
         assert!(!dark.light() && light.light());
         let on = Look::on(dark.surface, dark.ink, dark.accent);
         assert!(dark.edge.is_none() && on.edge.is_some());
+    }
+}
+
+/// What an assistive app finds of a Settings view drawn in a test's window, once one asks: each
+/// place ⇥ stops, front to back, and each control it can press, with the role and name it reads.
+#[cfg(test)]
+pub mod spoken {
+    use gpui::accesskit::{Action, Role};
+    use gpui::{InputEvent, VisualTestContext};
+
+    /// A control as an assistive app reads it: its role, its name, and its value, if any.
+    pub type Said = (Role, String, Option<String>);
+
+    fn said(node: &gpui::accesskit::Node) -> Said {
+        let name = node.label().unwrap_or_default().to_string();
+        (node.role(), name, node.value().map(str::to_string))
+    }
+
+    /// Turns on what an assistive app sees, and lists what VoiceOver's press can press: every
+    /// node that takes a click, a pop-up's and a switch's too.
+    pub fn pressable(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.run_until_parked();
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        (tree.nodes.iter())
+            .filter(|(_, node)| node.supports_action(Action::Click))
+            .map(|(_, node)| said(node))
+            .collect()
+    }
+
+    /// Each place ⇥ stops, from the first round to it again, as an assistive app reads it.
+    pub fn stops(cx: &mut VisualTestContext) -> Vec<Said> {
+        cx.simulate_a11y_activation();
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.focus_next(cx);
+        });
+        cx.run_until_parked();
+        let mut stops = Vec::new();
+        let mut first = None;
+        for _ in 0..40 {
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let Some((id, node)) = (tree.nodes.iter()).find(|(id, _)| *id == tree.focus) else {
+                break;
+            };
+            if first == Some(*id) {
+                break;
+            }
+            first.get_or_insert(*id);
+            stops.push(said(node));
+            cx.update(|window, cx| window.focus_next(cx));
+            cx.run_until_parked();
+        }
+        stops
+    }
+
+    /// `key` pressed and let go, as a keyboard sends it: Space and Return click on the release.
+    pub fn press(key: &'static str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes(key);
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.update(|window, cx| {
+            window.dispatch_event(gpui::KeyUpEvent { keystroke }.to_platform_input(), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// Those of `said` an assistive app can't tell apart: no name, or no role of a control.
+    pub fn unnamed(said: &[Said]) -> Vec<Said> {
+        (said.iter())
+            .filter(|(role, name, _)| {
+                name.is_empty()
+                    || matches!(role, Role::Window | Role::GenericContainer | Role::Unknown)
+            })
+            .cloned()
+            .collect()
     }
 }

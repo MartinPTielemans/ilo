@@ -19,8 +19,8 @@ use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Rgba, Role,
     SharedString, Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb,
+    rgba, size, svg,
 };
 
 use crate::{
@@ -95,6 +95,13 @@ impl Highlight {
 pub struct Swatch {
     pub from: u32,
     pub to: u32,
+}
+
+impl Swatch {
+    /// The mark as a menu draws it on `panel`, ringed where its edge would fade into the panel.
+    pub fn dot(self, panel: Rgba) -> gpui::Div {
+        crate::palette::Swatch::of_two(rgb(self.from), rgb(self.to)).draw(SWATCH, &[panel])
+    }
 }
 
 /// The menu's look: the panel's material, Ink in a dark window and Paper in a light one, and the
@@ -1497,23 +1504,9 @@ impl ContextMenu {
                 )
             })
         });
-        let swatch = entry.swatch.map(|swatch| {
-            let gradient = linear_gradient(
-                135.,
-                linear_color_stop(rgb(swatch.from), 0.),
-                linear_color_stop(rgb(swatch.to), 1.),
-            )
-            .color_space(gpui::ColorSpace::Oklab);
-            let panel = rgb(palette.fill >> 8);
-            let ring =
-                crate::palette::Palette::swatch_ring_of(rgb(swatch.from), rgb(swatch.to), &[panel]);
-            div()
-                .size(px(SWATCH))
-                .flex_none()
-                .rounded_full()
-                .bg(gradient)
-                .when_some(ring, |dot, ring| dot.border_1().border_color(ring))
-        });
+        let swatch = entry
+            .swatch
+            .map(|swatch| swatch.dot(rgb(palette.fill >> 8)));
         let favicon = entry.page.then(|| match entry.favicon.clone() {
             Some(favicon) => img(favicon)
                 .size(px(FAVICON))

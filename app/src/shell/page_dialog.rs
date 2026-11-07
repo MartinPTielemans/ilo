@@ -120,8 +120,12 @@ impl Shell {
         // The user's page is out of the window while a task has the page area, and its dialog
         // waits for it.
         let asked = asked.filter(|_| self.task_area.is_none());
+        // A Little ilo window's own page first, then what a tab it sent behind asks to open.
+        let asked = asked
+            .map(|dialog| (self.selected, dialog))
+            .or_else(|| self.little_sent_asks());
         let wanted = match (asked, self.page_laid) {
-            (Some(dialog), Some(over)) => Some((self.selected, dialog.clone(), over)),
+            (Some((tab, dialog)), Some(over)) => Some((tab, dialog.clone(), over)),
             _ => None,
         };
         let key = wanted

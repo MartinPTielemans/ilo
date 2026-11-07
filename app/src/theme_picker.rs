@@ -14,11 +14,14 @@
 use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, Global, Hsla,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
-    Point, RenderImage, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, actions, canvas, div, fill, point, prelude::*, px,
-    quad, rgb, rgba, size, svg,
+    App, Bounds, Context, DispatchPhase, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
+    Hsla, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
+    Pixels, Point, RenderImage, Stateful, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{Action, Role, Toggled},
+    actions, canvas, div, fill, point,
+    prelude::*,
+    px, quad, rgb, rgba, size, svg,
 };
 use image::{Frame, RgbaImage};
 
@@ -45,6 +48,7 @@ pub const WIDTH: f32 = ARROW + CARD_WIDTH;
 use crate::tokens::theme_picker::DOT_ALPHA;
 /// Its grid of 1 pt dots.
 use crate::tokens::theme_picker::DOT_PITCH;
+use crate::tokens::theme_picker::EDGE_INSET;
 use crate::tokens::theme_picker::FIELD;
 use crate::tokens::theme_picker::FIELD_FILL;
 use crate::tokens::theme_picker::FIELD_INSET;
@@ -124,7 +128,7 @@ const GLIDE: f32 = 0.2;
 pub trait Host {
     /// Shows the picker's window with its top left at `left`, `top` in browser window `window`,
     /// the one that asked for it, with the keyboard, in the shape of `corners` (x, y and radius,
-    /// clockwise from the arrow's tip, which it grows in from).
+    /// clockwise from the first, which it grows in from).
     fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
@@ -164,8 +168,8 @@ struct Editing {
     /// The appearance chosen before there's a colour, for the first one to take.
     appearance: Appearance,
     changed: Changed,
-    /// The arrow's tip, down the window.
-    arrow_y: f32,
+    /// The arrow's tip, down the window, if it has one.
+    arrow_y: Option<f32>,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
     drag: Option<Drag>,
@@ -265,41 +269,65 @@ pub fn open_at(
     }
 }
 
-/// The card's corners with the arrow's tip `arrow_y` down the window, from the window's top left,
-/// clockwise from the tip, each with the radius it's rounded by.
-pub fn corners(arrow_y: f32) -> [(f32, f32, f32); 7] {
-    [
-        (0., arrow_y, ARROW_TIP_RADIUS),
-        (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS),
+/// Where the picker opens in the browser window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum At {
+    /// Beside a row, its arrow pointing at the middle of the row's right end: the Create a Space
+    /// form's Choose a Theme row, or a Library card's brush.
+    Row(Point<f32>),
+    /// With no arrow, against the sidebar's edge this far across, at the window's top, as Arc
+    /// 1.171's opens from the Space's menu, over the page rather than the sidebar it colours.
+    Edge(f32),
+}
+
+/// The card's corners from the window's top left, each with the radius it's rounded by, clockwise
+/// from where it grows in from: the arrow's tip `arrow_y` down the window, or with no arrow the
+/// card's top left.
+pub fn corners(arrow_y: Option<f32>) -> Vec<(f32, f32, f32)> {
+    let card = [
         (ARROW, 0., RADIUS),
         (WIDTH, 0., RADIUS),
         (WIDTH, HEIGHT, RADIUS),
         (ARROW, HEIGHT, RADIUS),
-        (ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS),
-    ]
+    ];
+    let Some(arrow_y) = arrow_y else {
+        return card.to_vec();
+    };
+    let mut corners = vec![
+        (0., arrow_y, ARROW_TIP_RADIUS),
+        (ARROW, arrow_y - ARROW, ARROW_FOOT_RADIUS),
+    ];
+    corners.extend(card);
+    corners.push((ARROW, arrow_y + ARROW, ARROW_FOOT_RADIUS));
+    corners
 }
 
-/// Where the window goes for its arrow to point at `anchor`, the middle of a row's right end, in a
-/// browser window `height` tall: its top left, and the arrow's tip down it. The card centres on
-/// the arrow, as Arc's does, unless that takes it past the browser window's top or bottom.
-pub fn placed(anchor: Point<f32>, height: f32) -> (f32, f32, f32) {
+/// Where the window goes in a browser window `height` tall: its top left, and the arrow's tip
+/// down it if it has one. Beside a row, the card centres on the arrow, as Arc's does, unless that
+/// takes it past the browser window's top or bottom.
+pub fn placed(at: At, height: f32) -> (f32, f32, Option<f32>) {
+    let anchor = match at {
+        // The window is as wide as the card and its arrow, so it starts that far left of the card.
+        At::Edge(x) => return (x + EDGE_INSET - ARROW, EDGE_INSET, None),
+        At::Row(anchor) => anchor,
+    };
     let top = (anchor.y - HEIGHT / 2.)
         .min(height - MARGIN - HEIGHT)
         .max(MARGIN);
     // The tip keeps clear of the card's rounded corners.
     let reach = RADIUS + ARROW + ARROW_FOOT_RADIUS;
     let arrow_y = (anchor.y - top).clamp(reach, HEIGHT - reach);
-    (anchor.x + GAP - TIP_SHORT, top, arrow_y)
+    (anchor.x + GAP - TIP_SHORT, top, Some(arrow_y))
 }
 
-/// Shows the picker for `space`, which has `theme` or none yet, pointing at `anchor`, the middle
-/// of a row's right end, in browser window `over`, `height` tall. `changed` gets the theme as the
-/// user makes it. A context menu in a window behind another asks for it there.
+/// Shows the picker for `space`, which has `theme` or none yet, `at` its place in browser window
+/// `over`, `height` tall. `changed` gets the theme as the user makes it. A context menu in a
+/// window behind another asks for it there.
 pub fn show(
     over: u64,
     space: u64,
     theme: Option<Theme>,
-    anchor: Point<f32>,
+    at: At,
     height: f32,
     changed: Changed,
     cx: &mut App,
@@ -311,7 +339,7 @@ pub fn show(
         .update(cx, |picker, window, cx| {
             // check.sh reads this line.
             log!("browser: theme picker for {space}");
-            let (left, top, arrow_y) = placed(anchor, height);
+            let (left, top, arrow_y) = placed(at, height);
             picker.editing = Some(Editing {
                 space,
                 theme,
@@ -439,6 +467,65 @@ fn knob_x(intensity: f32) -> f32 {
 }
 
 /// The intensity for the knob's middle at `x` in the card.
+/// What an assistive app calls the swatch of `color`: its hue's name, or for one with little
+/// colour, how light it is, a bluish grey being slate.
+fn swatch_name(color: u32) -> &'static str {
+    let [r, g, b] = [16, 8, 0].map(|shift| ((color >> shift) & 0xff) as f32 / 255.);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let chroma = max - min;
+    let hue = match () {
+        _ if chroma == 0. => 0.,
+        _ if max == r => 60. * ((g - b) / chroma).rem_euclid(6.),
+        _ if max == g => 60. * ((b - r) / chroma + 2.),
+        _ => 60. * ((r - g) / chroma + 4.),
+    };
+    let lightness = (max + min) / 2.;
+    if chroma < 0.14 {
+        return match () {
+            _ if lightness > 0.85 => "White",
+            _ if lightness < 0.15 => "Black",
+            _ if chroma > 0.05 && (200. ..260.).contains(&hue) => "Slate",
+            _ => "Gray",
+        };
+    }
+    match hue {
+        hue if !(15. ..345.).contains(&hue) => "Red",
+        hue if hue < 45. => "Orange",
+        hue if hue < 70. => "Yellow",
+        hue if hue < 170. => "Green",
+        hue if hue < 200. => "Teal",
+        hue if hue < 260. => "Blue",
+        hue if hue < 320. => "Purple",
+        _ => "Pink",
+    }
+}
+
+/// What an assistive app reads of a slider called `name` at `value` of 0 to 1, in percent, a tenth
+/// a step, which its increment and decrement move by, as `step` does.
+fn slider(
+    element: Stateful<Div>,
+    name: &'static str,
+    value: Option<f32>,
+    step: impl Fn(f32, &mut App) + 'static,
+) -> Stateful<Div> {
+    let step = Rc::new(step);
+    let down = step.clone();
+    element
+        .role(Role::Slider)
+        .aria_label(name)
+        .aria_min_numeric_value(0.)
+        .aria_max_numeric_value(100.)
+        .aria_numeric_value_step(10.)
+        .when_some(value, |slider, value| {
+            slider.aria_numeric_value((value * 100.).round() as f64)
+        })
+        .when(value.is_none(), |slider| {
+            slider.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+        })
+        .on_a11y_action(Action::Increment, move |_, _, cx| step(0.1, cx))
+        .on_a11y_action(Action::Decrement, move |_, _, cx| down(-0.1, cx))
+}
+
 fn intensity_at(x: f32) -> f32 {
     ((x - KNOB_LEFT) / (KNOB_RIGHT - KNOB_LEFT)).clamp(0., 1.)
 }
@@ -529,6 +616,34 @@ impl ThemePicker {
             (editing.changed.clone())(theme, done, cx);
         }
         cx.notify();
+    }
+
+    /// Moves the intensity or the grain `by`, as VoiceOver's increment and decrement do, and keeps
+    /// it.
+    fn step(&mut self, drag: Drag, by: f32, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return;
+        };
+        let Some(theme) = editing.theme else {
+            return;
+        };
+        // To the nearest tenth, so the steps read as whole tens of percent.
+        let stepped = |value: f32| (((value + by) * 10.).round() / 10.).clamp(0., 1.);
+        let moved = match drag {
+            Drag::Intensity => Theme {
+                intensity: stepped(theme.intensity),
+                ..theme
+            },
+            Drag::Grain => Theme {
+                grain: stepped(theme.grain),
+                ..theme
+            },
+            Drag::Handle(..) => return,
+        };
+        if moved != theme {
+            editing.theme = Some(moved);
+            self.changed(true, cx);
+        }
     }
 
     fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
@@ -985,7 +1100,12 @@ impl Render for ThemePicker {
         // the empty one drawn as the window was made. So every frame takes the keys, the press and
         // the release, the press read against the picker as it is now, and a click as the picker
         // appears isn't lost.
+        let a11y = window.is_a11y_active();
         let picker = div()
+            .id("theme-picker")
+            .when(a11y, |picker| {
+                picker.role(Role::Dialog).aria_label("Space Theme")
+            })
             .key_context("ThemePicker")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::dismiss))
@@ -1101,7 +1221,26 @@ impl Render for ThemePicker {
         )
         .absolute()
         .size_full();
+        let colours = match theme.map_or(0, |theme| theme.count) {
+            0 => "Colors, none".to_string(),
+            1 => "Colors, 1".to_string(),
+            count => format!("Colors, {count}"),
+        };
         let mut field = div()
+            .id("theme-field")
+            // Its press on the empty field places the first colour in its middle, as a click does.
+            .when(a11y, |field| {
+                field
+                    .role(Role::Group)
+                    .aria_label(colours)
+                    .when(theme.is_none(), |field| {
+                        field
+                            .aria_description(HINT)
+                            .a11y_synthetic_children(|builder| {
+                                builder.parent_node().add_action(Action::Click)
+                            })
+                    })
+            })
             .absolute()
             .left(card_x(FIELD_INSET))
             .top(px(FIELD_INSET))
@@ -1166,7 +1305,28 @@ impl Render for ThemePicker {
                     Appearance::Light => "icons/sun.svg",
                     Appearance::Dark => "icons/moon-star.svg",
                 };
+                let name = match appearance {
+                    Appearance::Automatic => "Automatic",
+                    Appearance::Light => "Light",
+                    Appearance::Dark => "Dark",
+                };
+                let toggled = if appearance == chosen {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                };
                 div()
+                    .id(name)
+                    // The picker answers presses where they land, so its press is a click there.
+                    .when(a11y, |plate| {
+                        plate
+                            .role(Role::RadioButton)
+                            .aria_label(name)
+                            .aria_toggled(toggled)
+                            .a11y_synthetic_children(|builder| {
+                                builder.parent_node().add_action(Action::Click)
+                            })
+                    })
                     .absolute()
                     .left(card_x(x - APPEARANCE_PLATE / 2.))
                     .top(px(APPEARANCE_Y - APPEARANCE_PLATE / 2.))
@@ -1189,7 +1349,25 @@ impl Render for ThemePicker {
         let count = theme.map_or(0, |theme| theme.count);
         let count_button = |target: Target, x: f32, glyph: &'static str, enabled: bool| {
             let color = count_color(&palette, enabled, editing.pressed == Some(target));
+            let name = if target == Target::Add {
+                "Add Color"
+            } else {
+                "Remove Color"
+            };
             div()
+                .id(name)
+                .when(a11y, |button| {
+                    button
+                        .role(Role::Button)
+                        .aria_label(name)
+                        .a11y_synthetic_children(move |builder| {
+                            let node = builder.parent_node();
+                            node.add_action(Action::Click);
+                            if !enabled {
+                                node.set_disabled();
+                            }
+                        })
+                })
                 .absolute()
                 .left(card_x(x - COUNT_TARGET / 2.))
                 .top(px(COUNT_Y - COUNT_TARGET / 2.))
@@ -1210,6 +1388,15 @@ impl Render for ThemePicker {
         let behind = palette.overlay;
         let swatches = self.swatches.iter().enumerate().map(|(index, swatch)| {
             div()
+                .id(("swatch", index))
+                .when(a11y, |plate| {
+                    plate
+                        .role(Role::Button)
+                        .aria_label(swatch_name(SWATCHES[index]))
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().add_action(Action::Click)
+                        })
+                })
                 .absolute()
                 .left(card_x(SWATCH_X + SWATCH_PITCH * index as f32 - SWATCH / 2.))
                 .top(px(SWATCH_Y - SWATCH / 2.))
@@ -1307,6 +1494,39 @@ impl Render for ThemePicker {
         .top_0()
         .left_0()
         .size_full();
+        // What an assistive app reads of the wave and the dial, which are drawn, as sliders where
+        // they lie.
+        let sliders = a11y.then(|| {
+            let entity = cx.weak_entity();
+            let stepper = move |drag: Drag| {
+                let entity = entity.clone();
+                move |by: f32, cx: &mut App| {
+                    entity
+                        .update(cx, |picker, cx| picker.step(drag, by, cx))
+                        .ok();
+                }
+            };
+            let intensity = div()
+                .id("theme-intensity")
+                .absolute()
+                .left(card_x(TRACK_LEFT))
+                .top(px(SLIDER_Y - KNOB_HEIGHT / 2.))
+                .w(px(TRACK_RIGHT - TRACK_LEFT))
+                .h(px(KNOB_HEIGHT));
+            let value = theme.map(|theme| theme.intensity);
+            let intensity = slider(intensity, "Intensity", value, stepper(Drag::Intensity));
+            let grain = div()
+                .id("theme-grain")
+                .absolute()
+                .left(card_x(DIAL.0 - DIAL_DISC))
+                .top(px(DIAL.1 - DIAL_DISC))
+                .size(px(DIAL_DISC * 2.));
+            let value = theme.map(|theme| theme.grain);
+            [
+                intensity,
+                slider(grain, "Grain", value, stepper(Drag::Grain)),
+            ]
+        });
         // The grain in the dial's disc, as it lies over the window.
         let dial_grain = theme.filter(|theme| theme.grain > 0.).map(|theme| {
             div()
@@ -1345,6 +1565,7 @@ impl Render for ThemePicker {
                 .children(swatches)
                 .child(controls)
                 .children(dial_grain)
+                .children(sliders.into_iter().flatten())
                 .children(keyed_ring),
         )
     }

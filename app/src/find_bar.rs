@@ -16,7 +16,10 @@ use browser::{
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight, Global, KeyBinding,
     Pixels, Point, SharedString, Size, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point, prelude::*,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions,
+    accesskit::{Live, Role},
+    actions, canvas, div, point,
+    prelude::*,
     px, rgb, rgba, size, svg,
 };
 
@@ -228,9 +231,31 @@ pub fn show(browser: bc::bc_id, tab: u64, cx: &mut App) {
             .update(cx, |input, cx| input.reset(text.into(), window, cx));
         bar.ui_view
     });
-    if let Ok(ui_view) = ui_view {
-        unsafe { platform::host_show_find_bar(ui_view, true) };
+    let Ok(ui_view) = ui_view else {
+        return;
+    };
+    // On Windows the field takes a character only once the bar has drawn with it, which a bar the
+    // host shows for the first time hasn't: the keys held since the shortcut, given as the bar
+    // takes the keyboard, came before its first frame, and the first was lost (#1917). So the bar
+    // shows first and takes the keyboard, and with it the held keys, once it has drawn: from a task
+    // its next frame starts, outside the frame, as taking the keyboard tells its window at once.
+    // Until then the keys are held, as only a shortcut the page gets first holds them: from the UI,
+    // keys typed before that frame went to the browser window and were lost.
+    #[cfg(target_os = "windows")]
+    {
+        unsafe { platform::host_hold_keys() };
+        unsafe { platform::host_show_find_bar(ui_view, false) };
+        let shown = window.update(cx, |_, window, _| {
+            window.on_next_frame(move |_, cx| {
+                cx.spawn(async move |_| unsafe { platform::host_show_find_bar(ui_view, true) })
+                    .detach();
+            });
+        });
+        if shown.is_ok() {
+            return;
+        }
     }
+    unsafe { platform::host_show_find_bar(ui_view, true) };
 }
 
 /// Goes to `tab`'s next match, or the one before, opening its find bar over the browser window
@@ -460,10 +485,27 @@ impl FindBar {
             )
     }
 
-    /// A 28 pt button with `icon`, which dims while it can't be used.
-    fn button(id: &'static str, icon: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    /// A 28 pt button with `icon`, which dims while it can't be used, and which an assistive app
+    /// reads as `name`, its tooltip's, if it's asked for the tree.
+    fn button(
+        id: &'static str,
+        icon: &'static str,
+        name: &'static str,
+        enabled: bool,
+        a11y: bool,
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
+            .when(a11y, |button| {
+                button
+                    .role(Role::Button)
+                    .aria_label(name)
+                    .a11y_synthetic_children(move |builder| {
+                        if !enabled {
+                            builder.parent_node().set_disabled();
+                        }
+                    })
+            })
             .flex_none()
             .size(px(BUTTON))
             .flex()
@@ -485,7 +527,8 @@ impl FindBar {
 }
 
 impl Render for FindBar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let a11y = window.is_a11y_active();
         let found = self.found();
         // Arc's count, "1/12", and its previous and next, or "NOT FOUND" in their place.
         let (status, matches) = match found {
@@ -500,20 +543,37 @@ impl Render for FindBar {
         );
         let enabled = matches.is_some();
         let not_found = found.is_some() && !enabled;
-        let previous = Self::button("previous", "icons/chevron-up.svg", enabled);
+        let previous = Named::Previous.named().0;
+        let previous = Self::button("previous", "icons/chevron-up.svg", previous, enabled, a11y);
         let previous = self
             .named(previous, Named::Previous, cx)
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(false, cx)))
             });
-        let next = Self::button("next", "icons/chevron-down.svg", enabled);
+        let next = Named::Next.named().0;
+        let next = Self::button("next", "icons/chevron-down.svg", next, enabled, a11y);
         let next = self
             .named(next, Named::Next, cx)
             .ml(px(-ARROW_OVERLAP))
             .when(enabled, |button| {
                 button.on_click(cx.listener(|bar, _, _, cx| bar.find_next(true, cx)))
             });
+        // What it says, said as it changes after what's typed, wherever VoiceOver's cursor is:
+        // "1 of 12" rather than its slash, and "not found" rather than its capitals.
+        let said = match found {
+            Some((_, 0)) => "Not found".to_string(),
+            Some((selected, matches)) => format!("{selected} of {matches}"),
+            None => String::new(),
+        };
         let status = div()
+            .id("matches")
+            .when(a11y, |status| {
+                status
+                    .role(Role::Status)
+                    .aria_label("Matches")
+                    .aria_value(said)
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_live(Live::Polite))
+            })
             .flex_none()
             .mr(px(COUNT_GAP))
             .when(not_found, |status| {
@@ -533,7 +593,7 @@ impl Render for FindBar {
             .flex()
             .justify_center()
             .child(div().w(px(1.)).h_full().bg(rgba(DIVIDER)));
-        let close = Self::button("close", "icons/x.svg", true);
+        let close = Self::button("close", "icons/x.svg", Named::Close.named().0, true, a11y);
         let close = self
             .named(close, Named::Close, cx)
             .on_click(cx.listener(|bar, _, window, cx| bar.close(&Close, window, cx)));

@@ -1099,6 +1099,53 @@ fn the_archives_delete_and_clear_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["archive clear as 9004"]);
 }
 
+/// A page or search the command bar took out of history is the window's step, Remove from
+/// History: ⌘Z puts it back and ⇧⌘Z takes it out again. The bar's field, which has no undo of its
+/// own, steps only a removal, so ⌘Z there never undoes something out of sight under the bar.
+#[gpui::test]
+fn a_removal_from_history_is_undone_and_done_again(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    let in_bar = |shell: &Entity<Shell>, undoing: bool, cx: &mut TestAppContext| {
+        shell.update(cx, |shell, cx| shell.step_suggestion_removal(undoing, cx))
+    };
+    shell.update(cx, |shell, cx| shell.suggestion_removed(7, cx));
+    assert_eq!(titles(&shell, cx), (Some("Remove from History"), None));
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["put back removal 7"]);
+    assert_eq!(titles(&shell, cx), (None, Some("Remove from History")));
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["remove again removal 7"]);
+    assert!(in_bar(&shell, true, cx));
+    assert!(in_bar(&shell, false, cx));
+    assert_eq!(
+        host.take_edits(),
+        ["put back removal 7", "remove again removal 7"]
+    );
+
+    // With a closed tab next, the bar's ⌘Z does nothing, and the window's reopens it.
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    report(&shell, cx, Vec::new(), vec![10]);
+    host.take_edits();
+    assert!(!in_bar(&shell, true, cx));
+    assert_eq!(host.take_edits(), Vec::<String>::new());
+
+    // One the core no longer keeps is dropped, and the bar goes no further than the removals.
+    shell.update(cx, |shell, cx| shell.suggestion_removed(8, cx));
+    host.lost_removals.borrow_mut().push(8);
+    assert!(!in_bar(&shell, true, cx));
+    assert_eq!(host.take_edits(), Vec::<String>::new());
+    assert_eq!(titles(&shell, cx).0, Some("Close Tab"));
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["reopen 11 as 1001"]);
+
+    // Nothing is kept for a removal that took nothing out, so the redo stays.
+    shell.update(cx, |shell, cx| shell.suggestion_removed(0, cx));
+    assert_eq!(
+        titles(&shell, cx),
+        (Some("Remove from History"), Some("Close Tab"))
+    );
+}
+
 fn archived(id: u64) -> Archived {
     Archived {
         id,

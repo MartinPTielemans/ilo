@@ -104,11 +104,16 @@ impl Mode {
 
     /// What ⇧⌘2 does: the shell's `start`.
     fn start(&mut self) {
+        self.start_from(None);
+    }
+
+    /// The shell's `start`, for ⇧⌘2 or, with `press`, a ⇧⌘-drag on the page from there.
+    fn start_from(&mut self, press: Option<Point<Pixels>>) {
         let frame = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(600.)));
         let library = self.library;
         self.cx
             .cx
-            .update(|cx| start(TAB, frame, 8., library, Look::dark(), cx));
+            .update(|cx| start(TAB, frame, 8., library, Look::dark(), press, cx));
         self.cx.run_until_parked();
     }
 
@@ -286,6 +291,33 @@ fn a_drag_takes_the_rectangle_dragged(cx: &mut TestAppContext) {
             format!("save {len}")
         ]
     );
+}
+
+#[gpui::test]
+fn a_shift_cmd_drag_on_the_page_takes_the_rectangle_dragged(cx: &mut TestAppContext) {
+    let mut mode = Mode::new(cx);
+    // The page's window keeps the pointer, so its moves come from the core, the first before the
+    // picture of the page has.
+    mode.start_from(Some(point(px(100.), px(100.))));
+    mode.cx
+        .cx
+        .update(|cx| page_dragged(TAB, point(px(200.), px(150.)), cx));
+    mode.captured(1);
+    assert_eq!(
+        mode.calls(),
+        [format!("capture {TAB} 1 view"), "show 0 0 800 600".into()]
+    );
+    // Another ⇧⌘-drag's start, past its window, doesn't leave, as ⇧⌘2's second press does.
+    mode.start_from(Some(point(px(10.), px(10.))));
+    mode.cx
+        .cx
+        .update(|cx| page_dragged(TAB, point(px(300.), px(250.)), cx));
+    mode.cx.cx.update(|cx| page_released(TAB, cx));
+    mode.cx.run_until_parked();
+    assert_eq!(mode.calls(), ["camera false"]);
+    let menu = point(100. - RING + MENU_LEFT, 100. - RING);
+    mode.click(menu.x + MENU_WIDTH / 2., menu.y + row(Action::Copy));
+    assert_eq!(mode.calls(), [format!("capture {TAB} 2 100 100 200 150")]);
 }
 
 #[gpui::test]

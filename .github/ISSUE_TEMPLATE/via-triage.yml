@@ -39,9 +39,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: The commit the bug happened on, or unknown.
-      placeholder: a9a6941a
+      label: ilo version
+      description: The ilo version and build that Settings › About shows, the commit for a build from source, or unknown.
+      placeholder: 0.1.0 (4321)
     validations:
       required: true
 
@@ -49,7 +49,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Chromium version, macOS version and chip, prod or dev build, extensions if relevant.
+      description: Chromium version, the system and its version and chip (on Linux Wayland or X11 and the desktop, on Windows how ilo is installed), prod or dev build, extensions if relevant.
       placeholder: Chromium 155.0.8059.84, macOS 26.1 arm64, prod build, uBlock Origin
     validations:
       required: true

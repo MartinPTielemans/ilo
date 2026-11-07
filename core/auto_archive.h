@@ -1,6 +1,8 @@
 #ifndef BROWSER_CORE_AUTO_ARCHIVE_H_
 #define BROWSER_CORE_AUTO_ARCHIVE_H_
 
+#include <optional>
+
 #include "base/time/time.h"
 
 class Profile;
@@ -28,11 +30,11 @@ void RegisterArchivePrefs();
 void GiveArchiveDefault(Profile* profile);
 // The Spaces were read: gives the default to the profiles loaded before, and those loaded after.
 void ArchiveDefaultRead();
-// |profile|'s time, or the default for one that has none yet.
-base::TimeDelta ProfileArchiveAfter(Profile* profile);
-// Sets |profile|'s time, and returns whether it did: not for no profile or a time that isn't
-// positive.
-bool SetProfileArchiveAfter(Profile* profile, base::TimeDelta after);
+// |profile|'s time, or the default for one that has none yet; none for Never.
+std::optional<base::TimeDelta> ProfileArchiveAfter(Profile* profile);
+// Sets |profile|'s time, none for Never, and returns whether it did: not for no profile or a time
+// that isn't positive.
+bool SetProfileArchiveAfter(Profile* profile, std::optional<base::TimeDelta> after);
 // The note on the first tabs auto-archive takes: shown from then until the user dismisses it, and
 // never again after that (bc_archive_note).
 bool ArchiveNoteShown();

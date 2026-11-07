@@ -380,6 +380,12 @@ fn states(palette: &Palette, theme: Option<&Theme>) -> Vec<(String, Hsla, f32, V
             TEXT,
             lay(&window, toast::CHIP_FILL, &PRESSABLE),
         ),
+        (
+            "page chip key",
+            palette.text(shell::conversation::CHIP_KEY),
+            TEXT,
+            lay(&window, toast::CHIP_FILL, &PRESSABLE),
+        ),
         // On the overlays.
         (
             "command bar row",
@@ -957,6 +963,53 @@ fn a_shimmer_draws_as_lit() {
         assert!(
             (drawn - meant).abs() < 1e-4,
             "{lit} lit drew {drawn}, not {meant}"
+        );
+    }
+}
+
+/// A Space's swatch of two colours reads as its main colour, the one its accents take, with the
+/// second the smaller part, lying as the window's gradient does (#1849). GPUI's 135° runs a disc
+/// from its top left edge at 0 to its bottom right at 1, so the middle, and most of the disc, lies
+/// nearer the main colour there, and the second still shows whole at the far edge. The window's
+/// own 75 % left the middle two thirds of the way to the second.
+#[test]
+fn a_two_colour_swatch_reads_as_its_main_colour() {
+    let orange_blue = theme(2, 0., "automatic", 30., 1., 0.55, DEFAULT_INTENSITY);
+    let [main, second] = [0, 1].map(|index| rgb(orange_blue.colors()[index]));
+    let swatches = [
+        ("a theme's", Swatch::of_theme(Some(&orange_blue))),
+        ("a menu's", Swatch::of_two(main, second)),
+    ];
+    let distance = |a: Rgba, b: Rgba| (a.r - b.r).hypot(a.g - b.g).hypot(a.b - b.b);
+    for (which, swatch) in swatches {
+        assert_eq!((swatch.from, swatch.to, swatch.angle), (main, second, 135.));
+        let toward_second =
+            |along: f32| ((along - swatch.from_at) / (swatch.to_at - swatch.from_at)).clamp(0., 1.);
+        let color = |along: f32| theme::mix_oklab(main, second, toward_second(along));
+        let middle = color(0.5);
+        assert!(
+            distance(middle, main) < distance(middle, second),
+            "{which} middle is nearer its second colour: {:06x}",
+            hex(middle)
+        );
+        assert_eq!(hex(color(0.)), hex(main), "{which} top left");
+        assert_eq!(hex(color(1.)), hex(second), "{which} bottom right");
+        // The disc's share nearer the main colour, at points 1/40 of it apart.
+        let points: Vec<f32> = (0..40)
+            .flat_map(|i| {
+                (0..40).map(move |j| ((i as f32 + 0.5) / 40. - 0.5, (j as f32 + 0.5) / 40. - 0.5))
+            })
+            .filter(|(x, y)| x.hypot(*y) <= 0.5)
+            .map(|(x, y)| 0.5 + (x + y) * std::f32::consts::FRAC_1_SQRT_2)
+            .collect();
+        let main_share = points
+            .iter()
+            .filter(|&&along| distance(color(along), main) < distance(color(along), second))
+            .count() as f32
+            / points.len() as f32;
+        assert!(
+            main_share > 0.6,
+            "{which} disc is {main_share:.2} its main colour"
         );
     }
 }
