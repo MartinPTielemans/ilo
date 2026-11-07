@@ -143,6 +143,1231 @@ index d7849d0c4a..ea6788943e 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          dispatch!(self, connection => connection.window_stack(), headless => None)
      }
+diff --git a/crates/gpui_linux/src/linux/file_drag.rs b/crates/gpui_linux/src/linux/file_drag.rs
+new file mode 100644
+index 0000000000..a202ddef4e
+--- /dev/null
++++ b/crates/gpui_linux/src/linux/file_drag.rs
+@@ -0,0 +1,91 @@
++//! The system's drag of a file out of an embedder's windows, as a browser hands a download to the
++//! file manager: XDND on X11 (x11/drag.rs), the data device's drag under Wayland. It starts from
++//! the press the left button holds.
++
++use std::{cell::RefCell, path::Path};
++
++use http_client::Url;
++
++#[allow(unused_imports)]
++use super::DisplayConnection;
++
++/// How a drag `start_drag` started ended.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub enum DragEnd {
++    /// A target took it.
++    Taken,
++    /// Let go where none took it, at this point on the screen, in its logical pixels, where the
++    /// display says, as X11 does and Wayland doesn't.
++    LetGo(Option<(f32, f32)>),
++    /// Cancelled, as Escape does.
++    Cancelled,
++}
++
++thread_local! {
++    static ENDED: RefCell<Option<Box<dyn FnOnce(DragEnd)>>> = const { RefCell::new(None) };
++}
++
++/// Starts the system's drag of the file at `path`, a full path, while the left button is held
++/// after going down in one of GPUI's windows. Anywhere it's let go may take a copy. `ended` runs
++/// once it's let go, with whether something took it. Returns false, and `ended` never runs, if it
++/// didn't start.
++pub fn start_file_drag(path: &Path, ended: impl FnOnce(bool) + 'static) -> bool {
++    let Ok(url) = Url::from_file_path(path) else {
++        return false;
++    };
++    let uri_list = format!("{url}\r\n");
++    start_drag("text/uri-list", uri_list.into_bytes(), move |end| {
++        ended(end == DragEnd::Taken)
++    })
++}
++
++/// Starts the system's drag of `data`, as the type `mime`, as `start_file_drag` does a file's: an
++/// embedder's own type that only its own targets take, such as a browser's tab. `ended` runs once
++/// it ends. Returns false, and `ended` never runs, if it didn't start.
++pub fn start_drag(mime: &str, data: Vec<u8>, ended: impl FnOnce(DragEnd) + 'static) -> bool {
++    let started = super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::start_drag(mime, data),
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => x11.start_drag(mime, data),
++        #[allow(unreachable_patterns)]
++        _ => false,
++    });
++    if started == Some(true) {
++        ENDED.set(Some(Box::new(ended)));
++        return true;
++    }
++    false
++}
++
++/// Shows `rgba`, `width` by `height` top-down RGBA pixels at `scale` device pixels a logical one,
++/// under the pointer of the drag `start_drag` started, with the pointer at `hold` in it, in its
++/// pixels, as the picture of what's dragged: XDND's drag icon window on X11, the data device's
++/// icon surface under Wayland. Returns whether it shows.
++pub fn set_drag_icon(width: u32, height: u32, rgba: &[u8], hold: (i32, i32), scale: f32) -> bool {
++    #[allow(unused_variables)]
++    let shown = super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => {
++            super::wayland::set_drag_icon(width, height, rgba, hold, scale)
++        }
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let (Ok(across), Ok(down)) = (u16::try_from(width), u16::try_from(height)) else {
++                return false;
++            };
++            let hold = (hold.0.clamp(0, across.into()) as i16, hold.1.clamp(0, down.into()) as i16);
++            x11.set_drag_icon(across, down, rgba, hold)
++        }
++        #[allow(unreachable_patterns)]
++        _ => false,
++    });
++    shown == Some(true)
++}
++
++/// The drag `start_drag` started ended, `end`.
++pub(crate) fn drag_ended(end: DragEnd) {
++    if let Some(ended) = ENDED.take() {
++        ended(end);
++    }
++}
+diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
+new file mode 100644
+index 0000000000..bb6c40d819
+--- /dev/null
++++ b/crates/gpui_linux/src/linux/overlay.rs
+@@ -0,0 +1,1122 @@
++//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
++//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
++//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
++//! with the keyboard gets the keys until it hides, and the embedder hears when the user leaves it:
++//! a press outside it, or the keyboard going to another window. A panel, such as a find bar, stays
++//! in its window instead (`set_overlay_panel`), and takes the keys and gives them back while it
++//! shows (`set_overlay_keyboard`). One that keeps the keys while it shows, such as a dialog, takes
++//! them back when the user left it (`take_overlay_keyboard`).
++//!
++//! The embedder asks from inside GPUI's updates, where the overlay can't draw, so what it asks of
++//! the display happens once GPUI's loop next runs, in order, as does telling it the user left.
++//! Under Wayland that waits for the embedder to have read its display
++//! (`dispatch_embedded_after_read`): Vulkan sets a surface up with a roundtrip, which would wait
++//! forever for a read the embedder has prepared and not finished.
++
++use std::{cell::RefCell, collections::VecDeque, ffi::c_void};
++
++use calloop::ping::Ping;
++use gpui::{Bounds, Pixels, Point, Size};
++#[allow(unused_imports)]
++use gpui_util::ResultExt as _;
++#[cfg(feature = "x11")]
++use x11rb::protocol::{
++    xkb,
++    xproto::{self, ConnectionExt as _},
++};
++
++#[allow(unused_imports)]
++use super::DisplayConnection;
++
++struct Shown {
++    view: usize,
++    keyboard: bool,
++    /// Shown, with the keys from now on: the key that asked for it, which reaches GPUI too, isn't
++    /// the overlay's.
++    ready: bool,
++    /// Told once the user leaves the overlay; the embedder hides it then.
++    left: Option<fn(*mut c_void)>,
++    /// Which time it shows, so leaving it is never told to its next showing: a right-click
++    /// elsewhere hides a menu and shows the next under the same view before it's told.
++    showing: u64,
++}
++
++#[allow(dead_code)]
++enum Op {
++    Show {
++        view: usize,
++        parent: usize,
++        bounds: Bounds<Pixels>,
++        radius: Pixels,
++        keyboard: bool,
++    },
++    Move {
++        view: usize,
++        bounds: Bounds<Pixels>,
++        radius: Pixels,
++    },
++    Hide {
++        view: usize,
++        keyboard: bool,
++        hidden: Box<dyn FnOnce()>,
++    },
++    /// The user left the overlay, as it showed then.
++    Left(usize, u64),
++    /// An overlay that shows takes the keys, or gives them back.
++    Keyboard {
++        view: usize,
++        keyboard: bool,
++    },
++    /// An overlay that has the keys takes them again: from wherever they are after a press in it
++    /// (`pressed`), or else only from the embedder's own windows, not from another app's.
++    Retake {
++        view: usize,
++        pressed: bool,
++    },
++    /// A press in a panel that shows without the keys.
++    Pressed(usize),
++    /// A window of the embedder's own shows, centred over `over` the first time (`show_window`).
++    ShowWindow {
++        view: usize,
++        over: usize,
++    },
++    HideWindow(usize),
++    /// The keyboard left the embedder's window, unless it's back by the time this runs, as a
++    /// compositor sends a leave and an enter together when the keyboard's keymap changes.
++    KeyboardLeft,
++    /// An overlay that shows takes the pointer where `set_overlay_pointer` last said.
++    Pointer(usize),
++    /// Whether Control is held, for `watch_control`.
++    Control,
++}
++
++thread_local! {
++    static SHOWN: RefCell<Vec<Shown>> = const { RefCell::new(Vec::new()) };
++    static SHOWINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++    static OPS: RefCell<VecDeque<Op>> = const { RefCell::new(VecDeque::new()) };
++    /// Under Wayland, the overlays the last press left, until the ops it led to have run
++    /// (`left_by_press`).
++    static LEFT_BY_PRESS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
++    static PING: RefCell<Option<Ping>> = const { RefCell::new(None) };
++    /// On X11, the window that had the input focus before each overlay with the keyboard took it.
++    static FOCUS_FROM: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
++    /// On X11, where each overlay that let the keyboard go had it from, for an overlay that took it
++    /// from that one (`holder`).
++    static LET_GO: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
++    /// On X11, the window each overlay shows over.
++    static PARENTS: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
++    /// The outlines overlays have that aren't rounded rectangles (`set_overlay_outlines`).
++    static OUTLINES: RefCell<Vec<(usize, Vec<Vec<Corner>>)>> = const { RefCell::new(Vec::new()) };
++    /// The menus (`set_overlay_menu`).
++    static MENUS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
++    /// The panels (`set_overlay_panel`), with what a press in each runs.
++    static PANELS: RefCell<Vec<(usize, fn(*mut c_void))>> = const { RefCell::new(Vec::new()) };
++    /// Where the overlays that don't take the pointer all over take it (`set_overlay_pointer`).
++    static POINTERS: RefCell<Vec<(usize, Vec<Bounds<Pixels>>)>> = const { RefCell::new(Vec::new()) };
++    /// The overlays that show directly under another (`set_overlay_under`), by theirs and its.
++    static UNDER: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
++}
++
++/// Makes the overlay `view` a panel of the window it shows over, from its next show on: on X11 a
++/// window inside that one rather than over every other, which moves with it and stays under other
++/// apps' windows, as a find bar or a toast does that stays while the user is elsewhere. Its edges
++/// aren't blended there. A press in it while it hasn't the keys runs `pressed`, after the event.
++pub fn set_overlay_panel(view: *mut c_void, pressed: fn(*mut c_void)) {
++    let view = view as usize;
++    PANELS.with_borrow_mut(|all| {
++        all.retain(|(each, _)| *each != view);
++        all.push((view, pressed));
++    });
++}
++
++/// The menu that shows, if one does.
++#[allow(dead_code)]
++pub(crate) fn shown_menu() -> Option<usize> {
++    MENUS.with_borrow(|all| all.iter().copied().find(|&view| is_shown(view)))
++}
++
++/// Whether the overlay `view` waits for its window to go where it was last asked to show.
++#[allow(dead_code)]
++pub(crate) fn placing(view: usize) -> bool {
++    OPS.with_borrow(|ops| {
++        ops.iter().any(|op| {
++            matches!(op, Op::Show { view: each, .. } | Op::Move { view: each, .. } if *each == view)
++        })
++    })
++}
++
++/// Whether `view` is a menu (`set_overlay_menu`).
++pub(crate) fn is_menu(view: usize) -> bool {
++    MENUS.with_borrow(|all| all.contains(&view))
++}
++
++/// Whether `view` is a panel that shows.
++#[allow(dead_code)]
++pub(crate) fn is_shown_panel(view: usize) -> bool {
++    is_shown(view) && is_panel(view)
++}
++
++#[allow(dead_code)]
++pub(crate) fn is_panel(view: usize) -> bool {
++    PANELS.with_borrow(|all| all.iter().any(|(each, _)| *each == view))
++}
++
++/// Gives the overlay `view` that shows the keys, or gives them back to the window that had them,
++/// as it keeps showing. `left` runs when the user next leaves it. One that has them already only
++/// waits for the user to leave again.
++pub fn set_overlay_keyboard(view: *mut c_void, keyboard: bool, left: fn(*mut c_void)) {
++    let view = view as usize;
++    let changed = SHOWN.with_borrow_mut(|all| {
++        let shown = all.iter_mut().find(|shown| shown.view == view)?;
++        shown.left = Some(left);
++        let changed = shown.keyboard != keyboard;
++        if changed {
++            shown.keyboard = keyboard;
++            shown.ready = false;
++        }
++        Some(changed)
++    });
++    if changed == Some(true) {
++        later(Op::Keyboard { view, keyboard });
++    }
++}
++
++/// Gives the overlay `view` that has the keys them again after the user left it, unless another
++/// app has them by now, as a dialog that's answered before anything else does. `left` runs when the
++/// user next leaves it.
++pub fn take_overlay_keyboard(view: *mut c_void, left: fn(*mut c_void)) {
++    let view = view as usize;
++    let keyboard = SHOWN.with_borrow_mut(|all| {
++        let shown = all.iter_mut().find(|shown| shown.view == view)?;
++        shown.left = Some(left);
++        Some(shown.keyboard)
++    });
++    if keyboard == Some(true) {
++        later(Op::Retake { view, pressed: false });
++    }
++}
++
++/// A press in GPUI's window `view`: a panel that shows without the keys hears of it, and an overlay
++/// with the keys takes them again, which on X11 it may have lost to another app.
++#[allow(dead_code)]
++pub(crate) fn pressed_in(view: usize) {
++    let keyboard = SHOWN.with_borrow(|all| {
++        all.iter().find(|shown| shown.view == view).map(|shown| shown.keyboard)
++    });
++    match keyboard {
++        Some(false) if is_panel(view) => later(Op::Pressed(view)),
++        Some(true) => later(Op::Retake { view, pressed: true }),
++        _ => {}
++    }
++}
++
++/// A corner of an overlay's outline: x and y in logical pixels from its top left, and the radius
++/// it's rounded by.
++pub type Corner = (f32, f32, f32);
++
++/// Gives the overlay `view` the outline of the polygon through `corners`, clockwise, from its next
++/// show or move on, for one that isn't a rounded rectangle, such as a popover with an arrow. What
++/// GPUI draws outside it shows on X11, which can't blend a child window with what's under it.
++pub fn set_overlay_outline(view: *mut c_void, corners: &[Corner]) {
++    set_overlay_outlines(view, &[corners.to_vec()]);
++}
++
++/// Gives the overlay `view` the outline of all the `polygons` together, as `set_overlay_outline`
++/// gives it one's, for one that shows several shapes, such as a menu with its submenu beside it.
++pub fn set_overlay_outlines(view: *mut c_void, polygons: &[Vec<Corner>]) {
++    let view = view as usize;
++    OUTLINES.with_borrow_mut(|all| {
++        all.retain(|(each, _)| *each != view);
++        all.push((view, polygons.to_vec()));
++    });
++}
++
++/// Makes the overlay `view` take the pointer only in `areas`, in logical pixels from its top left,
++/// and let it through to what's under it elsewhere: nowhere with none, as for a HUD the mouse goes
++/// through. With no `areas` it takes it all over its outline again. From now on, if it shows.
++pub fn set_overlay_pointer(view: *mut c_void, areas: Option<&[Bounds<Pixels>]>) {
++    let view = view as usize;
++    POINTERS.with_borrow_mut(|all| {
++        all.retain(|(each, _)| *each != view);
++        if let Some(areas) = areas {
++            all.push((view, areas.to_vec()));
++        }
++    });
++    if is_shown(view) {
++        later(Op::Pointer(view));
++    }
++}
++
++thread_local! {
++    /// The embedder's window the pointer is watched over, and what hears it (`watch_pointer_over`).
++    static POINTER_OVER: std::cell::Cell<Option<(usize, fn(Point<Pixels>))>> =
++        const { std::cell::Cell::new(None) };
++}
++
++/// Hands `moved` where the pointer goes over the embedder's `parent`, in logical pixels from its
++/// top left, as it moves over the embedder's own content, which GPUI's windows don't hear; with
++/// none, stops. Only while asked, so an idle embedder isn't woken by the pointer's moves.
++pub fn watch_pointer_over(parent: *mut c_void, moved: Option<fn(Point<Pixels>)>) {
++    let parent = parent as usize;
++    let was = POINTER_OVER.replace(moved.map(|moved| (parent, moved)));
++    #[cfg(feature = "x11")]
++    super::platform::with_embedded_connection(|connection| {
++        // Under Wayland GPUI's pointer hears the embedder's surfaces anyway; on X11 its own
++        // connection asks for the moves over the embedder's window, beside the embedder's own ask.
++        if let DisplayConnection::X11(x11) = connection {
++            let x11 = x11.0.borrow();
++            if let Some((was, _)) = was.filter(|&(was, _)| moved.is_none() || was != parent) {
++                x11.watch_motion(was as _, false).log_err();
++            }
++            if moved.is_some() && was.is_none_or(|(was, _)| was != parent) {
++                x11.watch_motion(parent as _, true).log_err();
++            }
++        }
++    });
++}
++
++/// The pointer is `at` over `surface`, the embedder's or GPUI's.
++pub(crate) fn pointer_over(surface: usize, at: Point<Pixels>) {
++    if let Some((parent, moved)) = POINTER_OVER.get()
++        && parent == surface
++    {
++        moved(at);
++    }
++}
++
++/// Makes the overlay `view` show directly under the overlay `over` whenever both show, as a shadow
++/// under what casts it, or with a null `over` wherever it's put again. On X11 with no compositor,
++/// which would draw what it blends opaque, it doesn't show.
++pub fn set_overlay_under(view: *mut c_void, over: *mut c_void) {
++    let view = view as usize;
++    UNDER.with_borrow_mut(|all| {
++        all.retain(|(each, _)| *each != view);
++        if !over.is_null() {
++            all.push((view, over as usize));
++        }
++    });
++}
++
++/// The overlay `view` shows directly under, if it's one that does.
++#[allow(dead_code)]
++pub(crate) fn under(view: usize) -> Option<usize> {
++    UNDER.with_borrow(|all| all.iter().find(|(each, _)| *each == view).map(|&(_, over)| over))
++}
++
++/// The pairs of overlays that show, one under the other, that `view` is in, as each goes back
++/// over the embedder's window as it's put there.
++fn stacked_with(view: usize) -> Vec<(usize, usize)> {
++    UNDER.with_borrow(|all| {
++        (all.iter())
++            .filter(|&&(under, over)| (under == view || over == view) && is_shown(under) && is_shown(over))
++            .copied()
++            .collect()
++    })
++}
++
++/// Where the overlay `view` takes the pointer, if not all over.
++#[allow(dead_code)]
++fn pointer_areas(view: usize) -> Option<Vec<Bounds<Pixels>>> {
++    POINTERS.with_borrow(|all| {
++        let (_, areas) = all.iter().find(|(each, _)| *each == view)?;
++        Some(areas.clone())
++    })
++}
++
++/// The outline of the overlay `view` at `bounds`, as polygons: its own, else its rounded rectangle.
++#[allow(dead_code)]
++fn outline(view: usize, bounds: Bounds<Pixels>, radius: Pixels) -> Vec<Vec<Corner>> {
++    let own = OUTLINES.with_borrow(|all| {
++        let (_, polygons) = all.iter().find(|(each, _)| *each == view)?;
++        Some(polygons.clone())
++    });
++    own.unwrap_or_else(|| {
++        let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
++        let radius = f32::from(radius).min(width / 2.).min(height / 2.);
++        vec![vec![
++            (0., 0., radius),
++            (width, 0., radius),
++            (width, height, radius),
++            (0., height, radius),
++        ]]
++    })
++}
++
++/// Shows the window `view` that GPUI opened with `show: false` (its `wl_surface` or X window, as its
++/// raw handle gives it) over the embedder's `parent` (the `wl_surface` or X window GPUI's window is
++/// embedded in), at `bounds` in logical pixels from the parent's top left, its corners rounded by
++/// `radius`. It's drawn before it shows. With `keyboard` it takes the keys. `left` runs when the
++/// user leaves it, after the event. Shown already, it moves.
++pub fn show_overlay(
++    view: *mut c_void,
++    parent: *mut c_void,
++    bounds: Bounds<Pixels>,
++    radius: Pixels,
++    keyboard: bool,
++    left: fn(*mut c_void),
++) {
++    let view = view as usize;
++    if is_shown(view) {
++        later(Op::Move {
++            view,
++            bounds,
++            radius,
++        });
++        return;
++    }
++    let showing = SHOWINGS.get() + 1;
++    SHOWINGS.set(showing);
++    SHOWN.with_borrow_mut(|all| {
++        all.push(Shown {
++            view,
++            keyboard,
++            ready: false,
++            left: Some(left),
++            showing,
++        })
++    });
++    later(Op::Show {
++        view,
++        parent: parent as usize,
++        bounds,
++        radius,
++        keyboard,
++    });
++}
++
++/// Moves and sizes the overlay `view` that shows, as `show_overlay` places it.
++pub fn move_overlay(view: *mut c_void, bounds: Bounds<Pixels>, radius: Pixels) {
++    let view = view as usize;
++    if is_shown(view) {
++        later(Op::Move {
++            view,
++            bounds,
++            radius,
++        });
++    }
++}
++
++/// Hides the overlay `view`. The window that had the keys before it has them back, after which
++/// `hidden` runs.
++pub fn hide_overlay(view: *mut c_void, hidden: impl FnOnce() + 'static) {
++    let view = view as usize;
++    let Some(shown) = SHOWN.with_borrow_mut(|all| {
++        let at = all.iter().position(|shown| shown.view == view)?;
++        Some(all.remove(at))
++    }) else {
++        return;
++    };
++    #[allow(unused_mut)]
++    let mut keyboard = shown.keyboard;
++    // Under Wayland nothing the overlay still has to do touches its parent's surface, which the
++    // embedder can destroy before the hide runs, as a pop-up's window closes under its dialog
++    // (#1999): a subsurface made on it ends the connection, and a commit to it ends the app.
++    #[cfg(feature = "wayland")]
++    if super::platform::with_embedded_connection(|c| matches!(c, DisplayConnection::Wayland(_)))
++        == Some(true)
++    {
++        let showed = OPS.with_borrow_mut(|ops| {
++            let to_show = |op: &Op| matches!(op, Op::Show { view: each, .. } if *each == view);
++            let showed = !ops.iter().any(to_show);
++            ops.retain(|op| {
++                !matches!(op, Op::Show { view: each, .. } | Op::Move { view: each, .. } if *each == view)
++            });
++            showed
++        });
++        super::wayland::overlay_hiding(view as _);
++        // One that never showed never had the keys.
++        keyboard &= showed;
++    }
++    later(Op::Hide {
++        view,
++        keyboard,
++        hidden: Box::new(hidden),
++    });
++}
++
++/// Shows the window of `view`, opened with `show: false`, as a window of its own, in front and with
++/// the keys, as an app's settings window shows. On X11 it's centred over the embedder's window
++/// `over`, unless that's null; under Wayland the compositor places it.
++pub fn show_window(view: *mut c_void, over: *mut c_void) {
++    later(Op::ShowWindow {
++        view: view as usize,
++        over: over as usize,
++    });
++}
++
++/// Hides the window `show_window` showed. On X11 it keeps its place for the next show.
++pub fn hide_window(view: *mut c_void) {
++    later(Op::HideWindow(view as usize));
++}
++
++/// Makes the overlay `view` a menu, as a context menu is. On X11 its window says so, so that a
++/// compositor that runs X's clients, as sway's and Hyprland's Xwayland do, doesn't give it its own
++/// keyboard focus: one that did would take that back to the window that had it before as the menu
++/// hides, rather than leave the keys with the overlay the menu gave them back to. And it takes the
++/// pointer while a button that went down elsewhere is held over it, as when a press opened it, so
++/// that letting go on an item chooses it.
++pub fn set_overlay_menu(view: *mut c_void) {
++    MENUS.with_borrow_mut(|all| {
++        if !all.contains(&(view as usize)) {
++            all.push(view as usize);
++        }
++    });
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            x11.0.borrow().overlay_is_menu(view as u32).log_err();
++            wake();
++        }
++        #[allow(unreachable_patterns)]
++        _ => {}
++    });
++}
++
++/// The size of the embedder's `parent`, which GPUI's window in it fills, in logical pixels.
++pub fn embedder_size(parent: *mut c_void) -> Option<Size<Pixels>> {
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::embedded_size(parent),
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let size = x11.0.borrow().window_size(parent as u32).log_err();
++            wake();
++            size
++        }
++        #[allow(unreachable_patterns)]
++        _ => None,
++    })
++    .flatten()
++}
++
++/// The size of the overlay `view`, as GPUI opened it or it last showed, in logical pixels.
++pub fn overlay_size(view: *mut c_void) -> Option<Size<Pixels>> {
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::overlay_size(view),
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let size = x11.0.borrow().window_size(view as u32).log_err();
++            wake();
++            size
++        }
++        #[allow(unreachable_patterns)]
++        _ => None,
++    })
++    .flatten()
++}
++
++/// Whether an overlay's pixels blend with what's under it, as a fade needs: under Wayland, and on
++/// X11 with a compositor, which would otherwise draw them opaque.
++pub fn overlays_blend() -> bool {
++    super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => x11.0.borrow().compositor_present,
++        #[allow(unreachable_patterns)]
++        _ => true,
++    })
++    .unwrap_or(true)
++}
++
++pub(crate) fn is_shown(view: usize) -> bool {
++    SHOWN.with_borrow(|all| all.iter().any(|shown| shown.view == view))
++}
++
++/// The overlay that shows with the keyboard, if one does.
++#[allow(dead_code)]
++pub(crate) fn keyboard_overlay() -> Option<usize> {
++    SHOWN.with_borrow(|all| {
++        all.iter()
++            .rev()
++            .find(|shown| shown.keyboard && shown.ready)
++            .map(|shown| shown.view)
++    })
++}
++
++/// The view of the overlay that shows with the keyboard, for a test driver: under Wayland the
++/// compositor gives the keys to the browser window, whose overlays it doesn't know of.
++pub fn shown_keyboard_overlay() -> Option<*mut c_void> {
++    keyboard_overlay().map(|view| view as *mut c_void)
++}
++
++/// The overlay that has the keyboard, shown or about to be. On X11 GPUI gets no key that asked for
++/// one, which went to the window it was typed in before the overlay was asked for.
++#[allow(dead_code)]
++pub(crate) fn keyboard_overlay_asked() -> Option<usize> {
++    SHOWN.with_borrow(|all| {
++        all.iter()
++            .rev()
++            .find(|shown| shown.keyboard)
++            .map(|shown| shown.view)
++    })
++}
++
++/// Holds the keys typed after the press of `shortcut`, which the embedder has now and which opens
++/// an overlay with the keyboard, for that overlay (`give_held_keys`). Under Wayland every key
++/// reaches GPUI too, and the overlay has the keyboard only once GPUI has read the keys typed by
++/// then, which it would leave to the embedder; the shortcut's press is where both find the keys
++/// to give it. Only the keystroke's key and modifiers count. With no `shortcut`, GPUI has it
++/// itself, in the press it's handling, and holds the keys after that. On X11 GPUI has none to hold.
++pub fn hold_keys(#[allow(unused_variables)] shortcut: Option<&gpui::Keystroke>) {
++    #[cfg(feature = "wayland")]
++    super::wayland::hold_keys(shortcut);
++}
++
++/// The overlay `view` takes the keys held since a shortcut (`hold_keys`), and gets them once it
++/// shows with the keyboard, before those typed later. Says whether GPUI holds them; if it doesn't,
++/// as on X11, the embedder gives the overlay those it held.
++pub fn give_held_keys(#[allow(unused_variables)] view: *mut c_void) -> bool {
++    #[cfg(feature = "wayland")]
++    return super::wayland::give_held_keys(view as usize);
++    #[cfg(not(feature = "wayland"))]
++    false
++}
++
++/// The user left the overlay `view`, as when the embedder dismisses it.
++pub fn leave_overlay(view: *mut c_void) {
++    left(view as usize);
++}
++
++/// The overlay `view` shows again, its show still to run: the keyboard leaving it now left its
++/// last showing, as when a right-click elsewhere hides a menu and shows the next in its window.
++#[cfg(feature = "x11")]
++pub(crate) fn to_show(view: usize) -> bool {
++    SHOWN.with_borrow(|all| all.iter().any(|shown| shown.view == view && !shown.ready))
++}
++
++/// The user left the overlay `view`.
++pub(crate) fn left(view: usize) {
++    let showing = SHOWN.with_borrow(|all| {
++        all.iter().find(|shown| shown.view == view).map(|shown| shown.showing)
++    });
++    if let Some(showing) = showing {
++        later(Op::Left(view, showing));
++    }
++}
++
++/// A press outside each overlay that shows but `on`, the window pressed, if it's GPUI's.
++#[allow(dead_code)]
++pub(crate) fn pressed(on: Option<usize>) {
++    let views: Vec<usize> = SHOWN.with_borrow(|all| {
++        all.iter()
++            .map(|shown| shown.view)
++            .filter(|&view| Some(view) != on)
++            .collect()
++    });
++    LEFT_BY_PRESS.set(views.clone());
++    views.into_iter().for_each(left);
++}
++
++/// The keyboard went to another window, away from each overlay.
++#[allow(dead_code)]
++pub(crate) fn left_all() {
++    if SHOWN.with_borrow(|all| !all.is_empty()) {
++        later(Op::KeyboardLeft);
++    }
++}
++
++fn later(op: Op) {
++    OPS.with_borrow_mut(|ops| ops.push_back(op));
++    wake();
++}
++
++/// Has GPUI's loop run what the embedder asked. On X11 it then handles the events that the
++/// embedder's wait for a reply read into xcb's queue, where they don't wake it
++/// (`dispatch_embedded`).
++fn wake() {
++    PING.with_borrow_mut(|ping| {
++        if ping.is_none() {
++            *ping = make_ping();
++        }
++        if let Some(ping) = ping {
++            ping.ping();
++        }
++    });
++}
++
++fn make_ping() -> Option<Ping> {
++    let handle = super::platform::embedded_loop_handle()?;
++    let (ping, source) = calloop::ping::make_ping().log_err()?;
++    handle
++        .insert_source(source, |_, _, _| run_when_free())
++        .ok()?;
++    Some(ping)
++}
++
++fn run_when_free() {
++    let wayland = super::platform::with_embedded_connection(|connection| {
++        #[cfg(feature = "wayland")]
++        if let DisplayConnection::Wayland(_) = connection {
++            return true;
++        }
++        false
++    });
++    #[cfg(feature = "wayland")]
++    if wayland == Some(true) {
++        // After the events read with it, such as the key that asked for an overlay (`ready`).
++        if !super::platform::embedder_has_read() {
++            // The compositor's answer has the embedder read, and then dispatch GPUI.
++            super::wayland::wake_after_read();
++        }
++        return;
++    }
++    run();
++}
++
++thread_local! {
++    /// What runs once Control is up, while the embedder watches it (`watch_control`).
++    static CONTROL_RELEASED: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
++}
++
++/// Calls `released` once, after the event that shows Control is no longer held, or at once if it
++/// isn't. On X11 that's Control going up anywhere on the display, as XKB tells every client its
++/// keyboard's state; under Wayland, Control going up in the embedder's surfaces, whose keys GPUI's
++/// keyboard hears too, or the keyboard leaving them. A later call replaces `released`.
++pub fn watch_control(released: impl FnOnce() + 'static) {
++    CONTROL_RELEASED.set(Some(Box::new(released)));
++    let held = super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => None,
++        // The server's, as GPUI may not have heard yet of a press the embedder's connection has.
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            use x11rb::protocol::xkb::ConnectionExt as _;
++            let xcb = x11.0.borrow().xcb_connection.clone();
++            let state = xcb.xkb_get_state(xkb::ID::USE_CORE_KBD.into());
++            let state = state.ok().and_then(|state| state.reply().log_err());
++            Some(state.is_some_and(|state| state.mods.contains(xproto::ModMask::CONTROL)))
++        }
++        #[allow(unreachable_patterns)]
++        _ => Some(false),
++    });
++    match held {
++        // Under Wayland, GPUI's, once it has had the events read with the key that asked: the
++        // embedder handles its page's key first, before GPUI hears of the press of Control that
++        // came with it.
++        Some(None) => later(Op::Control),
++        held => control_changed(held.flatten() == Some(true)),
++    }
++}
++
++/// Control is `held`, or not, after a change to the keyboard's state.
++pub(crate) fn control_changed(held: bool) {
++    if !held && let Some(released) = CONTROL_RELEASED.take() {
++        released();
++    }
++}
++
++thread_local! {
++    /// What runs each time Alt is pressed and let go alone (`watch_alt_taps`).
++    static ALT_TAPPED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
++    /// Alt went down with no other modifier held, and no key or press has come since.
++    static ALT_ALONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
++}
++
++/// Calls `tapped` each time Alt is pressed and let go with nothing between, while no overlay has
++/// the keyboard. Another key or modifier, a press or a scroll makes it part of something else: a
++/// shortcut, a typed character or an Alt-click. On X11 GPUI hears the keys of its own windows
++/// alone; under Wayland every key of the embedder's too.
++pub fn watch_alt_taps(tapped: impl Fn() + 'static) {
++    ALT_TAPPED.set(Some(Box::new(tapped)));
++}
++
++/// A key went down or up (`pressed`): Alt, or another, with or without other modifiers held
++/// before it.
++pub(crate) fn key_changed(alt: bool, pressed: bool, modifiers_held: bool) {
++    match (alt, pressed) {
++        (true, true) => ALT_ALONE.set(!modifiers_held),
++        (true, false) => {
++            if ALT_ALONE.take() && keyboard_overlay().is_none() {
++                ALT_TAPPED.with_borrow(|tapped| tapped.as_ref().map(|tapped| tapped()));
++            }
++        }
++        (false, true) => ALT_ALONE.set(false),
++        // A key let go that went down before Alt did.
++        (false, false) => {}
++    }
++}
++
++/// A button was pressed, the wheel's too, or the keyboard went elsewhere.
++pub(crate) fn alt_interrupted() {
++    ALT_ALONE.set(false);
++}
++
++/// Runs what the embedder asked, once it has read its Wayland display.
++pub(crate) fn run_after_read() {
++    if OPS.with_borrow(|ops| !ops.is_empty()) {
++        run();
++    }
++}
++
++fn run() {
++    #[allow(unused_variables, unused_mut)]
++    let mut applied = false;
++    while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++        let gave = match op {
++            Op::Hide {
++                view,
++                keyboard: true,
++                ..
++            }
++            | Op::Keyboard {
++                view,
++                keyboard: false,
++            } => Some(view),
++            _ => None,
++        };
++        applied |= run_op(op);
++        if let Some(gave) = gave {
++            left_by_press(gave);
++        }
++    }
++    LEFT_BY_PRESS.with_borrow_mut(Vec::clear);
++    // The events the display sends for what the ops asked, such as an overlay's new size.
++    if applied {
++        sync_display();
++    }
++}
++
++/// Has GPUI handle the events the X server sent it before now, such as a test driver's. A wait for
++/// a reply, here or on another thread of the connection's, can read them into xcb's queue, where
++/// they don't wake the loop: they're all read by the reply to one more request, and handled now.
++pub fn sync_display() {
++    #[cfg(feature = "x11")]
++    {
++        let x11 = super::platform::with_embedded_connection(|connection| match connection {
++            DisplayConnection::X11(x11) => Some(super::X11Client::clone(x11)),
++            #[allow(unreachable_patterns)]
++            _ => None,
++        });
++        if let Some(x11) = x11.flatten() {
++            let xcb = x11.0.borrow().xcb_connection.clone();
++            let synced = xcb.get_input_focus().map(|focus| focus.reply());
++            if let Some(Ok(_)) = synced.log_err() {
++                x11.process_x11_events(&xcb).log_err();
++            }
++        }
++    }
++}
++
++/// Runs `op`, and says whether it asked the display for anything.
++fn run_op(op: Op) -> bool {
++    match op {
++        #[cfg(feature = "wayland")]
++        Op::KeyboardLeft if super::wayland::keyboard_entered() => false,
++        Op::KeyboardLeft => {
++            pressed(None);
++            false
++        }
++        Op::Control => {
++            #[cfg(feature = "wayland")]
++            control_changed(super::wayland::control_held());
++            false
++        }
++        Op::Left(view, showing) => {
++            let left = SHOWN.with_borrow_mut(|all| {
++                let shown = all.iter_mut().find(|shown| shown.view == view)?;
++                if shown.showing != showing {
++                    return None;
++                }
++                shown.left.take()
++            });
++            if let Some(left) = left {
++                left(view as *mut c_void);
++            }
++            false
++        }
++        Op::Pressed(view) => {
++            let pressed = PANELS.with_borrow(|all| {
++                all.iter().find(|(each, _)| *each == view).map(|&(_, pressed)| pressed)
++            });
++            if let Some(pressed) = pressed.filter(|_| is_shown(view)) {
++                pressed(view as *mut c_void);
++            }
++            false
++        }
++        Op::Hide {
++            view,
++            keyboard,
++            hidden,
++        } => {
++            let op = Op::Hide {
++                view,
++                keyboard,
++                hidden: Box::new(|| {}),
++            };
++            super::platform::with_embedded_connection(|connection| apply(op, connection));
++            hidden();
++            true
++        }
++        op => {
++            let shown = match op {
++                Op::Show { view, .. } | Op::Keyboard { view, .. } => Some(view),
++                _ => None,
++            };
++            let placed = match op {
++                Op::Show { view, .. } | Op::Move { view, .. } => Some(view),
++                _ => None,
++            };
++            super::platform::with_embedded_connection(|connection| apply(op, connection));
++            // Put back over the embedder's window, it may have gone over one that shows under it.
++            for (under, over) in placed.map(stacked_with).unwrap_or_default() {
++                super::platform::with_embedded_connection(|connection| {
++                    place_under(under, over, connection)
++                });
++            }
++            if let Some(view) = shown {
++                SHOWN.with_borrow_mut(|all| {
++                    all.iter_mut()
++                        .filter(|each| each.view == view)
++                        .for_each(|each| each.ready = true)
++                });
++                // The keys typed since the shortcut that showed it, before those typed later.
++                #[cfg(feature = "wayland")]
++                super::wayland::deliver_held_keys();
++            }
++            true
++        }
++    }
++}
++
++/// The overlay `gave`, which had the keys, let them go, as the ops a press led to ran: another that
++/// has them back, such as a find bar under the command bar a press on the page hid, is left too if
++/// that press left it, as X11's hide says when the input focus went elsewhere than either. It kept
++/// the keys while the overlay over it had them, to be given them back, and the press was outside
++/// both. Under Wayland only, where the compositor never moves the keys between overlays.
++fn left_by_press(gave: usize) {
++    let wayland = super::platform::with_embedded_connection(|connection| {
++        #[cfg(feature = "wayland")]
++        if let DisplayConnection::Wayland(_) = connection {
++            return true;
++        }
++        false
++    });
++    if wayland != Some(true) {
++        return;
++    }
++    // The overlay that let the keys go isn't one that has them back, though it has them again: a
++    // right-click on another row hides the menu up and shows it again as that row's (#1908).
++    let Some(next) = keyboard_overlay_asked().filter(|&next| next != gave) else {
++        return;
++    };
++    let pressed = LEFT_BY_PRESS.with_borrow_mut(|all| {
++        let at = all.iter().position(|&each| each == next)?;
++        Some(all.remove(at))
++    });
++    if pressed.is_some() {
++        left(next);
++    }
++}
++
++/// The overlay `view` lets the keyboard go: forgets where it had it from, keeping that for
++/// `holder`, and returns it, or none if it didn't have it.
++#[cfg(feature = "x11")]
++fn let_go(view: usize) -> u32 {
++    let from = FOCUS_FROM.with_borrow_mut(|all| {
++        let at = all.iter().position(|&(each, _)| each == view)?;
++        Some(all.remove(at).1)
++    });
++    let Some(from) = from else {
++        return x11rb::NONE;
++    };
++    LET_GO.with_borrow_mut(|all| {
++        all.retain(|&(each, _)| each != view);
++        all.push((view, from));
++    });
++    from
++}
++
++/// The window to give the input focus back to for `from`: past each overlay that has let the
++/// keyboard go since, to where that one had it from. Such as the dialog an item of the Site
++/// Controls opens, which takes the keys from the panel as it lets them go and closes: given back
++/// to the panel, hidden, X would leave them with no window.
++#[cfg(feature = "x11")]
++fn holder(mut from: u32) -> u32 {
++    let holds =
++        |view: u32| FOCUS_FROM.with_borrow(|all| all.iter().any(|&(each, _)| each == view as usize));
++    for _ in 0..LET_GO.with_borrow(Vec::len) {
++        let before = LET_GO.with_borrow(|all| {
++            all.iter().find(|&&(each, _)| each == from as usize).map(|&(_, before)| before)
++        });
++        match before {
++            Some(before) if !holds(from) => from = before,
++            _ => break,
++        }
++    }
++    from
++}
++
++/// Keeps `from`, which had the input focus before the overlay `view` took it, to give it back to,
++/// unless the overlay took it before and keeps the window it had it from first.
++#[cfg(feature = "x11")]
++fn focus_from(view: usize, from: u32) {
++    FOCUS_FROM.with_borrow_mut(|all| {
++        if from != x11rb::NONE && !all.iter().any(|&(each, _)| each == view) {
++            all.push((view, from));
++        }
++    });
++}
++
++/// The overlay but `view` that takes the keys in an op still to run, and that op's place among
++/// them.
++#[cfg(feature = "x11")]
++fn next_to_take_keys(view: usize) -> Option<(usize, usize)> {
++    OPS.with_borrow(|ops| {
++        ops.iter().enumerate().find_map(|(at, op)| match op {
++            Op::Show { view: next, keyboard: true, .. }
++            | Op::Keyboard { view: next, keyboard: true }
++                if *next != view =>
++            {
++                Some((*next, at))
++            }
++            _ => None,
++        })
++    })
++}
++
++/// Stacks the overlay `under` directly under the overlay `over`, both showing.
++#[allow(unused_variables)]
++fn place_under(under: usize, over: usize, connection: &DisplayConnection) {
++    match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => super::wayland::place_overlay_under(under as _, over as _),
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            x11.0.borrow().place_overlay_under(under as _, over as _).log_err();
++        }
++        #[allow(unreachable_patterns)]
++        _ => {}
++    }
++}
++
++#[allow(unused_variables)]
++fn apply(op: Op, connection: &DisplayConnection) {
++    match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => match op {
++            Op::Show {
++                view,
++                parent,
++                bounds,
++                keyboard,
++                ..
++            } => {
++                super::wayland::show_overlay(view as _, parent as _, bounds, keyboard).log_err();
++                // With its first frame, which comes as it shows.
++                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref(), false);
++            }
++            // With a frame asked for: one that shows may draw none by itself again, as a toast
++            // whose buttons come after its last frame.
++            Op::Pointer(view) => {
++                super::wayland::overlay_pointer(view as _, pointer_areas(view).as_deref(), true)
++            }
++            Op::Move { view, bounds, .. } => super::wayland::move_overlay(view as _, bounds),
++            Op::Hide { view, keyboard, .. } => super::wayland::hide_overlay(view as _, keyboard),
++            Op::Keyboard { view, keyboard } => super::wayland::overlay_keyboard(view as _, keyboard),
++            // The compositor gives the embedder's surface the keys back, and they come here then.
++            Op::Retake { view, pressed: false } => super::wayland::overlay_keyboard(view as _, true),
++            Op::Retake { pressed: true, .. } => {}
++            Op::ShowWindow { view, .. } => {
++                super::wayland::show_window(view as _).log_err();
++            }
++            Op::HideWindow(view) => super::wayland::hide_window(view as _),
++            Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
++        },
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let x11 = x11.0.borrow();
++            match op {
++                Op::Show {
++                    view,
++                    parent,
++                    bounds,
++                    radius,
++                    keyboard,
++                } => {
++                    let outline = outline(view, bounds, radius);
++                    PARENTS.with_borrow_mut(|all| {
++                        all.retain(|&(each, _)| each != view);
++                        all.push((view, parent as u32));
++                    });
++                    let panel = is_panel(view);
++                    // Before it maps: mapped under the pointer with no input shape yet, it would
++                    // take the pointer from the window under it, whose hover, and tooltip, then go.
++                    x11.overlay_pointer(view as _, pointer_areas(view).as_deref()).log_err();
++                    let from =
++                        x11.show_overlay(view as _, parent as _, bounds, &outline, keyboard, panel);
++                    if let Some(from) = from.log_err() {
++                        focus_from(view, from);
++                    }
++                }
++                Op::Pointer(view) => {
++                    x11.overlay_pointer(view as _, pointer_areas(view).as_deref()).log_err();
++                }
++                Op::Move {
++                    view,
++                    bounds,
++                    radius,
++                } => {
++                    let outline = outline(view, bounds, radius);
++                    let parent = PARENTS.with_borrow(|all| {
++                        all.iter().find(|&&(each, _)| each == view).map(|&(_, parent)| parent)
++                    });
++                    if let Some(parent) = parent {
++                        let panel = is_panel(view);
++                        x11.move_overlay(view as _, parent, bounds, &outline, panel).log_err();
++                    }
++                }
++                Op::Hide { view, .. } => {
++                    let from = holder(let_go(view));
++                    // The overlay that takes the keys next, such as the command bar a menu's item
++                    // opens, takes them from this one, to give back where this one had them from.
++                    // Given back in between, wlroots 0.17's Xwayland would put the input focus on
++                    // that window's top-level once the next overlay had it, as it does each time
++                    // the focus comes into a top-level, and the next one would close. This one
++                    // hides once the next has them: unmapped with the input focus, it would leave
++                    // it to the root window, which openbox gives to the top-level, and that could
++                    // come after the next one had it too.
++                    if from != x11rb::NONE
++                        && let Some((next, at)) = next_to_take_keys(view)
++                    {
++                        focus_from(next, from);
++                        let op = Op::Hide { view, keyboard: false, hidden: Box::new(|| {}) };
++                        OPS.with_borrow_mut(|ops| ops.insert(at + 1, op));
++                        return;
++                    }
++                    // The user left the overlay that had the keys before, such as a find bar under
++                    // the command bar, which would wait for them back.
++                    if x11.hide_overlay(view as _, from).log_err() == Some(true) {
++                        left(from as usize);
++                    }
++                }
++                Op::Keyboard { view, keyboard: true } => {
++                    if let Some(from) = x11.overlay_takes_focus(view as _, None).log_err() {
++                        focus_from(view, from);
++                    }
++                }
++                Op::Retake { view, pressed } => {
++                    let parent = PARENTS.with_borrow(|all| {
++                        all.iter().find(|&&(each, _)| each == view).map(|&(_, parent)| parent)
++                    });
++                    let within = parent.filter(|_| !pressed);
++                    if let Some(from) = x11.overlay_takes_focus(view as _, within).log_err() {
++                        focus_from(view, from);
++                    }
++                }
++                Op::Keyboard { view, keyboard: false } => {
++                    let from = holder(let_go(view));
++                    x11.overlay_gives_focus(view as _, from).log_err();
++                }
++                Op::ShowWindow { view, over } => {
++                    x11.show_window(view as _, over as _).log_err();
++                }
++                Op::HideWindow(view) => {
++                    x11.hide_window(view as _).log_err();
++                }
++                Op::Left(..) | Op::Pressed(_) | Op::KeyboardLeft | Op::Control => {}
++            }
++        }
++        #[allow(unreachable_patterns)]
++        _ => {}
++    }
++}
 diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
 index 0c5370db6c..348f7b509c 100644
 --- a/crates/gpui_linux/src/linux/platform.rs
@@ -4924,6 +6149,504 @@ index 9835786efe..a44725263b 100644
          self.inner.write(data, selection, wait)
      }
  
+diff --git a/crates/gpui_linux/src/linux/x11/drag.rs b/crates/gpui_linux/src/linux/x11/drag.rs
+new file mode 100644
+index 0000000000..704677746c
+--- /dev/null
++++ b/crates/gpui_linux/src/linux/x11/drag.rs
+@@ -0,0 +1,492 @@
++//! A file's drag out of GPUI's windows on X11, as XDND's source (freedesktop.org's XDND, version
++//! 5): the window the left button went down in owns `XdndSelection`, the pointer is grabbed until
++//! it's let go, and the top-level window under it that takes XDND hears where it is and, if it
++//! accepts the file there, gets it. GPUI is XDND's target in client.rs.
++
++use gpui_util::ResultExt as _;
++use x11rb::{
++    connection::Connection as _,
++    protocol::{
++        shape::{self, ConnectionExt as _},
++        xproto::{
++            self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
++            CreateWindowAux, EventMask, GrabMode, ImageFormat, PropMode, SelectionNotifyEvent,
++            SelectionRequestEvent, StackMode, WindowClass,
++        },
++    },
++    xcb_ffi::XCBConnection,
++};
++
++use super::{X11Client, XcbAtoms};
++
++pub(crate) struct FileDrag {
++    /// GPUI's window it started in, which owns `XdndSelection` and hears from the targets.
++    window: xproto::Window,
++    /// The type it carries, and what.
++    kind: xproto::Atom,
++    data: Vec<u8>,
++    /// Where the pointer last was on the root, for where it's let go.
++    last: (i16, i16),
++    /// Until it's let go.
++    held: bool,
++    /// The top-level window under the pointer that takes XDND, with its version.
++    target: Option<(xproto::Window, u32)>,
++    /// The target was told where the pointer is and hasn't answered, as XDND has the source wait
++    /// for before it says again.
++    asked: bool,
++    /// Where the pointer moved to on the root while the target hadn't answered, and when.
++    moved: Option<(i16, i16, u32)>,
++    accepted: bool,
++    /// Let go while the target hadn't answered, when.
++    released: Option<u32>,
++    /// The picture of what's dragged, an override-redirect window the pointer carries, and where
++    /// the pointer holds it, until it's let go.
++    icon: Option<DragIcon>,
++}
++
++struct DragIcon {
++    window: xproto::Window,
++    pixmap: xproto::Pixmap,
++    hold: (i16, i16),
++}
++
++impl X11Client {
++    /// Starts dragging `data`, as `mime`, from the window the left button went down in, which
++    /// it's held in.
++    pub(crate) fn start_drag(&self, mime: &str, data: Vec<u8>) -> bool {
++        let mut state = self.0.borrow_mut();
++        let Some(window) = state.pressed_window.filter(|_| state.file_drag.is_none()) else {
++            return false;
++        };
++        let xcb = state.xcb_connection.clone();
++        let kind = match mime {
++            "text/uri-list" => state.atoms.TextUriList,
++            _ => match xcb.intern_atom(false, mime.as_bytes()).ok().and_then(|c| c.reply().ok()) {
++                Some(reply) => reply.atom,
++                None => return false,
++            },
++        };
++        let root = xcb.setup().roots[state.x_root_index].root;
++        let owned = xcb.set_selection_owner(window, state.atoms.XdndSelection, x11rb::CURRENT_TIME);
++        if owned.log_err().is_none() {
++            return false;
++        }
++        // On the root, which a hold on the window the press went down in would lose as that window
++        // hides, as the downloads' window does when one of its files is dragged.
++        xcb.grab_pointer(
++            false,
++            root,
++            EventMask::POINTER_MOTION | EventMask::BUTTON_RELEASE,
++            GrabMode::ASYNC,
++            GrabMode::ASYNC,
++            x11rb::NONE,
++            x11rb::NONE,
++            x11rb::CURRENT_TIME,
++        )
++        .log_err();
++        xcb.flush().log_err();
++        state.file_drag = Some(FileDrag {
++            window,
++            kind,
++            data,
++            last: (0, 0),
++            held: true,
++            target: None,
++            asked: false,
++            moved: None,
++            accepted: false,
++            released: None,
++            icon: None,
++        });
++        true
++    }
++
++    /// Shows `rgba`, `width` by `height` top-down RGBA pixels, under the pointer of the drag
++    /// that's held, with the pointer at `hold` in it, as the picture of what's dragged.
++    pub(crate) fn set_drag_icon(
++        &self,
++        width: u16,
++        height: u16,
++        rgba: &[u8],
++        hold: (i16, i16),
++    ) -> bool {
++        let mut state = self.0.borrow_mut();
++        let state = &mut *state;
++        let xcb = &state.xcb_connection;
++        let Some(drag) = state.file_drag.as_mut().filter(|drag| drag.held) else {
++            return false;
++        };
++        let screen = &xcb.setup().roots[state.x_root_index];
++        let (root, depth, visual) = (screen.root, screen.root_depth, screen.root_visual);
++        if width == 0 || height == 0 || rgba.len() != usize::from(width) * usize::from(height) * 4
++        {
++            return false;
++        }
++        let made = || -> anyhow::Result<DragIcon> {
++            let pixmap = xcb.generate_id()?;
++            xcb.create_pixmap(depth, pixmap, root, width, height)?;
++            let gc = xcb.generate_id()?;
++            xcb.create_gc(gc, pixmap, &Default::default())?;
++            // The X server's pixels are BGRX, in bands that each fit in a request.
++            let bgrx: Vec<u8> = (rgba.chunks_exact(4))
++                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], 0xff])
++                .collect();
++            let row = usize::from(width) * 4;
++            let band = (60_000 / row).max(1);
++            for (index, rows) in bgrx.chunks(row * band).enumerate() {
++                let top = (index * band) as i16;
++                let rows_high = (rows.len() / row) as u16;
++                xcb.put_image(
++                    ImageFormat::Z_PIXMAP,
++                    pixmap,
++                    gc,
++                    width,
++                    rows_high,
++                    0,
++                    top,
++                    0,
++                    depth,
++                    rows,
++                )?;
++            }
++            xcb.free_gc(gc)?;
++            let window = xcb.generate_id()?;
++            xcb.create_window(
++                depth,
++                window,
++                root,
++                0,
++                0,
++                width,
++                height,
++                0,
++                WindowClass::INPUT_OUTPUT,
++                visual,
++                &CreateWindowAux::new()
++                    .override_redirect(1)
++                    .background_pixmap(pixmap),
++            )?;
++            // It takes no input, so the window under it is the one the pointer is over, for XDND
++            // as for the pointer.
++            xcb.shape_rectangles(
++                shape::SO::SET,
++                shape::SK::INPUT,
++                xproto::ClipOrdering::UNSORTED,
++                window,
++                0,
++                0,
++                &[],
++            )?;
++            Ok(DragIcon {
++                window,
++                pixmap,
++                hold,
++            })
++        };
++        let Some(icon) = made().log_err() else {
++            return false;
++        };
++        // Where the pointer is now, as it may not have moved since the drag started.
++        let (x, y) = match xcb.query_pointer(root).ok().and_then(|c| c.reply().ok()) {
++            Some(pointer) => (pointer.root_x, pointer.root_y),
++            None => drag.last,
++        };
++        place_icon(xcb, &icon, x, y);
++        xcb.map_window(icon.window).log_err();
++        if let Some(old) = drag.icon.replace(icon) {
++            remove_icon(xcb, old);
++        }
++        xcb.flush().log_err();
++        true
++    }
++
++    pub(crate) fn file_drag_held(&self) -> bool {
++        (self.0.borrow().file_drag.as_ref()).is_some_and(|drag| drag.held)
++    }
++
++    /// The pointer moved to (x, y) on the root at `time`.
++    pub(crate) fn file_drag_moved(&self, x: i16, y: i16, time: u32) {
++        let mut state = self.0.borrow_mut();
++        let state = &mut *state;
++        let xcb = &state.xcb_connection;
++        let atoms = &state.atoms;
++        let Some(drag) = state.file_drag.as_mut() else {
++            return;
++        };
++        let root = xcb.setup().roots[state.x_root_index].root;
++        drag.last = (x, y);
++        if let Some(icon) = &drag.icon {
++            place_icon(xcb, icon, x, y);
++        }
++        let target = xdnd_target(xcb, atoms, root, x, y);
++        if target.map(|(window, _)| window) != drag.target.map(|(window, _)| window) {
++            if let Some((window, _)) = drag.target.take() {
++                send(xcb, window, atoms.XdndLeave, [drag.window, 0, 0, 0, 0]);
++            }
++            (drag.asked, drag.accepted, drag.moved) = (false, false, None);
++            if let Some((window, version)) = target {
++                let version = version.min(5) << 24;
++                send(
++                    xcb,
++                    window,
++                    atoms.XdndEnter,
++                    [drag.window, version, drag.kind, 0, 0],
++                );
++                drag.target = target;
++            }
++        }
++        if drag.target.is_some() {
++            match drag.asked {
++                true => drag.moved = Some((x, y, time)),
++                false => ask(xcb, atoms, drag, x, y, time),
++            }
++        }
++        xcb.flush().log_err();
++    }
++
++    /// The left button was let go at `time`.
++    pub(crate) fn file_drag_released(&self, time: u32) {
++        let let_go = {
++            let mut state = self.0.borrow_mut();
++            let state = &mut *state;
++            let Some(drag) = state.file_drag.as_mut() else {
++                return;
++            };
++            drag.held = false;
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(&state.xcb_connection, icon);
++            }
++            state
++                .xcb_connection
++                .ungrab_pointer(x11rb::CURRENT_TIME)
++                .log_err();
++            state.xcb_connection.flush().log_err();
++            match drag.asked {
++                // Once it answers.
++                true => {
++                    drag.released = Some(time);
++                    false
++                }
++                false => true,
++            }
++        };
++        if let_go {
++            self.file_drag_let_go(time);
++        }
++    }
++
++    /// Drops the file on the target if it accepted it where the pointer was let go, or else ends
++    /// the drag with nothing taking it.
++    fn file_drag_let_go(&self, time: u32) {
++        let at = self.drag_let_go_at();
++        {
++            let mut state = self.0.borrow_mut();
++            let state = &mut *state;
++            let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
++            let Some(drag) = state.file_drag.as_mut() else {
++                return;
++            };
++            if let Some((window, _)) = drag.target {
++                // Until the target says it's finished with it.
++                if drag.accepted {
++                    send(xcb, window, atoms.XdndDrop, [drag.window, 0, time, 0, 0]);
++                    xcb.flush().log_err();
++                    return;
++                }
++                send(xcb, window, atoms.XdndLeave, [drag.window, 0, 0, 0, 0]);
++                xcb.flush().log_err();
++            }
++            state.file_drag = None;
++        }
++        crate::linux::drag_ended(crate::linux::DragEnd::LetGo(at));
++    }
++
++    /// Where the drag's pointer last was on the root, in the screen's logical pixels.
++    fn drag_let_go_at(&self) -> Option<(f32, f32)> {
++        let state = self.0.borrow();
++        let (x, y) = state.file_drag.as_ref()?.last;
++        let scale = state.scale_factor;
++        Some((f32::from(x) / scale, f32::from(y) / scale))
++    }
++
++    /// Escape was pressed while dragging: the target hears it left, and nothing takes it.
++    pub(crate) fn drag_cancelled(&self) {
++        {
++            let mut state = self.0.borrow_mut();
++            let state = &mut *state;
++            let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
++            let Some(mut drag) = state.file_drag.take() else {
++                return;
++            };
++            if let Some((window, _)) = drag.target {
++                send(xcb, window, atoms.XdndLeave, [drag.window, 0, 0, 0, 0]);
++            }
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(xcb, icon);
++            }
++            xcb.ungrab_pointer(x11rb::CURRENT_TIME).log_err();
++            xcb.flush().log_err();
++        }
++        crate::linux::drag_ended(crate::linux::DragEnd::Cancelled);
++    }
++
++    /// Handles `message` if it's the target's answer, XdndStatus or XdndFinished.
++    pub(crate) fn file_drag_message(&self, message: &ClientMessageEvent) -> bool {
++        let at = self.drag_let_go_at();
++        let (let_go, ended) = {
++            let mut state = self.0.borrow_mut();
++            let state = &mut *state;
++            let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
++            let Some(drag) = state.file_drag.as_mut() else {
++                return false;
++            };
++            let [from, flags, ..] = message.data.as_data32();
++            // One from a target the pointer has left is for nothing.
++            let from_target = drag.target.is_some_and(|(window, _)| window == from);
++            if message.type_ == atoms.XdndStatus {
++                let mut let_go = None;
++                if from_target && drag.asked {
++                    drag.asked = false;
++                    drag.accepted = flags & 1 == 1;
++                    let_go = drag.released.take();
++                    if let_go.is_none()
++                        && let Some((x, y, time)) = drag.moved.take()
++                    {
++                        ask(xcb, atoms, drag, x, y, time);
++                        xcb.flush().log_err();
++                    }
++                }
++                (let_go, None)
++            } else if message.type_ == atoms.XdndFinished {
++                let mut ended = None;
++                if from_target && !drag.held {
++                    let version = drag.target.map_or(0, |(_, version)| version);
++                    state.file_drag = None;
++                    // Before version 5, a target that finished took it.
++                    ended = Some(version < 5 || flags & 1 == 1);
++                }
++                (None, ended)
++            } else {
++                return false;
++            }
++        };
++        if let Some(time) = let_go {
++            self.file_drag_let_go(time);
++        }
++        if let Some(taken) = ended {
++            crate::linux::drag_ended(match taken {
++                true => crate::linux::DragEnd::Taken,
++                false => crate::linux::DragEnd::LetGo(at),
++            });
++        }
++        true
++    }
++
++    /// Answers a target's request for the dragged file, as `text/uri-list`.
++    pub(crate) fn file_drag_selection(&self, request: &SelectionRequestEvent) {
++        let state = self.0.borrow();
++        let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
++        let Some(drag) = state.file_drag.as_ref() else {
++            return;
++        };
++        if request.owner != drag.window || request.selection != atoms.XdndSelection {
++            return;
++        }
++        // A requestor of before ICCCM 2 names no property.
++        let property = match request.property {
++            x11rb::NONE => request.target,
++            property => property,
++        };
++        let given = request.target == drag.kind
++            && (xcb.change_property(
++                PropMode::REPLACE,
++                request.requestor,
++                property,
++                drag.kind,
++                8,
++                drag.data.len() as u32,
++                &drag.data,
++            ))
++            .log_err()
++            .is_some();
++        let answer = SelectionNotifyEvent {
++            response_type: xproto::SELECTION_NOTIFY_EVENT,
++            sequence: 0,
++            time: request.time,
++            requestor: request.requestor,
++            selection: request.selection,
++            target: request.target,
++            property: if given { property } else { x11rb::NONE },
++        };
++        xcb.send_event(false, request.requestor, EventMask::NO_EVENT, answer)
++            .log_err();
++        xcb.flush().log_err();
++    }
++}
++
++/// Tells the target the pointer is at (x, y) on the root, at `time`, and that the file would be
++/// copied there.
++fn ask(xcb: &XCBConnection, atoms: &XcbAtoms, drag: &mut FileDrag, x: i16, y: i16, time: u32) {
++    let Some((window, _)) = drag.target else {
++        return;
++    };
++    let at = (x as u16 as u32) << 16 | y as u16 as u32;
++    send(
++        xcb,
++        window,
++        atoms.XdndPosition,
++        [drag.window, 0, at, time, atoms.XdndActionCopy],
++    );
++    drag.asked = true;
++}
++
++/// The window at (x, y) on `root` that takes XDND, with its version: the first one down from the
++/// root that says so, a top-level window, inside any window manager's frame.
++fn xdnd_target(
++    xcb: &XCBConnection,
++    atoms: &XcbAtoms,
++    root: xproto::Window,
++    x: i16,
++    y: i16,
++) -> Option<(xproto::Window, u32)> {
++    let mut window = root;
++    loop {
++        window = xcb
++            .translate_coordinates(root, window, x, y)
++            .ok()?
++            .reply()
++            .ok()?
++            .child;
++        if window == x11rb::NONE {
++            return None;
++        }
++        let aware = (xcb.get_property(false, window, atoms.XdndAware, AtomEnum::ATOM, 0, 1))
++            .ok()?
++            .reply()
++            .ok()?;
++        if let Some(version) = aware.value32().and_then(|mut values| values.next()) {
++            return Some((window, version));
++        }
++    }
++}
++
++/// Puts `icon` with the pointer at (x, y) on the root where it holds it, over every other window.
++fn place_icon(xcb: &XCBConnection, icon: &DragIcon, x: i16, y: i16) {
++    let place = ConfigureWindowAux::new()
++        .x(i32::from(x) - i32::from(icon.hold.0))
++        .y(i32::from(y) - i32::from(icon.hold.1))
++        .stack_mode(StackMode::ABOVE);
++    xcb.configure_window(icon.window, &place).log_err();
++}
++
++fn remove_icon(xcb: &XCBConnection, icon: DragIcon) {
++    xcb.destroy_window(icon.window).log_err();
++    xcb.free_pixmap(icon.pixmap).log_err();
++    xcb.flush().log_err();
++}
++
++fn send(xcb: &XCBConnection, to: xproto::Window, type_: xproto::Atom, data: [u32; 5]) {
++    let message = ClientMessageEvent::new(32, to, type_, data);
++    xcb.send_event(false, to, EventMask::NO_EVENT, message)
++        .log_err();
++}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
 index f6ee76ae8c..286264936f 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
