@@ -289,20 +289,25 @@ check_buttons "after a resize"
 # The window's resize border, about 3 outside its edge (Dia), is AppKit's to track, as for any
 # resizable window. Whether AppKit takes a drag the driver posts there only a Mac's run tells: a
 # drag from 2 outside the right edge either widens the window by 100 or leaves it, and the run
-# says which.
-send drag 1002 350 1102 350
-check_layout "after a drag at the window's edge"
-case "$width" in
-  1100)
-    edge="a drag 2 outside the window's right edge widened it by 100"
-    check_buttons "after a drag at the window's edge"
-    ../tools/window-screenshot.sh "$pid" "$out/edge-resized.png" || fail "no window to capture"
-    send resize 1000 700
-    check_layout "after the edge's resize"
-    ;;
-  1000) edge="the window didn't take a posted drag 2 outside its right edge, so no run can drag it" ;;
-  *) fail "a drag at the window's edge left it $width wide, neither 1000 nor 1100" ;;
-esac
+# says which. On Wayland the border is the compositor's, and the driver puts the pointer only over
+# the app's own surfaces, so there's no drag to post (#1572).
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  edge="on Wayland the window's border is the compositor's, which the driver can't reach"
+else
+  send drag 1002 350 1102 350
+  check_layout "after a drag at the window's edge"
+  case "$width" in
+    1100)
+      edge="a drag 2 outside the window's right edge widened it by 100"
+      check_buttons "after a drag at the window's edge"
+      ../tools/window-screenshot.sh "$pid" "$out/edge-resized.png" || fail "no window to capture"
+      send resize 1000 700
+      check_layout "after the edge's resize"
+      ;;
+    1000) edge="the window didn't take a posted drag 2 outside its right edge, so no run can drag it" ;;
+    *) fail "a drag at the window's edge left it $width wide, neither 1000 nor 1100" ;;
+  esac
+fi
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen"
 # Once there, it says how to leave, at the card's top right, as Arc's does, in Chrome's words off the
