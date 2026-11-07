@@ -80,6 +80,9 @@ class Space {
   static Space* FromId(bc_id id);
   // Every Space but the windows' own, in the switcher's order, which sync's places set.
   static std::vector<Space*> All();
+  // The user's Space with the node |node|, not an agent's or a window's own, or null if there's
+  // none, as for an invalid |node|.
+  static Space* WithNode(const base::Uuid& node);
   // The Space holding |tab|, pinned or in Today, if any.
   static Space* Holding(bc_id tab);
   // The Space holding |folder|, if any.
