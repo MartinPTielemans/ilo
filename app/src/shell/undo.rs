@@ -50,6 +50,7 @@ impl What {
     pub const ADD_FAVORITE: What = What::quiet("Add to Favorites");
     pub const REMOVE_FAVORITE: What = What::said("Remove from Favorites", "Removed from Favorites");
     pub const MOVE_TAB: What = What::quiet("Move Tab");
+    pub const MOVE_TO_WINDOW: What = What::quiet("Move Tab to Window");
     pub const DUPLICATE: What = What::quiet("Duplicate");
     pub const MOVE_FAVORITE: What = What::quiet("Move Favorite");
     pub const MOVE_TO_SPACE: What = What::said("Move to Space", "Tab Moved to Space");
@@ -60,8 +61,10 @@ impl What {
     pub const CONVERT_VERTICAL: What = What::quiet("Convert to Vertical Split View");
     pub const CONVERT_HORIZONTAL: What = What::quiet("Convert to Horizontal Split View");
     pub const RENAME_TAB: What = What::quiet("Rename Tab");
+    pub const RENAME_SPLIT: What = What::quiet("Rename Split View");
     pub const RENAME_FOLDER: What = What::quiet("Rename Folder");
     pub const RENAME_SPACE: What = What::quiet("Rename Space");
+    pub const MOVE_SPACE: What = What::quiet("Move Space");
     pub const CHANGE_ICON: What = What::quiet("Change Icon");
     pub const CHANGE_PINNED_URL: What = What::quiet("Change Pinned URL");
     pub const CHANGE_THEME: What = What::quiet("Change Theme Color");
@@ -71,6 +74,9 @@ impl What {
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     pub const DELETE_ARCHIVED: What = What::said("Delete from Archive", "Deleted from Archive");
     pub const CLEAR_ARCHIVE: What = What::said("Clear Archive", "Archive Cleared");
+    /// The command bar's trash, ⇧⌦ or ⌥⌘⌫ on a page or search from history. The row going from
+    /// the list under the pointer is what it did, so there's no toast.
+    pub const REMOVE_FROM_HISTORY: What = What::quiet("Remove from History");
 }
 
 /// Where a tab, a favorite or a folder is, exactly enough to put it back.
@@ -118,6 +124,9 @@ pub(super) enum Prop {
     PinnedUrl(u64),
     FolderName(u64),
     FolderIcon(u64),
+    /// The name or icon of the split view a tab is in.
+    SplitName(u64),
+    SplitIcon(u64),
     SpaceName(u64),
     SpaceIcon(u64),
     SpaceColor(u64),
@@ -132,6 +141,15 @@ pub(super) enum Value {
         color: Option<u32>,
         theme: String,
     },
+}
+
+/// How a split view looks, which goes with its tabs when they're joined again: stacked or side by
+/// side, and the name and icon the user gave it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Look {
+    pub stacked: bool,
+    pub name: SharedString,
+    pub icon: SharedString,
 }
 
 /// A step. Applying one does it and returns the step that undoes it, or None if it can't be done
@@ -156,6 +174,13 @@ pub(super) enum Edit {
     },
     /// Removes a pinned row from the pinned tabs, as its remove button does.
     Remove(u64),
+    /// Shows `tab` in browser window `window`, its page moving there live, as it was before a drag
+    /// took it to this window, and with `close` closes this one, which the drag opened for it.
+    Return {
+        tab: u64,
+        window: u64,
+        close: bool,
+    },
     /// Puts a tab, a favorite or a folder at a spot, and a pinned tab's or favorite's URL back.
     Put {
         tab: u64,
@@ -174,19 +199,19 @@ pub(super) enum Edit {
     },
     /// Takes a tab out of its split view.
     Separate(u64),
-    /// Puts a tab in a split view with another, as `Join` does, stacking the split if `stacked`,
-    /// which the user did and ⌘Z takes back out.
+    /// Puts a tab in a split view with another, as `Join` does, which then looks as `look` says:
+    /// what the user did and ⌘Z takes back out, or a split that a tab leaving ended.
     Split {
         tab: u64,
         with: u64,
         left: bool,
-        stacked: bool,
+        look: Look,
     },
     /// Puts a split view, by its tabs in order, at a spot, in another Space too, joined there
-    /// again and stacked if `stacked`, as the core moves a tab to another Space alone.
+    /// again as it looked, as the core moves a tab to another Space alone.
     MoveSplit {
         tabs: Vec<u64>,
-        stacked: bool,
+        look: Look,
         spot: Spot,
     },
     /// Takes a tab out of the split view it joined, with `back`: the `Put` back to its row and
@@ -213,6 +238,11 @@ pub(super) enum Edit {
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
+    /// Moves the Space to right after the Space `after`, or first if it's 0.
+    MoveSpace {
+        space: u64,
+        after: u64,
+    },
     /// Puts back what the archive removal `removal` took out: the archived tab `id`, or all.
     UndoArchive {
         removal: u64,
@@ -232,6 +262,11 @@ pub(super) enum Edit {
     /// Puts back in the Archive the task Delete from Archive took out, which Redo deletes again.
     UndeleteTask(SharedString),
     DeleteTask(SharedString),
+    /// Puts back what the window's removal from history `removal` took out, as it was (the
+    /// command bar's trash). The core keeps the window's last ten.
+    PutBackSuggestion(u64),
+    /// Takes it out again.
+    RemoveSuggestion(u64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -289,6 +324,7 @@ impl Edit {
                 }
             }
             Edit::Remove(tab) => id(tab),
+            Edit::Return { tab, .. } => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -325,18 +361,22 @@ impl Edit {
             | Edit::DismissTask(_)
             | Edit::UndeleteTask(_)
             | Edit::DeleteTask(_) => {}
+            Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_) => {}
             Edit::Set(prop, _) => match prop {
                 Prop::TabName(each)
                 | Prop::TabIcon(each)
                 | Prop::PinnedUrl(each)
                 | Prop::FolderName(each)
-                | Prop::FolderIcon(each) => id(each),
+                | Prop::FolderIcon(each)
+                | Prop::SplitName(each)
+                | Prop::SplitIcon(each) => id(each),
                 Prop::SpaceName(_) | Prop::SpaceIcon(_) | Prop::SpaceColor(_) => {}
             },
             Edit::UndoClear { .. }
             | Edit::Clear(_)
             | Edit::UndoDeleteSpace(_)
             | Edit::DeleteSpace(_)
+            | Edit::MoveSpace { .. }
             | Edit::UndoArchive { .. }
             | Edit::Archive(_) => {}
             Edit::Many(edits) => edits.iter_mut().for_each(|edit| edit.rekey(from, to)),
@@ -434,6 +474,20 @@ impl Edit {
                 }
                 Some(Edit::Remove(first))
             }
+            Edit::Return { tab, window, close } => {
+                let here = shell.browser.window();
+                shell.browser.show_in_window(window, tab, cx);
+                if close {
+                    // A window the drag opened holds nothing else of the user's: every window
+                    // shows the same Spaces. Its redo goes with it.
+                    shell.browser.close_window(cx);
+                }
+                Some(Edit::Return {
+                    tab,
+                    window: here,
+                    close: false,
+                })
+            }
             Edit::Remove(tab) => {
                 let back = shell.repin_of(tab)?;
                 shell.unpin_and_close(tab, cx);
@@ -469,15 +523,11 @@ impl Edit {
                 shell.browser.split_with(tab, with, left, cx);
                 Some(Edit::Separate(tab))
             }
-            Edit::MoveSplit {
-                tabs,
-                stacked,
-                spot,
-            } => {
+            Edit::MoveSplit { tabs, look, spot } => {
                 let first = *tabs.first()?;
                 let now = shell.spot_of(first)?;
                 if now.space != spot.space {
-                    shell.move_split(&tabs, stacked, spot.space, cx);
+                    shell.move_split(&tabs, &look, spot.space, cx);
                 }
                 match spot.at {
                     At::Pinned { folder, index } => {
@@ -488,7 +538,7 @@ impl Edit {
                 }
                 Some(Edit::MoveSplit {
                     tabs,
-                    stacked,
+                    look,
                     spot: now,
                 })
             }
@@ -501,25 +551,27 @@ impl Edit {
                 tab,
                 with,
                 left,
-                stacked,
+                look,
             } => {
                 if !shell.has_tab(tab) || !shell.has_tab(with) {
                     return None;
                 }
                 let undo = shell.unsplit_of(tab, with)?;
                 shell.browser.split_with(tab, with, left, cx);
-                if stacked {
-                    shell.browser.set_split_stacked(with, true, cx);
-                }
+                shell.give_look(with, &look, cx);
                 Some(undo)
             }
             Edit::Unsplit { tab, back } => {
                 let Some(Edit::Join { with, left, .. }) = shell.join_of(tab) else {
                     return None;
                 };
-                let (panes, stacked) = shell.split_of(tab)?;
-                // A split of two goes with the tab, and its orientation with it, for Redo to give.
-                let stacked = stacked && panes.len() == 2;
+                let (panes, look) = shell.split_of(tab)?;
+                // A split of two goes with the tab, and how it looked with it, for Redo to give.
+                let look = if panes.len() == 2 {
+                    look
+                } else {
+                    Look::default()
+                };
                 let shown = shell.selected;
                 match *back {
                     join @ Edit::Join { .. } => {
@@ -541,11 +593,11 @@ impl Edit {
                     tab,
                     with,
                     left,
-                    stacked,
+                    look,
                 })
             }
             Edit::Stack { tab, stacked } => {
-                let (_, now) = shell.split_of(tab)?;
+                let now = shell.split_of(tab)?.1.stacked;
                 shell.browser.set_split_stacked(tab, stacked, cx);
                 Some(Edit::Stack { tab, stacked: now })
             }
@@ -572,6 +624,10 @@ impl Edit {
                 .browser
                 .delete_space(space, cx)
                 .then_some(Edit::UndoDeleteSpace(space)),
+            Edit::MoveSpace { space, after } => {
+                let back = shell.move_space(space, after, cx)?;
+                Some(Edit::MoveSpace { space, after: back })
+            }
             Edit::UndoArchive { removal, id } => {
                 (shell.browser.undo_archive_remove(removal, cx) > 0).then_some(Edit::Archive(id))
             }
@@ -604,6 +660,10 @@ impl Edit {
                 .then_some(Edit::ClosePreview(closed)),
             Edit::ClosePreview(closed) => (shell.browser.close_preview(closed.over, cx))
                 .then_some(Edit::ReopenPreview(closed)),
+            Edit::PutBackSuggestion(removal) => (shell.browser.undo_remove_suggestion(removal, cx))
+                .then_some(Edit::RemoveSuggestion(removal)),
+            Edit::RemoveSuggestion(removal) => (shell.browser.redo_remove_suggestion(removal, cx))
+                .then_some(Edit::PutBackSuggestion(removal)),
         }
     }
 }
@@ -619,7 +679,7 @@ impl Shell {
     /// which keeps nothing. What was undone before is gone, as in every app. If `what` takes
     /// something out of sight without a trace, the toast offers the Undo.
     pub(super) fn keep(&mut self, what: What, edit: Option<Edit>, cx: &mut Context<Self>) {
-        let Some(edit) = edit.filter(|_| !self.private) else {
+        let Some(edit) = edit.filter(|_| !self.one_space()) else {
             return;
         };
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
@@ -646,16 +706,47 @@ impl Shell {
     /// Undoes the last step, once, and returns whether it did. A step that can't be done any more
     /// is dropped and the one before it is undone.
     pub(super) fn undo(&mut self, cx: &mut Context<Self>) -> bool {
-        self.step(true, cx)
+        self.step(true, false, cx)
     }
 
     /// Does again what the last Undo undid.
     pub(super) fn redo(&mut self, cx: &mut Context<Self>) -> bool {
-        self.step(false, cx)
+        self.step(false, false, cx)
     }
 
-    fn step(&mut self, undoing: bool, cx: &mut Context<Self>) -> bool {
-        if self.private {
+    /// The command bar took a page or search out of history in this window, as `removal`.
+    pub fn suggestion_removed(&mut self, removal: u64, cx: &mut Context<Self>) {
+        let edit = (removal != 0).then_some(Edit::PutBackSuggestion(removal));
+        self.keep(What::REMOVE_FROM_HISTORY, edit, cx);
+    }
+
+    /// ⌘Z, or ⇧⌘Z unless `undoing`, in the command bar's field, which has no undo of its own:
+    /// undoes or redoes the next step if it's a removal from history, as it's the bar's, and
+    /// nothing else, which would be out of sight under it. Whether it did.
+    pub fn step_suggestion_removal(&mut self, undoing: bool, cx: &mut Context<Self>) -> bool {
+        self.step(undoing, true, cx)
+    }
+
+    /// Undoes the last step, or redoes it unless `undoing`; with `removals`, only while the next is
+    /// a removal from history.
+    fn step(&mut self, undoing: bool, removals: bool, cx: &mut Context<Self>) -> bool {
+        if self.one_space() {
+            return false;
+        }
+        let removal = |stack: &[Entry]| {
+            stack.last().is_some_and(|entry| {
+                matches!(
+                    entry.edit,
+                    Edit::PutBackSuggestion(_) | Edit::RemoveSuggestion(_)
+                )
+            })
+        };
+        let stack = if undoing {
+            &self.history.undo
+        } else {
+            &self.history.redo
+        };
+        if removals && !removal(stack) {
             return false;
         }
         // The Undo the toast offers is done, or is no longer the one.
@@ -665,6 +756,9 @@ impl Shell {
                 true => &mut self.history.undo,
                 false => &mut self.history.redo,
             };
+            if removals && !removal(stack) {
+                break false;
+            }
             let Some(Entry { what, edit }) = stack.pop() else {
                 break false;
             };
@@ -717,7 +811,7 @@ impl Shell {
     /// The user closed the link preview over `closed.over`, which ⌘Z and ⇧⌘T open again, unless
     /// Redo closed it (`undone`), as the history has it already.
     pub fn preview_closed(&mut self, closed: Closed, undone: bool, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             return;
         }
         self.closed_preview = Some(closed.clone());
@@ -733,7 +827,7 @@ impl Shell {
         if !self.has_tab(closed.over) {
             return false;
         }
-        let Some(page) = self.page_laid() else {
+        let Some(page) = self.preview_page() else {
             return false;
         };
         if !self.shows(closed.over) {
@@ -811,7 +905,7 @@ impl Shell {
         {
             self.browser.close(tab, false, cx);
             self.closed_preview = None;
-            self.closed_pinned = (!self.private).then(|| join.clone());
+            self.closed_pinned = (!self.one_space()).then(|| join.clone());
             return self.keep(What::CLOSE_TAB, Some(join), cx);
         }
         // The core closes a split's panes in their order, so they reopen last first.
@@ -874,7 +968,7 @@ impl Shell {
         };
         self.unpin_and_close(tab, cx);
         self.keep(What::REMOVE_TAB, Some(back.clone()), cx);
-        self.closed_pinned = (!self.private).then_some(back);
+        self.closed_pinned = (!self.one_space()).then_some(back);
     }
 
     /// The core has no call that removes a pinned tab, so it's the two the other way takes: Unpin,
@@ -935,7 +1029,7 @@ impl Shell {
         }
         let before = self.put_back(tab);
         let moving = self.favorites.contains(&tab);
-        self.browser.move_to_favorites(tab, index, cx);
+        self.make_favorite(tab, index, cx);
         self.keep(
             if moving {
                 What::MOVE_FAVORITE
@@ -945,6 +1039,15 @@ impl Shell {
             before,
             cx,
         );
+    }
+
+    /// Makes `tab` the favorite at `index`, with the rest of its split view, which is one favorite,
+    /// or moves the favorite there.
+    fn make_favorite(&self, tab: u64, index: usize, cx: &mut Context<Self>) {
+        match self.panes(tab).len() > 1 && !self.favorites.contains(&tab) {
+            true => self.browser.move_split_to_favorites(tab, index, cx),
+            false => self.browser.move_to_favorites(tab, index, cx),
+        }
     }
 
     /// Moves `tab` (or the folder `tab`) to `index` of the pinned tabs, `folder`'s, or Today's.
@@ -1007,7 +1110,7 @@ impl Shell {
             self.browser.set_pinned(tab, true, cx);
         }
         // A split moves whole, as its row does in its Space (Arc).
-        if let Some((tabs, stacked)) = self.split_of(tab) {
+        if let Some((tabs, look)) = self.split_of(tab) {
             if !same_profile {
                 // There the core makes each page a new tab, in a row of its own.
                 for &each in &tabs {
@@ -1018,27 +1121,44 @@ impl Shell {
             let spot = self.spot_of(tab);
             let before = spot.map(|spot| Edit::MoveSplit {
                 tabs: tabs.clone(),
-                stacked,
+                look: look.clone(),
                 spot,
             });
-            self.move_split(&tabs, stacked, space, cx);
+            self.move_split(&tabs, &look, space, cx);
             return self.keep(What::MOVE_TO_SPACE, before, cx);
         }
         self.browser.move_to_space(tab, space, cx);
         self.keep(What::MOVE_TO_SPACE, before, cx);
     }
 
-    /// Moves a split view's `tabs` to `space` and joins them again there, in their order and
-    /// orientation, at even sizes.
-    fn move_split(&mut self, tabs: &[u64], stacked: bool, space: u64, cx: &mut Context<Self>) {
+    /// Moves a split view's `tabs` to `space` and joins them again there, in their order, as it
+    /// looked, at even sizes.
+    fn move_split(&mut self, tabs: &[u64], look: &Look, space: u64, cx: &mut Context<Self>) {
         for &tab in tabs {
             self.browser.move_to_space(tab, space, cx);
         }
+        self.join_again(tabs, look, cx);
+    }
+
+    /// Joins `tabs` in a split view in their order, looking as `look` says.
+    pub(super) fn join_again(&mut self, tabs: &[u64], look: &Look, cx: &mut Context<Self>) {
         for pair in tabs.windows(2) {
             self.browser.split_with(pair[1], pair[0], false, cx);
         }
-        if stacked {
-            self.browser.set_split_stacked(tabs[0], true, cx);
+        self.give_look(tabs[0], look, cx);
+    }
+
+    /// Gives `tab`'s split view, just joined again, the look it had. A new split is side by side
+    /// with no name or icon, so only what differs is set.
+    fn give_look(&mut self, tab: u64, look: &Look, cx: &mut Context<Self>) {
+        if look.stacked {
+            self.browser.set_split_stacked(tab, true, cx);
+        }
+        if !look.name.is_empty() {
+            self.browser.set_split_name(tab, &look.name, cx);
+        }
+        if !look.icon.is_empty() {
+            self.browser.set_split_icon(tab, &look.icon, cx);
         }
     }
 
@@ -1049,15 +1169,35 @@ impl Shell {
         self.keep(What::DELETE_FOLDER, snapshot, cx);
     }
 
-    /// Takes `tab` out of its split view.
+    /// Takes `tab` out of its split view. ⌘Z joins it again, and a split of two that it ended
+    /// looks again as it did.
     pub(super) fn separate_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let join = self.join_of(tab);
+        let join = match (self.join_of(tab), self.split_of(tab)) {
+            (Some(Edit::Join { tab, with, left }), Some((panes, look))) if panes.len() == 2 => {
+                Some(Edit::Split {
+                    tab,
+                    with,
+                    left,
+                    look,
+                })
+            }
+            (join, _) => join,
+        };
         self.browser.separate(tab, cx);
         self.keep(What::REMOVE_FROM_SPLIT, join, cx);
     }
 
     /// Takes every tab of `tab`'s split view out of it, each a step to undo, from the right, so
     /// the pages keep their order in the list.
+    /// Takes the favorite split `tab`'s pages but its first out of it, to the top of Today, its
+    /// first staying the favorite.
+    pub(super) fn separate_favorite(&mut self, tab: u64, cx: &mut Context<Self>) {
+        for &each in self.panes(tab)[1..].iter().rev() {
+            self.browser.separate(each, cx);
+            self.browser.move_tab(each, false, 0, 0, cx);
+        }
+    }
+
     pub(super) fn separate_all(&mut self, tab: u64, cx: &mut Context<Self>) {
         for &each in self.panes(tab)[1..].iter().rev() {
             self.separate_tab(each, cx);
@@ -1166,9 +1306,10 @@ impl Shell {
 
     /// Stacks the pages of `tab`'s split view top to bottom, or puts them side by side.
     pub(super) fn stack_split(&mut self, tab: u64, stacked: bool, cx: &mut Context<Self>) {
-        let undo = self
-            .split_of(tab)
-            .map(|(_, now)| Edit::Stack { tab, stacked: now });
+        let undo = self.split_of(tab).map(|(_, now)| Edit::Stack {
+            tab,
+            stacked: now.stacked,
+        });
         self.browser.set_split_stacked(tab, stacked, cx);
         let what = if stacked {
             What::CONVERT_VERTICAL
@@ -1187,9 +1328,12 @@ impl Shell {
         self.set_prop(prop, &value, cx);
         let what = match prop {
             Prop::TabName(_) => What::RENAME_TAB,
+            Prop::SplitName(_) => What::RENAME_SPLIT,
             Prop::FolderName(_) => What::RENAME_FOLDER,
             Prop::SpaceName(_) => What::RENAME_SPACE,
-            Prop::TabIcon(_) | Prop::FolderIcon(_) | Prop::SpaceIcon(_) => What::CHANGE_ICON,
+            Prop::TabIcon(_) | Prop::FolderIcon(_) | Prop::SplitIcon(_) | Prop::SpaceIcon(_) => {
+                What::CHANGE_ICON
+            }
             Prop::PinnedUrl(_) => What::CHANGE_PINNED_URL,
             Prop::SpaceColor(_) => match value {
                 Value::Color { color: None, .. } => What::REMOVE_THEME,
@@ -1282,7 +1426,7 @@ impl Shell {
             }
         }
         match spot.at {
-            At::Favorite(index) => self.browser.move_to_favorites(tab, index, cx),
+            At::Favorite(index) => self.make_favorite(tab, index, cx),
             At::Pinned { folder, index } => match self.is_folder_anywhere(tab) {
                 true => self.browser.move_folder(tab, folder, index, cx),
                 false => self.browser.move_tab(tab, true, folder, index, cx),
@@ -1391,11 +1535,19 @@ impl Shell {
         })
     }
 
-    /// The tabs of `tab`'s split view, in any Space, and whether it's stacked.
-    fn split_of(&self, tab: u64) -> Option<(Vec<u64>, bool)> {
+    /// The tabs of `tab`'s split view, in any Space, and how it looks.
+    pub(super) fn split_of(&self, tab: u64) -> Option<(Vec<u64>, Look)> {
         self.spaces.iter().find_map(|space| {
-            let panes = space.panes(tab);
-            (panes.len() > 1).then(|| (panes, space.stacked(tab)))
+            let split = space
+                .splits
+                .iter()
+                .find(|split| split.tabs.contains(&tab))?;
+            let look = Look {
+                stacked: split.stacked,
+                name: split.name.clone(),
+                icon: split.icon.clone(),
+            };
+            Some((split.tabs.clone(), look))
         })
     }
 
@@ -1429,6 +1581,8 @@ impl Shell {
                     .then_some(())?;
                 Value::Text(self.folder_icon(folder).to_string())
             }
+            Prop::SplitName(tab) => Value::Text(self.split_of(tab)?.1.name.to_string()),
+            Prop::SplitIcon(tab) => Value::Text(self.split_of(tab)?.1.icon.to_string()),
             Prop::SpaceName(id) => Value::Text(space(id)?.name.to_string()),
             Prop::SpaceIcon(id) => Value::Text(space(id)?.icon.to_string()),
             Prop::SpaceColor(id) => {
@@ -1456,6 +1610,8 @@ impl Shell {
             (Prop::FolderIcon(folder), Value::Text(icon)) => {
                 browser.set_folder_icon(folder, icon, cx)
             }
+            (Prop::SplitName(tab), Value::Text(name)) => browser.set_split_name(tab, name, cx),
+            (Prop::SplitIcon(tab), Value::Text(icon)) => browser.set_split_icon(tab, icon, cx),
             (Prop::SpaceName(space), Value::Text(name)) => browser.rename_space(space, name, cx),
             (Prop::SpaceIcon(space), Value::Text(icon)) => browser.set_space_icon(space, icon, cx),
             (Prop::SpaceColor(space), Value::Color { color, theme }) => {

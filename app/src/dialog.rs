@@ -9,7 +9,7 @@
 //! its tab's card alone, which come and go with the tab (docs/ux-spec.md › Page dialogs).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     sync::Arc,
@@ -20,7 +20,11 @@ use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, actions, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowOptions,
+    accesskit::{Role, Toggled},
+    actions, canvas, div, img, point,
+    prelude::*,
+    px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -81,8 +85,11 @@ use crate::tokens::dialog::{
 use crate::tokens::text;
 /// Arc's motion: over 0.275 s the window dims and the card comes down 32 pt into place,
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
-const MOVE: f32 = 0.275;
+pub(crate) const MOVE: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
+/// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
+/// Windows once it has hidden: a page's question is answered then.
+const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
 const DROP: f32 = 32.;
 
 /// What a dialog asks.
@@ -174,6 +181,13 @@ pub trait Host {
     fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
+    /// The dialog was answered and leaves, so no key typed from now may be lost to it: Linux gives
+    /// the browser window the keyboard back at once (overlays::dialog_leaving), and the Mac and
+    /// Windows hold the keys until it has hidden (host_hold_keys).
+    fn hold_keys(&self) {}
+    /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
+    /// (host_release_held_keys).
+    fn give_held_keys(&self) {}
 }
 
 /// Where the motion is: how far the window has dimmed and the card has faded in, from 0 to 1,
@@ -207,7 +221,7 @@ impl Pose {
     }
 }
 
-fn ease_in_out(t: f32) -> f32 {
+pub(crate) fn ease_in_out(t: f32) -> f32 {
     cubic_bezier(0.42, 0., 0.58, 1., t)
 }
 
@@ -272,6 +286,36 @@ struct Asked {
     drawn_press: Option<&'static str>,
     /// Where each button was said to be drawn, in the browser window.
     buttons_drawn: Rc<RefCell<HashMap<&'static str, Point<Pixels>>>>,
+    /// Where the card, the checkbox and its label were drawn last, in the dialog's window.
+    check_drawn: Rc<Cell<CheckDrawn>>,
+}
+
+/// The card's bounds, its checkbox's and the checkbox's label's, as drawn.
+#[derive(Clone, Copy, Default, Debug)]
+struct CheckDrawn {
+    card: Bounds<Pixels>,
+    check: Bounds<Pixels>,
+    label: Bounds<Pixels>,
+}
+
+/// Puts the bounds it's drawn at into `drawn` by `put`.
+fn drawn_into(
+    drawn: &Rc<Cell<CheckDrawn>>,
+    put: fn(&mut CheckDrawn, Bounds<Pixels>),
+) -> impl IntoElement + use<> {
+    let drawn = drawn.clone();
+    canvas(
+        move |bounds, _, _| {
+            let mut now = drawn.get();
+            put(&mut now, bounds);
+            drawn.set(now);
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }
 
 impl Asked {
@@ -760,6 +804,7 @@ impl Dialog {
             pressed: None,
             drawn_press: None,
             buttons_drawn: Rc::default(),
+            check_drawn: Rc::default(),
         });
         self.host.show(asker, over.map(|(over, _)| over));
         cx.notify();
@@ -890,6 +935,9 @@ impl Dialog {
             return;
         };
         asked.answered_at = Some((Instant::now(), asked.pose()));
+        // Motion never blocks a key (ux-principles): one typed while it leaves, such as ⌥⌘N right
+        // after Esc, waits for the browser window rather than reaching the dialog going (#1930).
+        self.host.hold_keys();
         let (answered, also_chosen) = match answer {
             Some(Answer::Also) => (None, asked.also_chosen.take()),
             Some(answer) => {
@@ -907,6 +955,19 @@ impl Dialog {
             }
             None => (None, None),
         };
+        // On Linux the page has the keyboard back as the dialog starts leaving (Host::hold_keys),
+        // and Chromium drops its keys until its question is answered, so it's answered then: ⌘L
+        // typed right after Esc opens the command bar (#1711, #1963). After this update, as the
+        // core's answer can come back to the dialog.
+        let answered = match answered {
+            Some((answered, reply))
+                if PAGE_ANSWERED_AS_IT_LEAVES && asked.source == Source::Page =>
+            {
+                cx.defer(move |cx| answered(reply, cx));
+                None
+            }
+            answered => answered,
+        };
         asked._leave = Some(cx.spawn(async move |dialog, cx| {
             cx.background_executor()
                 .timer(Duration::from_secs_f32(MOVE))
@@ -914,6 +975,7 @@ impl Dialog {
             let hidden = dialog.update(cx, |dialog, cx| {
                 dialog.asked = None;
                 dialog.host.hide();
+                dialog.host.give_held_keys();
                 // check.sh reads this line.
                 log!("browser: dialog hidden");
                 cx.notify();
@@ -1014,7 +1076,11 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
 
 impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The window holds the card alone, so VoiceOver reads it as the alert it is, and the
+        // focus GPUI reports is on it as the dialog comes.
+        let a11y = window.is_a11y_active();
         let root = div()
+            .id("dialog-window")
             .key_context("Dialog")
             .track_focus(&self.focus)
             .size_full()
@@ -1080,6 +1146,11 @@ impl Render for Dialog {
             .text_color(palette.on_overlay(CANCEL_TEXT))
             .relative()
             .child(button_frame("cancel", asked))
+            .when(a11y, |button| {
+                button
+                    .role(Role::Button)
+                    .aria_label(question.cancel.clone())
+            })
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("cancel", *hovered, cx)))
             .on_click(cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx)))
         });
@@ -1099,6 +1170,9 @@ impl Render for Dialog {
                 .hover(move |style| style.bg(palette.plate(CANCEL_HOVERED)))
                 .active(move |style| style.bg(palette.state(CANCEL_FILL, STATE_PRESSED)))
                 .text_color(palette.on_overlay(CANCEL_TEXT))
+                .when(a11y, |button| {
+                    button.role(Role::Button).aria_label(label.clone())
+                })
                 .child(label)
                 .relative()
                 .child(button_frame("also", asked))
@@ -1158,6 +1232,11 @@ impl Render for Dialog {
             .text_color(label)
             .relative()
             .child(button_frame("confirm", asked))
+            .when(a11y, |button| {
+                button
+                    .role(Role::Button)
+                    .aria_label(question.action.clone())
+            })
             .on_hover(cx.listener(|dialog, hovered, _, cx| dialog.hover("confirm", *hovered, cx)))
             .on_mouse_down(
                 MouseButton::Left,
@@ -1233,17 +1312,24 @@ impl Render for Dialog {
         });
         let check = question.check.clone().map(|check| {
             let checked = asked.checked;
+            // The label wraps inside the card as the detail does, a site's long name too, and the
+            // box sits beside its first line.
             div()
                 .id("dialog-check")
                 .mt(px(CHECK_TOP))
+                .pr(px(TEXT_INSET - BUTTON_INSET))
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(CHECK_GAP))
                 .text_size(px(text::BODY))
+                .line_height(px(DETAIL_LINE))
                 .text_color(palette.on_overlay(DETAIL))
                 .child(
                     div()
+                        .relative()
                         .flex_none()
+                        .mt(px((DETAIL_LINE - CHECK_BOX) / 2.))
+                        .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.check = at))
                         .size(px(CHECK_BOX))
                         .flex()
                         .items_center()
@@ -1265,7 +1351,24 @@ impl Render for Dialog {
                             )
                         }),
                 )
-                .child(check)
+                .when(a11y, |row| {
+                    let toggled = if checked {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    };
+                    row.role(Role::CheckBox)
+                        .aria_label(check.clone())
+                        .aria_toggled(toggled)
+                })
+                .child(
+                    div()
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.label = at))
+                        .child(check),
+                )
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.toggle_check(cx)))
         });
         let buttons_top = match detail.is_some() || fields.is_some() || check.is_some() {
@@ -1277,6 +1380,7 @@ impl Render for Dialog {
             // Clicks on the card stay on it, and one around it cancels.
             .occlude()
             .relative()
+            .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
             .w(px(WIDTH))
             .pt(px(TEXT_INSET))
@@ -1326,6 +1430,14 @@ impl Render for Dialog {
                     ),
             );
         let radius = asked.over.map_or(0., |(_, radius)| radius);
+        let root = root.when(a11y, |root| {
+            let root = root
+                .role(Role::AlertDialog)
+                .aria_label(question.message.clone());
+            root.when(!question.detail.is_empty(), |root| {
+                root.aria_description(question.detail.clone())
+            })
+        });
         root.on_action(cx.listener(|dialog, _: &Confirm, _, cx| dialog.confirm(cx)))
             .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.answer(Answer::Cancel, cx)))
             .on_action(

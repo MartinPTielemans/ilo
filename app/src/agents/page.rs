@@ -28,6 +28,26 @@ const INTERACTIVE: &[&str] = &[
     "tab",
     "treeitem",
 ];
+/// Roles given a ref too, to scroll in: a frame, and the parts of a page a site often scrolls on
+/// their own.
+const SCROLLS: &[&str] = &[
+    "Iframe",
+    "IframePresentational",
+    "main",
+    "region",
+    "document",
+    "article",
+    "feed",
+    "log",
+    "list",
+    "grid",
+    "tree",
+    "tabpanel",
+    "dialog",
+    "alertdialog",
+    "complementary",
+    "navigation",
+];
 /// Wrappers that only add nesting, whose children are outlined a level up.
 const FLATTEN: &[&str] = &[
     "none",
@@ -54,6 +74,8 @@ const LANDMARKS: &[&str] = &[
 const STATES: &[&str] = &[
     "checked", "selected", "expanded", "disabled", "required", "level",
 ];
+/// A frame's element, under which the core puts its document.
+const FRAMES: &[&str] = &["Iframe", "IframePresentational"];
 /// The outline's bytes at most, as a long page would fill the agent's context.
 pub const MAX_OUTLINE: usize = 30_000;
 
@@ -402,6 +424,8 @@ impl Walk<'_> {
         }
         let (mut next, mut next_name) = (depth, parent_name.to_string());
         let shown = INTERACTIVE.contains(&role) || !name.is_empty() || LANDMARKS.contains(&role);
+        // Where a frame's element's line went, and the size before it.
+        let mut frame = None;
         if !ignored && !FLATTEN.contains(&role) && shown {
             let mut line = format!("- {role}");
             let mut reference = None;
@@ -409,7 +433,8 @@ impl Walk<'_> {
                 line.push_str(&format!(" \"{}\"", clip(&name, 160)));
             }
             let backend = node.get("backendDOMNodeId").and_then(Value::as_i64);
-            if let (true, Some(backend)) = (INTERACTIVE.contains(&role), backend) {
+            let refers = INTERACTIVE.contains(&role) || SCROLLS.contains(&role);
+            if let (true, Some(backend)) = (refers, backend) {
                 let password = node
                     .get("password")
                     .and_then(Value::as_bool)
@@ -450,7 +475,11 @@ impl Walk<'_> {
                     _ => {}
                 }
             }
+            let before = (self.lines.len(), self.size);
             self.add(depth, line, reference);
+            if FRAMES.contains(&role) && self.lines.len() > before.0 {
+                frame = Some(before);
+            }
             next = depth + 1;
             next_name = name;
         }
@@ -459,6 +488,14 @@ impl Walk<'_> {
             if let Some(child) = child.as_str().and_then(|id| self.by_id.get(id).copied()) {
                 self.node(child, next, &next_name, levels + 1);
             }
+        }
+        // A frame with nothing under its line, as a site's helper frames have, says nothing
+        // (#1444).
+        if let Some((at, size)) = frame
+            && self.lines.len() == at + 1
+        {
+            self.lines.pop();
+            self.size = size;
         }
     }
 }
@@ -544,14 +581,19 @@ const BANKS: &[&str] = &[
 pub fn risk(host: &str, label: &str) -> Option<&'static str> {
     let label = label.to_lowercase();
     if PAYMENT.iter().any(|words| has_words(&label, words)) {
-        return Some("It looks like a payment or an order.");
+        return Some(ORDER);
     }
     let sends = SEND.iter().any(|words| has_words(&label, words));
     if sends && MESSAGING.iter().any(|site| on(host, site)) {
-        return Some("It sends a message or a post.");
+        return Some(SENDS);
     }
     None
 }
+
+/// Why a payment or an order asks first, which a session's receipt counts as an order placed.
+pub const ORDER: &str = "It looks like a payment or an order.";
+/// Why sending a message or a post asks first, which the receipt counts as a message sent.
+pub const SENDS: &str = "It sends a message or a post.";
 
 /// Why opening a page on `host` asks the user first, if it does: it's a bank's.
 pub fn opening_risk(host: &str) -> Option<&'static str> {
@@ -588,6 +630,7 @@ mod tests {
             id: 20,
             title: "Shop".into(),
             url: "https://shop.example/".into(),
+            ..TabInfo::default()
         }
     }
 
@@ -691,15 +734,15 @@ mod tests {
             open.since(&closed),
             format!(
                 "{head}{since}New:\n\
-                 - listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]\n\n\
-                 Changed:\n- combobox \"Size\" [e5] (expanded)"
+                 - listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]\n\n\
+                 Changed:\n- combobox \"Size\" [e6] (expanded)"
             )
         );
         assert_eq!(
             closed.since(&open),
             format!(
-                "{head}{since}Changed:\n- combobox \"Size\" [e5]\n\n\
-                 Gone:\n- listbox \"Size\" [e7]\n  - option \"S\" [e8]\n  - option \"M\" [e9]"
+                "{head}{since}Changed:\n- combobox \"Size\" [e6]\n\n\
+                 Gone:\n- listbox \"Size\" [e8]\n  - option \"S\" [e9]\n  - option \"M\" [e10]"
             )
         );
         assert_eq!(
@@ -766,12 +809,66 @@ mod tests {
         assert_eq!(
             outline(&tab(), &shop(true), &mut refs, Some(5)).text(),
             "Tab 20: Shop\nURL: https://shop.example/\n\n\
-             - combobox \"Size\" [e5] (expanded)\n  - listbox \"Size\" [e6]\n    \
-             - option \"S\" [e7]\n    - option \"M\" [e8]"
+             - combobox \"Size\" [e6] (expanded)\n  - listbox \"Size\" [e7]\n    \
+             - option \"S\" [e8]\n    - option \"M\" [e9]"
         );
         let gone = outline(&tab(), &shop(false), &mut refs, Some(999)).text();
         let note = "That element isn't on the page any more. Take a snapshot without a ref.";
         assert!(gone.ends_with(note), "{gone}");
+    }
+
+    /// A frame's document is outlined under its element, however deep, and a frame with nothing in
+    /// it, as a site's helper frames, is left out (#1444).
+    #[test]
+    fn a_frame_is_outlined_only_with_what_is_in_it() {
+        let nodes = vec![
+            node("1", "RootWebArea", "Document", &["2", "3"]),
+            node("2", "Iframe", "Not intended for user action", &["1:1"]),
+            node("3", "Iframe", "Office on the web Frame", &["2:1"]),
+            node("1:1", "RootWebArea", "", &[]),
+            node("2:1", "RootWebArea", "Word", &["2:2", "2:3"]),
+            node("2:2", "Iframe", "Not intended for user action", &[]),
+            node("2:3", "Iframe", "Document", &["3:1"]),
+            node("3:1", "RootWebArea", "", &["3:2"]),
+            node("3:2", "paragraph", "", &["3:3"]),
+            node("3:3", "StaticText", "Quarterly report", &[]),
+        ];
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        assert_eq!(
+            outline,
+            "Tab 20: Document\nURL: https://shop.example/\n\n\
+             - Iframe \"Office on the web Frame\"\n\
+             \x20 - Iframe \"Document\"\n\
+             \x20   - text: Quarterly report"
+        );
+    }
+
+    /// A frame and a part of the page a site scrolls on its own have refs, for scroll to name, and
+    /// a heading has none (#1445).
+    #[test]
+    fn what_scrolls_has_a_ref() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Mail", &["2", "3", "4"]),
+            node("2", "heading", "Inbox", &[]),
+            node("3", "region", "Messages", &["5"]),
+            node("4", "Iframe", "Message", &["6"]),
+            node("5", "StaticText", "From Ana", &[]),
+            node("6", "StaticText", "Hello", &[]),
+        ];
+        nodes[1]["backendDOMNodeId"] = json!(20);
+        nodes[2]["backendDOMNodeId"] = json!(30);
+        nodes[3]["backendDOMNodeId"] = json!(40);
+        let mut refs = Refs::default();
+        let outline = outline(&tab(), &nodes, &mut refs, None).text();
+        assert!(
+            outline.ends_with(
+                "- heading \"Inbox\"\n\
+                 - region \"Messages\" [e1]\n  - text: From Ana\n\
+                 - Iframe \"Message\" [e2]\n  - text: Hello"
+            ),
+            "{outline}"
+        );
+        assert_eq!(refs.get("e2").map(|element| element.node), Some(40));
     }
 
     /// A page bigger than an agent should take in is cut, and says so.

@@ -1,0 +1,41 @@
+# The UI builds and its tests pass on the Mac, the OS ilo ships first, so a change to shared GPUI
+# code or to a patch that applies on every OS can't merge without compiling there (#1872). ci.yml
+# calls it when a change touches the app outside check/ (.github/scripts/ci-changes.cjs). It links
+# no engine (setup.sh ui): the UI's library tested and the browser checked, not linked, as on
+# Linux; check-mac.yml runs the browser.
+name: UI on macOS
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - run: rustup update stable --no-self-update
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: app-mac-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: app-mac-
+
+      - run: ./setup.sh ui
+      - run: cargo test --release --lib
+      # main.rs and the Mac's driver, which the tests don't compile. Checked, as linking needs the
+      # engine's framework.
+      - run: cargo check --release --bin Browser

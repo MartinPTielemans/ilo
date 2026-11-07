@@ -10,6 +10,8 @@ on:
     paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
   pull_request:
     paths: [app/**, core/public/**, tools/headless.sh, tools/parity.sh, .github/workflows/app-linux.yml, '!**/*.md']
+  # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
+  workflow_dispatch:
 
 # A branch's newer push cancels its older run. Main's runs, and pull requests', each get a group of
 # their own, so none is cancelled, or replaced while it waits.
@@ -22,7 +24,7 @@ jobs:
   # read the manifests, and its --all formats them too. The workflow's app/** filter starts it for
   # every Rust file and app/rustfmt.toml.
   fmt:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -31,8 +33,8 @@ jobs:
       - run: git ls-files -z 'app/*.rs' | xargs -0 rustfmt --check
 
   test:
-    # A pull request from a branch here already ran on its push.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    # A pull request from a branch here already ran on its push, or on a dispatch on its head.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -44,11 +46,10 @@ jobs:
       # bindgen reads the core's header with libclang; GPUI's X11 window system links xcb and
       # xkbcommon, and loads Wayland's, fontconfig and Vulkan at run time.
       - name: Install tools
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev
-          rustup update stable --no-self-update
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+      - run: rustup update stable --no-self-update
 
       - uses: actions/cache@v4
         with:
@@ -56,8 +57,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             app/target
-          key: app-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          key: app-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**', 'core/public/browser_core.h') }}
           restore-keys: app-linux-
+
+      # Cargo rebuilds what's older than its inputs, and a cache saved after this checkout (another
+      # branch's, while apt stalled) is newer than them all, so its bindings and builds of the core's
+      # header and the app would pass as fresh (#2003). Our files are made newer than anything restored.
+      - run: git ls-files -z . ../core/public | xargs -0 touch
 
       - run: ./setup.sh
       - run: cargo test --release --lib
@@ -71,10 +77,16 @@ jobs:
       # The same screens on Wayland and X11, side by side, so text that fits on the Mac but not here
       # shows on every change to the app (tools/parity.sh). It only reports: nothing here fails the
       # job. lavapipe draws GPUI's Vulkan in software, as the runner has no GPU.
+      - id: parity-tools
+        continue-on-error: true
+        uses: ./.github/actions/apt-install
+        with:
+          packages: sway grim xwayland imagemagick mesa-vulkan-drivers
+          options: --no-install-recommends
       - name: Capture the parity screens
+        if: steps.parity-tools.outcome == 'success'
         continue-on-error: true
         run: |
-          sudo apt-get install -yq --no-install-recommends sway grim xwayland imagemagick mesa-vulkan-drivers
           export XDG_RUNTIME_DIR=$(mktemp -d)
           ../tools/parity.sh target/release/preview ../parity
 

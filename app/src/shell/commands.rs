@@ -7,12 +7,13 @@ use std::{
 };
 
 use gpui::{
-    Action, App, Context, Global, Image, KeyBinding, MenuItem, SharedString, WeakEntity, actions,
-    point,
+    Action, App, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
+    WeakEntity, actions, point,
 };
 
 use crate::build_info::{self, BuildInfo};
 use crate::theme::Appearance;
+use crate::usage::{self, Usage};
 
 use super::{
     COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
@@ -39,6 +40,8 @@ pub enum Command {
     NewPrivateWindow,
     /// Opens a Little ilo window, Arc's Little Arc, for the user's Space shown.
     NewLittleWindow,
+    /// Opens a Blank Window, Arc's: one list of tabs that aren't kept or shown in other windows.
+    NewBlankWindow,
     /// A Little ilo window's ⌘O: its page goes to the main window, live.
     OpenInMainWindow,
     /// Closes the window, its tabs going to the window in front of the others.
@@ -85,6 +88,15 @@ pub enum Command {
     ResetSpaceTabs,
     /// Mutes the selected tab, or unmutes it.
     ToggleMute,
+    /// Turns Chrome's Battery Saver off until the computer's plugged in, while it's on (#686).
+    TurnOffBatterySaver,
+    /// Mutes every tab of the window (`true`), or unmutes them all: Arc's Mute All Tabs.
+    MuteAll(bool),
+    /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
+    ToggleFullScreen,
+    /// Arc's View › Exit (⎋): takes the window out of full screen, and a page full screen with
+    /// it, as Exit Full Screen does.
+    Exit,
     /// Closes the Today tabs of the Space shown, but the one shown.
     Clear,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
@@ -142,6 +154,9 @@ pub enum Command {
     TaskManager,
     /// Starts recording a trace of the whole browser, or stops it and asks where to save it.
     RecordTrace,
+    /// Keeps the window over other apps' windows, or lets it go back among them (Arc's Window ›
+    /// Stay On Top).
+    StayOnTop,
     /// Turns Developer Mode on or off for the page's site.
     ToggleDeveloperMode,
     /// Opens Chrome's extensions page in a new tab.
@@ -187,6 +202,8 @@ pub enum Command {
     ViewDownloads,
     /// Opens the Library on its media, or closes it there.
     ViewMedia,
+    /// Opens the Library on its agents' past tasks, or closes it there.
+    ViewAgents,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -232,6 +249,13 @@ pub enum Command {
     Import,
     /// Opens the Settings window on its Passwords tab, with the Space's profile's logins.
     Passwords,
+    /// Opens Chrome's autofill dropdown at the field of the page that has the keyboard, as a click
+    /// in the field does, or with no field there, Settings › Passwords, as Edit › AutoFill's
+    /// Contact… and Credit Card… do.
+    AutoFill,
+    /// The same, its dropdown with every login the profile has, as Chrome's Select Password and
+    /// Edit › AutoFill › Passwords… do.
+    AutoFillPasswords,
     /// Plays a new profile's first launch again.
     Welcome,
     /// Gives every window this appearance where its Space's theme doesn't choose one, in place of
@@ -260,6 +284,7 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-n", Command::NewWindow, true),
     ("shift-cmd-n", Command::NewPrivateWindow, true),
     ("alt-cmd-n", Command::NewLittleWindow, true),
+    ("ctrl-cmd-n", Command::NewBlankWindow, true),
     ("cmd-o", Command::OpenInMainWindow, false),
     ("shift-cmd-w", Command::CloseWindow, true),
     ("shift-cmd-t", Command::ReopenClosedTab, true),
@@ -361,6 +386,10 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
 /// sidebar to hide.
 const HIDE_SIDEBAR: &str = "Hide Sidebar";
 
+/// Window › Stay On Top, and the command bar's row that ends it while it's on.
+pub const STAY_ON_TOP: &str = "Stay On Top";
+const DONT_STAY_ON_TOP: &str = "Don't Stay On Top";
+
 /// The page's Developer Mode's rows in the command bar, of which it lists the one that would change
 /// it (Arc's, in sentence case).
 const DEVELOPER_MODE_ON: &str = "Turn on Developer Mode for this site";
@@ -439,6 +468,29 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         &["reset tab"],
     ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
+    (
+        "Turn Off Battery Saver for Now",
+        Command::TurnOffBatterySaver,
+        &["energy saver", "power"],
+    ),
+    (
+        "Mute All Tabs",
+        Command::MuteAll(true),
+        &["sound", "audio", "silence"],
+    ),
+    (
+        "Unmute All Tabs",
+        Command::MuteAll(false),
+        &["sound", "audio"],
+    ),
+    ("Exit", Command::Exit, &["escape"]),
+    ("Enter Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    ("Exit Full Screen", Command::ToggleFullScreen, &["toggle"]),
+    (
+        "New Profile",
+        Command::ChangeProfile(None),
+        &["add profile"],
+    ),
     ("Copy URL", Command::CopyUrl, &["link"]),
     ("Copy URL as Markdown", Command::CopyMarkdownLink, &["link"]),
     (
@@ -458,6 +510,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "New Little ilo Window",
         Command::NewLittleWindow,
         &["little arc", "small window"],
+    ),
+    (
+        "New Blank Window",
+        Command::NewBlankWindow,
+        &["empty window", "unsaved"],
     ),
     (
         "Open in Main Window",
@@ -560,6 +617,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Open Task Manager", Command::TaskManager, &[]),
     (
+        STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
+    (
+        DONT_STAY_ON_TOP,
+        Command::StayOnTop,
+        &["float", "always on top", "pin window"],
+    ),
+    (
         trace::RECORD,
         Command::RecordTrace,
         &["performance", "tracing"],
@@ -600,6 +667,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "View Media…",
         Command::ViewMedia,
         &["screenshots", "captures"],
+    ),
+    (
+        "View Agents…",
+        Command::ViewAgents,
+        &["agent history", "past tasks"],
     ),
     ("View History", Command::ViewHistory, &[]),
     (
@@ -718,24 +790,34 @@ pub struct BarTab {
     /// Whether its title is the name the user gave it, which counts more when what's typed starts
     /// it, as Arc's custom title does.
     pub renamed: bool,
+    /// How much the user's switches to it count, which ranks the tabs matching what's typed.
+    pub switched: f32,
+}
+
+/// One of the user's Spaces, which a Little ilo window's Spaces menu lists for its page to go to,
+/// with the mark Move to Space's menu shows it by.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BarSpace {
+    pub space: u64,
+    pub name: SharedString,
+    pub swatch: crate::menu::Swatch,
 }
 
 /// The commands that do something now that match `typed`, best first.
 pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     let Some(shell) = shell else {
         return Vec::new();
     };
     let shell = shell.read(cx);
     let keys = user_keys(cx);
-    let found = find_commands(typed, keys, |name, command| {
+    let picks = shell.bar_picks(cx);
+    let found = find_ranked(typed, keys, picks, |name, command| {
         shell.bar_name(name, command, cx)
     });
     let mut named = shell.named_bar_rows();
     named.extend(shell.numbered_bar_row(typed, cx));
-    with_named_rows(found, typed, &named, keys)
+    with_named_ranked(found, typed, &named, keys, picks)
 }
 
 /// The commands of BAR_COMMANDS that match `typed`, best first and then in the table's order, at
@@ -745,6 +827,16 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
 pub fn find_commands(
     typed: &str,
     keys: &UserKeys,
+    named: impl FnMut(&'static str, Command) -> Option<&'static str>,
+) -> Vec<BarCommand> {
+    find_ranked(typed, keys, None, named)
+}
+
+/// As `find_commands`, with equal matches ranked by the user's `picks` of them.
+fn find_ranked(
+    typed: &str,
+    keys: &UserKeys,
+    picks: Option<&Usage<String>>,
     mut named: impl FnMut(&'static str, Command) -> Option<&'static str>,
 ) -> Vec<BarCommand> {
     let typed = typed.trim().to_lowercase();
@@ -766,7 +858,7 @@ pub fn find_commands(
             Some((matched, SharedString::from(named(name, command)?), command))
         })
         .collect();
-    ranked(found, &typed, keys)
+    ranked(found, &typed, keys, picks)
 }
 
 /// A command bar row the browser names now: its name, the words that find it as hidden words do,
@@ -781,6 +873,16 @@ pub fn with_named_rows(
     rows: &[NamedRow],
     keys: &UserKeys,
 ) -> Vec<BarCommand> {
+    with_named_ranked(found, typed, rows, keys, None)
+}
+
+fn with_named_ranked(
+    found: Vec<BarCommand>,
+    typed: &str,
+    rows: &[NamedRow],
+    keys: &UserKeys,
+    picks: Option<&Usage<String>>,
+) -> Vec<BarCommand> {
     let typed = typed.trim().to_lowercase();
     if typed.is_empty() {
         return found;
@@ -794,17 +896,31 @@ pub fn with_named_rows(
         let matched = match_of(&name.to_lowercase(), &words, &typed)?;
         Some((matched, name.clone(), *command))
     });
-    ranked(found.chain(named).collect(), &typed, keys)
+    ranked(found.chain(named).collect(), &typed, keys, picks)
 }
 
-/// `found` best first, equals in their order, at most BAR_ROWS unless nothing is `typed`.
+/// `found` best first, equals by how much the user picked them, then in their order, at most
+/// BAR_ROWS unless nothing is `typed`, when it's the table's order alone, which the user learns by
+/// place.
 fn ranked(
     mut found: Vec<(Match, SharedString, Command)>,
     typed: &str,
     keys: &UserKeys,
+    picks: Option<&Usage<String>>,
 ) -> Vec<BarCommand> {
-    // Stable, so equals keep the table's order.
-    found.sort_by_key(|&(matched, ..)| std::cmp::Reverse(matched));
+    use std::cmp::Reverse;
+    match picks.filter(|picks| !typed.is_empty() && !picks.is_empty()) {
+        // A score is never negative, so its bits order as it does. Stable, so equals keep the
+        // table's order.
+        Some(picks) => {
+            let now = usage::now();
+            let picked = |name: &str| picks.score(name, now).to_bits();
+            found.sort_by_cached_key(|(matched, name, _)| {
+                (Reverse(*matched), Reverse(picked(name)))
+            });
+        }
+        None => found.sort_by_key(|&(matched, ..)| Reverse(matched)),
+    }
     if !typed.is_empty() {
         found.truncate(BAR_ROWS);
     }
@@ -812,7 +928,10 @@ fn ranked(
         .map(|(matched, name, command)| BarCommand {
             name,
             command,
-            shortcut: keys.label(command).map(Into::into),
+            // Exit is View › Exit's ⎋, which leaves full screen as it does, bound to no command.
+            shortcut: (keys.label(command))
+                .or_else(|| (command == Command::Exit).then(|| keystroke_label("escape")))
+                .map(Into::into),
             matched,
         })
         .collect()
@@ -852,17 +971,27 @@ fn words(text: &str) -> impl Iterator<Item = &str> {
 /// How a menu shows `keystroke`, as SHORTCUTS writes it: ⇧⌘K for shift-cmd-k, and Ctrl+Shift+K
 /// off the Mac, where it's pressed that way.
 pub fn keystroke_label(keystroke: &str) -> String {
-    match super::keys::OFF_THE_MAC {
-        true => keystroke_keys(keystroke).join("+"),
-        false => keystroke_keys(keystroke).concat(),
+    keystroke_label_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+/// `keystroke_label`, on the Mac or `off_the_mac`, for each key chip that spells a chord, such as
+/// Stop's ⌘. or Ctrl+., the way a menu does.
+pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
+    match off_the_mac {
+        true => keystroke_keys_on(keystroke, true).join("+"),
+        false => keystroke_keys_on(keystroke, false).concat(),
     }
 }
 
 /// The keys of `keystroke` as a menu shows them, one by one, for a chip each: ⇧, ⌘ and K for
 /// shift-cmd-k, and Ctrl, Shift and K off the Mac. None if it can't be pressed here.
 pub fn keystroke_keys(keystroke: &str) -> Vec<String> {
-    match super::keys::OFF_THE_MAC {
-        true => (super::keys::pressed_as(keystroke).first())
+    keystroke_keys_on(keystroke, super::keys::OFF_THE_MAC)
+}
+
+fn keystroke_keys_on(keystroke: &str, off_the_mac: bool) -> Vec<String> {
+    match off_the_mac {
+        true => (super::keys::pressed_off_the_mac(keystroke).first())
             .map(|pressed| keys_named(pressed, true))
             .unwrap_or_default(),
         false => keys_named(keystroke, false),
@@ -917,10 +1046,7 @@ pub fn key_name(key: &str, off_the_mac: bool) -> String {
 /// Copies `text`, a sum's result chosen in the command bar, once the bar has gone, and says so in
 /// the toast.
 pub fn copy_from_bar(text: &str, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -934,10 +1060,7 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
     let url = clean_link(url);
-    let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    else {
+    let Some(shell) = key_shell(cx) else {
         return;
     };
     if !url.is_empty() {
@@ -949,10 +1072,7 @@ pub fn copy_url_of_preview(url: &str, cx: &mut App) {
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
 pub fn run_from_bar(command: Command, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 shell.command_bar_dismissed(cx);
@@ -993,6 +1113,7 @@ impl Command {
             Command::NewWindow => "new-window",
             Command::NewPrivateWindow => "new-private-window",
             Command::NewLittleWindow => "new-little-window",
+            Command::NewBlankWindow => "new-blank-window",
             Command::OpenInMainWindow => "open-in-main-window",
             Command::CloseWindow => "close-window",
             Command::EditUrl => "edit-url",
@@ -1018,6 +1139,11 @@ impl Command {
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
+            Command::TurnOffBatterySaver => "turn-off-battery-saver",
+            Command::MuteAll(true) => "mute-all-tabs",
+            Command::MuteAll(false) => "unmute-all-tabs",
+            Command::ToggleFullScreen => "toggle-full-screen",
+            Command::Exit => "exit",
             Command::Clear => "clear",
             Command::Undo => "undo",
             Command::Redo => "redo",
@@ -1051,6 +1177,7 @@ impl Command {
             Command::JavaScriptConsole => "javascript-console",
             Command::TaskManager => "task-manager",
             Command::RecordTrace => "record-trace",
+            Command::StayOnTop => "stay-on-top",
             Command::ToggleDeveloperMode => "toggle-developer-mode",
             Command::ManageExtensions => "manage-extensions",
             Command::AddExtension => "add-extension",
@@ -1074,6 +1201,7 @@ impl Command {
             Command::ClearArchive => "clear-archive",
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
+            Command::ViewAgents => "view-agents",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1099,6 +1227,8 @@ impl Command {
             Command::CheckForUpdates => "check-for-updates",
             Command::Import => "import",
             Command::Passwords => "passwords",
+            Command::AutoFill => "autofill",
+            Command::AutoFillPasswords => "autofill-passwords",
             Command::Welcome => "welcome",
             Command::ReportProblem => "report-problem",
             Command::CopyBuildInfo => "copy-build-info",
@@ -1120,6 +1250,45 @@ actions!(space_name, [KeepName, CancelName]);
 pub(super) struct ShellHandle(pub(super) WeakEntity<Shell>);
 
 impl Global for ShellHandle {}
+
+thread_local! {
+    /// The shell of the browser window made key last, from the moment the host says so until the
+    /// shell has heard: a shortcut pressed in between acts on it, not on the window behind.
+    static MADE_KEY: std::cell::RefCell<Option<WeakEntity<Shell>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The shell of the browser window last key, which the browser's shortcuts and menus act on.
+pub(super) fn key_shell(cx: &App) -> Option<WeakEntity<Shell>> {
+    let made_key = MADE_KEY.with_borrow(Clone::clone);
+    made_key
+        .filter(|shell| shell.upgrade().is_some())
+        .or_else(|| {
+            cx.try_global::<ShellHandle>()
+                .map(|handle| handle.0.clone())
+        })
+}
+
+/// A browser window became key, as the host says from inside AppKit's update that made it so,
+/// where the app can't change (#819). The shortcuts act on it from now; what the shell does about
+/// it is returned, for once that update is over.
+pub fn window_became_key(shell: WeakEntity<Shell>) -> impl FnOnce(&mut App) + 'static {
+    MADE_KEY.set(Some(shell.clone()));
+    move |cx| {
+        if shell.update(cx, |shell, cx| shell.became_key(cx)).is_err() {
+            // Closed before it heard.
+            heard_key(&shell);
+        }
+    }
+}
+
+/// The shell made key has heard, so the ShellHandle names it.
+pub(super) fn heard_key(shell: &WeakEntity<Shell>) {
+    MADE_KEY.with_borrow_mut(|made_key| {
+        if made_key.as_ref() == Some(shell) {
+            *made_key = None;
+        }
+    });
+}
 
 /// The key context at the root of the browser's windows, where its shortcuts apply. GPUI ranks a
 /// binding with no context above every other, so without one the shortcuts would take keys a
@@ -1148,10 +1317,7 @@ pub fn bind_keys(cx: &mut App) {
         if run.0.opens_field() {
             gpui_linux::hold_keys(None);
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.run(run.0, "ui", cx))
                 .ok();
@@ -1167,10 +1333,7 @@ pub fn bind_keys(cx: &mut App) {
 /// room of the pane being added, if one is, so the split view shows at its place at once. ⌘Z takes
 /// `tab` back out, or closes it if it was `opened` for the split.
 pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
-    if let Some(shell) = cx
-        .try_global::<ShellHandle>()
-        .map(|handle| handle.0.clone())
-    {
+    if let Some(shell) = key_shell(cx) {
         shell
             .update(cx, |shell, cx| {
                 if shell.adding_pane.take().is_some() {
@@ -1188,18 +1351,14 @@ pub fn pane_added(tab: u64, with: u64, opened: bool, cx: &mut App) {
 
 /// The tab the window shows, or 0.
 pub fn shown_tab(cx: &App) -> u64 {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     shell.map_or(0, |shell| shell.read(cx).selected)
 }
 
 /// Whether `tab` is a task's page the window shows in place, which the user may edit the address
 /// of but which stays in the task's Space.
 pub fn task_page_shown(tab: u64, cx: &App) -> bool {
-    let shell = cx
-        .try_global::<ShellHandle>()
-        .and_then(|handle| handle.0.upgrade());
+    let shell = key_shell(cx).and_then(|shell| shell.upgrade());
     shell.is_some_and(|shell| shell.read(cx).task_page_live() == Some(tab))
 }
 
@@ -1214,8 +1373,18 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return;
+        }
+        // ⌘T in a Little ilo window opens its command bar on its page, as ⌘L does (Arc): it holds
+        // one page.
+        let command = match command {
+            Command::NewTab if self.little.is_some() => Command::EditUrl,
+            command => command,
+        };
+        // Its Spaces menu sends its page to the Space picked, in the main window (Arc).
+        if let (Command::MoveToSpace(space), Some(_)) = (command, &self.little) {
+            return self.open_in_space(space, cx);
         }
         if self.little.is_some() && !little_runs(command) {
             return;
@@ -1228,9 +1397,12 @@ impl Shell {
         let space = self.spaces.iter().position(|space| space.id == self.space);
         // Next and previous wrap around for tabs, as in Chrome, and stop at the ends for Spaces, as
         // in Arc.
-        // Escape puts back a dragged row, or lets chosen rows go, before it stops the page
+        // Escape puts back a dragged row or dot, or lets chosen rows go, before it stops the page
         // (docs/ux-spec.md › Tab list).
-        if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
+        let put_back = |shell: &mut Self, cx: &mut Context<Self>| {
+            shell.cancel_drag(cx) || shell.cancel_space_drag(cx) || shell.unchoose(cx)
+        };
+        if matches!(command, Command::Stop) && put_back(self, cx) {
             return;
         }
         if self.run_in_task_area(command, from, cx) {
@@ -1247,34 +1419,49 @@ impl Shell {
             Command::NewTab | Command::SearchTabs | Command::EditUrl | Command::AddSplit
         ) {
             self.set_revealed(false, cx);
+            self.read_bar_picks(cx);
         }
         let target = match command {
             Command::NewTab => {
                 self.set_new_tab(true, cx);
+                self.set_bar_over_card(true, cx);
                 let shown = self.shown_urls();
                 return self
                     .browser
-                    .command_bar(None, shown, self.bar_tabs(), None, cx);
+                    .command_bar(None, shown, self.bar_tabs(cx), None, cx);
             }
             Command::SearchTabs => {
                 self.set_new_tab(false, cx);
-                return self.browser.search_tabs(self.open_tabs(), cx);
+                self.set_bar_over_card(true, cx);
+                return self.browser.search_tabs(self.open_tabs(cx), cx);
             }
             Command::EditUrl => {
                 self.set_new_tab(false, cx);
                 let tab = self.field_tab();
                 let editing = (tab != 0).then(|| (tab, self.url(tab)));
-                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). A
-                // Little ilo window's opens compact over its bar's title either way.
-                let field = match self.little_field_bounds() {
-                    Some(title) => Some(title),
+                self.set_bar_over_card(editing.is_none(), cx);
+                // A click on the URL field opens the bar over the field, and ⌘L centred (Arc). In a
+                // Little ilo window a click on its bar's title opens it compact over the title, and
+                // the keys inside the window.
+                let field = match self.little_field_bounds(cx) {
+                    Some(title) if from == "little bar" => Some(title),
+                    Some(_) => {
+                        let (bar, shown) = (self.little_bar_bounds(), self.shown_urls());
+                        return self.browser.command_bar_in(
+                            editing,
+                            shown,
+                            self.bar_tabs(cx),
+                            bar,
+                            cx,
+                        );
+                    }
                     None if from == "sidebar" => self.url_field_bounds(),
                     None => None,
                 };
                 let shown = self.shown_urls();
                 return self
                     .browser
-                    .command_bar(editing, shown, self.bar_tabs(), field, cx);
+                    .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
             }
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
@@ -1292,9 +1479,11 @@ impl Shell {
                         self.close_chosen(cx);
                     } else if self.selected != 0 {
                         // A pinned split's pages all go, and it stays a pinned split, as its −
-                        // does (Arc 1.171).
+                        // does (Arc 1.171), and so do a favorite split's, its tile kept.
                         let tab = self.selected;
-                        let split = self.pinned().contains(&tab) && self.panes(tab).len() > 1;
+                        let kept =
+                            self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
+                        let split = kept && self.panes(tab).len() > 1;
                         self.close_tab(tab, split, cx);
                     } else {
                         self.browser.close_window(cx);
@@ -1304,6 +1493,9 @@ impl Shell {
             }
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
+            // Off in Settings › Features, ⌥⌘N does nothing.
+            Command::NewLittleWindow if !self.little_windows => return,
+            Command::NewBlankWindow => return self.browser.new_blank_window(cx),
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
                 return self.browser.new_little_window(home, cx);
@@ -1352,6 +1544,9 @@ impl Shell {
                 return;
             }
             Command::ToggleMute => return self.toggle_mute(self.selected, cx),
+            Command::MuteAll(muted) => return self.mute_all(muted, cx),
+            Command::ToggleFullScreen => return self.browser.toggle_full_screen(cx),
+            Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::Undo => {
                 self.undo(cx);
@@ -1363,6 +1558,7 @@ impl Shell {
             }
             Command::CopyUrl if !self.chosen.is_empty() => return self.copy_chosen(cx),
             Command::CopyUrl => return self.copy_url(false, cx),
+            Command::TurnOffBatterySaver => return self.turn_off_battery_saver(cx),
             Command::CopyMarkdownLink => return self.copy_url(true, cx),
             Command::PasteUrlAsTab => return self.paste_url_as_tab(cx),
             Command::Share => return self.share_page(cx),
@@ -1402,6 +1598,7 @@ impl Shell {
                 trace::toggle(self.browser.clone(), cx);
                 return self.update_menus(cx);
             }
+            Command::StayOnTop => return self.toggle_on_top(cx),
             Command::ToggleDeveloperMode => {
                 let on = !self.page(self.selected).developer_mode;
                 return self.browser.set_developer_mode(self.selected, on, cx);
@@ -1416,6 +1613,14 @@ impl Shell {
             Command::CheckForUpdates => return self.browser.check_for_updates(cx),
             Command::Import => return self.browser.import(cx),
             Command::Passwords => return self.browser.passwords(self.space, cx),
+            Command::AutoFill | Command::AutoFillPasswords => {
+                let logins = command == Command::AutoFillPasswords;
+                let shown = self.selected != 0 && self.browser.show_autofill(self.selected, logins);
+                if !shown {
+                    self.browser.passwords(self.space, cx);
+                }
+                return;
+            }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
                 let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
@@ -1490,6 +1695,7 @@ impl Shell {
             Command::ViewArchive => return self.view_section(Section::Archive, cx),
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
+            Command::ViewAgents => return self.view_section(Section::Agents, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -1651,9 +1857,30 @@ impl Shell {
     /// Copies the selected tab's URL, or a Markdown link to it, without its tracking parameters,
     /// and says so in the toast.
     fn copy_url(&mut self, markdown: bool, cx: &mut Context<Self>) {
-        if let Some((text, toast)) = self.link_to_copy(self.field_tab(), markdown) {
-            self.copy(&text, toast, cx);
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, markdown) else {
+            return;
+        };
+        match markdown {
+            true => self.copy(&text, toast, cx),
+            false => self.copy_page_url(tab, text, toast, cx),
         }
+    }
+
+    /// Copies `tab`'s link, `url`, and says so in `toast`, which shares the page too where there's
+    /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
+    fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
+        if !self.browser.has_share_sheet() {
+            return self.copy(&url, toast, cx);
+        }
+        self.browser.copy(&url, cx);
+        // check.sh reads this line.
+        log!("browser: copied {url}");
+        let (browser, title) = (self.browser.clone(), self.title(tab));
+        let share = std::rc::Rc::new(move |at, cx: &mut App| {
+            browser.share_from_toast(&url, &title, at, cx)
+        });
+        self.browser.toast_share(toast, share, COPIED_TIME, cx);
     }
 
     /// Opens the clipboard's web link at the top of the Today tabs and shows it, as Arc's ⌥⌘V
@@ -1718,10 +1945,11 @@ impl Shell {
     pub(super) fn copy_url_from_button(&mut self, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: command copy-url via sidebar");
-        let Some((text, toast)) = self.link_to_copy(self.field_tab(), false) else {
+        let tab = self.field_tab();
+        let Some((text, toast)) = self.link_to_copy(tab, false) else {
             return;
         };
-        self.copy(&text, toast, cx);
+        self.copy_page_url(tab, text, toast, cx);
         if self.url_copied.is_none() {
             self.swaps
                 .start(Swapped::CopyUrl, LINK, CHECK, Instant::now());
@@ -1754,21 +1982,21 @@ impl Shell {
     /// sidebar's order. It leaves out the tab shown and what shows with it, as its suggestions do.
     /// All of them: the bar lists the first BAR_TABS_SHOWN, and looks through the rest for a name
     /// that what's typed starts.
-    pub(super) fn bar_tabs(&self) -> Vec<BarTab> {
+    pub(super) fn bar_tabs(&self, cx: &App) -> Vec<BarTab> {
         let mut tabs = self.favorites.clone();
         if let Some(space) = self.shown_space() {
             tabs.extend(space_tabs(space));
         }
-        self.as_bar_tabs(self.recent_first(tabs))
+        self.as_bar_tabs(self.recent_first(tabs), cx)
     }
 
     /// The tabs Search Tabs lists: the command bar's, then the other Spaces' pinned and Today tabs,
     /// those shown most recently first, then the rest in the Spaces' order.
-    pub(super) fn open_tabs(&self) -> Vec<BarTab> {
+    pub(super) fn open_tabs(&self, cx: &App) -> Vec<BarTab> {
         let others = self.spaces.iter().filter(|space| space.id != self.space);
         let others = self.recent_first(others.flat_map(space_tabs).collect());
-        let mut tabs = self.bar_tabs();
-        tabs.extend(self.as_bar_tabs(others));
+        let mut tabs = self.bar_tabs(cx);
+        tabs.extend(self.as_bar_tabs(others, cx));
         tabs
     }
 
@@ -1786,7 +2014,7 @@ impl Shell {
 
     /// `tabs` as the command bar lists them, without the tab shown and what shows with it, and
     /// without those that have no page yet.
-    fn as_bar_tabs(&self, tabs: Vec<u64>) -> Vec<BarTab> {
+    fn as_bar_tabs(&self, tabs: Vec<u64>, cx: &App) -> Vec<BarTab> {
         let shown = self.panes(self.selected);
         tabs.into_iter()
             .filter(|tab| !shown.contains(tab) && !self.url(*tab).is_empty())
@@ -1796,6 +2024,7 @@ impl Shell {
                 url: self.url(tab),
                 favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
                 renamed: !self.browser.tab_name(tab).is_empty(),
+                switched: self.switch_score(tab, cx),
             })
             .collect()
     }
@@ -1811,27 +2040,34 @@ impl Shell {
 
     /// Starts capture mode over the focused page, or with `full_page` captures all of it.
     fn capture(&mut self, full_page: bool, cx: &mut Context<Self>) {
+        self.capture_pane(self.selected, full_page, None, cx);
+    }
+
+    /// Starts capture mode over the page of `tab`, a pane of the tab shown, dragging from `press`
+    /// in it for a ⇧⌘-drag on the page (Arc's), else choosing; or with `full_page` captures all of
+    /// it. Returns whether `tab`'s page shows here.
+    pub fn capture_pane(
+        &mut self,
+        tab: u64,
+        full_page: bool,
+        press: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.selected == 0 {
-            return;
+            return false;
         }
         let (frame, radius) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
-        let focused = panes
-            .iter()
-            .position(|&pane| pane == self.selected)
-            .unwrap_or(0);
+        let index = panes.iter().position(|&pane| pane == tab);
+        let Some(index) = index.or((tab == self.selected).then_some(0)) else {
+            return false;
+        };
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let look = self.menu_look();
-        self.browser.capture(
-            self.selected,
-            pane,
-            radius,
-            full_page,
-            !self.private,
-            look,
-            cx,
-        );
+        let pane = pane_frames(frame, panes.len(), stacked, &shares)[index];
+        let (look, library) = (self.menu_look(), !self.private);
+        self.browser
+            .capture(tab, pane, radius, full_page, press, library, look, cx);
+        true
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page
@@ -1844,7 +2080,7 @@ impl Shell {
 
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return false;
         }
         if self.little.is_some() && !little_runs(command) {
@@ -1910,18 +2146,28 @@ impl Shell {
                 self.selected != 0 && !favorite && !self.sidebar_hidden
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
+            Command::TurnOffBatterySaver => self.battery_saver.is_some(),
+            Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
+            // As the menus' New Profile: only an empty Space changes profile.
+            Command::ChangeProfile(None) => {
+                self.profile_choices(self.space).is_some_and(|(_, new)| new)
+            }
+            Command::ToggleFullScreen => true,
+            // Only full screen, the page's too, has something to leave.
+            Command::Exit => self.full_screen,
             Command::CheckForUpdates => self.browser.updates(),
             Command::RestoreEarlierSidebar => !self.shown_backups().is_empty(),
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
+            Command::NewLittleWindow => self.little_windows,
             Command::NewFolder
             | Command::PasteUrlAsTab
             | Command::SearchTabs
             | Command::ReopenClosedTab
             | Command::NewWindow
             | Command::NewPrivateWindow
-            | Command::NewLittleWindow
+            | Command::NewBlankWindow
             | Command::CloseWindow
             | Command::ToggleSidebar
             | Command::NewSpace
@@ -1933,6 +2179,7 @@ impl Shell {
             | Command::ClearArchive
             | Command::ViewDownloads
             | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ManageExtensions
             | Command::AddExtension
             | Command::ViewHistory
@@ -1943,9 +2190,12 @@ impl Shell {
             | Command::About
             | Command::Import
             | Command::Passwords
+            | Command::AutoFill
+            | Command::AutoFillPasswords
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace
+            | Command::StayOnTop
             | Command::ReportProblem
             | Command::CopyBuildInfo
             | Command::HelpCenter
@@ -1978,7 +2228,12 @@ impl Shell {
 
     /// What the command bar calls `command`, listed as `name`, if it offers it now: a toggle's row
     /// says what it would do.
-    fn bar_name(&self, name: &'static str, command: Command, cx: &App) -> Option<&'static str> {
+    pub(super) fn bar_name(
+        &self,
+        name: &'static str,
+        command: Command,
+        cx: &App,
+    ) -> Option<&'static str> {
         if !self.offers(command) {
             return None;
         }
@@ -1997,6 +2252,22 @@ impl Shell {
                 (name == orientation_title(self.stacked(self.selected))).then_some(name)
             }
             Command::RecordTrace => (name == trace::title(trace::recording(cx))).then_some(name),
+            Command::ToggleFullScreen => {
+                let title = match self.full_screen {
+                    true => "Exit Full Screen",
+                    false => "Enter Full Screen",
+                };
+                (name == title).then_some(name)
+            }
+            // The row that changes it, where the window can stay on top at all.
+            Command::StayOnTop => (self.browser.can_stay_on_top()
+                && name
+                    == if self.on_top {
+                        DONT_STAY_ON_TOP
+                    } else {
+                        STAY_ON_TOP
+                    })
+            .then_some(name),
             Command::CheckForUpdates => (name == crate::updates::command_title(cx)).then_some(name),
             _ => Some(name),
         }
@@ -2011,7 +2282,7 @@ impl Shell {
     /// theirs, as their menu's, for the Spaces it lists and the folders. A private window has one
     /// Space and no folders.
     pub(super) fn named_bar_rows(&self) -> Vec<NamedRow> {
-        if self.private {
+        if self.one_space() {
             return Vec::new();
         }
         let chosen = !self.chosen.is_empty();
@@ -2085,14 +2356,15 @@ impl Shell {
 }
 
 /// `space`'s pinned tabs, without its folders, and its Today tabs, in the sidebar's order.
-fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
+pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     let pinned = space.pinned.iter().filter(|&&row| !space.is_folder(row));
     pinned.chain(&space.today).copied()
 }
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
 /// or shows another Space, and none of what the regular windows keep: the closed tabs, the
-/// Library, the history.
+/// Library's Spaces and archived tabs, the history. Its Library has its own session's downloads
+/// and their media (#669).
 pub(super) fn private_runs(command: Command) -> bool {
     !matches!(
         command,
@@ -2121,11 +2393,9 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::MoveToFolder(_)
             | Command::NextSpace
             | Command::PreviousSpace
-            | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
-            | Command::ViewDownloads
-            | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData
@@ -2179,6 +2449,26 @@ mod tests {
         }
         assert_eq!(keys.label(Command::SelectSpace(0)).as_deref(), Some("⌃1"));
         assert_eq!(keys.label(Command::SelectSpace(9)), None);
+    }
+
+    /// Each key chip that spells a chord after its words spells it as a menu does: Stop's and Take
+    /// Over's in the conversation and under a task's page, and the command bar's Run and Ask at its
+    /// input's end. Off the Mac they read Ctrl+. and Ctrl+Enter, not Ctrl. and CtrlEnter, and Enter
+    /// and Tab in the words the UI's font has.
+    #[test]
+    fn key_chips_spell_their_chords_as_the_menus_do() {
+        let stop = "cmd-.";
+        let take_over = "cmd-enter";
+        assert!(SHORTCUTS.contains(&(take_over, Command::BackToPinnedUrl, false)));
+        assert_eq!(keystroke_label_on(stop, true), "Ctrl+.");
+        assert_eq!(keystroke_label_on(take_over, true), "Ctrl+Enter");
+        assert_eq!(keystroke_label_on(stop, false), "⌘.");
+        assert_eq!(keystroke_label_on(take_over, false), "⌘↩");
+        assert_eq!(super::super::agent_bar::stop_keys(), keystroke_label(stop));
+        for (key, mac, off) in [("enter", "↩", "Enter"), ("tab", "⇥", "Tab")] {
+            assert_eq!(key_name(key, false), mac);
+            assert_eq!(key_name(key, true), off);
+        }
     }
 
     /// Off the Mac, keys are named in Chrome's words, as the UI's font there has no keyboard
@@ -2699,6 +2989,68 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// A shell with one Space and Today tabs `tabs`, on a host that records what it asks.
+    fn shell_with_today(
+        cx: &mut gpui::TestAppContext,
+        tabs: Vec<u64>,
+    ) -> (
+        gpui::Entity<Shell>,
+        std::rc::Rc<super::super::recorder::Recorder>,
+    ) {
+        use gpui::AppContext;
+        let host = std::rc::Rc::new(super::super::recorder::Recorder::default());
+        let shell = cx.new(|cx| Shell::new(host.clone(), cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_tabs(1, Vec::new(), tabs, Vec::new(), Default::default(), cx);
+            shell.set_space(1, cx);
+        });
+        (shell, host)
+    }
+
+    /// A shortcut acts on the window just made key, though the shell hears of the change only
+    /// once AppKit's update that made it is over: a click into another window and ⌘2 right away
+    /// show that window's second tab, not the one behind's.
+    #[gpui::test]
+    fn a_shortcut_acts_on_the_window_just_made_key(cx: &mut gpui::TestAppContext) {
+        cx.update(bind_keys);
+        let (first, first_host) = shell_with_today(cx, vec![11, 12]);
+        // Made last, it's the one the shortcuts act on, as a window just opened is.
+        let (_second, second_host) = shell_with_today(cx, vec![21, 22]);
+        cx.run_until_parked();
+        first_host.take();
+        second_host.take();
+
+        // As the host's key change does, and the press comes before the executor's next turn.
+        let later = window_became_key(first.downgrade());
+        cx.update(|cx| cx.dispatch_action(&Run(Command::SelectTab(1))));
+        let asked = |host: &super::super::recorder::Recorder| -> Vec<String> {
+            let calls = host.take();
+            calls
+                .into_iter()
+                .filter(|call| call.starts_with("select "))
+                .collect()
+        };
+        assert_eq!(
+            asked(&first_host),
+            ["select 12"],
+            "the window made key showed its tab"
+        );
+        assert!(
+            asked(&second_host).is_empty(),
+            "the window behind showed nothing"
+        );
+
+        cx.update(later);
+        cx.update(|cx| cx.dispatch_action(&Run(Command::SelectTab(0))));
+        assert_eq!(
+            asked(&first_host),
+            ["select 11"],
+            "and still does once the shell has heard"
         );
     }
 }

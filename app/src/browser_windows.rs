@@ -17,6 +17,8 @@ pub(crate) struct BrowserWindow {
     /// A Little ilo window's: it shows a Space of its own, for the user's Space here, which ⌘O
     /// moves its page to.
     pub(crate) little: Option<bc::bc_id>,
+    /// A Blank Window's: it shows a Space of its own, unsaved, in the user's profile.
+    pub(crate) blank: bool,
     /// The user's Space it showed last, not an agent's, or 0, for a link from another app.
     pub(crate) users_space: bc::bc_id,
     /// The link from another app a Little ilo window opened for, which brings it back when another
@@ -25,9 +27,9 @@ pub(crate) struct BrowserWindow {
 }
 
 impl BrowserWindow {
-    /// Whether it shows the user's Spaces, as neither a private nor a Little ilo window does.
+    /// Whether it shows the user's Spaces, as no private, Little ilo or Blank Window does.
     pub(crate) fn regular(&self) -> bool {
-        !self.private && self.little.is_none()
+        !self.private && self.little.is_none() && !self.blank
     }
 }
 
@@ -38,6 +40,8 @@ pub(crate) enum Own {
     Private(bc::bc_id),
     /// Little ilo's, in `profile`, for the user's Space `home`, which ⌘O moves its page to.
     Little { profile: bc::bc_id, home: bc::bc_id },
+    /// ⌃⌘N's Blank Window, in `profile`: its tabs aren't kept or shown in other windows.
+    Blank(bc::bc_id),
 }
 
 /// The core's id and the UI's view of the window that the overlays every window shares show over,
@@ -111,15 +115,42 @@ pub(crate) extern "C" fn key_window_changed(ui_view: *mut c_void) {
         (index > 0).then(|| {
             let window = windows.remove(index);
             windows.insert(0, window.clone());
-            window.id
+            window
         })
     });
-    if let Some(id) = moved {
-        log!("browser: key window {id}");
-        update_app_later(move |cx| {
-            update_window_in(id, cx, |shell, cx| shell.became_key(cx));
-        });
+    if let Some(window) = moved {
+        log!("browser: key window {}", window.id);
+        update_app_later(shell::window_became_key(window.shell));
     }
+}
+
+/// The browser window drawn in `ui_view` became the one the user is in, or stopped being, which
+/// its header's glyphs show (host_watch_window_main). The host can tell from inside the update that
+/// opened or closed a window, so the shell hears once that's over.
+pub(crate) extern "C" fn window_main_changed(ui_view: *mut c_void, main: bool) {
+    update_app_later(move |cx| {
+        let id = window_with_view(ui_view);
+        if id == 0 {
+            return;
+        }
+        // check.sh reads this line.
+        log!("browser: window {id} main {main}");
+        _ = shell_with_view(ui_view).update(cx, |shell, cx| shell.set_window_main(main, cx));
+        let handle = WINDOWS.with_borrow(|windows| {
+            let window = windows.iter().find(|window| window.ui_view == ui_view)?;
+            Some(window.handle)
+        });
+        // Once the frame that drew it is on screen, which the next frame's start says, for
+        // check.sh's capture.
+        if let Some(handle) = handle {
+            _ = handle.update(cx, |_, window, _| {
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, _| log!("browser: window {id} drew main {main}"));
+                    window.refresh();
+                });
+            });
+        }
+    });
 }
 
 /// The UI of the window drawn in `ui_view` lost the keyboard to its page, or an overlay took it,
@@ -146,6 +177,26 @@ pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
                     .ok()
             })
             .ok();
+    });
+}
+
+/// The user pressed a mouse button in a page of the window drawn in `ui_view`, which an agent's
+/// page shown there takes as the user taking it over (Shell::page_pressed).
+pub(crate) extern "C" fn page_pressed(ui_view: *mut c_void) {
+    page_pressed_in(window_with_view(ui_view));
+}
+
+/// As `page_pressed`, for the window `id`: after the press, which the page has.
+pub(crate) fn page_pressed_in(id: bc::bc_id) {
+    let Some(shell) = WINDOWS.with(|windows| {
+        let windows = windows.try_borrow().ok()?;
+        let window = windows.iter().find(|window| window.id == id)?;
+        Some(window.shell.clone())
+    }) else {
+        return;
+    };
+    update_app_later(move |cx| {
+        shell.update(cx, |shell, cx| shell.page_pressed(cx)).ok();
     });
 }
 
@@ -298,9 +349,30 @@ pub(crate) unsafe extern "C" fn window_resized(
     width: f64,
     height: f64,
 ) {
-    if let Some(ui_view) = ui_view_of(window) {
-        gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
-        frames::sized(ui_view, [width, height]);
+    // A window the launch puts back full screen can be told its state before it has a size, 0x0,
+    // and GPUI's viewport at 0x0 is a protocol error, which ends the Wayland connection. Its size
+    // comes with its bounds.
+    let Some(ui_view) = ui_view_of(window).filter(|_| width >= 1. && height >= 1.) else {
+        return;
+    };
+    let again = frames::size_of(ui_view) == Some([width, height]);
+    gpui_linux::resize_embedded(ui_view, width as f32, height as f32);
+    frames::sized(ui_view, [width, height]);
+    // The core tells the size again once the window has gone full screen or maximized, or back.
+    // At the size GPUI's window has, as a window already its screen's size goes or one whose size
+    // came before its state, no resize comes to ask and to lay the page out, so it's done here, as
+    // the resize does (#1220).
+    if again {
+        let viewport = gpui::size(gpui::px(width as f32), gpui::px(height as f32));
+        update_app_later(move |cx| {
+            update_window_in(window, cx, |shell, cx| {
+                shell.bounds_changed(cx);
+                if let Some(frame) = shell.window_page_frame(viewport) {
+                    set_frames(window, shell, frame, viewport);
+                    shell.full_screen_step("laid", viewport);
+                }
+            });
+        });
     }
 }
 
@@ -320,9 +392,9 @@ pub(crate) unsafe extern "C" fn window_activated(_: *mut c_void, window: bc::bc_
     }
 }
 
-/// ⌥ was pressed alone with the page in `window` focused, which GPUI doesn't hear under X11, as
-/// option_tapped is for the UI's. After, as window_activated.
-#[cfg(target_os = "linux")]
+/// ⌥ was pressed alone in `window`: with its page focused, which GPUI doesn't hear under X11, as
+/// option_tapped is for the UI's, or on Windows with either focused. After, as window_activated.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) unsafe extern "C" fn window_option_tapped(_: *mut c_void, window: bc::bc_id) {
     if let Some(cx) = CX.with_borrow(Clone::clone) {
         let later = async move { update_window(window, |shell, cx| shell.option_tapped(cx)) };

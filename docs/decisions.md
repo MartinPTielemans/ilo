@@ -86,7 +86,7 @@ Revisit the look if Arc users moving over say ilo doesn't feel like Arc continue
 
 ## 8. Agents: the user's own agents, in their real browser
 
-Agents drive the user's real browser through ilo's built-in MCP server, as a first-class, built-in capability. They come two ways, and both take that one path:
+Agents drive the user's real browser through ilo's built-in MCP server, as a first-class, built-in capability. They come two ways, and to the core both are agents alike, with the same tools, permission checks, confirmations and activity log:
 
 - **From outside.** Any MCP client (Claude Code, Codex, others) connects to the server.
 - **From ilo.** The user asks from ⌘T, and ilo runs the `claude` or `codex` CLI the user installed and signed into, with ilo's MCP server added for that task. The user's own subscription pays. ilo never handles their login, token or key, and when the CLI is missing or signed out it says how to fix that.
@@ -94,11 +94,10 @@ Agents drive the user's real browser through ilo's built-in MCP server, as a fir
 ilo has no assistant of its own: no model, agent loop or AI account. What answers is the user's agent, and it can do in a page only what the MCP server lets any agent do.
 
 - **Built-in MCP server.** Local-only at first, on a socket only this user's processes can reach. Cloud agents come later, through explicit pairing.
-- **Where the work shows.** An outside agent works in its own Agent Space, visible in the sidebar. A task asked from ilo shows among the user's tabs without becoming tabs: its pages and its conversation live in the task. An agent never takes the user's focus or cursor. The user can watch, take over and hand back at any time.
+- **Where the work shows.** Each agent works in a Space of its own that no window lists, its pages and steps on a card at the sidebar's foot, not among the tabs. A task asked from ilo and an outside agent's session get the same card; an outside agent's conversation stays in its terminal. An agent never takes the user's focus or cursor, and the user can watch, take over and hand back at any time.
 - **Engine-native page access.** The core serves the accessibility tree, a cleaned-up DOM, stable element references and screenshots straight from Chromium. No extension, and no remote-debugging port.
 - **Permissions per agent and per site,** plus an activity log. Defaults are conservative: no payments, no sending messages or forms on sensitive sites without confirmation, and no banking sites unless the user allows them.
 - **Handoff to the human.** At a login, 2FA prompt or CAPTCHA, the agent's tab pauses and the sidebar asks the user to step in.
-- **Same rules either way.** To the core, a task asked from ilo is an agent like any other: the same tools, permission checks, confirmations and activity log.
 - **Browser tools only.** A CLI that ilo runs gets ilo's MCP tools and nothing else. Its shell, file and web tools, the user's other MCP servers, plugins, hooks and settings are all off, it runs in an empty folder, and ilo declines any other approval it asks for. Page text can steer an agent, and a shell would reach the user's files, keys included. A CLI that can't be limited this way isn't offered.
 - **Sessions, never secrets.** Agents act inside the user's logged-in sessions but can never read passwords, cookies or autofill data.
 
@@ -122,3 +121,9 @@ Consequences now:
 No crash report leaves the device without the user's yes, in Send Crash Reports (off) or the offer after a crash. A report can hold a URL or page text but no user folder, and it asks Sentry to infer no IP. Official builds send them to ilo's Sentry in the EU, which takes minidumps. The collector is a default service URL: a fork names its own or none.
 
 Revisit if Sentry stops taking minidumps or keeping them in the EU.
+
+## 10. WebRTC: a page learns no address HTTP doesn't give it
+
+WebRTC gathers on the default route's public interface only (`default_public_interface_only`), so calls and peer-to-peer pages connect directly without telling a page a local address. While a profile uses a proxy, WebRTC goes only through it and TURN relays (`disable_non_proxied_udp`, ungoogled-chromium's default), so the proxy hides the real address. Settings › Privacy › Relay calls makes every profile relay-only, for those who want it always. Chrome's `default` isn't ours: ungoogled-chromium builds without mDNS (`enable_mdns=false`), so it would hand pages the raw local addresses that Chrome's own hides. Evidence: #1774.
+
+Revisit if the engine builds with mDNS again, or if a full-tunnel VPN is found to leak its real address under `default_public_interface_only`.

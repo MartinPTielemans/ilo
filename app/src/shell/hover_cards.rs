@@ -6,14 +6,22 @@ use std::rc::Rc;
 
 use gpui::{App, Bounds, Context, Pixels, Point, px, size};
 
+use std::time::Duration;
+
 use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
 use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Rest};
 use crate::space_icon::has_icon;
 use crate::{icon_picker, theme_picker};
 
+use super::recent_downloads::{age, now};
 use super::{PLATE_INSET, Row, Shell, host};
 
+/// How long the switches are quiet before a page they hid is pictured: the Dock dot's `QUIET`. A
+/// page the core still keeps on screen then, as a switch does until the new one draws, it holds
+/// as captured until the copy answers (core/capture.cc), so the picture needn't wait it out
+/// (#1658).
+pub(super) const PICTURE_HIDDEN: Duration = QUIET;
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while
@@ -140,25 +148,38 @@ impl Shell {
     }
 
     /// What a closed `folder`'s preview lists: the tabs in it and in the folders in it, as their
-    /// rows say them, or nothing for an open one, whose rows show.
+    /// rows say them, the one a window showed last first, each with how long ago that was, as
+    /// Arc's does, or nothing for an open folder, whose rows show.
     pub(super) fn previewed(&self, folder: u64) -> Vec<Item> {
         if self.shown_space().is_none_or(|space| space.is_open(folder)) {
             return Vec::new();
         }
-        let item = |tab: u64| {
+        let (now, today) = (now(), self.browser.day_starts()[0]);
+        let mut tabs: Vec<(u64, f64)> = (self.folder_tabs(folder).into_iter())
+            .map(|tab| (tab, self.browser.last_seen(tab)))
+            .collect();
+        // Those seen at the same time, or never, keep the sidebar's order.
+        tabs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let item = |(tab, seen): (u64, f64)| {
             let each = self.tabs.get(&tab);
             let icon = match each.filter(|each| has_icon(&each.page.icon)) {
                 Some(each) => Icon::Emoji(each.page.icon.clone()),
                 None => Icon::Favicon(each.and_then(|each| each.favicon.clone())),
+            };
+            let age = if seen > 0. {
+                age(seen, now, today).into()
+            } else {
+                Default::default()
             };
             Item {
                 tab,
                 title: self.title(tab),
                 url: self.url(tab),
                 icon,
+                age,
             }
         };
-        self.folder_tabs(folder).into_iter().map(item).collect()
+        tabs.into_iter().map(item).collect()
     }
 
     /// Shows the tab chosen in a folder's preview, which peeks under its closed folder, with the
@@ -180,28 +201,47 @@ impl Shell {
         }
     }
 
-    /// What `tab`'s card shows, if it has one.
+    /// What `tab`'s card shows, if it has one. A favorite split's tile has one too, its pages
+    /// side by side, the title the page focused last's and the hosts every page's in their order;
+    /// a split's row has none.
     pub(super) fn card(&self, tab: u64) -> Option<Card> {
+        let split = self
+            .favorite_split(tab)
+            .filter(|split| split.tabs[0] == tab);
         if tab == 0
             || self.is_folder(tab)
-            || self.panes(tab).len() > 1
+            || (self.panes(tab).len() > 1 && split.is_none())
             || !self.tabs.contains_key(&tab)
         {
             return None;
         }
-        let each = &self.tabs[&tab];
-        let icon = match has_icon(&each.page.icon) {
-            true => Icon::Emoji(each.page.icon.clone()),
-            false => Icon::Favicon(each.favicon.clone()),
+        let icon_of = |tab: u64| match self.tabs.get(&tab) {
+            Some(each) if has_icon(&each.page.icon) => Icon::Emoji(each.page.icon.clone()),
+            each => Icon::Favicon(each.and_then(|each| each.favicon.clone())),
+        };
+        let host_of = |tab: u64| host(&self.page(tab).url).to_string();
+        let (panes, focused) = match split {
+            Some(split) => (split.tabs.clone(), self.favorite_focused(tab)),
+            None => (Vec::new(), tab),
+        };
+        let host = match panes.is_empty() {
+            true => host_of(tab),
+            false => (panes.iter().map(|&pane| host_of(pane)))
+                .collect::<Vec<_>>()
+                .join(" · "),
         };
         Some(Card {
             tab,
-            title: self.title(tab),
-            host: host(&each.page.url).to_string().into(),
-            icon,
+            title: self.title(focused),
+            host: host.into(),
+            icon: icon_of(focused),
             // The page shown is on screen beside it.
-            pictured: !self.on_screen(tab),
+            pictured: !self.on_screen(tab) && !panes.iter().any(|&pane| self.on_screen(pane)),
+            paused: self.frozen(tab),
             actions: self.card_actions(tab),
+            panes: panes.iter().map(|&pane| (pane, icon_of(pane))).collect(),
+            focused,
+            ring: self.palette.accent.into(),
         })
     }
 
@@ -214,10 +254,9 @@ impl Shell {
     pub(super) fn card_actions(&self, tab: u64) -> Vec<Action> {
         let mut actions = Vec::new();
         let favorite = self.favorites.contains(&tab);
-        if !self.private {
+        if !self.one_space() {
             match favorite {
-                true if !self.agents_space_shown() => actions.push(Action::Unfavorite),
-                true => {}
+                true => actions.push(Action::Unfavorite),
                 false if self.pinned().contains(&tab) => actions.push(Action::Unpin),
                 false => actions.push(Action::Pin),
             }
@@ -240,13 +279,20 @@ impl Shell {
         self.selected != 0 && !self.new_tab && self.panes(self.selected).contains(&tab)
     }
 
-    fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
+    pub(super) fn card_event(&mut self, tab: u64, event: Event, cx: &mut Context<Self>) {
         match event {
-            // A loaded tab's picture is taken again, as the page is now.
+            // A loaded tab's picture is taken again, as the page is now, and each of a favorite
+            // split's. A page Battery Saver froze keeps the picture it had: taking one again would
+            // thaw it.
             Event::Shown => {
-                if self.tabs.contains_key(&tab) && !self.on_screen(tab) && !self.page(tab).unloaded
-                {
-                    self.browser.card_picture(tab, cx);
+                for tab in self.panes(tab) {
+                    if self.tabs.contains_key(&tab)
+                        && !self.on_screen(tab)
+                        && !self.page(tab).unloaded
+                        && !self.frozen(tab)
+                    {
+                        self.browser.card_picture(tab, cx);
+                    }
                 }
             }
             // Off the card, the pointer may be past a hidden sidebar's panel too, which the reveal
@@ -302,8 +348,8 @@ impl Shell {
     }
 
     /// The tab shown was `before`'s pages and is now another's: those it hid are pictured once
-    /// the switches have been quiet for QUIET, as the Dock's dot waits, so nothing lands on the
-    /// switch, and a run of switches pictures only what it left hidden.
+    /// the switches have been quiet for `PICTURE_HIDDEN`, so nothing lands on the switch, and a
+    /// run of switches pictures only what it left hidden.
     pub(super) fn hid_for_cards(&mut self, before: Vec<u64>, cx: &mut Context<Self>) {
         let shown = self.panes(self.selected);
         self.card_hidden.extend(
@@ -315,7 +361,7 @@ impl Shell {
             return;
         }
         self.card_wait = Some(cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(QUIET).await;
+            cx.background_executor().timer(PICTURE_HIDDEN).await;
             shell.update(cx, |shell, cx| shell.picture_hidden(cx)).ok();
         }));
     }

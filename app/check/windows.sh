@@ -1,5 +1,7 @@
-# ⌘N opens another window on the same Spaces, showing the key window's Space with no page, whose
-# card shows its one line, and a click on the card with ⌘T's bar open only closes the bar. Settings
+# Stay On Top keeps a window over the others, and Don't Stay On Top lets it go back. ⌘N opens
+# another window on the same Spaces, showing the key window's Space with no page, with ⌘T's
+# command bar, which escape closes to its card and its one line, and a click on the card with ⌘T's
+# bar open only closes the bar. Settings
 # opened from it and closed by its button gives it the keyboard back. The new window never shows
 # another window's page: a Space it switches to and back shows the first tab no window shows.
 # The Spaces menu acts on the window in front. A click on a row whose page another window shows
@@ -77,6 +79,7 @@ second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
 expect "^browser: window $second shows 0\$" "the new window showed a page"
 none_since "^browser: window $first shows" || fail "⌘N changed what the first window shows"
 shown_first=$(grep -c "^browser: window $first shows" "$log")
+new_window_bar "$out/new-window-bar.png"
 send window 2
 ../tools/window-screenshot.sh "$pid" "$out/windows-new.png" all || fail "no window to capture"
 # The new window's card shows its mark and line, and its URL field its placeholder, once the fade
@@ -156,6 +159,7 @@ in_front() {
   return 1
 }
 send window 2
+forward=$step
 in_front || true
 expect '^browser: front driven, main driven, key driven, ax focused driven, ax main driven$' \
   "with the first window in full screen, other apps take the wrong window: $(grep '^browser: front ' "$log" | tail -1)"
@@ -169,9 +173,16 @@ send window 1
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' "the first window's full-screen Space didn't come forward"
 fi
-send fullscreen
-left=$step
-expect '^browser: window left full screen$' "the first window didn't leave full screen"
+# Sway takes a full-screen window out of it as another on its workspace takes the focus, so there
+# the first left as the second came forward.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  logged '^browser: window left full screen$' "$forward" ||
+    fail "the first window stayed full screen under sway as the second came forward"
+else
+  send fullscreen
+  left=$step
+  expect '^browser: window left full screen$' "the first window didn't leave full screen"
+fi
 if [ "$(uname)" = Darwin ]; then
   expect '^browser: desktop space changed$' \
     "the desktop's Space didn't come back after full screen" "$left"
@@ -334,6 +345,7 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: window opened [0-9]' "⌘N didn't open a window for Safari's engine's page"
   fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   expect "^browser: window $fourth shows 0\$" "the window for Safari's engine's page showed a page"
+  new_window_bar
   send window 4
   send click $(row 0)
   expect "^browser: window $fourth shows $d\$" \
@@ -458,6 +470,7 @@ first_size=$(grep '^browser: layout content ' "$log" | tail -1 | sed 's/^browser
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the moves"
 fourth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+new_window_bar
 # The driver counts windows in the order they opened, closed ones too.
 driven_fourth=$(grep -c '^browser: window opened ' "$log")
 rm -f "$out/handover.txt"
@@ -497,10 +510,215 @@ awk -F'|' '
     }
   }' "$out/handover.txt" > "$out/handover-summary.txt"
 cat "$out/handover-summary.txt"
+
+# Stay On Top keeps the first window over the others, the fourth too once it's in front, and the
+# command bar's Don't Stay On Top lets it go back among them (Arc's Window › Stay On Top). The
+# command bar, an overlay, still shows over it. Wayland gives a client no way to stay on top, so
+# there the command bar doesn't offer it (frames::stays_on_top).
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: Stay On Top: Wayland gives a window no way to stay on top"
+else
+  send window 1
+  bar_command stay-on-top "Stay On Top" "stay on top"
+  expect '^browser: stays on top 1$' "Stay On Top didn't keep the window on top"
+  send window $driven_fourth
+  send order
+  expect "^browser: order window 1 window $driven_fourth" \
+    "the fourth window in front came over the one on top: $(grep '^browser: order' "$log" | tail -1)"
+  send window 1
+  send key l cmd
+  expect '^browser: command bar shown$' "⌘L didn't open the command bar over the window on top"
+  ../tools/window-screenshot.sh "$pid" "$out/stay-on-top.png" all || fail "no window to capture"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar over the window on top"
+  bar_command stay-on-top "Don't Stay On Top" "stay on top"
+  expect '^browser: stays on top 0$' "Don't Stay On Top didn't let the window go back"
+  send window $driven_fourth
+  send order
+  expect "^browser: order window $driven_fourth window 1" \
+    "the fourth window in front didn't come over the one no longer on top: $(grep '^browser: order' "$log" | tail -1)"
+fi
 send window $driven_fourth
 send key w cmd shift
 expect "^browser: window closed $fourth\$" "⇧⌘W didn't close the window the pages moved to"
 send window 1
+
+# Linux's desktop file's New window and New incognito window launch ilo again with Chrome's
+# --new-window and --incognito, as Windows' jump list does: the running browser opens a window as
+# ⌘N or ⇧⌘N would, from the regular window in front (#669).
+if [ "$(uname)" = Linux ]; then
+  for launch in "--new-window window new-window 0" "--incognito private\ window new-private-window 1"; do
+    eval "set -- $launch"
+    "$browser" "$1" >> "$out/new-window-launch.log" 2>&1 ||
+      fail "the second launch with $1 failed: $(tail -1 "$out/new-window-launch.log")"
+    expect_late "^browser: launched again for a new window, private $4\$" \
+      "the running browser didn't hear the launch with $1 ask for a window"
+    expect_late "^browser: command $3 via launch\$" "the launch with $1 didn't run $3"
+    expect_late "^browser: $2 opened [0-9]" "the launch with $1 opened no $2"
+    launched=$(sed -n "s/^browser: $2 opened \([0-9]*\).*/\1/p" "$log" | tail -1)
+    # A window ⌘N's command opens may open its command bar, which escape closes.
+    for _ in $(seq 30); do
+      logged '^browser: command bar shown$' && { send key escape; break; }
+      sleep 0.1
+    done
+    send window "$(grep -c '^browser: window opened ' "$log")"
+    send key w cmd shift
+    expect "^browser: window closed $launched\$" "⇧⌘W didn't close the window the launch with $1 opened"
+    send window 1
+  done
+else
+  echo "skip: a launch asking for a new window: the Mac's Dock has the items, and Windows' jump list waits for the header batch's engine."
+fi
+
+# ⌘N from a window full screen of its own opens one that goes full screen too, then opens its command
+# bar (#669), on Windows as elsewhere.
+send window 1
+send fullscreen
+expect '^browser: window entered full screen$' "the first window didn't go full screen for ⌘N"
+send key n cmd
+new_in=$step
+expect '^browser: window opened [0-9]' "⌘N in full screen didn't open a window"
+full_new=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+expect_late '^browser: new window went full screen$' \
+  "⌘N's window from full screen didn't go full screen: $(grep "^browser: window $full_new asked for full screen" "$log" | tail -1)"
+new_window_bar "$out/new-window-full-screen.png"
+send window "$(grep -c '^browser: window opened ' "$log")"
+send key w cmd shift
+expect "^browser: window closed $full_new\$" "⇧⌘W didn't close ⌘N's full-screen window"
+send window 1
+# Sway keeps one window of a workspace full screen, so there the first left as ⌘N's went.
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  logged '^browser: window left full screen$' "$new_in" ||
+    fail "the first window stayed full screen under sway as ⌘N's went full screen"
+else
+  send fullscreen
+  expect '^browser: window left full screen$' "the first window didn't leave full screen after ⌘N's"
+fi
+
+# A tab's row dragged out of its window (#1798), on the Mac, Windows and Linux's X11. Over the other window's list
+# it moves there where the line marks, its page live with what was typed in it, and let go where
+# nothing takes it, it opens in a window of its own under the pointer, which ⌘Z there closes,
+# sending the tab back. AppKit's drag of the tab only moves within the window it started in, with no
+# real button holding it, so the driver hands the other window's list the tab's drag itself, as it
+# hands another app's, and the drag let go over its own window's page, which takes no tab, is the
+# one let go where nothing takes it. ⌘Z after the drop on the list puts it back too. On Windows the
+# app stops in DoDragDrop under the driver (#1583), so the drag let go where nothing takes it is the
+# Mac's and Linux's alone. The windows sit side by side, their lists in the open: Xvfb's screen is
+# 1280 wide, the Macs' 1920.
+if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
+  case $(uname) in
+  Linux) left=10 right=640 wide=620 ;;
+  *) left=20 right=960 wide=900 ;;
+  esac
+  send key n cmd
+  expect '^browser: window opened [0-9]' "⌘N didn't open a window for the tab's drag"
+  sixth=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  # It opens with the command bar, which Escape closes before the windows are placed, so the
+  # first window keeps the keyboard it's given (#1814).
+  new_window_bar
+  driven_sixth=$(grep -c '^browser: window opened ' "$log")
+  send window $driven_sixth
+  send place $right 40 $wide 700
+  send window 1
+  send place $left 40 $wide 700
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for the tab to drag"
+  # Under localhost, Chromium's: 127.0.0.1's pages here are in Safari's engine, whose correction
+  # panel over a typed word holds AppKit's events until it goes, the driver's with them.
+  send insert "$(echo "$site" | sed 's/127\.0\.0\.1/localhost/')autofocus.html"
+  send key return
+  expect '^browser: title [0-9]* ready$' "the page to drag didn't draw"
+  c=$(grep '^browser: title [0-9]* ready$' "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: window $first shows $c\$" "the page to drag didn't show in the first window"
+  # Its field, at the page's top left, takes the keyboard from the UI the command bar left it with.
+  send click 380 28
+  send type kept
+  expect "^browser: title $c value kept\$" "the page to drag didn't take what was typed"
+  # kept <what>: the page wasn't loaded again, and its field still has what was typed, which a key
+  # in it adds to.
+  kept() {
+    [ "$(grep -c "^browser: loaded $c " "$log")" = 1 ] || fail "$1: the page loaded again"
+    send click 380 28
+    send type x
+    expect "^browser: title $c value kept\(x*\)x\$" "$1: the page's field lost what was typed"
+  }
+  # Over the second window's list, above its first row, as the system hands it a tab's drag from
+  # the first window: the driver stands in for that, as it does for another app's.
+  send window $driven_sixth
+  set -- $(row 0)
+  send dragover $1 $(($2 - 20)) tab $c
+  send dragdrop $1 $(($2 - 20))
+  expect '^browser: drag dropped$' "the second window's list didn't take the tab dragged from the first"
+  expect "^browser: tab $c dropped from window $first in today 0\$" \
+    "the second window's list didn't put the tab where its line was"
+  expect "^browser: window $sixth shows $c\$" "the tab dropped on the second window's list didn't show there"
+  ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-to.png" all || fail "no window to capture"
+  kept "dropped on the other window's list"
+  # ⌘Z there, from the UI, as ⌘Z in a page's text field is the page's, shows it in the first window
+  # again, and ⇧⌘Z in the second takes it back.
+  send click 100 600
+  send key z cmd
+  expect "^browser: window $first shows $c\$" "⌘Z didn't send the tab dropped on the list back to the first window"
+  send key z cmd shift
+  expect "^browser: window $sixth shows $c\$" "⇧⌘Z didn't bring the tab back to the second window's list"
+  if windows; then
+    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 40 points,
+    # as the window draws it, at the window's scale. The driver can't hold the drag itself (#1583),
+    # so it has the host make the picture and write it to a file.
+    set -- $(row_of $c)
+    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
+    expect '^browser: tab picture [1-9][0-9]*x[1-9][0-9]*$' "the host made no picture of the tab's row"
+    picture=$(grep '^browser: tab picture ' "$log" | tail -1 | cut -d' ' -f4)
+    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 40 && $1 / $2 > 5.6 && $1 / $2 < 5.8) }' ||
+      fail "the picture of the tab's row is $picture, not the row's 228 by 40 at the window's scale"
+    echo "skip: a tab's row let go where nothing takes it: the app stops in DoDragDrop under Windows' driver (#1583)."
+  else
+    # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
+    # over the page, which takes no tab, it opens in a window of its own there, under the pointer.
+    set -- $(row_of $c)
+    send press $1 $2
+    send dragto $1 $(($2 + 10))
+    send dragto $1 705
+    expect "^browser: tab $c window drag\$" "the row dragged past the window's edge didn't leave it"
+    # On Linux the drag shows a picture of the row, from the frame GPUI drew, as the Mac's does
+    # (#1859), here while the drag is still held.
+    if [ "$(uname)" = Linux ]; then
+      expect "^browser: tab $c drag picture [1-9][0-9]*x[1-9][0-9]*\$" "the tab's drag showed no picture of its row"
+      ../tools/window-screenshot.sh "$pid" "$out/windows-drag-picture.png" all || fail "no window to capture"
+    fi
+    # AppKit's drag tracks the mouse in a loop of its own until it's let go, which holds the
+    # driver's done till then: the move over the page is posted, and the release ends it there.
+    over=$((wide - 100))
+    post dragto $over 400
+    send release $over 400
+    expect "^browser: tab $c window drag to a new window\$" "let go where nothing took it, the tab's drag opened no window"
+    expect "^browser: window [0-9]* took $c from window $sixth\$" "no window took the tab let go where nothing took it"
+    seventh=$(grep "^browser: window [0-9]* took $c from window $sixth\$" "$log" | tail -1 | cut -d' ' -f3)
+    expect "^browser: window $seventh shows $c\$" "the window opened for the tab didn't show it"
+    driven_seventh=$(grep -c '^browser: window opened ' "$log")
+    # Under the pointer, at its point on the screen, as near as the screen lets it.
+    send order
+    frame=$(grep "^browser: frame window $driven_seventh " "$log" | tail -1 | cut -d' ' -f5-)
+    echo "$frame" | awk -v x=$((right + over)) '{ exit !($1 <= x && x <= $1 + $3 && $2 <= 440 && 440 <= $2 + $4) }' ||
+      fail "the window opened for the tab isn't under the pointer: $frame"
+    ../tools/window-screenshot.sh "$pid" "$out/windows-dragged-out.png" all || fail "no window to capture"
+    send window $driven_seventh
+    kept "let go where nothing took it"
+    # ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
+    # empty foot.
+    send click 100 600
+    send key z cmd
+    expect "^browser: window closed $seventh\$" "⌘Z didn't close the window the tab's drag opened"
+    expect "^browser: window $sixth shows $c\$" "⌘Z didn't send the tab back to the window it came from"
+  fi
+  send window $driven_sixth
+  send key w cmd shift
+  expect "^browser: window closed $sixth\$" "⇧⌘W didn't close the window the tab was dragged to"
+  send window 1
+  dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go where nothing takes it to a window of its own under the pointer, which ⌘Z closes, sending it back"
+else
+  echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
+fi
 
 # ⇧⌘W in the last window quits. It's the driver's last command: the app doesn't report it done.
 post key w cmd shift
@@ -508,4 +726,4 @@ exec 3>&-
 await "^browser: window closed $first\$" || fail "⇧⌘W didn't close the last window"
 exited
 forget_engine_sites
-echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"
+echo "ok: ⌘N opens a window on the same Spaces with no page, whose card shows its one line, and a click on it with the command bar open only closes the bar, which never takes another window's page on a Space switch, is the one other apps take for the window in front with the first in full screen, the Spaces menu acts on it, a click on a row moves its page there live and the window it left draws a picture of the page, a click on which takes the page back, a window switching away from the page gives it back to the one with its picture and keeps the keyboard, ⇧⌘W gives the closed window's tabs back to the other, live, and quits from the last, ⇧↩ in the command bar opens a new window, and Switch to Tab brings forward the window showing the tab${webkit_moved:-}${dragged_out:-}. Each stage of a page's move between windows: $out/handover-summary.txt. Windows: $out/windows-new.png, $out/empty-window.png, $out/windows-moved.png, $out/windows-pictured.png, $out/windows-pictured-back.png, $out/windows-handed-back.png, $out/windows-closed.png, $out/windows-shift-return.png, $out/windows-switch.png${webkit_moved:+, $out/windows-webkit-pictured.png}"

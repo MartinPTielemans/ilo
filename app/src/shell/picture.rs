@@ -117,10 +117,11 @@ struct Move {
 }
 
 impl Move {
-    /// From the card's size to REST, as the page goes.
+    /// From the card's size to REST, as the page goes, on the executor's clock, which the tests
+    /// move on themselves.
     fn step_back(cx: &gpui::App) -> Self {
         Self {
-            start: crate::motion::start(cx),
+            start: crate::motion::start_at(cx.background_executor().now(), cx),
             from: 1.,
             to: REST,
             duration: STEP_BACK,
@@ -320,11 +321,11 @@ impl Shell {
     }
 
     /// Steps the motion for a frame, and lets go of the pictures the window has no use for.
-    pub(super) fn step_picture(&mut self, window: &mut Window) {
+    pub(super) fn step_picture(&mut self, window: &mut Window, cx: &gpui::App) {
         for image in self.stale_pictures.drain(..) {
             window.drop_image(image).ok();
         }
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let id = self.browser.window();
         let Some(picture) = &mut self.picture else {
             return;
@@ -351,7 +352,7 @@ impl Shell {
     pub(super) fn picture_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picture = self.picture.as_ref()?;
         let ready = picture.image.as_ref()?;
-        let now = Instant::now();
+        let now = cx.background_executor().now();
         let bounds = self.picture_bounds(now)?;
         let scale = picture.scale(now);
         let veil = VEIL * (1. - (scale - REST) / (1. - REST)).clamp(0., 1.);

@@ -16,7 +16,8 @@ use crate::agents::Status;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
-/// and Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31.
+/// Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31, and the user's empty
+/// Space 4.
 fn shell_with_task(
     cx: &mut TestAppContext,
 ) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
@@ -55,6 +56,15 @@ fn shell_with_task(
                     0,
                     "".into(),
                     "Claude Code".into(),
+                    "".into(),
+                ),
+                (
+                    4,
+                    "Errands".into(),
+                    None,
+                    0,
+                    "".into(),
+                    "".into(),
                     "".into(),
                 ),
             ],
@@ -152,13 +162,13 @@ fn watching(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) 
     host.shown.borrow_mut().clear();
 }
 
-/// A task's Space is in none of the window's lists of Spaces: not the Spaces menu, ⌃1 to ⌃9, Move
-/// to or Search Tabs. Claude Code's own Space still is, and the task's tabs are kept for its
-/// conversation.
+/// A task's Space, and an outside agent's, whose sessions are cards as tasks are (#1080), is in
+/// none of the window's lists of Spaces: not the Spaces menu, ⌃1 to ⌃9, Move to or Search Tabs.
+/// The task's tabs are kept for its conversation.
 #[gpui::test]
 fn a_tasks_space_is_never_listed(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
-    assert_eq!(host.menu_bar.borrow().spaces, ["Space 1", "Research"]);
+    assert_eq!(host.menu_bar.borrow().spaces, ["Space 1", "Errands"]);
     shell.update(cx, |shell, cx| shell.run(Command::SelectSpace(2), "ui", cx));
     assert!(host.shown.borrow().is_empty(), "no third Space for ⌃3");
     shell.update(cx, |shell, cx| {
@@ -166,7 +176,8 @@ fn a_tasks_space_is_never_listed(cx: &mut TestAppContext) {
     });
     let menu = host.menus.borrow().last().cloned().unwrap_or_default();
     let titles: Vec<SharedString> = menu.into_iter().map(|(title, _)| title).collect();
-    assert!(titles.contains(&"Research".into()), "{titles:?}");
+    assert!(titles.contains(&"Errands".into()), "{titles:?}");
+    assert!(!titles.contains(&"Research".into()), "{titles:?}");
     assert!(!titles.contains(&"Find a flight".into()), "{titles:?}");
     shell.update(cx, |shell, cx| {
         for tab in [11, 20, 30, 31] {
@@ -177,14 +188,14 @@ fn a_tasks_space_is_never_listed(cx: &mut TestAppContext) {
             shell.set_page(tab, page, cx);
         }
     });
-    let searched = shell.read_with(cx, |shell, _| shell.open_tabs());
+    let searched = shell.read_with(cx, |shell, cx| shell.open_tabs(cx));
     let searched: Vec<u64> = searched.iter().map(|tab| tab.tab).collect();
     assert_eq!(
         searched,
-        [11, 20],
-        "the task's 30 and 31 aren't the user's to search"
+        [11],
+        "the agents' 20, 30 and 31 aren't the user's to search"
     );
-    let bar = shell.read_with(cx, |shell, _| shell.bar_tabs());
+    let bar = shell.read_with(cx, |shell, cx| shell.bar_tabs(cx));
     assert_eq!(bar.iter().map(|tab| tab.tab).collect::<Vec<_>>(), [11]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_tabs(3)), [30, 31]);
 }
@@ -385,7 +396,7 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
     assert_eq!(
         *host.shown.borrow(),
-        [1, 2],
+        [1, 4],
         "the user's Space back, then the second"
     );
 
@@ -416,6 +427,7 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
         let doing = "Typed · flights.example".into();
         vec![Status {
             agent: "task-1".into(),
+            name: "Claude".into(),
             space: 3,
             doing,
             held,
@@ -446,6 +458,118 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
     );
 }
 
+/// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
+/// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
+/// holds it, nothing more happens; ⌘↩ then hands it back. The host hears the pages' presses only
+/// while an agent works.
+#[gpui::test]
+fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    assert_eq!(host.take(), ["hear page presses true"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert_eq!(host.take(), ["take over task-1 30"]);
+
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+    });
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert!(
+        host.take().is_empty(),
+        "a press in a page the user holds took it again"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::BackToPinnedUrl, "page", cx)
+    });
+    assert_eq!(host.take(), ["hand back 30", "focus ui"]);
+
+    shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
+    assert_eq!(host.take(), ["hear page presses false"]);
+    shell.update(cx, |shell, cx| shell.page_pressed(cx));
+    assert!(
+        host.take().is_empty(),
+        "a press with no agent at work took a page"
+    );
+}
+
+/// The strip under an agent's page shows its speaker only while the page plays, crossed while it's
+/// muted, as an agent's tabs start (#1080), and the speaker's click unmutes it as a row's does.
+#[gpui::test]
+fn the_strips_speaker_shows_while_the_page_plays(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let speaker = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.strip_sound(30, cx).is_some())
+    };
+    assert!(!speaker(cx), "a silent page has a speaker");
+    let playing = Page {
+        url: "https://flights.example/".into(),
+        audible: true,
+        muted: true,
+        ..Default::default()
+    };
+    shell.update(cx, |shell, cx| shell.set_page(30, playing, cx));
+    assert!(speaker(cx), "a page playing muted has no speaker");
+    shell.update(cx, |shell, cx| shell.toggle_mute(30, cx));
+    assert_eq!(*host.muted.borrow(), [(30, false)]);
+}
+
+/// A scroll never takes the agent's page over: the wheel's buttons, 4 to 7 on X11, aren't presses,
+/// and scrolling over the page area takes nothing, where every mouse button's press does.
+#[gpui::test]
+fn a_scroll_in_the_agents_page_never_takes_it_over(cx: &mut TestAppContext) {
+    for button in [1, 2, 3, 8, 9] {
+        assert!(crate::agents::press_takes_over(button), "button {button}");
+    }
+    for wheel in 4..=7 {
+        assert!(
+            !crate::agents::press_takes_over(wheel),
+            "the wheel's {wheel}"
+        );
+    }
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: Vec::new(),
+            }],
+            cx,
+        );
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    host.take();
+    let over_the_page = point(px(700.), px(400.));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_the_page,
+        delta: gpui::ScrollDelta::Lines(point(0., -3.)),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("take over")),
+        "{calls:?}"
+    );
+}
+
 /// Escape on a task's page watched steps back to the conversation from the page's keyboard, which
 /// a page the user clicked into has, as from the UI's, and stops neither the agent nor its load.
 #[gpui::test]
@@ -469,15 +593,14 @@ fn escape_from_the_page_watched_steps_back(cx: &mut TestAppContext) {
 /// and Open once it left the user a tab.
 #[gpui::test]
 fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
-    use crate::agents::runner::Cli;
     use crate::agents::task::{Card, Dot};
-    let (shell, host, cx) = shell_with_task(cx);
-    watching(&shell, &host, cx);
+    let (shell, _, cx) = shell_with_task(cx);
     let card = |dot: Dot, status: &str| Card {
         agent: "task-1".into(),
         home: 1,
         space: 3,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: "Find a flight".into(),
         status: status.to_string().into(),
         asks: false,
@@ -504,8 +627,17 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
             (title, detail, shell.task_working())
         })
     };
+    // The strip is of the card whose conversation the area shows.
+    still(cx);
     let working = card(Dot::Working, "Clicking “Tickets”");
-    shell.update(cx, |shell, cx| shell.set_task_cards(vec![working], cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![working], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
     let expected = (
         "Claude is working".to_string(),
         "Clicking “Tickets”".to_string(),
@@ -578,13 +710,71 @@ fn the_url_field_is_the_page_watcheds(cx: &mut TestAppContext) {
         "it left the page"
     );
 
+    // Back in the conversation, the field shows no page, as nothing in the page area is one.
     shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
-    let field = shell.read_with(cx, |shell, _| shell.url(shell.field_tab()));
     assert_eq!(
-        field.as_ref(),
-        "https://en.wikipedia.org/wiki/Lisbon",
-        "the conversation's is the user's"
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
     );
+    assert_eq!(shell.read_with(cx, |shell, _| shell.field_tab()), 0);
+}
+
+/// While a task's conversation is in the page area, no page is: the URL field reads as an empty
+/// card's, with the command bar's placeholder, Copy URL copies nothing and Edit URL edits no tab,
+/// and the Space's tab gives up its selected plate, which the task's card has. Back on the tab,
+/// both are the tab's again.
+#[gpui::test]
+fn the_conversation_shows_no_page_in_the_url_field_or_the_rows(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://en.wikipedia.org/wiki/Lisbon".into(),
+            ..Page::default()
+        };
+        shell.set_page(10, page, cx);
+    });
+    let words =
+        |shell: &Shell, cx: &gpui::App| shell.url_field_words(&shell.url(shell.field_tab()), cx).0;
+    assert_eq!(
+        shell.read_with(cx, |shell, cx| words(shell, cx)).as_ref(),
+        "en.wikipedia.org"
+    );
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(
+            words(shell, cx).as_ref(),
+            crate::command_bar::PLACEHOLDER_TEXT
+        );
+        assert!(
+            shell.selected_row().is_none(),
+            "the Space's tab kept its plate"
+        );
+    });
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyUrl, "ui", cx);
+        shell.run(Command::EditUrl, "ui", cx);
+    });
+    assert!(
+        host.copied.borrow().is_empty(),
+        "Copy URL copied the user's tab under the conversation"
+    );
+    assert_eq!(*host.bar_edits.borrow(), [None]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "Edit URL left it"
+    );
+
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(words(shell, cx).as_ref(), "en.wikipedia.org");
+        assert!(
+            shell.selected_row() == Some(crate::shell::Row::Tab(10)),
+            "the tab didn't get its plate back"
+        );
+    });
 }
 
 /// ⌘R and Back act on the page watched; ⌘T opens the bar over the conversation, the core showing
@@ -647,4 +837,132 @@ fn the_area_follows_the_task_going(cx: &mut TestAppContext) {
         );
     });
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
+/// The agent's pointer comes to an element it acts on in a task's page watched, and not in its
+/// other tab or while only the conversation shows. It goes a moment after the agent's last action.
+#[gpui::test]
+fn the_agents_pointer_shows_where_it_acts_in_the_page_watched(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let element = Bounds::new(point(px(40.), px(60.)), size(px(120.), px(30.)));
+    let point_at = |shell: &Entity<Shell>, cx: &mut VisualTestContext, tab| {
+        shell.update(cx, |shell, cx| {
+            shell.agent_pointing(tab, "e3".into(), element, cx);
+            shell.agent_pointer_shown()
+        })
+    };
+    assert!(!point_at(&shell, cx, 30), "the user's page shows");
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    assert!(!point_at(&shell, cx, 30), "only the conversation shows");
+    watching(&shell, &host, cx);
+    assert!(!point_at(&shell, cx, 31), "the window doesn't show tab 31");
+    assert!(point_at(&shell, cx, 30));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    assert!(shell.update(cx, |shell, _| shell.agent_pointer_shown()));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    assert!(!shell.update(cx, |shell, _| shell.agent_pointer_shown()));
+}
+
+/// The strip under a page the user holds names its agent as the Agents name it, the name its card
+/// has, which for an outside client is the one it gave, not its Space's.
+#[gpui::test]
+fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let held = |name: &str| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: name.to_string().into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held: vec![(30, "Sign in to flights.example".into())],
+        }]
+    };
+    let says = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.task_strip_words(30))
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(held("Zed"), cx));
+    assert_eq!(
+        says(&shell, cx),
+        (
+            "Zed needs you".to_string(),
+            "Sign in to flights.example".to_string()
+        )
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(held("MCP client"), cx)
+    });
+    assert_eq!(says(&shell, cx).0, "MCP client needs you");
+}
+
+/// Quiet until it needs you (#1080): a card under the URL field only ever asks, so each has one
+/// primary, the answer its agent waits on; the strip under a page watched has one only while the
+/// user holds the page its card waits for, Hand Back, and none while the agent works, has done or
+/// stopped.
+#[test]
+fn only_what_needs_the_user_has_a_primary() {
+    use super::{StripChip, strip_chips};
+    use crate::agents::Question;
+    use crate::agents::task::Dot;
+    use crate::shell::agent_question::buttons;
+    use crate::shell::permission::Look;
+
+    let question = |handoff: Option<u64>, back: bool| Question {
+        id: 1,
+        agent: "Claude Code".into(),
+        from: "claude-code".into(),
+        what: "open bank.example".into(),
+        why: "It's a bank's site.".into(),
+        handoff,
+        back,
+        ..Default::default()
+    };
+    for (asked, primary) in [
+        (question(None, false), "Allow Once"),
+        (question(Some(30), false), "Show Tab"),
+        (question(Some(30), true), "Hand Back"),
+    ] {
+        let buttons = buttons(&asked);
+        let primaries: Vec<_> = (buttons.iter())
+            .filter(|button| button.look == Look::Primary)
+            .map(|button| button.label)
+            .collect();
+        assert_eq!(primaries, [primary], "{asked:?}");
+        assert_eq!(
+            buttons.last().map(|button| button.look),
+            Some(match asked.handoff {
+                Some(_) => Look::Primary,
+                None => Look::Text,
+            }),
+            "the primary is on the right, and Always Allow on a row of its own"
+        );
+    }
+
+    let primaries = |held, dot, open| -> Vec<StripChip> {
+        (strip_chips(held, dot, open).into_iter())
+            .filter(|(_, look)| *look == Look::Primary)
+            .map(|(chip, _)| chip)
+            .collect()
+    };
+    assert_eq!(
+        primaries(true, Some(Dot::Waiting), false),
+        [StripChip::HandBack],
+        "a handoff the user holds"
+    );
+    for (held, dot, open, what) in [
+        (false, Some(Dot::Working), false, "at work"),
+        (true, Some(Dot::Working), false, "taken over, nothing asked"),
+        (false, Some(Dot::Waiting), false, "waiting on another tab"),
+        (false, Some(Dot::Done), true, "done, with Open"),
+        (false, Some(Dot::Ended), false, "stopped"),
+    ] {
+        assert!(primaries(held, dot, open).is_empty(), "{what}");
+    }
+    assert_eq!(
+        strip_chips(false, Some(Dot::Working), false),
+        [(StripChip::Stop, Look::Quiet)],
+        "at work, Stop alone and quiet: a press in the page takes it over"
+    );
 }

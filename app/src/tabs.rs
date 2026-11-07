@@ -34,17 +34,21 @@ pub(crate) fn split_tab(window: bc::bc_id, tab: u64, with: u64, opened: bool, cx
 
 /// `tab`, opened to join a split view in `window`, joined it: that window's ⌘Z closes it.
 pub(crate) fn split_opened(window: bc::bc_id, tab: u64, cx: &mut App) {
-    let shell = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .find(|each| each.id == window)
-            .map(|each| each.shell.clone())
-    });
-    if let Some(shell) = shell {
+    if let Some(shell) = shell_of(window) {
         shell
             .update(cx, |shell, cx| shell.split_opened(tab, cx))
             .ok();
     }
+}
+
+/// The shell of browser window `window`, if it's open.
+pub(crate) fn shell_of(window: bc::bc_id) -> Option<WeakEntity<Shell>> {
+    WINDOWS.with_borrow(|windows| {
+        windows
+            .iter()
+            .find(|each| each.id == window)
+            .map(|each| each.shell.clone())
+    })
 }
 
 /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it in `window`.
@@ -117,6 +121,19 @@ pub(crate) extern "C" fn file_drag_ended(taken: bool) {
     update_window(front().0, |shell, cx| shell.file_drag_ended(taken, cx));
 }
 
+/// The system's drag of `tab` out of a window ended, `how` host_drag_tab says, let go at (`x`, `y`)
+/// on the screen where `placed`.
+pub(crate) extern "C" fn tab_drag_ended(tab: u64, how: c_int, placed: bool, x: f64, y: f64) {
+    let ended = match how {
+        platform::TAB_TAKEN => shell::WindowDragEnd::Taken,
+        platform::TAB_LET_GO => {
+            shell::WindowDragEnd::LetGo(placed.then(|| point(x as f32, y as f32)))
+        }
+        _ => shell::WindowDragEnd::Cancelled,
+    };
+    update_shells(|shell, cx| shell.window_drag_ended(tab, ended, cx));
+}
+
 pub(crate) extern "C" fn dragged(
     ui_view: *mut c_void,
     phase: c_int,
@@ -129,6 +146,20 @@ pub(crate) extern "C" fn dragged(
         true => &[][..],
         false => unsafe { std::slice::from_raw_parts(items, count) },
     };
+    let position = point(px(x as f32), px(y as f32));
+    // A tab dragged out of one of the app's windows (host_drag_tab).
+    if let Some(tab) = items.iter().map(|item| item.tab).find(|&tab| tab != 0) {
+        let window = window_with_view(ui_view);
+        let answer = update_window(window, |shell, cx| match phase {
+            platform::DRAG_OVER => shell.drag_tab_in(position, tab, cx),
+            platform::DRAG_DROP => shell.drop_tab_in(position, tab, cx),
+            _ => {
+                shell.drag_away(cx);
+                false
+            }
+        });
+        return answer.unwrap_or(false);
+    }
     let items: Vec<_> = items
         .iter()
         .map(|item| {
@@ -146,7 +177,6 @@ pub(crate) extern "C" fn dragged(
         })
     };
     let urls = shell::dropped_urls(items, search);
-    let position = point(px(x as f32), px(y as f32));
     let answer = update_window(window, |shell, cx| match phase {
         platform::DRAG_OVER => !urls.is_empty() && shell.drag_in(position, cx),
         platform::DRAG_DROP => shell.drop_in(position, &urls, cx),
@@ -341,6 +371,9 @@ pub(crate) unsafe extern "C" fn tab_opened(
         "background"
     };
     log!("browser: tab {tab} opened by {opener} in the {side}");
+    if opener != 0 {
+        agents_core::update(move |agents, _| agents.tab_opened(tab, opener));
+    }
     let little = WINDOWS.with_borrow(|windows| {
         windows
             .iter()
@@ -348,9 +381,16 @@ pub(crate) unsafe extern "C" fn tab_opened(
             .and_then(|each| each.little)
     });
     if let Some(home) = little.filter(|_| opener != 0) {
-        update_app_later(move |_| little_tab_opened(window, tab, home));
+        match take_popup(tab) {
+            Some(asked) => {
+                update_app_later(move |cx| little_popup_opened(window, tab, home, asked, cx))
+            }
+            None => update_app_later(move |cx| little_tab_opened(window, tab, home, cx)),
+        }
         return;
     }
+    // A pop-up elsewhere is a tab of its window, as decision 3 has it.
+    take_popup(tab);
     // A link ⌥⌘-clicked, or opened in a split view from the page's menu, joined its page's split,
     // which ⌘Z takes back as it does the user's other ways in.
     let mut split = [0; 3];
@@ -370,6 +410,8 @@ pub(crate) unsafe extern "C" fn tab_closed(_: *mut c_void, tab: bc::bc_id) {
         let executor = cx.foreground_executor().clone();
         executor
             .spawn(async move {
+                // Outside the update, as closing the pop-up's window calls back into GPUI.
+                popup_closed(tab);
                 cx.update(|cx| {
                     site_controls::tab_closed(tab, cx);
                     capture::tab_closed(tab, cx);

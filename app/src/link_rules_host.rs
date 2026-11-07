@@ -62,10 +62,12 @@ pub fn save() {
 /// The user's Space a link to `url` from another app opens in, by the first rule it meets, else
 /// everything else's, 0 being the Space in front and `LITTLE` Little ilo.
 pub fn route(url: &str) -> u64 {
-    let (space, rule) = RULES.with_borrow(|rules| rules.route(url, &users_spaces()));
+    let little = unsafe { crate::bc::bc_little_windows() };
+    let (space, rule) = RULES.with_borrow(|rules| rules.route_with(url, &users_spaces(), little));
     if let Some(rule) = rule {
         let place = match space {
             LITTLE => "little ilo".to_string(),
+            0 => "the space in front".to_string(),
             space => format!("space {space}"),
         };
         // check.sh reads this line.
@@ -90,6 +92,10 @@ pub fn preview_route(url: &str, shown: u64) -> u64 {
 pub struct CoreLinkRules;
 
 impl Host for CoreLinkRules {
+    fn little_windows(&self) -> bool {
+        unsafe { bc::bc_little_windows() }
+    }
+
     fn spaces(&self) -> Vec<(u64, SharedString)> {
         (users_spaces().into_iter())
             .map(|space| (space, name(bc::bc_space_name, space)))
@@ -109,11 +115,20 @@ impl Host for CoreLinkRules {
         &self,
         items: Vec<MenuEntry>,
         at: Point<Pixels>,
+        light: bool,
         window: &Window,
         picked: Box<dyn FnOnce(Option<usize>, &mut App)>,
         cx: &mut App,
     ) {
         let picked = browser::menu::picked(picked);
-        crate::show_menu(ns_view(window), items, at, false, Look::dark(), picked, cx);
+        crate::show_menu(
+            ns_view(window),
+            items,
+            at,
+            false,
+            Look::plain(light),
+            picked,
+            cx,
+        );
     }
 }

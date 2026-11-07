@@ -17,10 +17,27 @@ impl command_bar::Host for Bar {
         }
     }
 
-    fn remove_suggestion(&self, url: &str) {
-        if let Ok(url) = CString::new(url) {
-            unsafe { bc::bc_window_remove_suggestion(front().0, url.as_ptr()) };
+    fn remove_suggestion(&self, url: &str, cx: &mut App) {
+        let Ok(url) = CString::new(url) else {
+            return;
+        };
+        let window = front().0;
+        let removal = unsafe { bc::bc_window_remove_suggestion(window, url.as_ptr()) };
+        // The bar shows over the window in front, whose ⌘Z puts it back.
+        if let Some(shell) = shell_of(window) {
+            shell
+                .update(cx, |shell, cx| shell.suggestion_removed(removal, cx))
+                .ok();
         }
+    }
+
+    fn step_removal(&self, redo: bool, cx: &mut App) -> bool {
+        let Some(shell) = shell_of(front().0) else {
+            return false;
+        };
+        shell
+            .update(cx, |shell, cx| shell.step_suggestion_removal(!redo, cx))
+            .unwrap_or(false)
     }
 
     fn typed_url(&self, text: &str) -> Option<String> {
@@ -126,10 +143,12 @@ impl command_bar::Host for Bar {
 
     fn hide(&self) {
         unsafe { platform::host_hide_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn dismiss(&self) {
         unsafe { platform::host_dismiss_overlay(COMMAND_BAR) };
+        crate::settings::bar_hidden();
     }
 
     fn take_keyboard(&self) {
@@ -144,10 +163,23 @@ impl command_bar::Host for Bar {
         shell::bar_commands(text, cx)
     }
 
+    fn settings_index(&self, _: &App) -> Option<std::rc::Rc<Vec<browser::settings_search::Entry>>> {
+        crate::settings::index()
+    }
+
+    fn show_setting(
+        &self,
+        section: browser::settings_column::Section,
+        name: SharedString,
+        cx: &mut App,
+    ) {
+        crate::settings::show_row(section, name, cx);
+    }
+
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
-        if !agents.is_on() {
+        if !agents.tasks_on() {
             return None;
         }
         let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
@@ -281,5 +313,6 @@ pub(crate) fn rgba_u32(color: gpui::Rgba) -> u32 {
 /// The user left the command bar without choosing anything in it.
 pub(crate) extern "C" fn command_bar_dismissed() {
     update_app(command_bar::dismissed);
+    crate::settings::bar_hidden();
     update_window(front().0, |shell, cx| shell.command_bar_dismissed(cx));
 }

@@ -103,11 +103,17 @@ pub(crate) fn menus(
         menu(env!("APP_NAME"), app),
         menu(
             "File",
-            vec![
-                item("New Tab…", Command::NewTab),
-                item("New Window", Command::NewWindow),
-                item("New Little ilo Window", Command::NewLittleWindow),
+            [
+                Some(item("New Tab…", Command::NewTab)),
+                Some(item("New Window", Command::NewWindow)),
+                // Not with Little ilo off in Settings › Features.
+                (!bar.little_off).then(|| item("New Little ilo Window", Command::NewLittleWindow)),
+            ]
+            .into_iter()
+            .flatten()
+            .chain([
                 item("New Incognito Window", Command::NewPrivateWindow),
+                item("Blank Window", Command::NewBlankWindow),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
@@ -120,7 +126,8 @@ pub(crate) fn menus(
                 item("Capture Full Page", Command::CaptureFullPage),
                 item("Save Page As", Command::SavePage),
                 item("Print", Command::Print),
-            ],
+            ])
+            .collect(),
         ),
         menu(
             "Edit",
@@ -148,6 +155,16 @@ pub(crate) fn menus(
                         item("Find Next", Command::FindNext),
                         item("Find Previous", Command::FindPrevious),
                         item("Jump to Selection", Command::JumpToSelection),
+                    ],
+                )),
+                // Where AppKit puts the system's, which ilo's replaces (platform/mac/host.mm).
+                MenuItem::separator(),
+                MenuItem::submenu(menu(
+                    "AutoFill",
+                    vec![
+                        item("Contact…", Command::AutoFill),
+                        item("Passwords…", Command::AutoFillPasswords),
+                        item("Credit Card…", Command::AutoFill),
                     ],
                 )),
             ],
@@ -277,10 +294,12 @@ pub(crate) fn menus(
             "Window",
             vec![
                 MenuItem::action("Minimize Window", Minimize),
+                stay_on_top(bar.on_top),
                 MenuItem::separator(),
                 item("Open Library…", Command::ViewLibrary),
                 item("View Downloads…", Command::ViewDownloads),
                 item("View Media…", Command::ViewMedia),
+                item("View Agents…", Command::ViewAgents),
             ],
         ),
         menu(
@@ -307,6 +326,14 @@ pub(crate) fn menus(
 }
 
 /// View › Appearance's item for `appearance`, as Arc's names them.
+/// Window › Stay On Top, ticked while it's on, where the window can stay on top at all.
+fn stay_on_top(on: Option<bool>) -> MenuItem {
+    match on {
+        Some(on) => shell::menu_item(shell::STAY_ON_TOP, Command::StayOnTop).checked(on),
+        None => shell::menu_item(shell::STAY_ON_TOP, Command::StayOnTop).disabled(true),
+    }
+}
+
 pub(crate) fn appearance_title(appearance: Appearance) -> &'static str {
     match appearance {
         Appearance::Automatic => "Automatic",

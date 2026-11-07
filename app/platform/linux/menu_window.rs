@@ -106,7 +106,7 @@ pub extern "C" fn host_show_menu_window(
         size(px(width as f32), px(height as f32)),
     );
     // The menu draws its panels' corners and shadows inside its window.
-    gpui_linux::show_overlay(menu.view, ui_view, bounds, px(0.), true, left_menu);
+    crate::overlays::show_over(menu.view, ui_view, bounds, px(0.), true, left_menu);
     // check.sh reads it.
     eprintln!("browser: menu window at {left:.0},{top:.0} {width:.0}x{height:.0}");
 }

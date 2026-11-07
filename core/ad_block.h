@@ -8,8 +8,9 @@
 class Profile;
 
 namespace content {
+class NavigationThrottleRegistry;
 class WebContents;
-}
+}  // namespace content
 
 namespace browser_core {
 
@@ -24,6 +25,10 @@ void SetUpAdBlock();
 
 // Whether |id| is it, which the user turns off rather than removes.
 bool IsAdBlocker(const std::string& id);
+
+// Holds a page that starts before it's ready in the page's profile, as at launch, until it is, so
+// it blocks from the first page.
+void AddAdBlockHold(content::NavigationThrottleRegistry& registry);
 
 // Turns it on or off in every profile loaded, as UserSettings().ad_blocking says, once the
 // settings are read and whenever the user changes them.

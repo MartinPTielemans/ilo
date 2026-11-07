@@ -13,8 +13,8 @@
 //! component to WCAG's minimums.
 
 use gpui::{
-    BoxShadow, ColorSpace, Div, Global, Hsla, Rgba, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, rgb, rgba,
+    BoxShadow, ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba,
 };
 
 use crate::theme::{self, DEFAULT_INTENSITY, GRAIN_STRENGTH, Theme};
@@ -25,6 +25,7 @@ use crate::tokens::icon_picker::{
 pub use crate::tokens::palette::SECOND_AT;
 use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
+    SWATCH_MAIN_TO,
 };
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
@@ -42,6 +43,7 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
+use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
 const BLACK: Rgba = Rgba {
@@ -160,11 +162,19 @@ impl Tone {
         }
     }
 
-    /// The card the pages lie in, what shows before a page first paints.
+    /// The card the pages lie in.
     fn page(self) -> Rgba {
         rgba(match self {
             Tone::Dark => PAGE_CARD,
             Tone::Light => LIGHT_PAGE_CARD,
+        })
+    }
+
+    /// What a page shows until its first frame, while websites are told this is the appearance.
+    pub fn unpainted(self) -> Rgba {
+        rgba(match self {
+            Tone::Dark => UNPAINTED,
+            Tone::Light => LIGHT_UNPAINTED,
         })
     }
 
@@ -226,15 +236,17 @@ pub struct Palette {
     pub swatch: Swatch,
 }
 
-/// A Space's mark: its theme's colours as a small swatch (#320), drawn in the same gradient the
-/// window is, with a hairline ring of Ink or Paper where its edge would fade into what's behind.
+/// A Space's mark: its theme's colours as a small swatch (#320), lying as the window's gradient
+/// does, with a hairline ring of Ink or Paper where its edge would fade into what's behind.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Swatch {
-    /// The gradient's ends: the main colour and the second along 135°, reaching it SECOND_AT of
-    /// the way, or a colour alone going lighter down.
+    /// The gradient's ends: the main colour at the top left, held to SWATCH_MAIN_TO along 135°,
+    /// and the second at the bottom right, or a colour alone going lighter down. GPUI's 135° runs
+    /// a disc's diagonal from 0 at its top left edge to 1 at its bottom right.
     from: Rgba,
     to: Rgba,
     angle: f32,
+    from_at: f32,
     to_at: f32,
     /// A third colour coming in toward the bottom.
     third: Option<Rgba>,
@@ -415,6 +427,18 @@ impl Palette {
         .into()
     }
 
+    /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
+    /// the colour nearest `main` at its hue that reads on the bar, as the accent does, with Ink or
+    /// Paper on it.
+    pub fn site_accent(&self, main: Rgba) -> (Rgba, Rgba) {
+        let passes = |c: Rgba| {
+            contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
+                && contrast(c, self.overlay) >= GLYPH
+        };
+        let fill = nearest(main, passes).unwrap_or(self.accent);
+        (fill, label_on(fill))
+    }
+
     /// Behind selected text in a field: the accent, faint.
     pub fn selection(&self) -> Hsla {
         Hsla::from(self.accent).opacity(SELECTION)
@@ -423,6 +447,28 @@ impl Palette {
     /// Ink or Paper at `alpha`, or as much more as text needs to read on any theme.
     pub fn text(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
+    }
+
+    /// Text at `alpha`, `lit` of the way to the ink at `high`, as a shimmer's highlight passes. It
+    /// goes from where the floor puts the text, so the highlight shows however far that raises it.
+    pub fn lit(&self, alpha: f32, high: f32, lit: f32) -> Hsla {
+        let rest = self.text(alpha);
+        Hsla {
+            a: rest.a + (high.max(rest.a) - rest.a) * lit,
+            ..rest
+        }
+    }
+
+    /// The highlight that draws text in `lit(alpha, high, 1.)`, its peak, `lit` of the way there.
+    /// GPUI keeps the text's own alpha under a highlight's colour, so a brighter one of the same ink
+    /// shows nothing: the text is drawn at its peak, and each part fades down from it.
+    pub fn lit_highlight(&self, alpha: f32, high: f32, lit: f32) -> HighlightStyle {
+        let peak = self.lit(alpha, high, 1.).a;
+        let fade = 1. - self.lit(alpha, high, lit).a / peak.max(f32::EPSILON);
+        HighlightStyle {
+            fade_out: Some(fade),
+            ..Default::default()
+        }
     }
 
     /// Ink or Paper at `alpha`, or as much more as a glyph or boundary needs.
@@ -517,18 +563,7 @@ impl Palette {
     /// The ring a swatch of two colours alone needs on any of `behind`, by the same rule as a
     /// theme's: a Space's swatch in a menu, `from` at its top left to `to` at its bottom right.
     pub fn swatch_ring_of(from: Rgba, to: Rgba, behind: &[Rgba]) -> Option<Rgba> {
-        let (a, b) = (luminance(from), luminance(to));
-        let (darkest, lightest) = (a.min(b), a.max(b));
-        let swatch = Swatch {
-            from,
-            to,
-            angle: 135.,
-            to_at: 1.,
-            third: None,
-            darkest,
-            lightest,
-        };
-        swatch.ring_on(behind)
+        Swatch::of_two(from, to).ring_on(behind)
     }
 
     /// Where a swatch ring is checked against this palette's window: every point checked, over
@@ -658,6 +693,7 @@ impl Swatch {
                 from: accent,
                 to: accent,
                 angle: 180.,
+                from_at: 0.,
                 to_at: 1.,
                 third: None,
                 darkest: lum,
@@ -665,14 +701,14 @@ impl Swatch {
             };
         };
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
-        let (from, to, angle, to_at) = match colors[..] {
+        let (from, to, angle, from_at) = match colors[..] {
             [_] => (
                 Layer::of(theme, 0., 0.).color,
                 Layer::of(theme, 0., 1.).color,
                 180.,
-                1.,
+                0.,
             ),
-            _ => (colors[0], colors[1], 135., SECOND_AT),
+            _ => (colors[0], colors[1], 135., SWATCH_MAIN_TO),
         };
         let lums = window.swatch().into_iter().map(luminance);
         let (darkest, lightest) = lums.fold((f32::MAX, f32::MIN), |(d, l), y| (d.min(y), l.max(y)));
@@ -680,10 +716,27 @@ impl Swatch {
             from,
             to,
             angle,
-            to_at,
+            from_at,
+            to_at: 1.,
             third: colors.get(2).copied(),
             darkest,
             lightest,
+        }
+    }
+
+    /// Two colours alone, as a Space's swatch in a menu: `from`, the main one, at the top left,
+    /// as a theme's swatch lies.
+    pub fn of_two(from: Rgba, to: Rgba) -> Swatch {
+        let (a, b) = (luminance(from), luminance(to));
+        Swatch {
+            from,
+            to,
+            angle: 135.,
+            from_at: SWATCH_MAIN_TO,
+            to_at: 1.,
+            third: None,
+            darkest: a.min(b),
+            lightest: a.max(b),
         }
     }
 
@@ -722,7 +775,7 @@ impl Swatch {
     pub fn draw(&self, size: f32, behind: &[Rgba]) -> Div {
         let gradient = linear_gradient(
             self.angle,
-            linear_color_stop(self.from, 0.),
+            linear_color_stop(self.from, self.from_at),
             linear_color_stop(self.to, self.to_at),
         )
         .color_space(ColorSpace::Oklab);

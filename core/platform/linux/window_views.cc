@@ -415,6 +415,13 @@ class WindowViews : public views::WidgetObserver,
         region.emplace_back();
       }
       PlatformWindowOf(widget_)->SetInputRegion(region);
+      // Chromium applies the region with its next frame, until which the pointer over where a
+      // page was still goes to it, as when the hidden sidebar comes back (#1629), so it applies
+      // now, as X11's shape does. Not before the window shows, whose first commit is Chromium's.
+      if (widget_->IsVisible() && region != input_region_) {
+        input_region_ = region;
+        SetInputRegionNow(widget_, region, scale);
+      }
       return;
     }
     if (ui_ == x11::Window::None) {
@@ -570,7 +577,26 @@ class WindowViews : public views::WidgetObserver,
     // observers (DesktopWindowTreeHostLinux::UpdateFrameHints).
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&WindowViews::ShowThrough, weak_factory_.GetWeakPtr()));
-    // No compositor sizes a subsurface, so the app sizes its UI to the window's content.
+    TellSize();
+  }
+
+  // Maximized or full screen, the window has no band to resize by, and back from either has it
+  // again, which the window manager may say after the bounds have changed.
+  void OnWidgetShowStateChanged(views::Widget*) override {
+    ShowThrough();
+    // The app asks whether the window is full screen or maximized as it hears the window's size,
+    // and a window already its screen's size goes either way at that size (#1220). Told once the
+    // window has the compositor's configure for the state, with its bounds: a state the browser
+    // asks for changes here at once, before that configure comes, and the app would lay the page
+    // out at the size the window is leaving (#1907).
+    if (OnWayland()) {
+      AfterStateConfigured(widget_,
+                           base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
+  void TellSize() {
     if (!Host().window_resized) {
       return;
     }
@@ -581,10 +607,6 @@ class WindowViews : public views::WidgetObserver,
       }
     }
   }
-
-  // Maximized or full screen, the window has no band to resize by, and back from either has it
-  // again, which the window manager may say after the bounds have changed.
-  void OnWidgetShowStateChanged(views::Widget*) override { ShowThrough(); }
 
   void OnWidgetDestroying(views::Widget*) override {
     ui_text_input_.SetKeyboard(false);
@@ -909,6 +931,8 @@ class WindowViews : public views::WidgetObserver,
   double corner_radius_ = 0;
   // The pages stay where they are as the window resizes, until ShowPages (HoldPagesForResize).
   bool held_ = false;
+  // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
+  std::vector<gfx::Rect> input_region_;
   // Whether the window manager's state for the window last said full screen.
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
@@ -1166,6 +1190,14 @@ bool PageDialogsInOwnWindow() {
   return false;
 }
 
+bool FocusSettledOnActivation() {
+  // Aura's desktop widget tells its observers last, once it has activated its window and given
+  // views their focus back (DesktopNativeWidgetAura::HandleActivationChanged), as X11 reads the
+  // window's FocusIn and Wayland its activated state. A key read with that, in the same batch of
+  // events, comes before any task posted then (#1711).
+  return true;
+}
+
 bool KeyboardForPage(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   // The UI's, unless it only holds it while no page shows.
@@ -1192,6 +1224,11 @@ void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
   }
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  return views && views->overlay_has_keyboard();
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
@@ -1323,6 +1360,21 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
         frame.Inset(dialog->non_client_view()->frame_view()->GetInsets());
       }
       return frame;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the slot's holder, which the X server doesn't see.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.holder && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      const gfx::Vector2d at = slot.holder->bounds().OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
     }
   }
   return std::nullopt;

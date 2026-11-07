@@ -9,11 +9,15 @@
 #include <utility>
 #include <vector>
 
+#include "base/base64.h"
+#include "base/containers/adapters.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
+#include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/strcat.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,19 +25,36 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/shell_integration.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
+#include "content/public/browser/browser_accessibility_state.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/scoped_accessibility_mode.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_observer.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "ui/accessibility/ax_action_data.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/ax_mode.h"
+#include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
+#include "ui/gfx/geometry/point_f.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -44,10 +65,20 @@ namespace browser_core {
 namespace {
 
 constexpr base::TimeDelta kLoadTimeout = base::Seconds(15);
-// What an input starts, such as a navigation or a menu, has started by then.
+// How long an action waits for its element to be ready, and then for the page to settle.
+constexpr base::TimeDelta kBusy = base::Seconds(5);
+// A page with no request for this long has settled: what an input starts, such as a navigation
+// or a menu's fetch, has started by then.
+constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
+// A frame, at the rate pages draw, between the looks that tell whether something holds still.
+constexpr base::TimeDelta kFrame = base::Hertz(60);
+// What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
 // How long a hidden page keeps drawing after an agent's last action, for its next one.
 constexpr base::TimeDelta kRest = base::Seconds(30);
+// Ours: how long a navigation that became a download keeps its action's answer for the download.
+// Its item starts within a few tasks of the navigation's end.
+constexpr base::TimeDelta kDownloadStart = base::Seconds(5);
 
 // Select All's modifier: ⌘ on the Mac, Ctrl elsewhere, as DevTools' Input domain numbers them.
 #if BUILDFLAG(IS_MAC)
@@ -96,6 +127,62 @@ bool IsField(const base::DictValue& node) {
     }
   }
   return false;
+}
+
+// Whether an accessibility node is disabled, as a control, or one in a disabled fieldset, is.
+bool IsDisabled(const base::Value& node) {
+  const base::DictValue* dict = node.GetIfDict();
+  const base::ListValue* properties = dict ? dict->FindList("properties") : nullptr;
+  if (!properties) {
+    return false;
+  }
+  for (const base::Value& property : *properties) {
+    const base::DictValue* each = property.GetIfDict();
+    const std::string* name = each ? each->FindString("name") : nullptr;
+    if (name && *name == "disabled") {
+      return each->FindBoolByDottedPath("value.value").value_or(false);
+    }
+  }
+  return false;
+}
+
+// A node's name, as the page shows it, its runs of spaces one.
+std::string NameOf(const base::DictValue& node) {
+  const std::string* name = node.FindStringByDottedPath("name.value");
+  return name ? base::CollapseWhitespaceASCII(*name, /*trim_sequences_with_line_breaks=*/true)
+              : std::string();
+}
+
+// A name as it compares in any case, as "Open" and "OPEN" do.
+std::u16string Folded(std::string_view name) {
+  return base::i18n::FoldCase(base::UTF8ToUTF16(name));
+}
+
+// Whether the node has the boolean |property|, such as "selected", and it's true.
+bool Has(const base::DictValue& node, std::string_view property) {
+  if (const base::ListValue* properties = node.FindList("properties")) {
+    for (const base::Value& each : *properties) {
+      const base::DictValue* dict = each.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      if (name && *name == property) {
+        return dict->FindBoolByDottedPath("value.value").value_or(false);
+      }
+    }
+  }
+  return false;
+}
+
+// Network.enable's parameters: no request's or response's body is kept.
+base::DictValue Hearing() {
+  return base::DictValue()
+      .Set("maxTotalBufferSize", 0)
+      .Set("maxResourceBufferSize", 0)
+      .Set("maxPostDataSize", 0);
+}
+
+bool IsRole(const base::DictValue& node, std::string_view role) {
+  const std::string* value = node.FindStringByDottedPath("role.value");
+  return value && *value == role;
 }
 
 // An element's id: the slot of the session its frame is in, above its DOM node's id there, as each
@@ -221,6 +308,53 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
   return kept;
 }
 
+// Whether a wheel moved anything, as the widgets of the page's frames answer it: a scroll it
+// started that scrolled, in the frame under it or one it went on to, or a page that took the wheel
+// itself, as an editor or a map may.
+class AgentPage::WheelWatch : public content::RenderWidgetHost::InputEventObserver,
+                              public content::RenderWidgetHostObserver {
+ public:
+  explicit WheelWatch(content::WebContents& contents) {
+    contents.GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [this](content::RenderFrameHost* frame) {
+          content::RenderWidgetHost* widget = frame->GetRenderWidgetHost();
+          if (widget && !acks_.IsObservingSource(widget)) {
+            acks_.AddObservation(widget);
+            gone_.AddObservation(widget);
+          }
+        });
+  }
+
+  bool moved() const { return moved_; }
+
+ private:
+  // content::RenderWidgetHost::InputEventObserver:
+  void OnInputEventAck(const content::RenderWidgetHost&,
+                       blink::mojom::InputEventResultSource,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent& event) override {
+    const blink::WebInputEvent::Type type = event.GetType();
+    if (state == blink::mojom::InputEventResultState::kConsumed &&
+        (type == blink::WebInputEvent::Type::kGestureScrollUpdate ||
+         type == blink::WebInputEvent::Type::kMouseWheel)) {
+      moved_ = true;
+    }
+  }
+
+  // content::RenderWidgetHostObserver:
+  void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) override {
+    acks_.RemoveObservation(widget);
+    gone_.RemoveObservation(widget);
+  }
+
+  bool moved_ = false;
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost,
+                                     content::RenderWidgetHost::InputEventObserver>
+      acks_{this};
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost, content::RenderWidgetHostObserver>
+      gone_{this};
+};
+
 AgentPage::AgentPage(content::WebContents* contents)
     : content::WebContentsObserver(contents),
       content::WebContentsUserData<AgentPage>(*contents),
@@ -243,6 +377,23 @@ void AgentPage::SessionEnded(bc_id tab) {
   }
 }
 
+// static
+uint64_t AgentPage::TakeJob(content::WebContents* contents) {
+  AgentPage* page = AgentPage::FromWebContents(contents);
+  if (!page) {
+    return 0;
+  }
+  page->download_starting_.Stop();
+  if (page->held_) {
+    return std::exchange(page->held_, std::nullopt)->request;
+  }
+  if (page->job_ && !page->taken_) {
+    page->taken_ = true;
+    return page->job_->request;
+  }
+  return 0;
+}
+
 void AgentPage::Next() {
   if (job_ || jobs_.empty()) {
     return;
@@ -263,11 +414,29 @@ bool AgentPage::IsWebPage() {
   return GetWebContents().GetLastCommittedURL().SchemeIsHTTPOrHTTPS();
 }
 
+std::string AgentPage::NotWebPage() {
+  content::WebContents& contents = GetWebContents();
+  // A tab whose first page hasn't committed is still on its empty start page, which isn't the
+  // page's fault: the agent can wait for it (#1461).
+  const content::NavigationEntry* pending = contents.GetController().GetPendingEntry();
+  const GURL loading = pending ? pending->GetURL() : GURL();
+  if (contents.IsLoading() && loading.SchemeIsHTTPOrHTTPS()) {
+    std::string_view site = loading.host();
+    if (base::StartsWith(site, "www.")) {
+      site.remove_prefix(4);
+    }
+    return base::StrCat({site, " is still loading after ",
+                         base::NumberToString(kLoadTimeout.InSeconds()),
+                         " s. Wait, or try again."});
+  }
+  return "The tab's page isn't an http or https page, the only pages agents may use.";
+}
+
 void AgentPage::Run() {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
   if (!history && !IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail(NotWebPage());
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -290,18 +459,40 @@ void AgentPage::Run() {
       Type(action == BC_AGENT_PAGE_TYPE_SUBMIT);
       return;
     case BC_AGENT_PAGE_KEY:
-      PressKey(job_->text, base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
+      Listen(base::BindOnce(
+          [](base::WeakPtr<AgentPage> page) {
+            if (page) {
+              page->PressKey(page->job_->text, base::BindOnce(&AgentPage::Settle, page));
+            }
+          },
+          weak_factory_.GetWeakPtr()));
       return;
     case BC_AGENT_PAGE_SCROLL_DOWN:
     case BC_AGENT_PAGE_SCROLL_UP:
       Scroll(action == BC_AGENT_PAGE_SCROLL_DOWN);
       return;
+    case BC_AGENT_PAGE_SCROLL_TO:
+      ScrollTo();
+      return;
     case BC_AGENT_PAGE_BACK:
     case BC_AGENT_PAGE_FORWARD:
-      History(action == BC_AGENT_PAGE_FORWARD);
+      Listen(base::BindOnce(&AgentPage::History, weak_factory_.GetWeakPtr(),
+                            action == BC_AGENT_PAGE_FORWARD));
       return;
     case BC_AGENT_PAGE_SCREENSHOT:
       Screenshot();
+      return;
+    case BC_AGENT_PAGE_QUIET:
+      Listen(base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
+      return;
+    case BC_AGENT_PAGE_SELECT:
+      if (!job_->element || job_->text.empty()) {
+        Fail("Choosing needs an element and an option.");
+        return;
+      }
+      field_ = job_->element;
+      choosing_ = Choosing::kOptions;
+      Snapshot();
       return;
   }
   Fail("There's no such action.");
@@ -318,51 +509,488 @@ void AgentPage::AfterLoad(base::OnceClosure then) {
               base::BindOnce(&AgentPage::DidStopLoading, base::Unretained(this)));
 }
 
+void AgentPage::Ready(bool enabled, Then then) {
+  job_->deadline = base::TimeTicks::Now() + kBusy;
+  Look(enabled, std::nullopt, 0, std::move(then));
+}
+
+void AgentPage::Look(bool enabled, std::optional<gfx::RectF> last, int still, Then then) {
+  const int64_t element = job_->element;
+  Send("Accessibility.getPartialAXTree",
+       base::DictValue().Set("backendNodeId", NodeOfElement(element)).Set("fetchRelatives", false),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool enabled, std::optional<gfx::RectF> last,
+              int still, Then then, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             // DevTools knows no node by an id whose node is gone, nor one whose page is.
+             const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
+             if (!nodes || nodes->empty()) {
+               page->Fail("The element isn't on the page any more. Take a new snapshot.");
+               return;
+             }
+             const bool disabled = enabled && IsDisabled(nodes->front());
+             page->Center(base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, bool enabled, bool disabled,
+                    std::optional<gfx::RectF> last, int still, Then then,
+                    std::optional<gfx::RectF> box) {
+                   if (!page || !page->job_) {
+                     return;
+                   }
+                   still = box && box == last ? still + 1 : 0;
+                   if (still >= 2 && !disabled) {
+                     std::move(then).Run(box);
+                     return;
+                   }
+                   if (base::TimeTicks::Now() >= page->job_->deadline) {
+                     if (disabled) {
+                       page->Fail(
+                           "The element is still disabled after 5 s: the page may want something "
+                           "else first. Take a new snapshot.");
+                       return;
+                     }
+                     // One still moving is acted on where it is, and the caller says what one
+                     // that's hidden can't do.
+                     std::move(then).Run(box);
+                     return;
+                   }
+                   page->wait_.Start(FROM_HERE, kFrame,
+                                     base::BindOnce(&AgentPage::Look, page, enabled, box, still,
+                                                    std::move(then)));
+                 },
+                 page, enabled, disabled, last, still, std::move(then)));
+           },
+           weak_factory_.GetWeakPtr(), enabled, last, still, std::move(then)),
+       SlotOfElement(element));
+}
+
+void AgentPage::Listen(base::OnceClosure then) {
+  job_->deadline = base::TimeTicks::Now() + kBusy;
+  last_request_ = base::TimeTicks::Now();
+  listening_ = true;
+  // Each frame in a process of its own makes its own requests. The main frame's session last,
+  // as the first command starts DevTools' sessions, and its answer starts the input.
+  for (size_t slot = 1; slot < targets_.size(); ++slot) {
+    if (!targets_[slot].session.empty()) {
+      Send("Network.enable", Hearing(), base::DoNothing(), static_cast<int>(slot));
+    }
+  }
+  Send("Network.enable", Hearing(),
+       base::BindOnce([](base::OnceClosure then, const base::DictValue*) { std::move(then).Run(); },
+                      std::move(then)));
+}
+
+void AgentPage::Unlisten() {
+  if (!listening_) {
+    return;
+  }
+  listening_ = false;
+  settling_ = false;
+  requests_.clear();
+  streams_.clear();
+  if (!agent_host_) {
+    return;
+  }
+  for (size_t slot = 0; slot < targets_.size(); ++slot) {
+    if (slot == 0 || !targets_[slot].session.empty()) {
+      Send("Network.disable", base::DictValue(), base::DoNothing(), static_cast<int>(slot));
+    }
+  }
+}
+
+void AgentPage::Heard(const std::string& session,
+                      const std::string& method,
+                      const base::DictValue& event) {
+  const std::string* id = event.FindString("requestId");
+  if (!id) {
+    return;
+  }
+  const std::string request = session + " " + *id;
+  if (method == "Network.requestWillBeSent") {
+    // A stream, as an EventSource's, is open as long as the page is.
+    const std::string* type = event.FindString("type");
+    (type && *type == "EventSource" ? streams_ : requests_).insert(request);
+  } else if (method == "Network.loadingFinished" || method == "Network.loadingFailed") {
+    requests_.erase(request);
+  } else if (method != "Network.responseReceived") {
+    return;
+  }
+  if (streams_.contains(request)) {
+    return;
+  }
+  // One that started before the job listened counts when it ends too.
+  last_request_ = base::TimeTicks::Now();
+  if (settling_) {
+    Quiet();
+  }
+}
+
 void AgentPage::Settle() {
-  wait_.Start(
-      FROM_HERE, kSettle,
-      base::BindOnce(
-          [](AgentPage* page) {
-            page->AfterLoad(base::BindOnce(&AgentPage::Snapshot, page->weak_factory_.GetWeakPtr()));
-          },
-          base::Unretained(this)));
+  settling_ = true;
+  // The quiet counts from the action's end: the requests it starts come after its last event's
+  // answer, which on a loaded machine is more than kQuiet after Listen began.
+  last_request_ = base::TimeTicks::Now();
+  Quiet();
+}
+
+void AgentPage::Quiet() {
+  const base::TimeTicks now = base::TimeTicks::Now();
+  base::TimeTicks next = job_->deadline;
+  if (now >= next) {
+    settling_ = false;
+    job_->busy = true;
+    Still(base::ListValue());
+    return;
+  }
+  if (!GetWebContents().IsLoading() && requests_.empty()) {
+    if (now >= last_request_ + kQuiet) {
+      settling_ = false;
+      Still(base::ListValue());
+      return;
+    }
+    next = std::min(next, last_request_ + kQuiet);
+  }
+  // Else the load or a request ending looks again, as does the deadline.
+  wait_.Start(FROM_HERE, next - now, base::BindOnce(&AgentPage::Quiet, base::Unretained(this)));
+}
+
+void AgentPage::Still(base::ListValue last) {
+  // After an action, the page may have gone somewhere agents may not.
+  if (!IsWebPage()) {
+    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    return;
+  }
+  Send("Accessibility.getFullAXTree", base::DictValue(),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, base::ListValue last, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const base::ListValue* nodes = result ? result->FindList("nodes") : nullptr;
+             if (!nodes) {
+               page->Fail("The page's tree couldn't be read.");
+               return;
+             }
+             // The first read is always compared with a second, even past the deadline.
+             const bool same = *nodes == last;
+             if (!same && (last.empty() || base::TimeTicks::Now() < page->job_->deadline)) {
+               page->wait_.Start(FROM_HERE, kFrame,
+                                 base::BindOnce(&AgentPage::Still, page, nodes->Clone()));
+               return;
+             }
+             page->job_->busy |= !same;
+             page->Read(nodes->Clone());
+           },
+           weak_factory_.GetWeakPtr(), std::move(last)));
 }
 
 void AgentPage::Click() {
-  // In the session of the element's frame: DevTools then gives the click to that frame even while
-  // the window's hit-test data lacks it, as in a background tab, where through the main frame's
-  // session the page around the frame took the click (#1175).
-  const int slot = SlotOfElement(job_->element);
-  Locate(base::BindOnce(
-      [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
-        if (!page) {
-          return;
+  // Once it's on screen, still and enabled (Ready). Then in the session of the element's frame:
+  // DevTools then gives the click to that frame even while the window's hit-test data lacks it, as
+  // in a background tab, where through the main frame's session the page around the frame took the
+  // click (#1175). The click's answer waits for the requests it starts (Listen).
+  Ready(/*enabled=*/true,
+        base::BindOnce(
+            [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> ready) {
+              if (!page) {
+                return;
+              }
+              if (!ready) {
+                page->Fail(
+                    "The element isn't on the page any more, or is hidden. Take a new snapshot.");
+                return;
+              }
+              const int slot = SlotOfElement(page->job_->element);
+              page->Locate(base::BindOnce(
+                  [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
+                    if (!page) {
+                      return;
+                    }
+                    if (!box) {
+                      page->Fail(
+                          "The element isn't on the page any more, or is hidden. Take a new "
+                          "snapshot.");
+                      return;
+                    }
+                    // Where that is in the main frame's viewport, for the agent's pointer.
+                    page->Offset(
+                        slot, *box,
+                        base::BindOnce(
+                            [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                               std::optional<gfx::RectF> shown) {
+                              if (!page) {
+                                return;
+                              }
+                              if (!shown) {
+                                page->Fail(
+                                    "The element isn't on the page any more, or is hidden. Take "
+                                    "a new snapshot.");
+                                return;
+                              }
+                              page->Point(*shown);
+                              page->Listen(
+                                  base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                            },
+                            page, slot, box->CenterPoint()));
+                  },
+                  page, slot));
+            },
+            weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::string>& frames) {
+  const std::string want =
+      base::CollapseWhitespaceASCII(job_->text, /*trim_sequences_with_line_breaks=*/true);
+  if (want.empty()) {
+    Fail("Choosing needs an element and an option.");
+    return;
+  }
+  std::map<std::string, const base::DictValue*> by_id;
+  std::map<int64_t, std::string> of_element;
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+    if (!id) {
+      continue;
+    }
+    by_id[*id] = dict;
+    const std::optional<int64_t> element = ElementOf(*dict);
+    if (element && !dict->FindBool("ignored").value_or(false)) {
+      of_element.emplace(*element, *id);
+    }
+  }
+  const auto field = of_element.find(field_);
+  if (field == of_element.end()) {
+    Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
+    return;
+  }
+  // The options to choose from, in the page's order: those in the element, those in what it says
+  // it controls, as a combobox does its list, and once it's clicked, those that showed then. A
+  // select's are in a popup the page doesn't draw while it's closed, so they count hidden too.
+  struct Option {
+    const base::DictValue* node;
+    bool native;
+  };
+  std::vector<Option> options;
+  std::set<std::string> walked;
+  const auto walk = [&](const std::string& root) {
+    std::vector<std::pair<std::string, bool>> steps = {{root, false}};
+    while (!steps.empty()) {
+      auto [id, native] = std::move(steps.back());
+      steps.pop_back();
+      const auto found = by_id.find(id);
+      if (found == by_id.end() || !walked.insert(id).second) {
+        continue;
+      }
+      const base::DictValue& node = *found->second;
+      native = native || IsRole(node, "MenuListPopup");
+      if (IsRole(node, "option") && (native || !node.FindBool("ignored").value_or(false))) {
+        options.push_back({&node, native});
+      }
+      if (const base::ListValue* children = node.FindList("childIds")) {
+        for (const base::Value& child : base::Reversed(*children)) {
+          if (const std::string* each = child.GetIfString()) {
+            steps.emplace_back(*each, native);
+          }
         }
-        if (!box) {
-          page->Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
-          return;
+      }
+    }
+  };
+  walk(field->second);
+  if (const base::ListValue* properties = by_id[field->second]->FindList("properties")) {
+    for (const base::Value& property : *properties) {
+      const base::DictValue* dict = property.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      const base::ListValue* related =
+          name && *name == "controls" ? dict->FindListByDottedPath("value.relatedNodes") : nullptr;
+      if (!related) {
+        continue;
+      }
+      for (const base::Value& each : *related) {
+        const std::optional<int> node =
+            each.is_dict() ? each.GetDict().FindInt("backendDOMNodeId") : std::nullopt;
+        const auto controlled =
+            node ? of_element.find(ElementId(SlotOfElement(field_), *node)) : of_element.end();
+        if (controlled != of_element.end()) {
+          walk(controlled->second);
         }
-        // Where that is in the main frame's viewport, for the agent's pointer.
-        page->Offset(
-            slot, *box,
-            base::BindOnce(
-                [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
-                   std::optional<gfx::RectF> shown) {
-                  if (!page) {
-                    return;
-                  }
-                  if (!shown) {
-                    page->Fail(
-                        "The element isn't on the page any more, or is hidden. Take a new "
-                        "snapshot.");
-                    return;
-                  }
-                  page->Point(*shown);
-                  page->ClickAt(slot, at, 0);
-                },
-                page, slot, box->CenterPoint()));
-      },
-      weak_factory_.GetWeakPtr(), slot));
+      }
+    }
+  }
+  // Options on screen, in the tree's order, with their elements.
+  const auto each_shown = [&nodes](auto then) {
+    for (const base::Value& node : nodes) {
+      const base::DictValue* dict = node.GetIfDict();
+      const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+      const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+      if (id && element && IsRole(*dict, "option") && !dict->FindBool("ignored").value_or(false)) {
+        then(*id, *dict, *element);
+      }
+    }
+  };
+  if (choosing_ == Choosing::kOpened) {
+    each_shown([&](const std::string& id, const base::DictValue& node, int64_t element) {
+      if (!shown_.contains(element) && walked.insert(id).second) {
+        options.push_back({&node, false});
+      }
+    });
+  }
+  if (options.empty()) {
+    if (choosing_ == Choosing::kOpened) {
+      Fail("Clicking the element showed no options. Take a new snapshot to see what it did.");
+      return;
+    }
+    // Those hidden now that show then count as the element's, as a list it shows does.
+    each_shown([this](const std::string&, const base::DictValue&, int64_t element) {
+      shown_.insert(element);
+    });
+    choosing_ = Choosing::kOpened;
+    Click();
+    return;
+  }
+  std::vector<const Option*> exact;
+  std::vector<const Option*> folded;
+  for (const Option& option : options) {
+    const std::string name = NameOf(*option.node);
+    if (name == want) {
+      exact.push_back(&option);
+    } else if (Folded(name) == Folded(want)) {
+      folded.push_back(&option);
+    }
+  }
+  const std::vector<const Option*>& matches = exact.empty() ? folded : exact;
+  if (matches.size() != 1) {
+    constexpr size_t kListed = 50;
+    std::string why = matches.empty() ? "There's no option “" + want + "” there."
+                                      : "Several options are named “" + want + "”.";
+    why += " Its options are ";
+    for (size_t each = 0; each < options.size() && each < kListed; ++each) {
+      std::string name;
+      base::TruncateUTF8ToByteSize(NameOf(*options[each].node), 80, &name);
+      why += (each ? ", “" : "“") + name + "”";
+    }
+    if (options.size() > kListed) {
+      why += " and " + base::NumberToString(options.size() - kListed) + " more";
+    }
+    why += ".";
+    if (choosing_ == Choosing::kOpened) {
+      why += " Clicking the element showed them, so they may still be open.";
+    }
+    Fail(std::move(why));
+    return;
+  }
+  const Option& option = *matches.front();
+  if (Has(*option.node, "disabled")) {
+    Fail("The option “" + want + "” is disabled.");
+    return;
+  }
+  chosen_ = ElementOf(*option.node).value_or(0);
+  chosen_name_ = NameOf(*option.node);
+  choosing_ = Choosing::kChosen;
+  if (option.native) {
+    // A frame's nodes have its index in the snapshot's list before theirs, as "2:41".
+    const std::string* id = option.node->FindString("nodeId");
+    const size_t colon = id ? id->find(':') : std::string::npos;
+    size_t frame = 0;
+    if (colon != std::string::npos && !base::StringToSizeT(id->substr(0, colon), &frame)) {
+      frame = frames.size();
+    }
+    ChooseNative(frames, frame, *option.node);
+    return;
+  }
+  if (!chosen_) {
+    Fail("The option “" + want + "” can't be clicked. Take a new snapshot.");
+    return;
+  }
+  job_->element = chosen_;
+  Click();
+}
+
+void AgentPage::ChooseNative(const std::vector<std::string>& frames,
+                             size_t frame,
+                             const base::DictValue& option) {
+  // The action toggles an option, so choosing the one a select holds would clear it. It's left
+  // as it is, and the answer reads as it would had it been chosen.
+  if (Has(option, "selected")) {
+    Settle();
+    return;
+  }
+  content::RenderFrameHost* host = nullptr;
+  if (frame == 0) {
+    host = GetWebContents().GetPrimaryMainFrame();
+  } else if (frame < frames.size()) {
+    GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [&host, &id = frames[frame]](content::RenderFrameHost* each) {
+          if (each->GetDevToolsFrameToken().ToString() == id) {
+            host = each;
+          }
+        });
+  }
+  // DevTools gives a node's accessibility id, after its frame's index.
+  const std::string* id = option.FindString("nodeId");
+  const size_t colon = id ? id->rfind(':') : std::string::npos;
+  int node = 0;
+  if (!host || !IsWebFrame(host) || !id ||
+      !base::StringToInt(colon == std::string::npos ? *id : id->substr(colon + 1), &node)) {
+    Fail("The element isn't on the page any more. Take a new snapshot.");
+    return;
+  }
+  if (!accessibility_) {
+    accessibility_ =
+        content::BrowserAccessibilityState::GetInstance()->CreateScopedModeForWebContents(
+            &GetWebContents(), ui::AXMode::kWebContents);
+  }
+  // Content gives a hidden tab, as an agent's is, the mode only once it's shown, unless it was
+  // asked for that tab alone (engine/patches/ours/chromium-core-agent-accessibility.patch).
+  // Without it the renderer never hears of the action.
+  if (!GetWebContents().GetAccessibilityMode().has_mode(ui::AXMode::kWebContents)) {
+    Fail("This browser's engine can't choose in a select in a tab that isn't shown.");
+    return;
+  }
+  ui::AXActionData action;
+  action.action = ax::mojom::Action::kDoDefault;
+  action.target_tree_id = host->GetAXTreeID();
+  action.target_node_id = node;
+  host->AccessibilityPerformAction(action);
+  Settle();
+}
+
+bool AgentPage::Shows(const base::ListValue& nodes) {
+  const std::u16string chosen = Folded(chosen_name_);
+  for (const base::Value& node : nodes) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::optional<int64_t> element = dict ? ElementOf(*dict) : std::nullopt;
+    if (!element || chosen.empty()) {
+      continue;
+    }
+    if (*element == chosen_ && Has(*dict, "selected")) {
+      return true;
+    }
+    if (*element != field_) {
+      continue;
+    }
+    // What a field holds is never told: only whether it's the option the agent chose. A
+    // dropdown's button may show it as its name instead.
+    const std::string* value = dict->FindStringByDottedPath("value.value");
+    const std::string held =
+        value ? base::CollapseWhitespaceASCII(*value, /*trim_sequences_with_line_breaks=*/true)
+              : std::string();
+    if (Folded(held) == chosen || Folded(NameOf(*dict)) == chosen) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AgentPage::EndChoosing() {
+  choosing_ = Choosing::kNo;
+  shown_.clear();
+  field_ = 0;
+  chosen_ = 0;
+  chosen_name_.clear();
+  shows_ = false;
+  accessibility_.reset();
 }
 
 void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
@@ -421,18 +1049,20 @@ void AgentPage::Type(bool submit) {
                    }
                    // Where it is, for the agent's pointer, then the typing, which focusing
                    // scrolls to whether or not it has a box.
-                   page->Center(base::BindOnce(
-                       [](base::WeakPtr<AgentPage> page, int64_t element, bool submit,
-                          std::optional<gfx::RectF> box) {
-                         if (!page) {
-                           return;
-                         }
-                         if (box) {
-                           page->Point(*box);
-                         }
-                         page->Focus(element, submit);
-                       },
-                       page, element, submit));
+                   page->Ready(
+                       /*enabled=*/true,
+                       base::BindOnce(
+                           [](base::WeakPtr<AgentPage> page, int64_t element, bool submit,
+                              std::optional<gfx::RectF> box) {
+                             if (!page) {
+                               return;
+                             }
+                             if (box) {
+                               page->Point(*box);
+                             }
+                             page->Listen(base::BindOnce(&AgentPage::Focus, page, element, submit));
+                           },
+                           page, element, submit));
                  },
                  weak_factory_.GetWeakPtr(), element, submit));
 }
@@ -516,22 +1146,11 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
 }
 
 void AgentPage::Scroll(bool down) {
-  if (job_->element) {
-    Center(base::BindOnce(
-        [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
-          if (!page) {
-            return;
-          }
-          if (!box) {
-            page->Fail(
-                "The element isn't on the page any more, or is hidden. Take a new snapshot.");
-            return;
-          }
-          page->Settle();
-        },
-        weak_factory_.GetWeakPtr()));
-    return;
-  }
+  // The page's requests from the wheel on are heard, so the answer waits for what it starts.
+  Listen(base::BindOnce(&AgentPage::TurnWheel, weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::TurnWheel(bool down) {
   Send("Page.getLayoutMetrics", base::DictValue(),
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue* metrics) {
@@ -542,26 +1161,85 @@ void AgentPage::Scroll(bool down) {
                  metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
              const double width = viewport ? viewport->FindDouble("clientWidth").value_or(0) : 0;
              const double height = viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0;
-             if (width <= 0 || height <= 0) {
+             const gfx::RectF view(static_cast<float>(width), static_cast<float>(height));
+             if (view.IsEmpty()) {
                page->Fail("The page has no view to scroll.");
                return;
              }
-             page->Send("Input.dispatchMouseEvent",
-                        base::DictValue()
-                            .Set("type", "mouseWheel")
-                            .Set("x", width / 2)
-                            .Set("y", height / 2)
-                            .Set("deltaX", 0)
-                            .Set("deltaY", (down ? 0.8 : -0.8) * height),
-                        base::BindOnce(
-                            [](base::WeakPtr<AgentPage> page, const base::DictValue*) {
-                              if (page) {
-                                page->Settle();
-                              }
-                            },
-                            page));
+             if (!page->job_->element) {
+               page->Wheel(view, down);
+               return;
+             }
+             page->Center(base::BindOnce(
+                 [](base::WeakPtr<AgentPage> page, bool down, gfx::RectF view,
+                    std::optional<gfx::RectF> box) {
+                   if (!page) {
+                     return;
+                   }
+                   // Its part of the view, where a user's pointer would be.
+                   const gfx::RectF shown = box ? gfx::IntersectRects(*box, view) : gfx::RectF();
+                   if (shown.IsEmpty()) {
+                     page->Fail(
+                         "The element isn't on the page any more, or is hidden. Take a new "
+                         "snapshot.");
+                     return;
+                   }
+                   page->Wheel(shown, down);
+                 },
+                 page, down, view));
            },
            weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::Wheel(const gfx::RectF& area, bool down) {
+  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
+  const gfx::PointF at = area.CenterPoint();
+  Send("Input.dispatchMouseEvent",
+       base::DictValue()
+           .Set("type", "mouseWheel")
+           .Set("x", at.x())
+           .Set("y", at.y())
+           .Set("deltaX", 0)
+           .Set("deltaY", (down ? 0.8 : -0.8) * area.height()),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue*) {
+             if (page) {
+               // By then the scroll the wheel started has scrolled, or found nothing to.
+               page->wait_.Start(FROM_HERE, kSettle,
+                                 base::BindOnce(&AgentPage::Scrolled, page, down));
+             }
+           },
+           weak_factory_.GetWeakPtr(), down));
+}
+
+void AgentPage::Scrolled(bool down) {
+  const bool moved = wheel_ && wheel_->moved();
+  wheel_.reset();
+  if (!moved) {
+    Fail(down ? "Nothing scrolled: it's as far down as it goes, or nothing there scrolls."
+              : "Nothing scrolled: it's as far up as it goes, or nothing there scrolls.");
+    return;
+  }
+  // Then it waits for the page to settle, as after any input.
+  Settle();
+}
+
+void AgentPage::ScrollTo() {
+  // Readiness scrolls it into view, as each of its looks does.
+  Ready(/*enabled=*/false,
+        base::BindOnce(
+            [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> box) {
+              if (!page) {
+                return;
+              }
+              if (!box) {
+                page->Fail(
+                    "The element isn't on the page any more, or is hidden. Take a new snapshot.");
+                return;
+              }
+              page->Listen(base::BindOnce(&AgentPage::Settle, page));
+            },
+            weak_factory_.GetWeakPtr()));
 }
 
 void AgentPage::History(bool forward) {
@@ -580,26 +1258,79 @@ void AgentPage::History(bool forward) {
 }
 
 void AgentPage::Screenshot() {
-  Send("Page.captureScreenshot", base::DictValue().Set("format", "jpeg").Set("quality", 75),
-       base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
-             if (!page) {
-               return;
-             }
-             const std::string* data = result ? result->FindString("data") : nullptr;
-             if (!data) {
-               page->Fail("The page couldn't be pictured.");
-               return;
-             }
-             page->Answer(*data, /*error=*/false);
-           },
-           weak_factory_.GetWeakPtr()));
+  content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
+  if (!view) {
+    Fail("The page couldn't be pictured.");
+    return;
+  }
+  // A copy of the page's own surface, as the app's pictures of a page are (capture.cc). DevTools'
+  // capture waits for a redraw to be presented, which a page out of sight gets only as its window
+  // draws something new, so with the UI holding the keyboard and the window still it never came. A
+  // page no window shows is held in its tab's window, unseen, which gives it a compositor.
+  base::ScopedClosureRunner held;
+  if (!view->IsShowing()) {
+    Window* window = Window::Holding(tab_);
+    held = platform::DrawUnseen(window ? window->widget() : nullptr,
+                                GetWebContents().GetNativeView());
+  }
+  // Should no frame come, the agent hears so after as long as a page that won't load is waited for
+  // (#1461), rather than never. The timer runs only while the copy is out.
+  const uint64_t request = job_->request;
+  wait_.Start(FROM_HERE, kLoadTimeout,
+              base::BindOnce(
+                  [](AgentPage* page, uint64_t request) {
+                    if (page->job_ && page->job_->request == request) {
+                      page->Fail(base::StrCat(
+                          {"The tab didn't draw a picture in ",
+                           base::NumberToString(kLoadTimeout.InSeconds()),
+                           " s. Try again, or ask the user to bring it to the front."}));
+                    }
+                  },
+                  base::Unretained(this), request));
+  view->CopyFromSurface(
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t request, base::ScopedClosureRunner held,
+             const content::CopyFromSurfaceResult& result) {
+            if (!page || !page->job_ || page->job_->request != request) {
+              return;
+            }
+            if (!result.has_value() || result->bitmap.drawsNothing()) {
+              page->wait_.Stop();
+              page->Fail("The page couldn't be pictured.");
+              return;
+            }
+            // A page in a big window is millions of pixels, too many to encode on the UI thread.
+            base::ThreadPool::PostTaskAndReplyWithResult(
+                FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+                base::BindOnce(
+                    [](const SkBitmap& bitmap) {
+                      std::optional<std::vector<uint8_t>> jpeg =
+                          gfx::JPEGCodec::Encode(bitmap, /*quality=*/75);
+                      return jpeg ? base::Base64Encode(*jpeg) : std::string();
+                    },
+                    result->bitmap),
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
+                      if (!page || !page->job_ || page->job_->request != request) {
+                        return;
+                      }
+                      page->wait_.Stop();
+                      if (data.empty()) {
+                        page->Fail("The page couldn't be pictured.");
+                        return;
+                      }
+                      page->Answer(std::move(data), /*error=*/false);
+                    },
+                    page, request));
+          },
+          weak_factory_.GetWeakPtr(), request, std::move(held)));
 }
 
 void AgentPage::Snapshot() {
   // After an action, the page may have gone somewhere agents may not.
   if (!IsWebPage()) {
-    Fail("The tab's page isn't an http or https page, the only pages agents may use.");
+    Fail(NotWebPage());
     return;
   }
   Send("Accessibility.getFullAXTree", base::DictValue(),
@@ -613,13 +1344,17 @@ void AgentPage::Snapshot() {
                page->Fail("The page's tree couldn't be read.");
                return;
              }
-             // Then the trees of its frames, read after it, as only then has DevTools told
-             // of the sessions of those in other processes.
-             page->frames_ = page->Frames();
-             page->frames_[0].nodes = nodes->Clone();
-             page->ReadTree(1);
+             page->Read(nodes->Clone());
            },
            weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::Read(base::ListValue nodes) {
+  // Then the trees of its frames, read after it, as only then has DevTools told of the sessions
+  // of those in other processes.
+  frames_ = Frames();
+  frames_[0].nodes = std::move(nodes);
+  ReadTree(1);
 }
 
 std::vector<AgentPage::Frame> AgentPage::Frames() {
@@ -687,6 +1422,17 @@ void AgentPage::StitchTree(size_t next) {
         nodes.Append(std::move(node));
       }
     }
+    if (choosing_ == Choosing::kOptions || choosing_ == Choosing::kOpened) {
+      std::vector<std::string> ids;
+      for (const Frame& frame : frames) {
+        ids.push_back(frame.id);
+      }
+      Choose(nodes, ids);
+      return;
+    }
+    if (choosing_ == Choosing::kChosen) {
+      shows_ = Shows(nodes);
+    }
     // Its text fields, each checked for whether it's for a password.
     std::vector<int64_t> fields;
     for (const base::Value& node : nodes) {
@@ -743,10 +1489,16 @@ void AgentPage::CheckPasswords(base::ListValue nodes,
                                std::vector<int64_t> fields,
                                std::set<int64_t> passwords) {
   if (fields.empty()) {
+    base::DictValue answer = base::DictValue().Set("nodes", AgentTree(std::move(nodes), passwords));
+    if (job_ && job_->busy) {
+      answer.Set("busy", true);
+    }
+    if (choosing_ == Choosing::kChosen && shows_) {
+      answer.Set("chosen", chosen_name_);
+    }
     // The ids of elements in frames of their own are doubles, written as the integers they are.
-    std::optional<std::string> json =
-        base::WriteJsonWithOptions(base::Value(AgentTree(std::move(nodes), passwords)),
-                                   base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
+    std::optional<std::string> json = base::WriteJsonWithOptions(
+        base::Value(std::move(answer)), base::JSONWriter::OPTIONS_OMIT_DOUBLE_TYPE_PRESERVATION);
     if (json) {
       Answer(std::move(*json), /*error=*/false);
     } else {
@@ -986,11 +1738,22 @@ void AgentPage::Answer(std::string text, bool error) {
   const uint64_t request = job_->request;
   job_.reset();
   frames_.clear();
+  EndChoosing();
+  wheel_.reset();
   wait_.Stop();
   loaded_.Reset();
-  // Posted, so the app never hears inside its own bc_agent_page.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+  Unlisten();
+  if (std::exchange(taken_, false)) {
+    // The download it started answers it.
+  } else if (download_starting_.IsRunning()) {
+    // Its page didn't change, or the tab has none, as the navigation became a download.
+    AnswerHeld();
+    held_ = Held{request, std::move(text), error};
+  } else {
+    // Posted, so the app never hears inside its own bc_agent_page.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error));
+  }
   Next();
   if (!job_) {
     // A hidden page left drawing would keep its animations waking the browser while the agent
@@ -1005,23 +1768,37 @@ void AgentPage::Fail(std::string why) {
   Answer(std::move(why), /*error=*/true);
 }
 
+void AgentPage::AnswerHeld() {
+  if (std::optional<Held> held = std::exchange(held_, std::nullopt)) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&Report, tab_, held->request, std::move(held->text), held->error));
+  }
+}
+
 void AgentPage::LetGo() {
   std::deque<Job> owed = std::exchange(jobs_, {});
-  if (job_) {
+  if (job_ && !std::exchange(taken_, false)) {
     owed.push_front(*std::move(job_));
-    job_.reset();
   }
+  job_.reset();
+  download_starting_.Stop();
+  AnswerHeld();
   for (const Job& job : owed) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Report, tab_, job.request,
                                   std::string("The agent's session with the tab ended."), true));
   }
   weak_factory_.InvalidateWeakPtrs();
+  wheel_.reset();
   wait_.Stop();
   rest_.Stop();
   loaded_.Reset();
+  EndChoosing();
   drawing_.RunAndReset();
   Detach();
+  // With DevTools gone, its sessions are too, and what they heard.
+  Unlisten();
 }
 
 int AgentPage::SlotOf(content::RenderFrameHost* frame) {
@@ -1116,7 +1893,8 @@ void AgentPage::DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
       std::string_view(reinterpret_cast<const char*>(message.data()), message.size()),
       base::JSON_PARSE_RFC);
   std::optional<int> id = dict ? dict->FindInt("id") : std::nullopt;
-  // Events have no id. Of them, only a frame's session starting or ending matters here.
+  // Events have no id. Of them, a frame's session starting or ending matters here, and while a
+  // job listens, a request starting or ending.
   if (!id) {
     const std::string* method = dict ? dict->FindString("method") : nullptr;
     const base::DictValue* params = dict ? dict->FindDict("params") : nullptr;
@@ -1125,6 +1903,9 @@ void AgentPage::DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
       Attached(*session, *params);
     } else if (method && session && *method == "Target.detachedFromTarget") {
       Detached(*session);
+    } else if (method && params && listening_ && method->starts_with("Network.")) {
+      const std::string* from = dict->FindString("sessionId");
+      Heard(from ? *from : std::string(), *method, *params);
     }
     return;
   }
@@ -1162,10 +1943,20 @@ void AgentPage::Attached(const std::string& session, const base::DictValue& even
   }
   target->session = session;
   // Posted, as DevTools tells of a frame inside the command that attached it. The frame's own
-  // frames in other processes come in sessions of their own too.
+  // frames in other processes come in sessions of their own too, and while a job listens, so do
+  // its requests.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&AgentPage::AutoAttach, weak_factory_.GetWeakPtr(),
-                                static_cast<int>(target - targets_.begin())));
+      FROM_HERE, base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, int slot) {
+                       if (!page) {
+                         return;
+                       }
+                       page->AutoAttach(slot);
+                       if (page->listening_) {
+                         page->Send("Network.enable", Hearing(), base::DoNothing(), slot);
+                       }
+                     },
+                     weak_factory_.GetWeakPtr(), static_cast<int>(target - targets_.begin())));
 }
 
 void AgentPage::Detached(const std::string& session) {
@@ -1194,11 +1985,18 @@ void AgentPage::Detached(const std::string& session) {
 }
 
 void AgentPage::DidStopLoading() {
-  // Only a wait for the load ends here. A load that stops while an action settles, as a page from
-  // the cache can within the settle's time, leaves the settle to snapshot the page it loaded.
   if (loaded_) {
     wait_.Stop();
     std::move(loaded_).Run();
+  } else if (settling_) {
+    Quiet();
+  }
+}
+
+void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (navigation->IsDownload() && job_) {
+    download_starting_.Start(FROM_HERE, kDownloadStart,
+                             base::BindOnce(&AgentPage::AnswerHeld, base::Unretained(this)));
   }
 }
 

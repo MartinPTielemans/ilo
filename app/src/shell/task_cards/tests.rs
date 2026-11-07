@@ -8,7 +8,6 @@ use gpui::{
 };
 
 use super::{Card, Dot, Holds, Shape, chips, shape};
-use crate::agents::runner::Cli;
 use crate::shell::{Command, FOOTER_HEIGHT, Folders, PLATE_INSET, Shell, Slot, recorder::Recorder};
 use crate::tokens::shell::task::{GAP, HEIGHT};
 
@@ -17,7 +16,8 @@ fn card(n: u64, dot: Dot) -> Card {
         agent: format!("task-{n}").into(),
         home: 1,
         space: 100 + n,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: "Find a flight to Lisbon".into(),
         status: "Searching flights".into(),
         asks: false,
@@ -904,4 +904,15 @@ fn a_private_windows_foot_is_empty_while_a_regular_window_has_a_task(cx: &mut Te
     assert!(private.read_with(cx, |shell, _| shell.task_cards.is_empty()
         && shell.foot.plates.is_empty()));
     assert_eq!(plates(&regular, cx), "task-2");
+}
+
+/// An outside agent's session is numbered with the tasks, so its card's plate, motion and close
+/// are its own, and two sessions' cards never share one.
+#[test]
+fn a_sessions_card_has_a_number_of_its_own() {
+    use super::number;
+    assert_eq!(
+        [number("task-2"), number("session-3"), number("session-4")],
+        [2, 3, 4]
+    );
 }

@@ -4,8 +4,8 @@
 //! window's keyboard while it shows.
 //!
 //! Each casts its shadow from a window under it (shadows.rs). The icon and theme pickers grow in
-//! from their arrows, and the theme picker shrinks back to it, as on the Mac, drawn by GPUI
-//! (motion.rs).
+//! from their arrows, the theme picker shrinks back to it, and the folder preview grows a little
+//! and fades, as on the Mac, drawn by GPUI (motion.rs).
 //!
 //! shortcut: no blur under them.
 
@@ -42,10 +42,29 @@ struct Overlay {
     /// The point it grows in from, in it, and whether it shrinks back there as it goes.
     growth: Option<Point<Pixels>>,
     shrinks: bool,
+    /// From host_set_overlay_motion, else a popover's.
+    motion: Growth,
     /// When it started shrinking away, while it's still on screen.
     shrinking: Option<Instant>,
     shown: Option<Shown>,
 }
+
+/// The size an overlay grows from, over how long, how long its fade in takes, and how long it fades
+/// out as it hides, or None for a popover's shrink.
+#[derive(Clone, Copy)]
+struct Growth {
+    from: f32,
+    seconds: f32,
+    fade: f32,
+    out: Option<f32>,
+}
+
+const POPOVER: Growth = Growth {
+    from: SHRUNK,
+    seconds: GROW,
+    fade: GROW_FADE,
+    out: None,
+};
 
 struct Shown {
     window: bc::bc_id,
@@ -61,9 +80,9 @@ thread_local! {
     static STILL: Cell<bool> = const { Cell::new(false) };
 }
 
-/// The size an overlay grows from and shrinks to: its own under Reduce Motion.
-fn shrunk() -> f32 {
-    if STILL.get() { 1. } else { SHRUNK }
+/// The size an overlay grows from and shrinks to, `from` unless Reduce Motion keeps it its own.
+fn shrunk(from: f32) -> f32 {
+    if STILL.get() { 1. } else { from }
 }
 
 #[unsafe(no_mangle)]
@@ -114,6 +133,22 @@ fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<
     OVERLAYS.with_borrow_mut(|overlays| overlays.get_mut(overlay as usize)?.as_mut().map(f))
 }
 
+/// Shows `view` over the window whose UI is `ui_view`, as gpui_linux::show_overlay does, unless the
+/// quit has gone ahead: its window is going, and under Wayland a subsurface made on a surface
+/// Chromium has destroyed is a protocol error, which ends the connection.
+pub(crate) fn show_over(
+    view: *mut c_void,
+    ui_view: *mut c_void,
+    bounds: Bounds<Pixels>,
+    radius: Pixels,
+    keyboard: bool,
+    left: fn(*mut c_void),
+) {
+    if !browser::shell::quit_gone_ahead() {
+        gpui_linux::show_overlay(view, ui_view, bounds, radius, keyboard, left);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn host_add_overlay(
     overlay: c_int,
@@ -130,6 +165,7 @@ pub extern "C" fn host_add_overlay(
                 height: None,
                 growth: None,
                 shrinks: false,
+                motion: POPOVER,
                 shrinking: None,
                 shown: None,
             });
@@ -170,6 +206,20 @@ pub extern "C" fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn host_set_overlay_shrink(overlay: c_int) {
     with_overlay(overlay, |o| o.shrinks = true);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_overlay_motion(overlay: c_int, from: f64, seconds: f64, out: f64) {
+    let (from, seconds, out) = (from as f32, seconds as f32, out as f32);
+    let out = (out > 0.).then_some(out);
+    with_overlay(overlay, |o| {
+        o.motion = Growth {
+            from,
+            seconds,
+            fade: seconds,
+            out,
+        }
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -221,9 +271,10 @@ pub extern "C" fn host_show_overlay(
             was_shown,
             grows,
             shrinking,
+            o.motion,
         )
     });
-    let Some((view, radius, bounds, was_shown, grows, shrinking)) = shown else {
+    let Some((view, radius, bounds, was_shown, grows, shrinking, growth)) = shown else {
         return;
     };
     if !was_shown {
@@ -232,17 +283,23 @@ pub extern "C" fn host_show_overlay(
     if shrinking {
         gpui_linux::set_overlay_pointer(view, None);
     }
+    let Growth {
+        from,
+        seconds,
+        fade,
+        ..
+    } = growth;
     let scale = Track {
-        from: shrunk(),
+        from: shrunk(from),
         to: 1.,
-        seconds: GROW,
+        seconds,
         curve: GROW_CURVE,
     };
     if let Some(origin) = grows {
         let opacity = Track {
             from: 0.,
             to: 1.,
-            seconds: GROW_FADE,
+            seconds: fade,
             curve: LINEAR,
         };
         motion::start(
@@ -259,7 +316,7 @@ pub extern "C" fn host_show_overlay(
         let opacity = Track {
             from: 0.,
             to: 1.,
-            seconds: GROW,
+            seconds,
             curve: LINEAR,
         };
         shadows::follow(
@@ -271,7 +328,7 @@ pub extern "C" fn host_show_overlay(
             },
         );
     }
-    gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_overlay);
+    show_over(view, ui_view, bounds, radius, true, left_overlay);
     let (origin, size) = (bounds.origin, bounds.size);
     let name = NAMES[overlay as usize];
     let at = [origin.x, origin.y, size.width, size.height].map(f32::from);
@@ -393,13 +450,17 @@ pub(crate) fn restack(overlay: c_int) {
 fn hide(overlay: c_int) -> bool {
     // A tooltip over it goes with it, at once, not left over the page as it fades.
     crate::floats::overlay_hiding(overlay);
-    let Some(Some((view, window, shrinks))) = with_overlay(overlay, |o| {
+    let Some(Some((view, window, shrinks, growth))) = with_overlay(overlay, |o| {
         let shown = o.shown.take()?;
-        let shrinks = o
-            .growth
-            .filter(|_| o.shrinks && gpui_linux::overlays_blend());
+        let goes = o.shrinks || o.motion.out.is_some();
+        let shrinks = o.growth.filter(|_| goes && gpui_linux::overlays_blend());
         o.shrinking = shrinks.map(|_| Instant::now());
-        Some((o.view, shown.window, shrinks.zip(o.shrinking)))
+        Some((
+            o.view,
+            shown.window,
+            shrinks.zip(o.shrinking),
+            (o.shrinks, o.motion),
+        ))
     }) else {
         return false;
     };
@@ -413,16 +474,22 @@ fn hide(overlay: c_int) -> bool {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_overlay);
     lend_keyboard(window, view, false);
+    // It fades where it is, unless it shrinks back.
+    let (shrinks, Growth { from, out, .. }) = growth;
+    let (to, seconds) = (
+        if shrinks { shrunk(from) } else { 1. },
+        out.unwrap_or(SHRINK),
+    );
     let scale = Track {
         from: 1.,
-        to: shrunk(),
-        seconds: SHRINK,
+        to,
+        seconds,
         curve: motion::EASE_IN,
     };
     let opacity = Track {
         from: 1.,
         to: 0.,
-        seconds: SHRINK,
+        seconds,
         curve: motion::EASE_IN,
     };
     motion::start(
@@ -436,7 +503,7 @@ fn hide(overlay: c_int) -> bool {
     let opacity = Track {
         from: 1.,
         to: 0.,
-        seconds: SHRINK,
+        seconds,
         curve: LINEAR,
     };
     shadows::follow(
@@ -447,7 +514,7 @@ fn hide(overlay: c_int) -> bool {
             opacity,
         },
     );
-    motion::after(SHRINK, move || {
+    motion::after(seconds, move || {
         // Unless it showed again as it shrank.
         let gone = with_overlay(overlay, |o| {
             o.shrinking
@@ -523,11 +590,18 @@ struct Dialog {
     view: *mut c_void,
     over: Option<(*mut c_void, bc::bc_id)>,
     insets: [f64; 4],
+    /// Answered, it draws as it leaves with the keyboard back with the browser window.
+    leaving: bool,
 }
 
 thread_local! {
     static DIALOG: RefCell<Dialog> = const {
-        RefCell::new(Dialog { view: std::ptr::null_mut(), over: None, insets: [0.; 4] })
+        RefCell::new(Dialog {
+            view: std::ptr::null_mut(),
+            over: None,
+            insets: [0.; 4],
+            leaving: false,
+        })
     };
 }
 
@@ -590,9 +664,13 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
         return;
     };
     let window = crate::window_with_view(ui_view);
-    DIALOG.with_borrow_mut(|dialog| dialog.over = Some((ui_view, window)));
+    DIALOG.with_borrow_mut(|dialog| {
+        dialog.over = Some((ui_view, window));
+        dialog.leaving = false;
+    });
     lend_keyboard(window, view, true);
-    gpui_linux::show_overlay(view, ui_view, bounds, radius, true, left_dialog);
+    gpui_linux::set_overlay_pointer(view, None);
+    show_over(view, ui_view, bounds, radius, true, left_dialog);
     // check.sh reads this line.
     eprintln!("browser: dialog window shown");
 }
@@ -603,8 +681,32 @@ pub extern "C" fn host_hide_dialog() {
     let Some((_, window)) = over else {
         return;
     };
-    gpui_linux::hide_overlay(view, move || lend_keyboard(window, view, false));
+    gpui_linux::hide_overlay(view, move || {
+        // The next question, which shows as this one hides, keeps the keyboard it took.
+        if DIALOG.with_borrow(|dialog| dialog.over.is_none()) {
+            lend_keyboard(window, view, false);
+        }
+    });
     eprintln!("browser: dialog window hidden");
+}
+
+/// The dialog was answered and leaves: it goes on drawing, and the clicks and keys go to the
+/// browser window under it at once, to the page or the UI that had them, as a key typed while it
+/// leaves, such as ⌥⌘N right after Esc, would otherwise reach the dialog going (#1963).
+pub(crate) fn dialog_leaving() {
+    let left = DIALOG.with_borrow_mut(|dialog| {
+        let (_, window) = dialog.over.filter(|_| !dialog.leaving)?;
+        dialog.leaving = true;
+        Some((dialog.view, window))
+    });
+    let Some((view, window)) = left else {
+        return;
+    };
+    gpui_linux::set_overlay_pointer(view, Some(&[]));
+    gpui_linux::set_overlay_keyboard(view, false, left_dialog);
+    lend_keyboard(window, view, false);
+    // check.sh reads this line.
+    eprintln!("browser: dialog gives the keyboard back");
 }
 
 /// Places the dialog again if it shows over the browser window of `ui_view`, as its content
@@ -629,6 +731,10 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 /// The user left the dialog, such as for the sidebar beside a page's, or Chromium took its
 /// window's keyboard as a page committed: it takes the keyboard back, unless another app has it.
 fn left_dialog(view: *mut c_void) {
+    // One leaving has given the keyboard back for good.
+    if DIALOG.with_borrow(|dialog| dialog.leaving) {
+        return;
+    }
     // To ilo's menu over it, its field's, which gives the keyboard back as it closes.
     if crate::menu_window::over(view) {
         gpui_linux::set_overlay_keyboard(view, true, left_dialog);

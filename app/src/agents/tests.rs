@@ -41,6 +41,17 @@ struct Made {
     /// The tasks' Spaces made, and the Spaces deleted.
     task_spaces: RefCell<Vec<u64>>,
     deleted: RefCell<Vec<u64>>,
+    /// The tabs the user pinned, and those whose page asks before it's left.
+    pinned: RefCell<HashSet<u64>>,
+    asks: RefCell<HashSet<u64>>,
+    /// The downloads the agents answered for the user, and whether each goes on.
+    downloads: RefCell<Vec<(u64, bool)>>,
+    /// The HTTP requests the agents sent: the tab, the request and what it sent.
+    requests: RefCell<Vec<(u64, u64, request::Request)>>,
+    /// The split views, each its tabs left to right.
+    splits: RefCell<Vec<Vec<u64>>>,
+    /// Each mute or unmute asked of a tab, in order.
+    muted: RefCell<Vec<(u64, bool)>>,
 }
 
 impl Made {
@@ -80,6 +91,7 @@ impl Browser for Made {
                 id,
                 title: title.into(),
                 url: url.into(),
+                pinned: self.pinned.borrow().contains(&id),
             })
             .collect()
     }
@@ -103,6 +115,7 @@ impl Browser for Made {
                 id,
                 title: title.into(),
                 url: url.into(),
+                pinned: self.pinned.borrow().contains(&id),
             },
         )
     }
@@ -186,23 +199,83 @@ impl Browser for Made {
         self.held.borrow_mut().remove(&tab)
     }
 
-    fn close_tab(&self, tab: u64, _: &mut App) {
+    // As the core does, without a dialog.
+    fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
     }
 
-    // As the core does: only a tab of the user's, into an agent's Space.
-    fn give(&self, tab: u64, space: u64, _: &mut App) -> bool {
-        let agents = self.agent_spaces.borrow();
-        let mut tabs = self.tabs.borrow_mut();
-        let Some(each) = tabs.iter_mut().find(|each| each.0 == tab) else {
-            return false;
+    fn answer_download(&self, download: u64, keep: bool) {
+        self.downloads.borrow_mut().push((download, keep));
+    }
+
+    fn split(&self, tab: u64, _: &App) -> Vec<u64> {
+        let splits = self.splits.borrow();
+        match splits.iter().find(|split| split.contains(&tab)) {
+            Some(split) => split.clone(),
+            None => vec![tab],
+        }
+    }
+
+    // As the core does: three tabs at most, of one Space, the tab leaving any split it was in.
+    fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool {
+        let space = |tab| {
+            self.tabs
+                .borrow()
+                .iter()
+                .find(|each| each.0 == tab)
+                .map(|each| each.1)
         };
-        if agents.values().any(|&agent| agent == each.1) || !agents.values().any(|&s| s == space) {
+        let joined = self.split(with, cx);
+        if joined.len() >= tools::SPLIT_TABS || space(tab) != space(with) {
             return false;
         }
-        each.1 = space;
-        self.held.borrow_mut().remove(&tab);
+        self.separate(tab, cx);
+        let mut splits = self.splits.borrow_mut();
+        match splits.iter_mut().find(|split| split.contains(&with)) {
+            Some(split) => split.push(tab),
+            None => splits.push(vec![with, tab]),
+        }
         true
+    }
+
+    fn separate(&self, tab: u64, _: &mut App) {
+        let mut splits = self.splits.borrow_mut();
+        splits
+            .iter_mut()
+            .for_each(|split| split.retain(|&each| each != tab));
+        splits.retain(|split| split.len() > 1);
+    }
+
+    fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
+        match pinned {
+            true => self.pinned.borrow_mut().insert(tab),
+            false => self.pinned.borrow_mut().remove(&tab),
+        };
+    }
+
+    fn remove_pinned(&self, tab: u64, cx: &mut App) {
+        self.set_pinned(tab, false, cx);
+        self.close_user_tab(tab, cx);
+    }
+
+    fn close_tab(&self, agent: &str, tab: u64, discard: bool, _: &mut App) -> Closed {
+        let space = self.agent_space(agent);
+        let ours = (self.tabs.borrow().iter()).any(|each| each.0 == tab && each.1 == space);
+        if space == 0 || self.held.borrow().contains(&tab) || !ours {
+            return Closed::Refused;
+        }
+        if self.pinned.borrow().contains(&tab) {
+            return Closed::Pinned;
+        }
+        if !discard && self.asks.borrow().contains(&tab) {
+            return Closed::Asks;
+        }
+        self.tabs.borrow_mut().retain(|each| each.0 != tab);
+        Closed::Closed
+    }
+
+    fn set_muted(&self, tab: u64, muted: bool) {
+        self.muted.borrow_mut().push((tab, muted));
     }
 
     /// A task's Space is 100 and up, in the order they're made, in the profile of `like`.
@@ -240,6 +313,17 @@ impl Browser for Made {
             moved.1 = space;
             tabs.insert(0, moved);
         }
+    }
+
+    /// The user's Space is 1.
+    fn user_space(&self, _: u64) -> u64 {
+        1
+    }
+
+    fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
+        self.requests
+            .borrow_mut()
+            .push((tab, request, sent.clone()));
     }
 }
 
@@ -598,7 +682,8 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
     );
 }
 
-/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468).
+/// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468),
+/// muted, as an agent's tabs are until the user unmutes or keeps one (#1080).
 #[gpui::test]
 fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
@@ -621,6 +706,11 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     assert_eq!(tab, 30);
     let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+    assert_eq!(
+        *browser.muted.borrow(),
+        [(30, true)],
+        "the agent's tab opened with sound"
+    );
     let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
         .recv()
         .unwrap();
@@ -742,6 +832,7 @@ fn a_long_page_is_cut() {
         id: 1,
         title: "Long".into(),
         url: "https://long.example/".into(),
+        ..TabInfo::default()
     };
     let text = "é".repeat(tools::MAX_TEXT);
     let answer = tools::page_text(&tab, &text);
@@ -862,7 +953,7 @@ fn the_switch_and_the_agents_come_back(cx: &mut TestAppContext) {
 /// The tree the core gives for tab 20's page: a heading, a field, a password field and a button
 /// that orders.
 fn shop_tree() -> String {
-    json!([
+    json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2", "3", "4", "5"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Basket" } },
@@ -872,7 +963,7 @@ fn shop_tree() -> String {
           "backendDOMNodeId": 41, "password": true },
         { "nodeId": "5", "role": { "value": "button" }, "name": { "value": "Place order" },
           "backendDOMNodeId": 51 },
-    ])
+    ]})
     .to_string()
 }
 
@@ -923,7 +1014,8 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
         cx,
     );
     let (tab, _, action, _, _) = browser.pages.borrow()[0].clone();
-    assert_eq!((tab, action), (30, PageAction::Snapshot));
+    // It answers once the page has settled, as an action does.
+    assert_eq!((tab, action), (30, PageAction::Quiet));
     let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
     assert!(
         opened
@@ -1031,6 +1123,37 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
 }
 
+/// A tab open_tab opened stays open though its page then fails, as one still loading does, so the
+/// answer names it for the agent to look at later; another action's failure is the core's alone
+/// (#1461).
+#[gpui::test]
+fn a_tab_opened_still_loading_is_named_in_the_error(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let loading = "example.com is still loading after 15 s. Wait, or try again.";
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "example.com" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, loading.into(), true, cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(format!("Opened tab 30. {loading}"))
+    );
+
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, loading.into(), true, cx)
+    });
+    assert_eq!(answer.recv().unwrap(), ToolResult::error(loading));
+}
+
 /// Tab 20's page with a size picker, open or not, in the document `document`: a menu, a heading,
 /// its text, the picker and a button.
 fn size_picker(open: bool, document: i64) -> String {
@@ -1061,7 +1184,8 @@ fn size_picker(open: bool, document: i64) -> String {
           "backendDOMNodeId": id.parse::<i64>().unwrap() * 10 }),
         );
     }
-    Value::Array(nodes).to_string()
+    // As the core answers: the tree, at rest.
+    json!({ "nodes": nodes, "busy": false }).to_string()
 }
 
 /// An action answers with what changed in the page's outline since the last outline the agent
@@ -1190,6 +1314,155 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
     );
 }
 
+/// select chooses an option in a field by the option's text: the core gets the field's node and
+/// the text, and the answer says what the field holds now, as the core names the option, or that
+/// it doesn't show it. It asks the core as select_option, is a run's step, and asks the user first
+/// as a click would.
+#[gpui::test]
+fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let form = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Ticket" },
+          "childIds": ["2", "3"] },
+        { "nodeId": "2", "role": { "value": "combobox" }, "name": { "value": "Status" },
+          "backendDOMNodeId": 61 },
+        { "nodeId": "3", "role": { "value": "combobox" }, "name": { "value": "Payment" },
+          "backendDOMNodeId": 71 },
+    ]});
+    let answered = |chosen: Option<&str>| {
+        let mut tree = form.clone();
+        if let Some(option) = chosen {
+            tree["chosen"] = json!(option);
+        }
+        tree.to_string()
+    };
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    let outline = page_done(&agents, &browser, answer, form.to_string(), cx).text;
+    assert!(outline.contains("- combobox \"Status\" [e1]"), "{outline}");
+
+    // The core matches in any case, and names the option as the page does.
+    let choose = json!({ "tab": 20, "ref": "e1", "option": " closed " });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let (tab, _, action, element, text) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(
+        (tab, action, element, text.as_str()),
+        (20, PageAction::Select, 61, "closed")
+    );
+    let held = page_done(&agents, &browser, answer, answered(Some("Closed")), cx);
+    assert!(
+        held.text
+            .starts_with("The combobox “Status” now holds “Closed”.\n\nTab 20"),
+        "{}",
+        held.text
+    );
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "select_option");
+
+    let choose = json!({ "tab": 20, "ref": "e1", "option": "51" });
+    let answer = call(&agents, "claude-code", "select", choose, cx);
+    let missed = page_done(&agents, &browser, answer, answered(None), cx);
+    assert!(
+        missed.text.starts_with(
+            "Chose “51” in the combobox “Status”. It doesn't show it as chosen, so the page may \
+             have changed it back.\n\nTab 20"
+        ),
+        "{}",
+        missed.text
+    );
+
+    let pages = browser.pages.borrow().len();
+    for wrong in [
+        json!({ "tab": 20, "ref": "e1" }),
+        json!({ "tab": 20, "ref": "e1", "option": "  " }),
+        json!({ "tab": 20, "option": "51" }),
+    ] {
+        let refused = call(&agents, "claude-code", "select", wrong, cx)
+            .recv()
+            .unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error("select needs a ref and an option.")
+        );
+    }
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "a select without its option reached the core"
+    );
+
+    let step = json!({ "action": "select", "ref": "e1", "option": "51" });
+    let steps = json!({ "tab": 20, "steps": [step] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    let (_, request, action, ..) = browser.pages.borrow().last().cloned().unwrap();
+    assert_eq!(action, PageAction::Select);
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, answered(Some("51")), false, cx)
+    });
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text
+            .starts_with("Ran 1 steps.\n1. The combobox “Status” now holds “51”.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+
+    let pages = browser.pages.borrow().len();
+    let paying = json!({ "tab": 20, "ref": "e2", "option": "Pay now" });
+    let _answer = call(&agents, "claude-code", "select", paying, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("choosing to pay didn't ask");
+    assert_eq!(
+        question.what,
+        "choose “Pay now” in “Payment” on example.com"
+    );
+    assert_eq!(question.why, "It looks like a payment or an order.");
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "it chose before the user answered"
+    );
+}
+
+/// scroll with a direction turns the wheel at the middle of the page, or with a ref as well in
+/// that element, such as a panel or a frame, and with a ref alone brings the element into view
+/// (#1445).
+#[gpui::test]
+fn an_agent_scrolls_the_page_in_an_element_or_to_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let scrolls = [
+        (
+            json!({ "direction": "up" }),
+            PageAction::ScrollUp,
+            0,
+            "Scrolled up.",
+        ),
+        (
+            json!({ "ref": "e3", "direction": "down" }),
+            PageAction::ScrollDown,
+            51,
+            "Scrolled down in “Place order”.",
+        ),
+        (
+            json!({ "ref": "e3" }),
+            PageAction::ScrollTo,
+            51,
+            "Scrolled to “Place order”.",
+        ),
+    ];
+    for (mut arguments, action, element, note) in scrolls {
+        arguments["tab"] = json!(20);
+        let answer = call(&agents, "claude-code", "scroll", arguments, cx);
+        let (_, _, sent, to, _) = browser.pages.borrow().last().cloned().unwrap();
+        assert_eq!((sent, to), (action, element));
+        let scrolled = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(scrolled.text.starts_with(note), "{}", scrolled.text);
+    }
+}
+
 /// An agent can't act on the user's tabs, type into a password field or open a page that isn't
 /// on the web; each refusal is logged.
 #[gpui::test]
@@ -1291,6 +1564,47 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
         "an agent went to Chrome's password manager"
     );
     assert!(browser.pages.borrow().is_empty());
+}
+
+/// A tab the page opens as the agent clicks, which the core puts in the agent's Space, behind, is
+/// named in the click's answer, so the agent can work in it (#1470). One another tab's page opens
+/// isn't.
+#[gpui::test]
+fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    agents.update(cx, |agents, _| {
+        agents.tab_opened(26, 20);
+        agents.tab_opened(27, 10);
+    });
+    let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
+    let said = clicked.text.split("\n\n").next().unwrap();
+    assert_eq!(
+        said,
+        "Clicked textbox “Coupon”. It opened tab 26 in your Space."
+    );
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
+    assert_eq!(
+        clicked.text.split("\n\n").next().unwrap(),
+        "Clicked textbox “Coupon”."
+    );
 }
 
 /// An order asks the user first, in the card: Allow Once lets it go this time and asks again
@@ -1447,6 +1761,162 @@ fn a_permission_given_for_good_is_listed_and_revoked(cx: &mut TestAppContext) {
     );
 }
 
+/// The core's report of a download the page in tab `tab` started, held, as the answer to
+/// `request`.
+fn download_started(
+    agents: &Entity<Agents>,
+    tab: u64,
+    request: u64,
+    id: u64,
+    cx: &mut TestAppContext,
+) {
+    let download = Download {
+        agent: "claude-code".into(),
+        tab,
+        request,
+        id,
+        name: "report.docx".into(),
+        url: "https://files.example.com/report.docx".into(),
+        tab_empty: tab == 30,
+    };
+    agents.update(cx, |agents, cx| agents.download_started(download, cx));
+}
+
+/// open_tab at a file's URL downloads it (#1446): the user says yes on the card first, the empty
+/// tab closes, and the answer names the file, with no error.
+#[gpui::test]
+fn an_agents_download_asks_and_answers_with_its_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let url = json!({ "url": "https://files.example.com/report.docx" });
+    let answer = call(&agents, "claude-code", "open_tab", url, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 30, request, 900, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the download didn't ask");
+    assert_eq!(question.what, "download report.docx from files.example.com");
+    assert!(
+        browser.tabs.borrow().iter().all(|tab| tab.0 != 30),
+        "the empty tab stayed"
+    );
+    assert!(
+        browser.downloads.borrow().is_empty(),
+        "it went on before the user's yes"
+    );
+
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert_eq!(*browser.downloads.borrow(), [(900, true)]);
+    let done = DownloadEnd::Done {
+        name: "report.docx".into(),
+        bytes: 48_213,
+        path: "/Users/someone/Downloads/report.docx".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::text(
+            "Downloaded report.docx (48 KB) to Downloads. Agents can't open files; ask the user \
+             if you need it."
+        )
+    );
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        ("download".into(), "files.example.com".into(), "".into())
+    );
+}
+
+/// A small file can come whole before the core's pause holds it, ending while its question
+/// waits: the user's yes then answers with the file at once, not that it's still downloading.
+#[gpui::test]
+fn a_download_that_ended_while_it_asked_answers_with_its_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let url = json!({ "url": "https://files.example.com/report.docx" });
+    let answer = call(&agents, "claude-code", "open_tab", url, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 30, request, 900, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the download didn't ask");
+    let done = DownloadEnd::Done {
+        name: "report.docx".into(),
+        bytes: 7,
+        path: "/Users/someone/Downloads/report.docx".into(),
+    };
+    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::text(
+            "Downloaded report.docx (7 bytes) to Downloads. Agents can't open files; ask the user \
+             if you need it."
+        )
+    );
+}
+
+/// A download the user says no to is cancelled, which leaves no file, and so is one whose agent
+/// went before the user answered. A page's own, with no action to answer, asks all the same.
+#[gpui::test]
+fn a_denied_download_leaves_no_file(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "screenshot",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    download_started(&agents, 20, request, 900, cx);
+    let question = browser.asked.borrow().clone().unwrap();
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Dismiss, cx)
+    });
+    assert_eq!(*browser.downloads.borrow(), [(900, false)]);
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(
+            "The user said no: you can't download report.docx from files.example.com. Don't try \
+             again."
+        )
+    );
+    assert_eq!(
+        log(&agents, "claude-code", cx)[0],
+        (
+            "download".into(),
+            "files.example.com".into(),
+            "You said no.".into()
+        )
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 20),
+        "a tab with a page closed"
+    );
+
+    download_started(&agents, 20, 0, 901, cx);
+    assert!(
+        browser.asked.borrow().is_some(),
+        "a page's own download didn't ask"
+    );
+    agents.update(cx, |agents, cx| {
+        agents.handle(
+            Event::Bye {
+                agent: "claude-code".into(),
+            },
+            cx,
+        );
+    });
+    assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
+    assert_eq!(*browser.asked.borrow(), None);
+}
+
 /// A bank's site asks before it opens. No, or the ×, refuses it, and Never refuses it from then
 /// on without asking; each is logged.
 #[gpui::test]
@@ -1577,6 +2047,143 @@ fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     });
 }
 
+/// A page that hadn't settled when the core stopped waiting for it says so, after what the action
+/// did, so a run's list of steps says it too.
+#[gpui::test]
+fn an_action_says_when_its_page_was_still_busy(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "scroll", json!({ "tab": 20 }), cx);
+    let busy = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "busy": true })
+    .to_string();
+    let scrolled = page_done(&agents, &browser, answer, busy, cx);
+    assert!(!scrolled.error);
+    assert!(
+        scrolled.text.starts_with(
+            "Scrolled down. The page was still busy after 5 s, so it may change yet.\n\nTab 20"
+        ),
+        "{}",
+        scrolled.text
+    );
+}
+
+/// A wait step until "quiet" asks the core for the page once it has settled, again while it was
+/// still busy, and once its time is up goes on with the run, as a page that polls never settles.
+#[gpui::test]
+fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let busy = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" } },
+    ], "busy": true })
+    .to_string();
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let last = || browser.pages.borrow().last().unwrap().2;
+    let looks = || browser.pages.borrow().len();
+
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 2 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    assert_eq!((looks(), last()), (1, PageAction::Quiet));
+    look(busy.clone(), cx);
+    assert!(
+        run.try_recv().is_err(),
+        "a busy page ended the wait before its time"
+    );
+    assert_eq!((looks(), last()), (2, PageAction::Quiet));
+    look(shop_tree(), cx);
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text
+            .starts_with("Ran 1 steps.\n1. The page settled.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+    assert_eq!(browser.checked.borrow().last().unwrap(), "snapshot");
+    let entry = agents.read_with(cx, |agents, _| agents.recent().next().unwrap().clone());
+    let steps: Vec<&str> = entry
+        .steps
+        .iter()
+        .map(|step| step.action.as_ref())
+        .collect();
+    assert_eq!(steps, ["wait"]);
+
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "until": "quiet", "seconds": 1 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    look(busy.clone(), cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    look(busy, cx);
+    let ran = run.recv().unwrap();
+    assert!(!ran.error, "a page still busy stopped the run");
+    assert!(
+        ran.text
+            .starts_with("Ran 1 steps.\n1. The page was still busy after 1 s.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+}
+
+/// A wait step for gone text looks at the page until the text has gone from it, and fails once its
+/// time is up with the text still there.
+#[gpui::test]
+fn a_wait_step_waits_for_text_to_go(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let look = |tree: String, cx: &mut TestAppContext| {
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        cx.run_until_parked();
+    };
+    let looks = || browser.pages.borrow().len();
+    let thanks = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Thanks for your order" } },
+    ]})
+    .to_string();
+
+    let steps = json!({ "tab": 20, "steps": [{ "action": "wait", "gone": "basket" }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    assert_eq!(
+        browser.pages.borrow().last().unwrap().2,
+        PageAction::Snapshot
+    );
+    look(shop_tree(), cx);
+    assert!(run.try_recv().is_err());
+    cx.executor().advance_clock(Duration::from_millis(500));
+    assert_eq!(looks(), 2);
+    look(thanks, cx);
+    let ran = run.recv().unwrap();
+    assert!(
+        ran.text
+            .starts_with("Ran 1 steps.\n1. “basket” went.\n\nTab 20"),
+        "{}",
+        ran.text
+    );
+
+    let steps =
+        json!({ "tab": 20, "steps": [{ "action": "wait", "gone": "Basket", "seconds": 1 }] });
+    let run = call(&agents, "claude-code", "run_steps", steps, cx);
+    for _ in 0..2 {
+        look(shop_tree(), cx);
+        cx.executor().advance_clock(Duration::from_millis(500));
+    }
+    look(shop_tree(), cx);
+    let failed = run.recv().unwrap();
+    assert!(failed.error);
+    assert!(
+        failed
+            .text
+            .starts_with("Step 1 failed: “Basket” was still there after 1 s."),
+        "{}",
+        failed.text
+    );
+}
+
 /// hand_off holds the tab for the user and asks them in the card, and its call waits: the agent's
 /// calls on the tab are refused meanwhile. Hand Back gives the tab back and answers it.
 #[gpui::test]
@@ -1640,7 +2247,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert!(stopped.error && stopped.text.starts_with("The user stopped you."));
     assert_eq!(*browser.asked.borrow(), None);
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
-    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped");
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
 
 /// A tab the user took over stays theirs: the agent's calls on it are refused until it asks with
@@ -1724,39 +2331,6 @@ fn a_tab_the_user_took_back_stays_theirs_until_they_hand_it_back(cx: &mut TestAp
     assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
 }
 
-/// The user gives the agent a tab of theirs, which it may then read, with an entry in its log.
-/// Nothing else moves into its Space: a tab of its own, or one into a Space that isn't an agent's.
-#[gpui::test]
-fn the_user_gives_an_agent_a_tab_of_theirs(cx: &mut TestAppContext) {
-    let (agents, browser, _) = connected(cx);
-    let read = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
-        call(agents, "claude-code", "snapshot", json!({ "tab": 10 }), cx)
-    };
-    assert!(
-        read(&agents, cx).recv().unwrap().error,
-        "the user's tab was the agent's already"
-    );
-    agents.update(cx, |agents, cx| {
-        agents.give(20, 2, cx);
-        agents.give(10, 1, cx);
-    });
-    assert!(
-        log(&agents, "claude-code", cx)
-            .iter()
-            .all(|entry| entry.0 != "given")
-    );
-
-    agents.update(cx, |agents, cx| agents.give(10, 2, cx));
-    assert_eq!(
-        log(&agents, "claude-code", cx)
-            .into_iter()
-            .find(|entry| entry.0 == "given"),
-        Some(("given".into(), "en.wikipedia.org".into(), String::new()))
-    );
-    let answer = read(&agents, cx);
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-}
-
 /// A page asking for the user's passkey hands its tab to them, as a handoff with no call waiting:
 /// no card over Chrome's dialog, the bar says why, the log has it and Hand Back ends it.
 #[gpui::test]
@@ -1822,6 +2396,314 @@ fn an_agent_closes_only_its_own_tabs(cx: &mut TestAppContext) {
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry, ("close_tab".into(), "example.com".into(), "".into()));
     assert_eq!(tools::describe(&entry.0), "Closed a tab");
+}
+
+/// A page that asks before it's left stays open, and the answer says why: the agent's own tab
+/// closes with discard, and the log says it was without saving (#1447).
+#[gpui::test]
+fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let opened = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "docs.example" }),
+        cx,
+    );
+    _ = page_done(&agents, &browser, opened, shop_tree(), cx);
+    browser.asks.borrow_mut().insert(30);
+
+    let kept = call(
+        &agents,
+        "claude-code",
+        "close_tab",
+        json!({ "tab": 30 }),
+        cx,
+    );
+    let kept = kept.recv().unwrap();
+    assert!(kept.error);
+    assert_eq!(
+        kept.text,
+        "Tab 30 stays open: its page asks before it's left, as it may have unsaved changes. \
+         close_tab with discard: true closes it without saving."
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
+        "a refused close closed it"
+    );
+
+    let discard = json!({ "tab": 30, "discard": true });
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert!(!closed.error);
+    assert_eq!(closed.text, "Closed tab 30 without saving.");
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 30));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("discard_tab".into(), "docs.example".into(), "".into())
+    );
+    assert_eq!(tools::describe(&entry.0), "Closed a tab without saving");
+    assert_eq!(
+        *browser.asked.borrow(),
+        None,
+        "the agent's own tab asked the user"
+    );
+}
+
+/// In a tab the agent didn't open, what's unsaved may be the user's: discard asks them first, and
+/// only their yes closes it.
+#[gpui::test]
+fn discarding_a_page_the_user_gave_asks_them(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    // In the agent's Space, a tab it didn't open, as one its page opened is.
+    for each in browser
+        .tabs
+        .borrow_mut()
+        .iter_mut()
+        .filter(|each| each.0 == 10)
+    {
+        each.1 = 2;
+    }
+    browser.asks.borrow_mut().insert(10);
+    let discard = json!({ "tab": 10, "discard": true });
+
+    let refused = call(&agents, "claude-code", "close_tab", discard.clone(), cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the discard didn't ask");
+    assert_eq!(
+        question.what,
+        "close the tab on en.wikipedia.org without saving"
+    );
+    assert_eq!(question.why, UNSAVED);
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Dismiss, cx)
+    });
+    let refused = refused.recv().unwrap();
+    assert!(refused.error);
+    assert!(
+        refused.text.starts_with("The user said no"),
+        "{}",
+        refused.text
+    );
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 10),
+        "a no closed the tab"
+    );
+
+    let closed = call(&agents, "claude-code", "close_tab", discard, cx);
+    let question = browser
+        .asked
+        .borrow()
+        .clone()
+        .expect("the discard didn't ask again");
+    agents.update(cx, |agents, cx| {
+        agents.answer(question.id, Answer::Once, cx)
+    });
+    let closed = closed.recv().unwrap();
+    assert_eq!(closed.text, "Closed tab 10 without saving.");
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 10));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        entry,
+        ("discard_tab".into(), "en.wikipedia.org".into(), "".into())
+    );
+}
+
+/// A pinned tab is the user's to close, and the answer says so alone.
+#[gpui::test]
+fn a_pinned_tab_stays_open(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.pinned.borrow_mut().insert(20);
+    let discard = json!({ "tab": 20, "discard": true });
+    let kept = call(&agents, "claude-code", "close_tab", discard, cx)
+        .recv()
+        .unwrap();
+    assert!(kept.error);
+    assert_eq!(kept.text, "Tab 20 stays open: the user pinned it.");
+    assert!(browser.tabs.borrow().iter().any(|tab| tab.0 == 20));
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(
+        (entry.0.as_str(), entry.2.as_str()),
+        ("close_tab", kept.text.as_str())
+    );
+}
+
+/// An agent pins its own tab, unpins it and removes it, each in the log (#1360). A pinned tab it
+/// didn't pin is the user's, in its Space or theirs, and stays, as does one whose pin the user
+/// changed: list_tabs says whose each pin is. A task has no pins.
+#[gpui::test]
+fn agents_pin_their_own_tabs_and_leave_the_users_pins(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = |tool: &str, tab: u64, cx: &mut TestAppContext| {
+        call(&agents, "claude-code", tool, json!({ "tab": tab }), cx)
+            .recv()
+            .unwrap()
+    };
+    let listed = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "list_tabs", json!({}), cx)
+            .recv()
+            .unwrap()
+            .text
+    };
+    let pinned = answer("pin_tab", 20, cx);
+    assert!(
+        pinned
+            .text
+            .starts_with("Pinned tab 20 at the page it's at."),
+        "{}",
+        pinned.text
+    );
+    assert!(browser.pinned.borrow().contains(&20));
+    assert_eq!(
+        listed(cx),
+        "* 20  Example Domain  https://www.example.com/  pinned by you"
+    );
+    assert_eq!(
+        answer("unpin_tab", 20, cx),
+        ToolResult::text("Unpinned tab 20. It's at the top of your Today tabs.")
+    );
+    assert!(browser.pinned.borrow().is_empty());
+    assert_eq!(
+        answer("unpin_tab", 20, cx),
+        ToolResult::error("Tab 20 isn't pinned.")
+    );
+    answer("pin_tab", 20, cx);
+    assert_eq!(
+        answer("remove_tab", 20, cx),
+        ToolResult::text("Removed tab 20. The user can still find it in the archive.")
+    );
+    assert!(browser.tabs.borrow().iter().all(|tab| tab.0 != 20));
+    assert!(browser.pinned.borrow().is_empty());
+    let did: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .filter(|(action, _, _)| action != "list_tabs")
+        .map(|(action, site, refused)| (action, site, refused.is_empty()))
+        .collect();
+    let did: Vec<_> = did.into_iter().take(5).rev().collect();
+    let expected = [
+        ("pin_tab", true),
+        ("unpin_tab", true),
+        ("unpin_tab", false),
+        ("pin_tab", true),
+        ("remove_tab", true),
+    ];
+    assert_eq!(
+        did,
+        expected.map(|(action, done)| (action.into(), "example.com".into(), done))
+    );
+    assert_eq!(tools::describe("remove_tab"), "Removed a pinned tab");
+
+    browser
+        .tabs
+        .borrow_mut()
+        .push((21, 2, "Docs", "https://docs.example.com/"));
+    browser.pinned.borrow_mut().extend([21, 10]);
+    assert!(listed(cx).ends_with("21  Docs  https://docs.example.com/  pinned by the user"));
+    let theirs = "The user pinned tab 21, so only they unpin it.";
+    assert_eq!(answer("unpin_tab", 21, cx), ToolResult::error(theirs));
+    let refused = ("unpin_tab".into(), "docs.example.com".into(), theirs.into());
+    assert_eq!(log(&agents, "claude-code", cx)[0], refused);
+    let theirs = "The user pinned tab 21, so only they remove it.";
+    assert_eq!(answer("remove_tab", 21, cx), ToolResult::error(theirs));
+    assert_eq!(
+        answer("pin_tab", 21, cx),
+        ToolResult::text("Tab 21 is pinned already.")
+    );
+    let theirs = "The user pinned tab 21, so only they unpin it.";
+    let answered = answer("unpin_tab", 21, cx);
+    assert_eq!(
+        answered,
+        ToolResult::error(theirs),
+        "pin_tab made it the agent's"
+    );
+    for tool in ["pin_tab", "unpin_tab", "remove_tab"] {
+        let refused = ToolResult::error("The tab isn't in the agent's own Space.");
+        assert_eq!(answer(tool, 10, cx), refused, "{tool}");
+    }
+    assert_eq!(*browser.pinned.borrow(), HashSet::from([21, 10]));
+
+    browser
+        .tabs
+        .borrow_mut()
+        .push((22, 2, "Status", "https://status.example.com/"));
+    answer("pin_tab", 22, cx);
+    agents.update(cx, |agents, _| agents.users_pin(22));
+    let theirs = "The user pinned tab 22, so only they remove it.";
+    assert_eq!(answer("remove_tab", 22, cx), ToolResult::error(theirs));
+    assert!(browser.pinned.borrow().contains(&22));
+
+    let names = tools::names("task-1");
+    let pins = ["pin_tab", "unpin_tab", "remove_tab"];
+    assert!(
+        names.iter().all(|name| !pins.contains(&name.as_str())),
+        "{names:?}"
+    );
+}
+
+/// An agent puts tabs of its own in a split view, adds one, lists it and separates one, each
+/// checked by the core and in the log; a tab of the user's is refused, and nothing changes.
+#[gpui::test]
+fn an_agent_splits_only_its_own_tabs(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).extend([
+        (21, 2, "Shop", "https://shop.example/"),
+        (22, 2, "Docs", "https://docs.example/"),
+    ]);
+    let answer = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        call(&agents, "claude-code", tool, arguments, cx)
+            .recv()
+            .unwrap()
+    };
+
+    let refused = answer("split_tabs", json!({ "tabs": [20, 10] }), cx);
+    assert!(refused.error);
+    assert_eq!(refused.text, "The tab isn't in the agent's own Space.");
+    assert!(browser.splits.borrow().is_empty());
+    let entry = log(&agents, "claude-code", cx).remove(0);
+    assert_eq!(entry.0, "split_tabs");
+    assert_eq!(entry.2, "The tab isn't in the agent's own Space.");
+    let refused = answer("add_to_split", json!({ "tab": 10, "split": 20 }), cx);
+    assert_eq!(refused.text, "The tab isn't in the agent's own Space.");
+    let wrong = answer("split_tabs", json!({ "tabs": [20, 20] }), cx);
+    assert!(wrong.error && wrong.text.starts_with("tabs is two or three"));
+
+    let split = answer("split_tabs", json!({ "tabs": [20, 21] }), cx);
+    assert_eq!(split.text, "Tab 20's split view, left to right: 20, 21.");
+    let added = answer("add_to_split", json!({ "tab": 22, "split": 21 }), cx);
+    assert_eq!(
+        added.text,
+        "Tab 22's split view, left to right: 20, 21, 22."
+    );
+    assert_eq!(*browser.splits.borrow(), [vec![20, 21, 22]]);
+    let listed = answer("list_split", json!({ "tab": 21 }), cx);
+    assert_eq!(
+        listed.text,
+        "Tab 21's split view, left to right: 20, 21, 22."
+    );
+    let separated = answer("separate_tab", json!({ "tab": 21 }), cx);
+    assert_eq!(separated.text, "Tab 21 is out of its split view.");
+    let listed = answer("list_split", json!({ "tab": 21 }), cx);
+    assert_eq!(listed.text, "Tab 21 is in no split view.");
+    let alone = answer("separate_tab", json!({ "tab": 21 }), cx);
+    assert!(alone.error && alone.text == "Tab 21 is in no split view.");
+
+    let logged: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .filter(|entry| entry.2.is_empty())
+        .map(|entry| entry.0)
+        .collect();
+    for tool in ["split_tabs", "add_to_split", "list_split", "separate_tab"] {
+        assert!(
+            logged.iter().any(|each| each == tool),
+            "{tool} isn't in {logged:?}"
+        );
+        assert_ne!(tools::describe(tool), "Acted");
+    }
+    let checked = browser.checked.borrow();
+    assert!(checked.iter().any(|each| each == "separate_tab"));
 }
 
 /// Take Back All Tabs, in the agent's Space's menu, takes over each tab there the user doesn't
@@ -1925,17 +2807,21 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
         agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
     };
     let looks = || browser.pages.borrow().len();
-    let thanks = json!([
+    let thanks = json!({ "nodes": [
         { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Shop" },
           "childIds": ["2"] },
         { "nodeId": "2", "role": { "value": "heading" }, "name": { "value": "Thanks for your order" } },
-    ])
+    ]})
     .to_string();
-    for wrong in [
+    let wrongs = [
         json!({}),
         json!({ "seconds": 31 }),
         json!({ "text": "Thanks", "seconds": 0 }),
-    ] {
+        json!({ "text": "Thanks", "gone": "Basket" }),
+        json!({ "until": "idle" }),
+        json!({ "until": "quiet", "text": "Thanks" }),
+    ];
+    for wrong in wrongs {
         let mut step = json!({ "action": "wait" });
         step.as_object_mut()
             .unwrap()
@@ -2018,20 +2904,28 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 13] = [
+const CORE_ALLOWS: [&str; 21] = [
+    "add_to_split",
     "back",
     "click",
     "close_tab",
     "forward",
     "hand_off",
+    "list_split",
     "navigate",
+    "pin_tab",
     "press_key",
     "read_page",
+    "remove_tab",
+    "request",
     "screenshot",
     "scroll",
     "select_option",
+    "separate_tab",
     "snapshot",
+    "split_tabs",
     "type",
+    "unpin_tab",
 ];
 
 /// Agents never read or fill a saved password, address, card or passkey (principle 3). The server
@@ -2049,17 +2943,26 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "list_tabs",
             "open_tab",
             "close_tab",
+            "split_tabs",
+            "add_to_split",
+            "separate_tab",
+            "list_split",
             "navigate",
             "snapshot",
             "read_page",
             "click",
             "type",
+            "select",
             "press_key",
             "scroll",
             "screenshot",
+            "request",
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "pin_tab",
+            "unpin_tab",
+            "remove_tab",
         ]
     );
 
@@ -2079,9 +2982,14 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("read_page", tab(json!({}))),
         ("click", tab(json!({ "ref": "e1" }))),
         ("type", tab(json!({ "ref": "e1", "text": "SAVE10" }))),
+        ("select", tab(json!({ "ref": "e1", "option": "Express" }))),
         ("press_key", tab(json!({ "key": "Tab" }))),
         ("scroll", tab(json!({}))),
         ("screenshot", tab(json!({}))),
+        (
+            "request",
+            tab(json!({ "requests": [{ "method": "GET", "path": "/" }] })),
+        ),
         ("navigate", tab(json!({ "url": "back" }))),
         ("navigate", tab(json!({ "url": "forward" }))),
         ("navigate", tab(json!({ "url": "iana.org" }))),
@@ -2091,6 +2999,14 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        ("pin_tab", tab(json!({}))),
+        ("unpin_tab", tab(json!({}))),
+        ("pin_tab", tab(json!({}))),
+        ("remove_tab", tab(json!({}))),
+        ("split_tabs", json!({ "tabs": [20, 30] })),
+        ("add_to_split", json!({ "tab": 30, "split": 20 })),
+        ("list_split", tab(json!({}))),
+        ("separate_tab", tab(json!({}))),
         ("close_tab", json!({ "tab": 30 })),
     ];
     for (tool, arguments) in calls {
@@ -2120,18 +3036,329 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         "read_page",
         "click",
         "type",
+        "select_option",
         "press_key",
         "scroll",
     ];
-    for action in page_actions
-        .into_iter()
-        .chain(["screenshot", "back", "hand_off", "close_tab"])
-    {
+    for action in page_actions.into_iter().chain([
+        "screenshot",
+        "request",
+        "back",
+        "hand_off",
+        "close_tab",
+        "pin_tab",
+        "unpin_tab",
+        "remove_tab",
+    ]) {
         assert!(
             checked.contains(action),
             "{action} didn't ask the core: {checked:?}"
         );
     }
+}
+
+/// The request tool (#1439): HTTP requests from a tab's page to its own site.
+mod requests {
+    use super::*;
+
+    /// Answers the request sent last as the core would, and gives what's sent next, if any.
+    fn answered(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        status: u16,
+        body: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let request = browser.requests.borrow().last().unwrap().1;
+        let response = request::Response {
+            status,
+            kind: "application/json".into(),
+            body: body.as_bytes().to_vec(),
+            ..request::Response::default()
+        };
+        agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+    }
+
+    fn sent(browser: &Made) -> Vec<String> {
+        let sent = browser.requests.borrow();
+        sent.iter()
+            .map(|(_, _, each)| format!("{} {}", each.method, each.url))
+            .collect()
+    }
+
+    fn targets(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<(String, String)> {
+        agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.action == "request")
+                .map(|entry| (entry.target.to_string(), entry.refused.to_string()))
+                .collect()
+        })
+    }
+
+    /// A read goes at once, and its answer is the body without what looks like a credential. A
+    /// call's changes ask in one question, every time, whatever the user answered before: none is
+    /// sent until they allow it, nor the call's reads, and Always and Never keep nothing.
+    #[gpui::test]
+    fn reads_go_and_every_change_asks_each_time(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
+        let answer = call(&agents, "claude-code", "request", read, cx);
+        assert_eq!(*browser.asked.borrow(), None, "a read asked");
+        assert_eq!(sent(&browser), ["GET https://www.example.com/api/me"]);
+        answered(
+            &agents,
+            &browser,
+            200,
+            r#"{"name":"Ada","accessToken":"ya29.secret"}"#,
+            cx,
+        );
+        let read = answer.recv().unwrap();
+        assert!(!read.error);
+        assert!(
+            read.text
+                .starts_with("GET /api/me → 200 application/json\n\n"),
+            "{}",
+            read.text
+        );
+        assert!(
+            read.text.contains("Ada") && !read.text.contains("ya29"),
+            "{}",
+            read.text
+        );
+        assert!(
+            read.text.ends_with("never hold their credentials."),
+            "{}",
+            read.text
+        );
+        assert_eq!(targets(&agents, cx), [("GET /api/me".into(), "".into())]);
+
+        let changes = json!({ "tab": 20, "requests": [
+            { "method": "GET", "path": "/api/items" },
+            { "method": "POST", "path": "/api/items", "body": { "title": "Milk" } },
+            { "method": "DELETE", "path": "/api/items/7" },
+        ] });
+        let answer = call(&agents, "claude-code", "request", changes.clone(), cx);
+        let question = browser.asked.borrow().clone().expect("a change didn't ask");
+        assert_eq!(question.what, "make 2 changes on example.com");
+        assert_eq!(question.why, "Changes ask every time.");
+        let listed = [
+            ("POST /api/items", "title: Milk"),
+            ("DELETE /api/items/7", ""),
+        ];
+        let listed = listed.map(|(line, sends)| (line.into(), sends.into()));
+        assert_eq!(
+            (question.changes.as_slice(), question.more),
+            (listed.as_slice(), 0)
+        );
+        assert_eq!(sent(&browser).len(), 1, "it sent before the user answered");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Always, cx)
+        });
+        for status in [200, 201, 204] {
+            answered(&agents, &browser, status, "", cx);
+        }
+        let done = answer.recv().unwrap();
+        let lines: Vec<&str> = done.text.split("\n\n").collect();
+        let expected = [
+            "1. GET /api/items → 200 application/json",
+            "2. POST /api/items → 201 application/json",
+            "3. DELETE /api/items/7 → 204 application/json",
+        ];
+        assert_eq!(lines, expected);
+        assert_eq!(browser.requests.borrow()[2].2.body, r#"{"title":"Milk"}"#);
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+
+        let answer = call(&agents, "claude-code", "request", changes, cx);
+        let question = browser
+            .asked
+            .borrow()
+            .clone()
+            .expect("Always kept the changes from asking");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Never, cx)
+        });
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error(
+                "The user said no: you can't make 2 changes on example.com. Don't try again."
+            )
+        );
+        assert_eq!(
+            sent(&browser).len(),
+            4,
+            "a call the user refused sent something"
+        );
+        assert!(
+            agents
+                .read_with(cx, |agents, _| agents.grants("claude-code"))
+                .is_empty()
+        );
+    }
+
+    /// The browser's headers, other sites and the user's tabs are refused, and logged, without a
+    /// question and without the user's tab's address in the answer. A request that gets no answer
+    /// stops the rest.
+    #[gpui::test]
+    fn requests_keep_to_the_rules(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        let refused = |requests: Value, tab: u64, cx: &mut TestAppContext| {
+            let arguments = json!({ "tab": tab, "requests": requests });
+            let answer = call(&agents, "claude-code", "request", arguments, cx);
+            let answer = answer.recv().unwrap();
+            assert!(answer.error, "{}", answer.text);
+            assert_eq!(*browser.asked.borrow(), None, "a refused call asked");
+            answer.text
+        };
+        let cookie = json!([{ "method": "GET", "path": "/", "headers": { "Cookie": "a=1" } }]);
+        assert!(refused(cookie, 20, cx).starts_with("Agents can't set the Cookie header"));
+        let elsewhere = json!([{ "method": "POST", "path": "https://example.org/a" }]);
+        assert!(refused(elsewhere, 20, cx).contains("only to the tab's own site"));
+        let theirs = refused(json!([{ "method": "POST", "path": "/w/edit" }]), 10, cx);
+        assert!(!theirs.contains("wikipedia"), "{theirs}");
+        assert!(sent(&browser).is_empty());
+        let refusals: Vec<String> = targets(&agents, cx)
+            .into_iter()
+            .map(|(_, why)| why)
+            .collect();
+        assert!(
+            refusals.iter().all(|why| !why.is_empty()) && refusals.len() == 3,
+            "{refusals:?}"
+        );
+
+        let two = json!([{ "method": "GET", "path": "/a" }, { "method": "GET", "path": "/b" }]);
+        let answer = call(
+            &agents,
+            "claude-code",
+            "request",
+            json!({ "tab": 20, "requests": two }),
+            cx,
+        );
+        let request = browser.requests.borrow().last().unwrap().1;
+        let error = Some("No answer came: ERR_CONNECTION_REFUSED".into());
+        let response = request::Response {
+            error,
+            ..request::Response::default()
+        };
+        agents.update(cx, |agents, cx| agents.request_done(request, response, cx));
+        let answer = answer.recv().unwrap();
+        assert!(answer.error);
+        assert_eq!(
+            answer.text,
+            "1. GET /a: No answer came: ERR_CONNECTION_REFUSED\n\nThe last request wasn't sent."
+        );
+        assert_eq!(sent(&browser).len(), 1);
+    }
+}
+
+/// Agents never read or fill a login, address or card the profile has (principle 3). No tool, a
+/// task's included, takes one as an argument. A snapshot of a page Chrome filled them into names
+/// its fields but gives none of their values, even where the tree carries them, though the core
+/// already leaves them out (agent_page.cc's AgentTree, as page_text.cc does for read_page). And
+/// typing into its password field is refused before the core hears of it.
+#[gpui::test]
+fn agents_never_get_a_login_address_or_card(cx: &mut TestAppContext) {
+    // The arguments in a tool list's schemas, at any depth, such as a step's in run_steps.
+    fn arguments(value: &Value, names: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    names.extend(properties.keys().cloned());
+                }
+                object.values().for_each(|each| arguments(each, names));
+            }
+            Value::Array(array) => array.iter().for_each(|each| arguments(each, names)),
+            _ => {}
+        }
+    }
+    let mut names = Vec::new();
+    arguments(&tools::list("claude-code"), &mut names);
+    arguments(&tools::list("task-1"), &mut names);
+    assert!(
+        names.iter().any(|name| name == "url"),
+        "no arguments found: {names:?}"
+    );
+    let secrets = [
+        "password",
+        "cookie",
+        "credential",
+        "autofill",
+        "card",
+        "address",
+        "login",
+    ];
+    // By the words of each name, so close_tab's discard isn't a card.
+    for name in &names {
+        let lower = name.to_lowercase();
+        let mut words = lower.split(|c: char| !c.is_ascii_alphanumeric());
+        assert!(
+            !words.any(|word| secrets
+                .iter()
+                .any(|secret| word == *secret || word.strip_suffix('s') == Some(secret))),
+            "a tool takes {name}"
+        );
+    }
+
+    // A checkout page Chrome filled in: each field with its value as Chromium's tree has it.
+    let values = [
+        "ada@example.test",
+        "hunter2",
+        "1 Check Street",
+        "4111 1111 1111 1111",
+    ];
+    let field = |id: &str, name: &str, backend: i64, value: &str| {
+        let text = json!({ "type": "string", "value": value });
+        json!({ "nodeId": id, "role": { "value": "textbox" }, "name": { "value": name },
+                "backendDOMNodeId": backend, "value": text,
+                "properties": [{ "name": "valuetext", "value": text }] })
+    };
+    let mut password = field("3", "Password", 41, values[1]);
+    password["password"] = json!(true);
+    let tree = json!([
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Checkout" },
+          "childIds": ["2", "3", "4", "5"] },
+        field("2", "Email", 31, values[0]),
+        password,
+        field("4", "Street address", 51, values[2]),
+        field("5", "Card number", 61, values[3]),
+    ]);
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    // As the core answers, with #1606's busy note (agent_page.cc).
+    let tree = json!({ "nodes": tree, "busy": false });
+    let outline = page_done(&agents, &browser, answer, tree.to_string(), cx).text;
+    let fields = [
+        "- textbox \"Email\" [e1]",
+        "- textbox \"Password\" [e2] (password: off limits)",
+        "- textbox \"Street address\" [e3]",
+        "- textbox \"Card number\" [e4]",
+    ];
+    for line in fields {
+        assert!(outline.contains(line), "{outline}");
+    }
+    for value in values {
+        assert!(
+            !outline.contains(value),
+            "the snapshot gave {value}: {outline}"
+        );
+    }
+
+    let pages = browser.pages.borrow().len();
+    let typing = json!({ "tab": 20, "ref": "e2", "text": values[1] });
+    assert!(
+        call(&agents, "claude-code", "type", typing, cx)
+            .recv()
+            .unwrap()
+            .error
+    );
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "the password reached the core"
+    );
 }
 
 /// Agent tasks: a task is an agent of its own, `task-<n>`, with a hidden Space in the profile it
@@ -2142,16 +3369,47 @@ mod tasks {
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
-    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers.
+    /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
+    /// is in a folder of its own: tests running at once that shared one would rewrite the script
+    /// under each other's CLI, and each CLI's start would empty the other's `.in`.
     #[cfg(unix)]
     fn fake_cli(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ilo-tasks-{}-{name}", std::process::id()));
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("ilo-tasks-{}-{name}-{made}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("claude");
         std::fs::write(&program, "#!/bin/sh\nexec cat > \"$0.in\"\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run_once_free(&program);
         program
+    }
+
+    /// Runs the fake CLI just written, with nothing to read, until it starts. Another test's thread
+    /// that forked while the script was open for writing hands its child that handle until the
+    /// child runs its own program, and the script won't run meanwhile: "Text file busy" (ETXTBSY).
+    /// Once it has run, no such handle is left and none can come, as ours is closed, so the task's
+    /// own start can't meet it. A retry, as cargo's and Go's spawns do; writing every fake before
+    /// any thread forks isn't possible from inside the test binary.
+    #[cfg(unix)]
+    fn run_once_free(program: &std::path::Path) {
+        for _ in 0..100 {
+            match crate::child::command(program)
+                .stdin(std::process::Stdio::null())
+                .status()
+            {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                ran => {
+                    ran.expect("the fake CLI didn't run");
+                    return;
+                }
+            }
+        }
+        panic!("the fake CLI stayed busy for a second");
     }
 
     /// Agents on, with Claude signed in at `program`, and the user's Space 1.
@@ -2181,6 +3439,127 @@ mod tasks {
             url: "https://en.wikipedia.org/wiki/Arc_(web_browser)".into(),
             title: "Arc (web browser)".into(),
         })
+    }
+
+    /// A run of the browser whose agents keep their settings at `path`, with ⌘T's Claude and Codex
+    /// signed in.
+    fn run_at(path: &std::path::Path, cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, Some(path.to_path_buf()), cx);
+        // As the app reads them at launch.
+        let saved = std::fs::read_to_string(path).unwrap_or_default();
+        agents.update(cx, |agents, cx| {
+            agents.load(&saved, cx);
+            agents.set_on(true, cx);
+            for cli in Cli::ALL {
+                let found = Found {
+                    ready: Ready::SignedIn,
+                    ..Default::default()
+                };
+                agents.tasks.found.insert(cli, found);
+            }
+            agents.tasks.default = Some(Cli::Claude);
+        });
+        (agents, browser)
+    }
+
+    /// Whether `agent` opening a bank's site asks the user first.
+    fn asks_to_open_the_bank(
+        agents: &Entity<Agents>,
+        browser: &Made,
+        agent: &str,
+        cx: &mut TestAppContext,
+    ) -> Option<Question> {
+        browser.asked.replace(None);
+        let _ = call(agents, agent, "open_tab", json!({ "url": "chase.com" }), cx);
+        browser.asked.borrow().clone()
+    }
+
+    /// A ⌘T task's answer for good is its CLI's (#1913), as a task's own id is new each task and
+    /// numbered from 1 again each run: the next run's first task, Codex's, still asks where Claude's
+    /// was told Always, and that run's Claude task doesn't. It's listed as Claude's tasks' to revoke,
+    /// and an earlier build's answer kept under a task's own id is gone.
+    #[gpui::test]
+    fn a_tasks_answer_for_good_is_its_clis_from_run_to_run(cx: &mut TestAppContext) {
+        let dir = std::env::temp_dir().join(format!("ilo-task-answers-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agents.json");
+        let _ = std::fs::remove_file(&path);
+
+        let (agents, browser) = run_at(&path, cx);
+        let claude = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Pay the card", page(), 1, cx)
+            })
+            .expect("started");
+        let question = asks_to_open_the_bank(&agents, &browser, &claude, cx)
+            .expect("Claude's task didn't ask before opening a bank's site");
+        agents.update(cx, |agents, cx| {
+            agents.answer(question.id, Answer::Always, cx)
+        });
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
+            "Always didn't hold in the task that was told it"
+        );
+        let listed = |agents: &Entity<Agents>, cli: Cli, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                agents.grants(&crate::agents::task_answers(cli))
+            })
+        };
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(listed(&agents, Cli::Codex, cx).is_empty());
+        assert!(agents.read_with(cx, |agents, _| agents.grants(&claude).is_empty()));
+        // As an earlier build left it, under the task's own id.
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let mut saved: Value = serde_json::from_str(&saved).unwrap();
+        saved["grants"]["task-7"] = json!({ "chase.com": "always" });
+        std::fs::write(&path, saved.to_string()).unwrap();
+
+        // The next run, from the same settings.
+        let (agents, browser) = run_at(&path, cx);
+        let codex = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Codex, "Check the balance", page(), 1, cx)
+            })
+            .expect("started");
+        assert_eq!(codex, claude, "the next run's first task has the same id");
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &codex, cx).is_some(),
+            "the next run's Codex task inherited Claude's Always"
+        );
+        let claude = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Pay the card again", page(), 1, cx)
+            })
+            .expect("started");
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_none(),
+            "Claude's Always didn't carry to its next task"
+        );
+        assert_eq!(
+            listed(&agents, Cli::Claude, cx),
+            [("chase.com".into(), true)]
+        );
+        assert!(
+            agents.read_with(cx, |agents, _| agents.grants("task-7").is_empty()),
+            "an answer kept under a task's own id came back"
+        );
+        agents.update(cx, |agents, cx| {
+            agents.revoke(
+                &crate::agents::task_answers(Cli::Claude),
+                Some("chase.com"),
+                cx,
+            )
+        });
+        assert!(listed(&agents, Cli::Claude, cx).is_empty());
+        assert!(
+            asks_to_open_the_bank(&agents, &browser, &claude, cx).is_some(),
+            "Revoke didn't have Claude's task ask again"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
@@ -2247,11 +3626,16 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.title.as_ref(), card.status.as_ref(), card.dot),
-            ("Find a flight to Lisbon", "Thinking", Dot::Working)
+            (
+                "Find a flight to Lisbon",
+                "Thinking · no steps yet",
+                Dot::Working
+            )
         );
-        // Dropped, its CLI ends and its Space goes.
+        // At quit its CLI ends and its Space goes, and so does Claude Code's, which only its
+        // sessions' cards show.
         agents.update(cx, |agents, cx| agents.end_tasks(true, cx));
-        assert_eq!(*browser.deleted.borrow(), vec![100]);
+        assert_eq!(*browser.deleted.borrow(), vec![100, 2]);
         assert!(
             agents.read_with(cx, |agents, _| agents.tokens.lock().unwrap().is_empty()
                 || !agents.tokens.lock().unwrap().contains_key(&token))
@@ -2282,6 +3666,54 @@ mod tasks {
             Some("npm install -g @anthropic-ai/claude-code")
         );
         assert_eq!(card.dot, Dot::Ended);
+    }
+
+    /// Settings › Agents' Tasks from the command bar off: ⌘T's ask lists no agent, no task starts,
+    /// and a task at its limit offers no Retry and takes no reply or retry; agents stay on for
+    /// apps that connect, and on again it's as it was.
+    #[gpui::test]
+    fn with_tasks_off_no_task_starts_and_a_card_asks_nothing_more(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find a flight", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.state = State::Limit { resets: None };
+        });
+        assert!(card_of(&agents, cx).retry);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.read_with(cx, |agents, _| {
+            assert!(agents.is_on(), "tasks off turned agents off");
+            assert!(!agents.tasks_on());
+            assert!(
+                agents.ask_agents().is_empty(),
+                "⌘T's ask still lists agents"
+            );
+        });
+        let started = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Another", page(), 1, cx)
+        });
+        assert_eq!(started, None, "a task started with tasks off");
+        assert!(!card_of(&agents, cx).retry, "the card still offers Retry");
+        let messages = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().messages.len())
+        };
+        let before = messages(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("And a hotel".into()), cx);
+            agents.task_action(&agent, TaskAction::Retry, cx);
+        });
+        assert_eq!(
+            messages(cx),
+            before,
+            "a reply reached the task with tasks off"
+        );
+        assert!(matches!(
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone()),
+            State::Limit { .. }
+        ));
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        assert!(agents.read_with(cx, |agents, _| !agents.ask_agents().is_empty()));
+        assert!(card_of(&agents, cx).retry);
     }
 
     #[gpui::test]
@@ -2389,9 +3821,14 @@ mod tasks {
             ("Its page went to the Archive", Vec::new())
         );
         browser.tabs.borrow_mut().push(kept);
-        // Open <site> moves the tab to the user's Space.
+        // Open <site> moves the tab to the user's Space, theirs now, with its sound (#1080).
         let shown = agents.update(cx, |agents, cx| agents.open_result(&agent, None, cx));
         assert_eq!(shown, Some(30), "it shows");
+        assert_eq!(
+            browser.muted.borrow().last(),
+            Some(&(30, false)),
+            "kept, it's still muted"
+        );
         assert!(browser.tabs.borrow().contains(&(
             30,
             1,
@@ -2710,7 +4147,10 @@ mod tasks {
             "Run ↩ shows nothing"
         );
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Thinking · no steps yet", Dot::Working)
+        );
         assert!(waiting(cx), "nothing ends a CLI that never answers");
 
         // Its first step takes the line's place, as a trace under way.
@@ -2752,7 +4192,10 @@ mod tasks {
             ]
         );
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.dot), ("Thinking", Dot::Working));
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Thinking · no steps yet", Dot::Working)
+        );
         // Its result folds it: the answer shows in its place.
         said(
             &agents,
@@ -2900,7 +4343,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
-            ("Waiting for your OK", Dot::Waiting)
+            ("Needs your OK · open chase.com", Dot::Waiting)
         );
         let question = card.question.expect("asked on the card");
         assert_eq!(
@@ -2924,7 +4367,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.dot),
-            ("Waiting for you", Dot::Waiting)
+            ("Needs you · Sign in, please", Dot::Waiting)
         );
         assert_eq!(
             card.question.and_then(|question| question.handoff),
@@ -2966,7 +4409,7 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             (card.status.as_ref(), card.asks),
-            ("Waiting for your OK", false)
+            ("Needs your OK · open chase.com", false)
         );
     }
 
@@ -3065,6 +4508,78 @@ mod tasks {
         result
     }
 
+    /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
+    /// Thinking with no steps yet, then "Step N · <step>", "Needs you" ahead of what a handoff
+    /// waits for, and "Stopped after N steps" once the user stops it. Only the count and "Needs
+    /// you" lead it, which the card sets heavier.
+    #[gpui::test]
+    fn a_cards_status_says_how_far_its_task_has_got(cx: &mut TestAppContext) {
+        use crate::agents::task::status_lead;
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let status = |cx: &mut TestAppContext| card_of(&agents, cx).status.to_string();
+        assert_eq!(status(cx), "Thinking · no steps yet");
+        assert_eq!(status_lead(&status(cx)), 0);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(status(cx), "Step 1 · Read shop.example");
+        let coupon = json!({ "tab": 30, "ref": "e1", "text": "SPRING10" });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "type",
+            coupon,
+            Some(shop_tree()),
+            cx,
+        );
+        assert_eq!(status(cx), "Step 2 · Typed “SPRING10” in “Coupon”");
+        assert_eq!(status_lead(&status(cx)), "Step 2".len());
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 100, "Sign in", "https://example.com/login"));
+        let _handed = call(
+            &agents,
+            &agent,
+            "hand_off",
+            json!({ "reason": "Sign in, please.", "tab": 31 }),
+            cx,
+        );
+        let card = card_of(&agents, cx);
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Needs you · Sign in, please", Dot::Waiting)
+        );
+        assert_eq!(status_lead(&card.status), "Needs you".len());
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let card = card_of(&agents, cx);
+        assert_eq!(
+            (card.status.as_ref(), card.dot),
+            ("Stopped after 3 steps", Dot::Ended)
+        );
+        assert_eq!(
+            status_lead(&card.status),
+            0,
+            "a stopped card asks for nothing"
+        );
+    }
+
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
@@ -3143,8 +4658,13 @@ mod tasks {
         let card = card_of(&agents, cx);
         assert_eq!(
             card.status.as_ref(),
-            "Looked at shop.example",
-            "the card says the step it's on"
+            "Step 4 · Looked at shop.example",
+            "the card says how far it has got and the step it's on"
+        );
+        assert_eq!(
+            conversation.progress.as_ref(),
+            "step 4 · 1 page",
+            "the conversation's header says how far it has got"
         );
         assert!(
             !format!("{conversation:?}{card:?}").contains("hunter2"),
@@ -3324,11 +4844,31 @@ mod tasks {
                 Tense::Now,
                 "Scrolling to “Opening hours”",
             ),
+            (
+                did("scroll", "maat.pt", "“Document”", "down"),
+                Tense::Done,
+                "Scrolled down in “Document”",
+            ),
             (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
             (
                 did("wait", "", "“Tickets”", ""),
                 Tense::Failed,
                 "Didn't see “Tickets”",
+            ),
+            (
+                did("wait", "", "“Loading” to go", ""),
+                Tense::Now,
+                "Waiting for “Loading” to go",
+            ),
+            (
+                did("wait", "", "“Loading” to go", ""),
+                Tense::Failed,
+                "Didn't see “Loading” go",
+            ),
+            (
+                did("wait", "", tools::SETTLE, ""),
+                Tense::Done,
+                "Waited for the page to settle",
             ),
             (
                 did("list_tabs", "", "", ""),
@@ -3609,10 +5149,14 @@ mod tasks {
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
         assert_eq!(opening.recv().unwrap(), ToolResult::error(STOPPED));
         let card = card_of(&agents, cx);
-        assert_eq!((card.status.as_ref(), card.question), ("Stopped", None));
+        // It says how far it got: the open_tab the stop answered.
+        assert_eq!(
+            (card.status.as_ref(), card.question),
+            ("Stopped after 1 step", None)
+        );
         // Its turn ending after the stop leaves it stopped.
         said(&agents, &agent, Out::Ended(None), cx);
-        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped");
+        assert_eq!(card_of(&agents, cx).status.as_ref(), "Stopped after 1 step");
     }
 
     #[gpui::test]
@@ -3730,12 +5274,18 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
+    /// At launch the tasks' Spaces a run before left go, and an outside agent's, which a run
+    /// before #1080 showed as a Space of the user's, gives its tabs to the user's Space first.
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         browser.task_spaces.borrow_mut().extend([100, 101]);
         agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
-        assert_eq!(*browser.deleted.borrow(), vec![100, 101]);
+        assert_eq!(*browser.deleted.borrow(), vec![100, 101, 2]);
+        let spaces: Vec<_> = (browser.tabs.borrow().iter())
+            .map(|each| (each.0, each.1))
+            .collect();
+        assert_eq!(spaces, [(20, 1), (10, 1)]);
     }
 
     #[gpui::test]
@@ -3789,5 +5339,447 @@ mod tasks {
             assert_eq!(agents.task_model(Cli::Codex), "");
         });
         std::fs::remove_dir_all(folder).unwrap();
+    }
+}
+
+/// Scripts are off at first: every Apple Event, reads too, is refused and logged as refused under
+/// its sender. On, each event is one entry, its command's, however many reads found its objects.
+#[gpui::test]
+fn scripts_are_refused_until_let_in_and_each_event_is_one_entry(cx: &mut TestAppContext) {
+    use scripts::{AGENT, NEW_TAB, READ, SHOW_SPACE, detail, title};
+    let (agents, _, _) = connected(cx);
+    let entries = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            (agents.activity(AGENT))
+                .map(|entry| (title(entry), detail(entry)))
+                .collect::<Vec<_>>()
+        })
+    };
+    let script = |cx: &mut TestAppContext, event, action, site| {
+        agents.update(cx, |agents, cx| {
+            agents.script(event, "osascript in Terminal", action, site, "", cx)
+        })
+    };
+    assert!(!agents.read_with(cx, |agents, _| agents.scripts_on()));
+    assert!(!script(cx, 1, READ, ""));
+    assert!(!script(cx, 1, READ, ""), "a second read of the same event");
+    assert_eq!(
+        entries(cx),
+        vec![(
+            "Read the windows, Spaces and tabs".to_string(),
+            "Refused: scripts are off · osascript in Terminal".to_string()
+        )]
+    );
+
+    agents.update(cx, |agents, cx| agents.set_scripts_on(true, cx));
+    assert!(script(cx, 2, READ, ""));
+    assert!(
+        script(cx, 2, SHOW_SPACE, "Home"),
+        "the command after its reads"
+    );
+    assert!(script(cx, 2, READ, ""), "a read after the command");
+    assert!(script(cx, 3, NEW_TAB, "example.com"));
+    let titles: Vec<String> = entries(cx).into_iter().map(|(title, _)| title).collect();
+    assert_eq!(
+        titles,
+        vec![
+            "Opened example.com in a new tab",
+            "Showed the Space Home",
+            "Read the windows, Spaces and tabs",
+        ],
+        "newest first, one entry for each event"
+    );
+    // No agent's activity holds them.
+    let scripts_in_agents = agents.read_with(cx, |agents, _| {
+        (agents.activity("claude-code")).any(|entry| !entry.by.is_empty())
+    });
+    assert!(!scripts_in_agents);
+}
+
+/// The scripts' switch is saved with the agents' settings, and comes back with them.
+#[gpui::test]
+fn the_scripts_switch_comes_back_with_the_settings(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    agents.update(cx, |agents, cx| agents.load(r#"{"scripts": true}"#, cx));
+    assert!(agents.read_with(cx, |agents, _| agents.scripts_on()));
+    agents.update(cx, |agents, cx| agents.load(r#"{}"#, cx));
+    assert!(
+        !agents.read_with(cx, |agents, _| agents.scripts_on()),
+        "on with nothing saved"
+    );
+}
+
+/// An outside agent's session (#1080): one task card for each client the user connected, from its
+/// first call that opens or acts on a tab, whichever of its connections it comes on, until its last
+/// connection closes, it waits IDLE for a call, or the user stops it.
+mod sessions {
+    use super::*;
+    use crate::agents::task::{Card, Dot, IDLE, Line, TaskAction};
+
+    /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
+    fn call_as(
+        agents: &Entity<Agents>,
+        id: u64,
+        tool: &str,
+        arguments: Value,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id,
+            agent: "claude-code".into(),
+            tool: tool.into(),
+            arguments,
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        answer
+    }
+
+    /// The server says call `id` was answered, as it does once it sent the answer.
+    fn answered(agents: &Entity<Agents>, id: u64, cx: &mut TestAppContext) {
+        let event = Event::Answered {
+            agent: "claude-code".into(),
+            id,
+            at: std::time::Instant::now(),
+            error: None,
+            image: None,
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn hello(agents: &Entity<Agents>, agent: &str, client: &str, cx: &mut TestAppContext) {
+        let event = Event::Hello {
+            agent: agent.into(),
+            client: client.into(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn bye(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+        let event = Event::Bye {
+            agent: "claude-code".into(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(event, cx));
+    }
+
+    fn cards(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<Card> {
+        agents.read_with(cx, |agents, cx| agents.shown_cards(cx))
+    }
+
+    /// Claude Code connected and said hello, at work in its tab 20.
+    fn at_work(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 1, "list_tabs", json!({}), cx);
+        answered(&agents, 1, cx);
+        assert!(cards(&agents, cx).is_empty(), "list_tabs alone isn't work");
+        call_as(&agents, 2, "read_page", json!({ "tab": 20 }), cx);
+        (agents, browser)
+    }
+
+    /// The first call that acts on a tab starts the client's card, with its name, and the calls of
+    /// its other connections are steps of the same card. Its conversation is its steps, with no
+    /// ask, and the user talks to it where they started it. Its last connection closing ends it,
+    /// with the pages it worked in to open, and its next call is a session of its own.
+    #[gpui::test]
+    fn a_clients_work_is_one_card_until_it_disconnects(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        // A second connection of Claude Code's.
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a card for each connection");
+        let card = &shown[0];
+        assert_eq!(
+            (card.name.as_ref(), card.title.as_ref(), card.dot),
+            ("Claude Code", "Claude Code", Dot::Working)
+        );
+        assert!(!card.replies);
+        let agent = card.agent.to_string();
+        assert!(agent.starts_with("session-"), "{agent}");
+        let talk = agents
+            .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+            .unwrap();
+        assert!(talk.asked.is_empty());
+        assert_eq!(talk.lines.len(), 2, "{:?}", talk.lines);
+        assert!(
+            talk.lines.iter().all(|line| matches!(line, Line::Step(_))),
+            "{:?}",
+            talk.lines
+        );
+        assert!(!talk.about.starts_with("Claude Code"), "{}", talk.about);
+        // A reply has nowhere to go.
+        let replied = agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("and then?".into()), cx)
+        });
+        assert_eq!(replied, (None, None));
+
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(card.dot, Dot::Done);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert_eq!(card.open, vec![(20, "example.com".into())]);
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0].dot, Dot::Working);
+    }
+
+    /// A client has one name wherever it shows, its card's (Agents::agent_name): the strip under its
+    /// page, from its status, its questions and Settings' activity read the same. Another MCP
+    /// client's is the name it gave, or with none its kind's, MCP client, and a session keeps the
+    /// name it started with while it works. Claude Code, connected by name, is Claude Code whatever
+    /// it calls itself.
+    #[gpui::test]
+    fn a_client_has_one_name_the_one_it_gave(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        agents.update(cx, |agents, cx| agents.connect(Client::Other, cx));
+        cx.run_until_parked();
+        let named = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                let status = agents.status();
+                let strip = status.iter().find(|each| each.agent == "mcp-client");
+                (
+                    agents.agent_name("mcp-client").to_string(),
+                    strip.map(|each| each.name.to_string()),
+                )
+            })
+        };
+        hello(&agents, "mcp-client", "", cx);
+        agents.update(cx, |agents, cx| agents.take_over("mcp-client", 30, cx));
+        assert_eq!(
+            named(&agents, cx),
+            ("MCP client".into(), Some("MCP client".into())),
+            "a client that gave no name has its kind's"
+        );
+        hello(&agents, "mcp-client", "Zed", cx);
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        // Its session's card has that name, and keeps it while it works.
+        let (reply, _answer) = mpsc::channel();
+        let call = Call {
+            id: 1,
+            agent: "mcp-client".into(),
+            tool: "read_page".into(),
+            arguments: json!({ "tab": 20 }),
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        hello(&agents, "mcp-client", "Cursor", cx);
+        assert_eq!(cards(&agents, cx)[0].name, "Zed");
+        assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
+        assert_eq!(claude, "Claude Code");
+    }
+
+    /// A session's card, once it ends, is its receipt (#1080): the orders the user allowed it, done,
+    /// and not the pages it worked in, which Open's button counts. An order refused, or allowed and
+    /// failed in the page, isn't one placed. A session with nothing of the kind says when it ended.
+    #[gpui::test]
+    fn a_sessions_receipt_counts_its_pages_and_the_orders_it_placed(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 1, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 1, cx);
+        let order = |id: u64, answer: Answer, cx: &mut TestAppContext| {
+            let reply = call_as(&agents, id, "click", json!({ "tab": 20, "ref": "e3" }), cx);
+            let question = browser
+                .asked
+                .borrow()
+                .clone()
+                .expect("the order didn't ask");
+            assert_eq!(question.why, "It looks like a payment or an order.");
+            agents.update(cx, |agents, cx| agents.answer(question.id, answer, cx));
+            reply
+        };
+        let placed = order(2, Answer::Once, cx);
+        assert!(!page_done(&agents, &browser, placed, shop_tree(), cx).error);
+        answered(&agents, 2, cx);
+        let refused = order(3, Answer::Dismiss, cx);
+        assert!(refused.recv().unwrap().error);
+        answered(&agents, 3, cx);
+        let failed = order(4, Answer::Once, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        agents.update(cx, |agents, cx| {
+            agents.page_done(request, "The button went away.".into(), true, cx)
+        });
+        assert!(failed.recv().unwrap().error);
+        answered(&agents, 4, cx);
+        assert_eq!(
+            cards(&agents, cx)[0].dot,
+            Dot::Working,
+            "the receipt came before the end"
+        );
+
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert_eq!(
+            (card.dot, card.status.as_ref()),
+            (Dot::Done, "Done · 1 order placed")
+        );
+        // Library › Agents keeps it once, as its receipt shows it: its title, agent, pages and the
+        // order, never what the pages said.
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        let (_, past) = &kept[0];
+        assert_eq!(
+            (
+                past.agent.as_str(),
+                past.orders,
+                past.messages,
+                past.pages.len()
+            ),
+            ("Claude Code", 1, 0, 1)
+        );
+        assert!(past.ended >= past.started);
+        assert!(
+            agents
+                .update(cx, |agents, cx| agents.take_ended(cx))
+                .is_empty(),
+            "kept twice"
+        );
+
+        hello(&agents, "claude-code", "claude-code", cx);
+        let looked = call_as(&agents, 5, "snapshot", json!({ "tab": 20 }), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        bye(&agents, cx);
+        let card = cards(&agents, cx).remove(0);
+        assert!(card.status.starts_with("Done "), "{}", card.status);
+        assert!(
+            !card.status.contains('·'),
+            "a session that only looked has a receipt: {}",
+            card.status
+        );
+    }
+
+    /// A session with no call under way ends once IDLE passes without another, and a call before
+    /// then keeps it going.
+    #[gpui::test]
+    fn a_session_waiting_idle_for_a_call_is_done(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        cx.executor().advance_clock(IDLE - Duration::from_secs(1));
+        call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        cx.executor().advance_clock(Duration::from_secs(2));
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        // Under way for longer than IDLE, it's still at work.
+        cx.executor().advance_clock(IDLE);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working);
+        answered(&agents, 3, cx);
+        cx.executor().advance_clock(IDLE + Duration::from_secs(1));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].dot, Dot::Done);
+    }
+
+    /// The card's Stop stops the client on every connection: its calls under way are answered that
+    /// the user stopped it, and its connections close, so it shows the browser's server as gone,
+    /// with "stopped by the user" in its activity log. Reconnected, its next call is a card of its
+    /// own, and ⌘. from its page, which stops the client, stops that card too.
+    #[gpui::test]
+    fn stop_closes_the_clients_connections_and_its_card(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        agents.update(cx, |agents, cx| agents.set_on(true, cx));
+        let (socket, token) = agents.read_with(cx, |agents, _| {
+            let tokens = agents.tokens.lock().unwrap();
+            let token = tokens.iter().find(|(_, agent)| *agent == "claude-code");
+            (agents.socket.clone(), token.unwrap().0.clone())
+        });
+        // Two connections of Claude Code's, each past its token.
+        let open = || {
+            let stream = server::connect(&socket).unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            std::io::Write::write_all(
+                &mut writer,
+                format!("{}\n", json!({ "token": token })).as_bytes(),
+            )
+            .unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            assert_eq!(
+                server::read_line(&mut reader).as_deref(),
+                Some(r#"{"ok":true}"#)
+            );
+            reader
+        };
+        let mut connections = [open(), open()];
+        let waiting = call_as(&agents, 3, "read_page", json!({ "tab": 20 }), cx);
+        let agent = cards(&agents, cx)[0].agent.to_string();
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Stop, cx)
+        });
+        assert_eq!(waiting.recv().unwrap().text, STOPPED);
+        assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Ended);
+        for reader in &mut connections {
+            assert_eq!(server::read_line(reader), None, "a connection stayed open");
+        }
+        assert!(
+            log(&agents, "claude-code", cx)
+                .iter()
+                .any(|entry| entry.0 == "stopped by the user")
+        );
+
+        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "a new session");
+        agents.update(cx, |agents, cx| agents.stop_agent("claude-code", cx));
+        assert!(cards(&agents, cx).iter().all(|card| card.dot == Dot::Ended));
+    }
+
+    /// Open moves a finished session's pages into the user's Space, and archiving one that left
+    /// pages closes its own and not those of the client's session under way, which share its
+    /// Space.
+    #[gpui::test]
+    fn open_and_archive_take_a_sessions_own_pages(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let opened = agents.update(cx, |agents, cx| {
+            agents.task_action(&first, TaskAction::Open, cx)
+        });
+        assert_eq!(opened, (Some(20), None));
+        let space = |tab: u64| {
+            (browser.tabs.borrow().iter())
+                .find(|each| each.0 == tab)
+                .map(|each| each.1)
+        };
+        assert_eq!(space(20), Some(1), "Open moved it to the user's Space");
+
+        // A session that opened 30 and is done, beside one at work in 31 of the same Space.
+        browser
+            .tabs
+            .borrow_mut()
+            .push((31, 2, "Other", "https://example.org/"));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let answer = call_as(&agents, 3, "open_tab", json!({ "url": "example.com" }), cx);
+        let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+        answered(&agents, 3, cx);
+        bye(&agents, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 4, "read_page", json!({ "tab": 31 }), cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&second, TaskAction::Dismiss, cx);
+            agents.task_action(&second, TaskAction::Delete, cx);
+        });
+        let archived = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx));
+        assert!(archived.iter().all(|task| task.agent != second.as_str()));
+        // Dropped, as the Archive keeps so many, its 30 closes and 31 stays.
+        agents.update(cx, |agents, cx| agents.drop_task(&second, cx));
+        assert_eq!(space(30), None);
+        assert_eq!(space(31), Some(2));
     }
 }

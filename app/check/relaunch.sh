@@ -5,7 +5,9 @@
 # regular window quits, and the next launch opens at its frame, not a private window's. On Windows,
 # the window in front maximized as the app quits, or as the last window closes, comes back
 # maximized, its launch window too, and un-maximizes to the frame it had, as Windows' own
-# placement says (#1422). Reports the launch's times with one window brought back and with two.
+# placement says (#1422). On Windows and X11, a window maximized behind the one in front comes back
+# maximized behind it, and un-maximizes to its frame (#1454). Reports the launch's times with one
+# window brought back and with two.
 
 page='data:text/html,<title>relaunch</title>'
 # Milliseconds from the process's start to the line "browser: $1 at <ms> ms".
@@ -48,6 +50,21 @@ expect_placement() {
   send window "${2:-1}"
   send placement
   [ "$(placement)" = "$1" ] || fail "$3: Windows has the window $(placement), not $1"
+}
+# Waits for window $2's placement to be $1, "maximized" or "normal", and with $4 to be $4 whole on
+# Windows, where it's the frame the window un-maximizes to, and on Linux once it's normal, where
+# it's the frame it has; fails with $3. The window manager, or Windows, changes it a moment after
+# it's asked.
+await_placement() {
+  wanted=${4:-$1}
+  [ "$(uname)" = Linux ] && [ "$1" = maximized ] && wanted=maximized
+  for _ in $(seq 50); do
+    send window "$2" behind
+    send placement
+    case "$(placement)" in "$wanted" | "$wanted "*) return 0 ;; esac
+    sleep 0.1
+  done
+  fail "$3: the window's placement is $(placement), not $wanted"
 }
 # The ids of the windows opened, in the order they opened.
 windows_opened() {
@@ -125,6 +142,7 @@ fi
 send key n cmd
 expect '^browser: command new-window via ' "⌘N didn't run New Window"
 expect '^browser: window opened [0-9]' "⌘N didn't open a window"
+new_window_bar
 second=$(windows_opened | tail -1)
 send window 2
 send place "$(at 320 140 900 640)"
@@ -140,6 +158,7 @@ expect "^browser: renamed space $reading reading\$" "the core didn't rename the 
   fail "the second window didn't show its Space"
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a third window"
+new_window_bar
 third=$(windows_opened | tail -1)
 send window 3
 send key w cmd shift
@@ -147,6 +166,7 @@ expect "^browser: window closed $third\$" "⇧⌘W didn't close the third window
 send window 1
 send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
+new_window_bar
 send window 2
 if [ "$(uname)" = Linux ]; then
   echo "skip: the windows' order before the quit: on X11 a new window opens behind the one in front (#712)."
@@ -192,11 +212,46 @@ fi
 ../tools/window-screenshot.sh "$pid" "$out/relaunch-two.png" all || fail "no window to capture"
 two="window on screen $(launch_at 'window on screen') ms, first frame $(launch_at 'first frame') ms"
 
+# Maximized behind the window in front as the app quits, by the window manager's maximize on X11,
+# the window comes back maximized behind it, and un-maximizes to the frame it had; the one in front
+# comes back at its own (#1454). Wayland shows no client the state, and the Mac's zoom is a frame,
+# which it keeps.
+behind_maximized=
+if [ -z "$wayland" ] && [ "$(uname)" != Darwin ]; then
+  send window 2
+  send maximize
+  await_placement maximized 2 "the window behind didn't maximize"
+  send window 1
+  quit_by_key
+  exited
+  launch_logged "$out/relaunch-maximized-behind.log"
+  await '^browser: restored in ' || fail "the relaunch with a window maximized behind didn't restore the Spaces"
+  await '^browser: first frame at ' || fail "the window in front didn't draw after the relaunch"
+  await '^browser: window [0-9]* in space Space 1$' || fail "the window maximized behind didn't come back"
+  [ "$(windows_opened | wc -l)" -eq 2 ] || fail "$(windows_opened | wc -l | tr -d ' ') windows came back, not 2"
+  front=$(windows_opened | head -1)
+  back=$(windows_opened | tail -1)
+  send order
+  expect '^browser: order window 1 window 2, key window 1$' \
+    "the window maximized behind came back out of order, or the one in front wasn't key"
+  same_frame "$(frame_of "$front")" "$(at 320 140 900 640)" ||
+    fail "the window in front came back at $(frame_of "$front"), not at $(at 320 140 900 640)"
+  await_placement maximized 2 "the window maximized behind came back windowed (#1454)" \
+    "maximized $(at 60 80 1000 700)"
+  await_placement normal 1 "the window in front came back maximized" "normal $(at 320 140 900 640)"
+  send window 2
+  send maximize
+  await_placement normal 2 "the window behind didn't un-maximize" "normal $(at 60 80 1000 700)"
+  send window 1
+  behind_maximized=" A window maximized behind the one in front comes back maximized behind it, and un-maximizes to the frame it had."
+fi
+
 # With windows open, ⌘N's window is as big as the one in front, down and to the right of it as
 # AppKit cascades windows, except on Wayland, where the compositor places it.
 send window 1
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a window over the two brought back"
+new_window_bar
 cascaded=$(windows_opened | tail -1)
 read -r x y width height <<EOF
 $(frame_of "$cascaded")
@@ -209,6 +264,7 @@ EOF
 # open at another frame doesn't.
 send key n cmd shift
 expect '^browser: private window opened [0-9]' "⇧⌘N didn't open a private window"
+new_window_bar
 send window 4
 send place "$(at 500 300 700 500)"
 send window 2
@@ -252,5 +308,5 @@ fi
 exec 3>&-
 quit
 
-echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't. ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized Window: $out/relaunch-two.png"
+echo "ok: after ⌘Q, every regular window comes back at its frame, in its Space, stacked as it was with the one in front key; a window closed before the quit and a private window don't.$behind_maximized ⌘N with windows open cascades from the one in front at its size, and after the last regular window closes the next launch opens at its frame, not a private window's.$maximized Window: $out/relaunch-two.png"
 echo "  Launch with one window: $one; with two: $two"

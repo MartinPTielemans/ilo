@@ -35,7 +35,7 @@ use super::{
     TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
     selected_plate, title,
 };
-use crate::agents::task::{Card, Dot, TaskAction, open_label};
+use crate::agents::task::{Card, Dot, TaskAction, open_label, status_lead};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
@@ -47,18 +47,19 @@ use crate::tokens::shell::task::motion::{
 use crate::tokens::shell::task::{
     BOTTOM, CHIP_END, CHIP_GAP, CHIP_HEIGHT, CHIP_X, CHIPS_BOTTOM, CHIPS_TOP, FOOT_SHARE, GAP,
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
-    SHIMMER_LOW, SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
+    SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
-use crate::tokens::shell::{MEDIA_BUTTON, MEDIA_GAP, MEDIA_HEIGHT, URL_FIELD};
+use crate::tokens::shell::{MEDIA_BUTTON, URL_FIELD};
 use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
 
-/// A task's number, from its agent's id, `task-<n>`.
+/// A task's number, from its agent's id: `task-<n>`, or `session-<n>` for an outside agent's
+/// session, which are numbered with the tasks.
 pub(super) fn number(agent: &str) -> u64 {
-    agent
-        .strip_prefix("task-")
+    (agent.strip_prefix("task-"))
+        .or_else(|| agent.strip_prefix("session-"))
         .and_then(|n| n.parse().ok())
         .unwrap_or(0)
 }
@@ -78,8 +79,8 @@ const CHIP_ROWS: usize = 2;
 /// The column the title and the status start on, from the plate's left edge.
 const COLUMN: f32 = FAVICON_X - PLATE_INSET + FAVICON_SIZE + TITLE_GAP;
 
-/// ✕'s inset from the plate's top and right edges, a player's button's.
-const CLOSE_INSET: f32 = (MEDIA_HEIGHT - MEDIA_BUTTON) / 2.;
+/// ✕'s inset from the plate's top and right edges, as a row's.
+const CLOSE_INSET: f32 = (ROW_HEIGHT - MEDIA_BUTTON) / 2.;
 
 /// Where the title ends under the pointer, clear of ✕.
 const HOVER_END: f32 = CLOSE_INSET + MEDIA_BUTTON;
@@ -260,11 +261,11 @@ fn marks(text: &SharedString, system: &WindowTextSystem) -> (Vec<(Range<usize>, 
     (marks, f32::from(line.width))
 }
 
-/// The shimmer's alpha at `x` along a line `width` wide, `phase` of the way through its sweep.
+/// How lit the shimmer has `x` along a line `width` wide, `phase` of the way through its sweep:
+/// 1 under its middle, nothing out of its reach.
 fn shimmer(x: f32, width: f32, phase: f32) -> f32 {
     let middle = width * (SHIMMER_FROM + (SHIMMER_TO - SHIMMER_FROM) * phase);
-    let near = (1. - (x - middle).abs() / (SHIMMER_REACH * width)).max(0.);
-    SHIMMER_LOW + (SHIMMER_HIGH - SHIMMER_LOW) * near
+    (1. - (x - middle).abs() / (SHIMMER_REACH * width)).max(0.)
 }
 
 /// What a plate at the foot holds.
@@ -648,7 +649,7 @@ impl Shell {
     /// The Agents' cards, newest first, none of which a private window shows, as it offers no
     /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             cards.clear();
         }
         if cards == self.task_cards {
@@ -719,18 +720,50 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
+    /// The stopped ring's colour: the ink at `stopped`, under the floor text keeps, as it's a mark
+    /// beside words that say the task stopped.
+    fn stopped_ring(&self) -> Hsla {
+        Hsla::from(self.palette.ink).opacity(STOPPED)
+    }
+
     /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
     /// stopped or failed, in the glyph's box.
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
         let now = Instant::now();
         let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
         let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.palette.text(STOPPED);
+        let stopped = self.stopped_ring();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
+            move |bounds, _, window, _| {
+                glyph::paint(&drawn, bounds, signal, stopped, false, window)
+            },
         )
         .size(px(GLYPH))
+    }
+
+    /// The glyph of `agent`'s card as the foot draws it now, for the strip under its page watched to
+    /// lead with, so the two read as one: its card's at rest if the foot doesn't show it.
+    pub(super) fn task_glyph(&self, agent: &SharedString, dot: Dot) -> gpui::AnyElement {
+        let now = Instant::now();
+        let face = (self.foot.plates.iter())
+            .find(|plate| plate.holds == Holds::Task(agent.clone()) && !plate.leaving)
+            .and_then(|plate| plate.face.as_ref());
+        let Some(face) = face else {
+            return self.status_mark(dot).into_any_element();
+        };
+        let drawn = face.glyph.drawn(now);
+        let signal: Hsla = rgb(STATUS_AGENT).into();
+        let stopped = self.stopped_ring();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                glyph::paint(&drawn, bounds, signal, stopped, false, window)
+            },
+        )
+        .flex_none()
+        .size(px(GLYPH))
+        .into_any_element()
     }
 
     /// Brings the plates to the cards and the slot: those no longer wanted fold away, new ones
@@ -834,12 +867,11 @@ impl Shell {
 
     /// Where the media players end, over Restart to Update, the foot's plates over them.
     pub(super) fn media_top(&self) -> f32 {
-        let players = self.media_players().len() as f32 * (MEDIA_HEIGHT + MEDIA_GAP);
-        FOOTER_HEIGHT + self.update_sign_room() + players
+        FOOTER_HEIGHT + self.update_banner_room() + self.media_room()
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
-    fn foot_cap(&self) -> Option<f32> {
+    pub(super) fn foot_cap(&self) -> Option<f32> {
         self.foot
             .all
             .then(|| FOOT_SHARE * f32::from(self.viewport.height))
@@ -1147,7 +1179,8 @@ impl Shell {
             return;
         }
         let now = Instant::now();
-        let flies = self.foot.primed && !cx.reduce_motion() && !self.private && self.foot_drawn();
+        let flies =
+            self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
         let from = self
             .foot
             .plates_drawn
@@ -1267,10 +1300,12 @@ impl Shell {
     ) -> AnyElement {
         let drawn = face.glyph.drawn(now);
         let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.palette.text(STOPPED);
+        let stopped = self.stopped_ring();
         let glyph = canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
+            move |bounds, _, window, _| {
+                glyph::paint(&drawn, bounds, signal, stopped, false, window)
+            },
         )
         .absolute()
         .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
@@ -1481,15 +1516,16 @@ impl Shell {
         let glyph = {
             let drawn = face.glyph.drawn(now);
             let signal: Hsla = rgb(STATUS_AGENT).into();
-            let stopped = self.palette.text(STOPPED);
-            canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| glyph::paint(&drawn, bounds, signal, stopped, window),
-            )
-            .absolute()
-            .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
-            .top(px(GLYPH_TOP))
-            .size(px(GLYPH))
+            let stopped = self.stopped_ring();
+            // On the selected plate's fill the ring is drawn brighter, to read as on the others.
+            let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
+                glyph::paint(&drawn, bounds, signal, stopped, shown, window)
+            };
+            canvas(|_, _, _| {}, paint)
+                .absolute()
+                .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
+                .top(px(GLYPH_TOP))
+                .size(px(GLYPH))
         };
         let end = if hovered { HOVER_END } else { TITLE_END_INSET };
         let text = div()
@@ -1589,6 +1625,8 @@ impl Shell {
                     alpha: f32,
                     shimmers: bool| {
             let height = if asks { QUESTION_LINE } else { STATUS_LINE };
+            // Its lead, how far the agent has got or that it needs the user, in the title's ink.
+            let lead = status_lead(&words);
             let base = div()
                 .absolute()
                 .left_0()
@@ -1597,7 +1635,7 @@ impl Shell {
                 .opacity(alpha)
                 .text_size(px(text::SMALL))
                 .line_height(px(height))
-                .text_color(self.palette.text(SECONDARY));
+                .text_color(self.palette.text(STATUS));
             let base = match lines {
                 1 => base.truncate(),
                 lines => base.line_clamp(lines).text_ellipsis(),
@@ -1606,19 +1644,27 @@ impl Shell {
                 true => {
                     let width = face.width.min(room).max(1.);
                     let highlights = face.marks.iter().map(|(range, x)| {
-                        let color = self.palette.text(shimmer(*x, width, phase));
-                        (
-                            range.clone(),
-                            HighlightStyle {
-                                color: Some(color),
-                                ..Default::default()
-                            },
-                        )
+                        let led = range.end <= lead;
+                        let lit = if led { 1. } else { shimmer(*x, width, phase) };
+                        let highlight = HighlightStyle {
+                            font_weight: led.then_some(FontWeight::MEDIUM),
+                            ..self.palette.lit_highlight(STATUS, SHIMMER_HIGH, lit)
+                        };
+                        (range.clone(), highlight)
                     });
                     let styled =
                         StyledText::new(words).with_highlights(highlights.collect::<Vec<_>>());
-                    base.text_color(self.palette.text(SHIMMER_LOW))
-                        .child(styled)
+                    // At the shimmer's peak, which each part fades down from.
+                    let peak = self.palette.lit(STATUS, SHIMMER_HIGH, 1.);
+                    base.text_color(peak).child(styled)
+                }
+                false if lead > 0 => {
+                    let highlight = HighlightStyle {
+                        color: Some(self.palette.text(TITLE)),
+                        font_weight: Some(FontWeight::MEDIUM),
+                        ..HighlightStyle::default()
+                    };
+                    base.child(StyledText::new(words).with_highlights([(0..lead, highlight)]))
                 }
                 false => base.child(words),
             }

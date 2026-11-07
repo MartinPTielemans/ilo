@@ -9,9 +9,9 @@ use gpui::{
 };
 
 use super::{
-    ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING, Settle,
-    Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at, library::library_band,
-    rubber_band,
+    Command, ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
+    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
+    library::library_band, rubber_band,
 };
 
 impl Shell {
@@ -114,7 +114,7 @@ impl Shell {
     /// docked sidebar, of a regular window.
     fn library_beside(&self, space: u64) -> bool {
         let first = self.spaces.first().is_some_and(|first| first.id == space);
-        first && !self.sidebar_hidden && !self.page_fullscreen && !self.private
+        first && !self.sidebar_hidden && !self.page_fullscreen && !self.one_space()
     }
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
@@ -370,29 +370,52 @@ impl Shell {
         if (sum * WHEEL_LINE).abs() > 1. {
             self.wheel = None;
             self.wheel_paged = Some(now);
-            self.leave_popovers(cx);
-            let library = sum > 0. && (self.library_open || self.library_beside(self.space));
-            if library != self.library_open {
-                // check.sh waits for this line.
-                log!("browser: command view-library via wheel");
-                if !library {
-                    self.show_first_space(cx);
-                }
-                self.set_library(library, cx);
-            } else if !self.library_open
-                && let Some(space) = self.nearest(self.space, sum.signum() * self.width())
-                && space != self.space
-            {
-                if self.form().is_some() {
-                    self.cancel_space(window, cx);
-                    return true;
-                }
-                // check.sh waits for this line.
-                log!("browser: command select-space via wheel");
-                self.show_space(space, cx);
-            }
+            self.page_step(sum > 0., "wheel", window, cx);
         }
         true
+    }
+
+    /// One step along the row the pages go by, back (to the left) or forward, as a wheel's burst
+    /// or a mouse's button takes it: back from the first Space opens the Library, forward leaves
+    /// it for the first Space, and back off the form cancels it.
+    fn page_step(&mut self, back: bool, via: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_popovers(cx);
+        let library = back && (self.library_open || self.library_beside(self.space));
+        if library != self.library_open {
+            // check.sh waits for this line.
+            log!("browser: command view-library via {via}");
+            if !library {
+                self.show_first_space(cx);
+            }
+            self.set_library(library, cx);
+        } else if !self.library_open
+            && let Some(space) =
+                self.nearest(self.space, if back { 1. } else { -1. } * self.width())
+            && space != self.space
+        {
+            if self.form().is_some() {
+                self.cancel_space(window, cx);
+                return;
+            }
+            // check.sh waits for this line.
+            log!("browser: command select-space via {via}");
+            self.show_space(space, cx);
+        }
+    }
+
+    /// A mouse's back or forward button over the UI takes the pages a step, and forward from the
+    /// last Space makes a new one, as the pull past it does. A private or little window pages no
+    /// Spaces with it.
+    pub(super) fn navigate(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.private || self.little.is_some() {
+            return;
+        }
+        if !back && !self.library_open && self.new_space_beside(self.space) {
+            self.leave_popovers(cx);
+            self.run(Command::NewSpace, "mouse", cx);
+            return;
+        }
+        self.page_step(back, "mouse", window, cx);
     }
 
     /// Fingers and wheels over the sidebar or the Library, heard ahead of the list, which would
@@ -925,6 +948,36 @@ mod tests {
         assert_eq!(*host.shown.borrow(), [1]);
     }
 
+    /// A flick, fingers lifted while they're still going, goes on to the next Space though they
+    /// went less than halfway, and lifted the same way back it goes back. check.sh's swipes go
+    /// past halfway, as a frame of the hosted runners' that takes longer than SWIPE_HISTORY can
+    /// fall between the last move and the lift there, which reads as fingers held still (#1869).
+    #[gpui::test]
+    fn a_flick_short_of_halfway_goes_on_to_the_next_space(cx: &mut TestAppContext) {
+        let (shell, host, cx) = three_spaces(cx, 1);
+        shell.update_in(cx, |shell, window, cx| {
+            let fingers = |touch_phase, x| ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(x), px(0.))),
+                touch_phase,
+                ..Default::default()
+            };
+            let flick =
+                |shell: &mut Shell, step: f32, window: &mut Window, cx: &mut Context<Shell>| {
+                    // A quarter of the way, in ten moves.
+                    let step = step * 0.25 * shell.width() / SWIPE_TRACKING / 10.;
+                    shell.scroll(&fingers(TouchPhase::Started, step), window, cx);
+                    for _ in 0..9 {
+                        shell.scroll(&fingers(TouchPhase::Moved, step), window, cx);
+                    }
+                    shell.scroll(&fingers(TouchPhase::Ended, 0.), window, cx);
+                };
+            flick(shell, -1., window, cx);
+            shell.set_space(2, cx);
+            flick(shell, 1., window, cx);
+        });
+        assert_eq!(*host.shown.borrow(), [2, 1]);
+    }
+
     /// Two fingers as Direct Manipulation reports a precision touchpad's on Windows: the touch
     /// comes with the first move, the lift ends the scroll, and the inertia after it goes on
     /// across. The swipe stops at the next Space, the inertia carrying it no further and scrolling
@@ -1361,6 +1414,45 @@ mod tests {
         let (shell, host, window) = switched_back(cx, true);
         held_swipe(&shell, window, -10., 10);
         assert!(host.shown.borrow().is_empty());
+    }
+
+    /// Past the last Space, VoiceOver hears the New Space circle come out, and when letting go
+    /// makes the Space, as the trackpad's click says it.
+    #[gpui::test]
+    fn voiceover_hears_when_letting_go_makes_a_space(cx: &mut TestAppContext) {
+        use gpui::accesskit::{Live, Role};
+        let (shell, _, cx) = three_spaces(cx, 3);
+        cx.simulate_a11y_activation();
+        let circle = |cx: &mut VisualTestContext| {
+            cx.run_until_parked();
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let found = tree
+                .nodes
+                .into_iter()
+                .find(|(_, node)| node.role() == Role::Status && node.label() == Some("New Space"));
+            found.map(|(_, node)| (node.value().map(str::to_owned), node.live()))
+        };
+        assert_eq!(circle(cx), None, "a circle before the fingers");
+        shell.update_in(cx, |shell, window, cx| {
+            fingers(shell, -8., false, window, cx)
+        });
+        let pulling = Some((
+            Some("Pull further to make one".to_owned()),
+            Some(Live::Polite),
+        ));
+        assert_eq!(circle(cx), pulling);
+        // On, without letting go, against the page's rubber band.
+        shell.update_in(cx, |shell, window, cx| {
+            let on = -2. * shell.width() / SWIPE_TRACKING;
+            let moved = ScrollEvent {
+                delta: ScrollDelta::Pixels(point(px(on), px(0.))),
+                touch_phase: TouchPhase::Moved,
+                ..Default::default()
+            };
+            shell.scroll(&moved, window, cx);
+        });
+        let ready = Some((Some("Let go to make it".to_owned()), Some(Live::Polite)));
+        assert_eq!(circle(cx), ready);
     }
 
     /// Fingers across the sidebar, `dx` this event, a moment after the last, as a trackpad sends

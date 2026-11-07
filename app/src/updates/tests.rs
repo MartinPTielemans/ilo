@@ -19,6 +19,10 @@ impl Host for Recorder {
         self.asked.borrow_mut().push("check");
     }
 
+    fn show(&self, _: &mut App) {
+        self.asked.borrow_mut().push("show");
+    }
+
     fn restart(&self, _: &mut App) {
         self.asked.borrow_mut().push("restart");
     }
@@ -133,6 +137,25 @@ fn downloading_names_the_version(cx: &mut TestAppContext) {
         (Some("Downloading the update…".into()), None)
     );
     assert!(about.asked().is_empty());
+}
+
+/// An update the updater won't download by itself, as Sparkle leaves one for the user to say,
+/// offers Show Update, which asks the updater to show it in its own window. A failure after it is
+/// the update's.
+#[gpui::test]
+fn an_update_the_updater_waits_on_offers_its_window(cx: &mut TestAppContext) {
+    let mut about = shown(Updater::Own, cx);
+    about.says(Stage::Found(Some("0.1.5".into())));
+    about.says(Stage::Available(Some("0.1.5".into())));
+    let available = concat!(env!("APP_NAME"), " 0.1.5 is available");
+    assert_eq!(about.reads(), (Some(available.into()), Some("Show Update")));
+    about.click();
+    assert_eq!(about.asked(), ["show"]);
+    about.says(Stage::Failed { found: false });
+    assert_eq!(
+        about.reads(),
+        (Some("The update didn’t install".into()), Some("Try Again"))
+    );
 }
 
 /// A ready update offers Restart to Update, which asks the updater to install it now, as do the
@@ -419,4 +442,72 @@ fn only_a_copy_with_a_nightly_feed_offers_it(_: &mut TestAppContext) {
         about.cx.update(|_, cx| follow(Track::Nightly, cx));
         assert!(about.asked().is_empty());
     }
+}
+
+/// With Settings › About's Show what's new off, an update's first launch opens no notes, and on
+/// again it opens them.
+#[test]
+fn with_whats_new_off_an_update_opens_no_notes() {
+    let dir = std::env::temp_dir().join(format!("ilo-whats-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = || Some(format!("{}#0.1.10", crate::build_info::WHATS_NEW));
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on, the default");
+    std::fs::write(dir.join(NO_WHATS_NEW), "").unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), None, "off");
+    assert_eq!(notes_to_open(None, &dir), None);
+    std::fs::remove_file(dir.join(NO_WHATS_NEW)).unwrap();
+    assert_eq!(notes_to_open(notes(), &dir), notes(), "on again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The version row's button is a button an assistive app calls by what it does, at each stage
+/// that offers one, and ⇥ stops at it (#1911): Try Again says it checks again.
+#[gpui::test]
+fn the_version_rows_button_says_what_it_does(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, stops, unnamed};
+    use gpui::accesskit::Role;
+    let mut about = shown(Updater::Own, cx);
+    for (stage, said) in [
+        (Stage::Idle, "Check for Updates"),
+        (Stage::Failed { found: true }, "Check for Updates Again"),
+        (Stage::Ready(Some("0.1.1".into())), "Restart to Update"),
+    ] {
+        about.says(stage);
+        let pressable = pressable(about.cx);
+        assert_eq!(unnamed(&pressable), [], "{pressable:?}");
+        assert_eq!(
+            pressable,
+            [(Role::Button, said.to_string(), None)],
+            "{said}"
+        );
+        let stops = stops(about.cx);
+        assert_eq!(stops, [(Role::Button, said.to_string(), None)], "{said}");
+    }
+}
+
+/// Get nightly builds is a switch an assistive app reads by its row's name, on or off (#1911).
+#[gpui::test]
+fn the_nightly_switch_is_named(cx: &mut TestAppContext) {
+    use crate::settings_rows::spoken::{pressable, unnamed};
+    use gpui::accesskit::{Role, Toggled};
+    let mut about = nightly(Updater::Own, Track::Release, Some(Track::Release), cx);
+    let switch = |about: &mut Nightly| {
+        let pressable = pressable(about.cx);
+        assert_eq!(unnamed(&pressable), [], "{pressable:?}");
+        let tree = about.cx.a11y_tree().expect("a tree");
+        (tree.nodes.iter())
+            .find(|(_, node)| node.role() == Role::Switch)
+            .map(|(_, node)| (node.label().unwrap_or_default().to_string(), node.toggled()))
+    };
+    assert_eq!(
+        switch(&mut about),
+        Some(("Get nightly builds".into(), Some(Toggled::False)))
+    );
+    about.click();
+    assert_eq!(about.asked(), ["follow nightlies", "check"]);
+    assert_eq!(
+        switch(&mut about),
+        Some(("Get nightly builds".into(), Some(Toggled::True)))
+    );
 }

@@ -16,6 +16,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "base/path_service.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
@@ -24,7 +25,9 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/device_chooser.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
 #include "browser_core/developer_mode.h"
@@ -50,6 +53,7 @@
 #include "browser_core/sync_spaces.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -65,9 +69,11 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
+#include "chrome/browser/ui/startup/features.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "chrome/browser/ui/startup/startup_tab_provider.h"
 #include "chrome/common/chrome_content_client.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
@@ -78,7 +84,12 @@
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/files/file_util.h"
+#endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 #include "browser_core/platform/app_library.h"
@@ -91,6 +102,7 @@
 #include "components/prefs/pref_service.h"
 #endif
 #if BUILDFLAG(IS_LINUX)
+#include "base/nix/xdg_util.h"
 #include "browser_core/platform/linux/wayland.h"
 #include "ui/ozone/public/ozone_switches.h"
 #endif
@@ -130,6 +142,9 @@ void OpenLinks(const std::vector<GURL>& urls) {
 }
 
 #if !BUILDFLAG(IS_MAC)
+// The switch of a launch that opens a new Little ilo window (OpenCommandLine).
+constexpr char kNewLittleWindow[] = "new-little-window";
+
 // The links in a launch's command line, read as Chrome reads them: paths relative to |cur_dir|,
 // and "? words" searched with the profile's engine, which needs a profile. A later launch with none
 // the app opens, as from the Start menu, brings a window forward, as Chrome's would open one: the
@@ -138,6 +153,24 @@ void OpenCommandLine(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir,
                      Profile* profile,
                      bool process_startup) {
+#if BUILDFLAG(IS_LINUX)
+  // Under Wayland, the activation token the launcher gave the launch, for the window the app
+  // brings forward for it (WaylandToplevelWindow::Activate). Chrome's own windows read it from the
+  // switch (StartupBrowserCreatorImpl::OpenTabsInBrowser), which a launch the core takes skips.
+  // Without it the window asks with a token of its own, which no click in it backs, and the
+  // compositor may only mark it.
+  base::CommandLine with_token(command_line);
+  base::nix::ExtractXdgActivationTokenFromCmdLine(with_token);
+#endif
+  // A launch for a new Little ilo window, as the jump list's task and the Linux launcher's action
+  // run one: the app opens it for the Space in front, as the Mac's Dock item does (#693). The first
+  // launch's own, the app reads once its windows are up.
+  if (command_line.HasSwitch(kNewLittleWindow)) {
+    if (!process_startup && g_host.window_open_little) {
+      g_host.window_open_little(g_host.context, 0, "", 0);
+    }
+    return;
+  }
   if (!profile) {
     profile = ProfileManager::GetLastUsedProfileIfLoaded();
   }
@@ -148,8 +181,13 @@ void OpenCommandLine(const base::CommandLine& command_line,
       urls.push_back(tab.url);
     }
   }
+  // A desktop file's or jump list's New Window or New Incognito Window, Chrome's switches.
+  const bool private_window = command_line.HasSwitch("incognito");
+  const bool new_window = private_window || command_line.HasSwitch("new-window");
   if (std::ranges::any_of(urls, &Opens)) {
     OpenLinks(urls);
+  } else if (!process_startup && new_window && g_host.app_new_window) {
+    g_host.app_new_window(g_host.context, private_window);
   } else if (!process_startup && g_host.launched_again) {
     g_host.launched_again(g_host.context);
   }
@@ -180,6 +218,8 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   // Chrome has just set its crash keys again, with the switches about:flags added.
   void PreCreateThreads() override {
     crash_reports::LeaveOutFolders();
+    // Before Chrome's performance manager makes its battery sampler, as its threads are made.
+    InstallBatteryForTesting();
 #if BUILDFLAG(IS_WIN)
     // A work account whose organisation requires a compliant device signs in only with Windows'
     // own Microsoft sign-in, which Chromium leaves off unless a policy turns it on (#1345). It's
@@ -202,6 +242,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
     RegisterDownloadPrefs();
     developer_mode::RegisterProfilePrefs();
     notes::RegisterProfilePrefs();
+    RegisterWebRtc();
     widevine::Start();
   }
 
@@ -228,6 +269,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
       UseProfile(profile);
     }
     sync::Start();
+    WatchBatterySaver();
     // Once the Spaces the last launch saved are read, and so once the run loop is running.
     LoadSession(base::BindOnce([] {
       if (g_host.started) {
@@ -340,10 +382,32 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     return parts;
   }
 
+  // Chrome's, but a profile's session cookies, those with no expiry a sign-in often lives in, come
+  // back at every launch, as Chrome brings them back only when it restores the last session or
+  // after a crash (ProfileImpl::ShouldRestoreOldSessionCookies). ilo always brings its tabs back
+  // itself, with no startup preference for Chrome to read, so it keeps what they were signed in
+  // with too (#1934). Only where Chrome keeps them on disk at all: a profile's main partition, not
+  // an off-the-record profile's or an app's partition.
+  void ConfigureNetworkContextParams(
+      content::BrowserContext* context,
+      bool in_memory,
+      const base::FilePath& relative_partition_path,
+      network::mojom::NetworkContextParams* network_context_params,
+      cert_verifier::mojom::CertVerifierCreationParams* cert_verifier_creation_params) override {
+    ChromeContentBrowserClient::ConfigureNetworkContextParams(
+        context, in_memory, relative_partition_path, network_context_params,
+        cert_verifier_creation_params);
+    if (!in_memory && relative_partition_path.empty() &&
+        network_context_params->persist_session_cookies) {
+      network_context_params->restore_old_session_cookies = true;
+    }
+  }
+
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
     ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
     system_engine::CreateThrottlesForNavigation(registry);
     AddLinkPreviewThrottle(registry);
+    AddAdBlockHold(registry);
   }
 
   bool HandleExternalProtocol(
@@ -387,9 +451,31 @@ const bc_host& Host() {
   return g_host;
 }
 
+namespace {
+
+bc_id g_last_id = 0;
+// The first id handed out once the last launch's session was read, or 0 without one.
+bc_id g_first_of_launch = 0;
+// Covers the ids a launch hands out after it last saved its session, should it then crash.
+constexpr bc_id kIdsSinceSaved = 1000;
+
+}  // namespace
+
 bc_id NewId() {
-  static bc_id last = 0;
-  return ++last;
+  return ++g_last_id;
+}
+
+bc_id LastId() {
+  return g_last_id;
+}
+
+void StartIdsAfter(bc_id last) {
+  g_last_id = std::max(g_last_id, last + kIdsSinceSaved);
+  g_first_of_launch = g_last_id + 1;
+}
+
+bool FromEarlierLaunch(bc_id id) {
+  return id < g_first_of_launch;
 }
 
 // Keeps the app's callbacks and puts the core's hooks in Chrome.
@@ -407,6 +493,7 @@ void Install(const bc_host& host) {
   g_browser_core_update_target_url = &Tab::LinkTargetChanged;
   content::SetPageLinkDragHandler(&Tab::LinkDragged);
   g_browser_core_permission_prompt = &PermissionQuestion::Create;
+  g_browser_core_device_chooser = &DeviceChooser::Show;
   g_browser_core_extension_install_dialog = &InstallQuestion::Ask;
   g_browser_core_populate_frame_binders = &PopulateFrameBinders;
   g_browser_core_password_prompt = &PasswordOffer::Prompt;
@@ -524,6 +611,15 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     features += features.empty() ? "" : ",";
     command_line->AppendSwitchASCII(switches::kEnableFeatures,
                                     features + features::kWebContentsDiscard.name);
+    // A profile's sessionStorage stays on disk across a launch, as Chrome keeps it when it restores
+    // the last session, for the tabs the Spaces bring back to find theirs again; the core deletes
+    // what no tab came back for once they're back (RestoreSession). Chrome otherwise clears it all
+    // as the profile starts, ilo having no startup preference for it to read (#1934).
+    std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
+    disabled += disabled.empty() ? "" : ",";
+    command_line->AppendSwitchASCII(
+        switches::kDisableFeatures,
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the
@@ -547,6 +643,16 @@ void MainDelegate::PreSandboxStartup() {
     crash_reports::PlaceReports();
   }
   ChromeMainDelegate::PreSandboxStartup();
+#if BUILDFLAG(IS_LINUX)
+  // An administrator's policies, under ilo's name rather than every Chromium's /etc/chromium
+  // (docs/policies.md). The Flatpak, whose /etc is its runtime's, reads them where its extension
+  // point mounts them, as Flathub's Chromium does. Not created: only an administrator makes it.
+  const base::FilePath policies(base::PathExists(base::FilePath("/.flatpak-info"))
+                                    ? "/app/ilo/extensions/policies"
+                                    : "/etc/ilo/policies");
+  base::PathService::OverrideAndCreateIfNeeded(chrome::DIR_POLICY_FILES, policies,
+                                               /*is_absolute=*/true, /*create=*/false);
+#endif
   crash_reports::LeaveOutPages();
   crash_reports::LeaveOutFolders();
 }

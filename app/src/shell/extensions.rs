@@ -14,7 +14,7 @@ use gpui::{
 use crate::site_controls;
 
 use super::{
-    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, PLATE_INSET, PRESSED, Shell, ShellHandle,
+    MenuAction, MenuEntry, NAV, NAV_HOVERED, NAV_RADIUS, NAV_SIZE, PLATE_INSET, PRESSED, Shell,
     URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD_TEXT_X, URL_FIELD_TOP, UserKeys,
     user_keys, written_as,
 };
@@ -108,10 +108,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        else {
+        let Some(shell) = super::commands::key_shell(cx) else {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
@@ -127,10 +124,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.run_extension(&run.0, cx))
                 .ok();
@@ -140,10 +134,7 @@ pub(super) fn bind(cx: &mut App) {
         if crate::dialog::asking(cx) {
             return;
         }
-        if let Some(shell) = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone())
-        {
+        if let Some(shell) = super::commands::key_shell(cx) {
             shell
                 .update(cx, |shell, cx| shell.toggle_pinned(&pin.0, cx))
                 .ok();
@@ -254,7 +245,7 @@ impl Shell {
             .position(|action| action.id == id))
         .map(|index| index.min(shown))
         .filter(|&place| place < shown || overflow)
-        .filter(|_| self.url_field_bounds().is_some())
+        .filter(|_| self.url_field_bounds().is_some() || self.little_title().is_some())
         .map(|place| self.action_bounds(place));
         let anchor = button.or(self.url_field_bounds()).unwrap_or_else(|| {
             let corner = point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET));
@@ -387,15 +378,35 @@ impl Shell {
     /// that leave the host its room with the field's button shown, so they keep their places as
     /// it comes and goes.
     pub(super) fn shown_actions(&self) -> (usize, bool) {
+        // A Little ilo window's end its bar's title, leaving it the room for its favicon and host.
+        if let Some(title) = self.little_title() {
+            let room = f32::from(title.size.width) - NAV_SIZE - HOST_ROOM;
+            let places = (room / URL_BUTTON_SIZE).floor().max(0.) as usize;
+            return fit_actions(places, self.extension_actions.len());
+        }
         let field = self.width() - 2. * PLATE_INSET;
         let room = field - (URL_FIELD_TEXT_X - PLATE_INSET) - HOST_ROOM - URL_BUTTON_INSET;
         let places = ((room - URL_BUTTON_SIZE) / URL_BUTTON_SIZE).floor().max(0.) as usize;
         fit_actions(places, self.extension_actions.len())
     }
 
+    /// Where a Little ilo window's bar's title was last drawn, whose end holds its buttons.
+    fn little_title(&self) -> Option<Bounds<Pixels>> {
+        self.little.as_ref().and_then(|little| little.title.get())
+    }
+
     /// Place `index`'s button in the window, the places in a row at the URL field's end.
     fn action_bounds(&self, index: usize) -> Bounds<Pixels> {
         let (shown, overflow) = self.shown_actions();
+        if let Some(title) = self.little_title() {
+            let left =
+                title.right() - px((shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE);
+            let top = title.top() + (title.size.height - px(URL_BUTTON_SIZE)) / 2.;
+            return Bounds::new(
+                point(left, top),
+                size(px(URL_BUTTON_SIZE), px(URL_BUTTON_SIZE)),
+            );
+        }
         let end = self.width() - PLATE_INSET - URL_BUTTON_INSET;
         let left = end - (shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE;
         Bounds::new(
@@ -910,6 +921,31 @@ mod tests {
             let bar = shell.menu_bar(cx);
             bar.extensions
                 .iter()
+                .map(|extension| extension.id.to_string())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(listed, ["allowed"]);
+    }
+
+    /// A private window opened after the core reported the extensions lists those allowed in
+    /// Incognito from the window it opened from, as it hears them only once they change.
+    #[gpui::test]
+    fn a_private_window_lists_the_allowed_extensions_its_opener_heard(cx: &mut TestAppContext) {
+        let allowed = Extension {
+            incognito: true,
+            ..extension("allowed", true, &[])
+        };
+        let extensions = vec![extension("other", true, &[]), allowed];
+        let host = Rc::new(Recorder::default());
+        let from = cx.new(|cx| Shell::new(host.clone(), cx));
+        from.update(cx, |shell, cx| shell.set_extensions(7, extensions, cx));
+        let private = cx.new(|cx| {
+            let mut shell = Shell::private_window(host.clone(), 1, "Private".into(), 7, cx);
+            shell.hear_extensions_from(&from, cx);
+            shell
+        });
+        let listed = private.update(cx, |shell, cx| {
+            (shell.menu_bar(cx).extensions.iter())
                 .map(|extension| extension.id.to_string())
                 .collect::<Vec<_>>()
         });

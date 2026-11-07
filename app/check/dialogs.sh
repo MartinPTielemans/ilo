@@ -3,7 +3,7 @@
 # OK, with what was typed in a prompt, and Esc Cancel, and the page puts the answer in its title.
 # The confirm's Cancel and OK are captured with the pointer on each. An alert goes with its tab
 # and comes back with it. Leaving a page whose beforeunload handler asks says "Leave site?": Esc
-# stays and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
+# stays, and on X11 ⌘L the moment it has closed opens the command bar (#1711), and ↩ leaves. A site's HTTP sign-in asks for a username and password: Esc shows the page
 # the site sends without them, and ↩ signs in, with the password in no log. A link to another app
 # asks first, and ↩ there opens nothing. The pointer on and off a link 20 times shows and hides the
 # link target each time, with the command bar and a tab's menu opened and closed between, and the
@@ -126,6 +126,20 @@ leave
 ../tools/window-screenshot.sh "$pid" "$out/dialog-leave.png" || fail "no window to capture"
 send key escape
 expect "^browser: page $page dialog answered cancel\$" "Esc didn't stay on the page"
+# A key typed as the dialog closes is the page's: ⌘L, sent the moment the X input focus is back in
+# the browser window, opens the command bar, five times over, as the page takes the keyboard as its
+# window becomes active (#1711). X11's driver alone can send a key then.
+if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  for _ in 1 2 3 4 5; do
+    leave
+    post key escape
+    send keyonreturn l cmd
+    expect "^browser: page $page dialog answered cancel\$" "Esc didn't stay on the page" $((step - 1))
+    expect '^browser: command bar shown$' "⌘L as the dialog closed reached no page (#1711)"
+    send key escape
+    expect '^browser: command bar hidden$' "Esc didn't close the command bar"
+  done
+fi
 leave
 send key return
 expect "^browser: page $page dialog answered accept\$" "↩ didn't leave the page"
@@ -190,6 +204,16 @@ kill -0 "$pid" 2>/dev/null || gone
 # window away from both. They went to the front of every app's window, which Windows allows unless
 # the window in front has the foreground. Once it's gone the plate is over ilo's window again.
 covered=
+# Fails unless the top row of the picture $1, $2 across, behind the window buttons, is the sidebar's
+# colour further down: not Windows' caption, which the frame painted under the UI as a PrintWindow
+# of it repainted it, the launch picture's as the app went to the background or a capture's (#1262).
+no_caption() {
+  local top below
+  top=$(pixel "$1" "$2" 0.008)
+  below=$(pixel "$1" "$2" 0.8)
+  ! brighter "$top" "$below" ||
+    fail "Windows' caption showed behind the window buttons $3, $top over the sidebar's $below: $1"
+}
 # The window and plate on top of the stack the driver last listed match $1, or fail with $2.
 stacked() {
   send stack
@@ -279,6 +303,10 @@ if windows; then
   expect "^browser: page $page dialog Alert .* says\$" "the page didn't alert once /held came"
   expect '^browser: dialog settled$' "the page's alert didn't settle with another app in front"
   ../tools/window-screenshot.sh "$pid" "$out/dialog-background.png" || fail "no window to capture"
+  # The launch picture the app took as it went to the background, of the sidebar alone.
+  launch_picture=$(ls -t "$profile_dir"/launch-picture-*.png 2>/dev/null | head -1)
+  [ -n "$launch_picture" ] || fail "going to the background, the app kept no launch picture"
+  cp "$launch_picture" "$out/dialog-launch-picture.png"
   [ "$foreground" != away ] ||
     expect '^browser: dialog shown in the background, its window asking for attention$' \
       "the alert shown in the background didn't have its window ask for attention"
@@ -314,6 +342,14 @@ if windows; then
   expect '^browser: dialog hidden$' "the page's dialog didn't leave on Alt+F4"
   expect "^browser: title $page confirm false\$" "the page didn't hear Cancel from Alt+F4"
   ask c Confirm after-close
+  # A copy of the screen, with nothing in front: a caption painted under the UI at the background
+  # step would still show, as no activation change since paints over it.
+  no_caption "$out/dialog-after-close.png" 0.15 "once the dialog came back"
+  # And in the pictures of the background step, PrintWindow's, the capture's and the launch picture.
+  [ -z "$background_dialog" ] || {
+    no_caption "$out/dialog-background.png" 0.15 "with the alert in the background"
+    no_caption "$out/dialog-launch-picture.png" 0.4 "in the launch picture"
+  }
   answer return accept "confirm true"
   closed_dialog=1
 fi
@@ -329,6 +365,7 @@ if windows || [ "$(uname)" = Darwin ]; then
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  new_window_bar
   # The driver numbers windows in the order they opened.
   driven_second=$(grep -c '^browser: window opened ' "$log")
   # The Windows runner's screen is 1920 by 1080 (check-windows.yml).
@@ -408,9 +445,11 @@ echo "  and hides 20 times, between the command bar and a tab's menu, with no pa
   "$out/link-target-uncovered.png"
 [ -z "$background_dialog" ] || echo "  An alert that came with another app in front of ilo's" \
   "window ($background_dialog) went under that app's window and over ilo's, and took the keyboard" \
-  "as ilo's window came to the front: $out/dialog-background.png"
+  "as ilo's window came to the front, with no caption of Windows' behind the window buttons there" \
+  "or in the launch picture: $out/dialog-background.png $out/dialog-launch-picture.png"
 [ -z "$closed_dialog" ] || echo "  Alt+F4 in a page's dialog cancels it as Esc does, and the" \
-  "dialog asks again: $out/dialog-after-close.png"
+  "dialog asks again, with no caption of Windows' behind the window buttons:" \
+  "$out/dialog-after-close.png"
 [ -z "$two_windows" ] || echo "  With two windows side by side, a row of the one behind shows its" \
   "card over that window, and a row of the one in front over the one in front:" \
   "$out/hover-card-window-behind.png"

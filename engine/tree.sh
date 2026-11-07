@@ -6,6 +6,17 @@ engine=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Chromium's instructions and skills for its own contributors' agents. Ours are the repository's
 # AGENTS.md. Some are symlinks to an AGENTS.md beside them. Chrome's own `skills` folders are a
 # browser feature, not agent skills, so they stay.
+# portablelinux's setup_toolchain empties third_party/devtools-frontend/src/node_modules/esbuild/, its
+# slash and all, and puts a link to npm's global esbuild in its place. A run that stopped after it
+# left that link in the scratch tree, and the next run's rm follows it into the global module, which
+# root owns, and fails. The link alone goes, here, and setup_toolchain makes it again.
+unlink_esbuild() {
+  local module=$1/third_party/devtools-frontend/src/node_modules/esbuild
+  if [ -L "$module" ]; then
+    rm "$module"
+  fi
+}
+
 remove_agent_instructions() {
   local src=$1
   find "$src" \( -name AGENTS.md -o -name CLAUDE.md -o -name GEMINI.md -o -name SKILL.md \

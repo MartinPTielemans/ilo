@@ -7,7 +7,6 @@ use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, poin
 
 use super::Fold;
 
-use crate::agents::runner::Cli;
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Shell, recorder::Recorder};
@@ -17,7 +16,8 @@ fn card() -> Card {
         agent: "task-1".into(),
         home: 1,
         space: 3,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
         asks: false,
@@ -50,9 +50,10 @@ fn conversation(steps: usize) -> Conversation {
         .collect();
     Conversation {
         agent: "task-1".into(),
-        name: "Claude",
+        name: "Claude".into(),
         title: "Flight to Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
+        progress: "".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -74,12 +75,21 @@ fn conversation(steps: usize) -> Conversation {
 /// is at the top of Space 1's Today; a click on the card shows its conversation. Without motion,
 /// so the area is in place at once.
 fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    shown_with(card(), cx)
+}
+
+/// As `shown`, with `card` for task-1's.
+fn shown_with(
+    card: Card,
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+    let agent = card.agent.clone();
     cx.update(|cx| {
         crate::shell::commands::bind_keys(cx);
         crate::text_input::bind_keys(cx);
     });
     let host = Rc::new(Recorder::default());
-    host.space_agents.borrow_mut().insert(3, "task-1".into());
+    host.space_agents.borrow_mut().insert(3, agent.clone());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     cx.update(|window, cx| {
@@ -121,12 +131,12 @@ fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTe
         shell.set_tabs(3, Vec::new(), vec![30], Vec::new(), Folders::default(), cx);
         shell.set_space(1, cx);
         shell.set_selected(10, cx);
-        shell.set_task_cards(vec![card()], cx);
+        shell.set_task_cards(vec![card], cx);
         shell.slides.clear();
     });
     cx.run_until_parked();
     let plate = shell
-        .read_with(cx, |shell, _| shell.task_plate_drawn("task-1"))
+        .read_with(cx, |shell, _| shell.task_plate_drawn(&agent))
         .expect("the task's plate");
     host.take();
     cx.simulate_click(plate.center(), Modifiers::none());
@@ -163,6 +173,52 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
         host.take().contains(&"task picture 30".to_string()),
         "the conversation wasn't sent"
     );
+}
+
+/// A click on the notification a task's need posted opens its card's conversation, as the card's
+/// click does, and leaves it open if it shows already, where the card's click would put it away.
+#[gpui::test]
+fn a_needs_notification_opens_its_task(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+    host.take();
+
+    let host_needs = Rc::new(NoNeeds);
+    cx.update(|_, cx| crate::needs_you::open(host_needs, cx));
+    let mut waits = card();
+    waits.dot = Dot::Waiting;
+    waits.status = "Which seat?".into();
+    cx.update(|_, cx| crate::needs_you::follow(&[waits], cx));
+    let agent = cx
+        .update(|_, cx| crate::needs_you::clicked(1, cx))
+        .expect("its task");
+    for _ in 0..2 {
+        shell.update(cx, |shell, cx| shell.show_needed_task(agent.clone(), cx));
+        cx.run_until_parked();
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, None))
+        );
+    }
+    assert_eq!(
+        host.take()
+            .iter()
+            .filter(|asked| *asked == "show task task-1")
+            .count(),
+        1
+    );
+}
+
+/// A host for the needs that says ilo is in the background and posts nowhere.
+struct NoNeeds;
+
+impl crate::needs_you::Host for NoNeeds {
+    fn badge(&self, _: usize) {}
+    fn active(&self) -> bool {
+        false
+    }
+    fn notify(&self, _: u64, _: &str, _: &str) {}
 }
 
 /// A click on the card shows its conversation in the page area, with the reply field's keyboard;
@@ -203,6 +259,59 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"task task-1 Stop".to_string()));
 }
 
+/// An outside agent's session shows its steps one by one, with no ask, and in the reply field's
+/// place a line that says to talk to it where it was started: the window keeps the keyboard, so
+/// typing and Return send nothing, and ⌘. still stops it.
+#[gpui::test]
+fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
+    let session = Card {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        title: "Claude Code".into(),
+        replies: false,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(session, cx);
+    let talk = Conversation {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        title: "Claude Code".into(),
+        about: "Working".into(),
+        progress: "".into(),
+        asked: "".into(),
+        lines: vec![
+            Line::Step(step(0, "Read the page", false)),
+            Line::Step(step(1, "Clicking “Tickets”", true)),
+        ],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    let (reply, window) = cx.update(|window, cx| {
+        let reply = view.read(cx).reply.focus_handle(cx).is_focused(window);
+        (reply, shell.read(cx).focus_handle.is_focused(window))
+    });
+    assert!(!reply && window, "the keyboard isn't the window's");
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the step under way doesn't shimmer"
+    );
+    host.take();
+    cx.simulate_input("Ryanair");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        !host.take().iter().any(|line| line.contains("Reply")),
+        "a reply went to a session"
+    );
+    assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
+    assert!(host.take().contains(&"task session-1 Stop".to_string()));
+}
+
 /// Esc steps back to the Space's tab and never stops the task, its pictures let go; a second click
 /// shows it again, pictured again, and ⌘W then closes the card, dismissing the task.
 #[gpui::test]
@@ -238,6 +347,62 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
     shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent(), None));
 }
 
+/// A task with two pages opens on Pages, its grid, a picture each; a pick zooms its page out of
+/// its picture, Esc puts it back in its picture on Pages, and Esc again goes to Talk, whose lines
+/// show, and a third closes the task.
+#[gpui::test]
+fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "seatmap.example".into()),
+    ];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "two pages opened on Talk"
+    );
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let tiles: Vec<u64> = view.read_with(cx, |view, _| {
+        view.drawn.borrow().iter().map(|(tab, _)| *tab).collect()
+    });
+    assert_eq!(tiles, [30, 31]);
+    let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert!(host.take().contains(&"select 30".to_string()));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+
+    cx.simulate_keystrokes("escape");
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+    assert!(
+        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "the page went back to Talk"
+    );
+    shell.update(cx, |shell, cx| shell.task_step_back(cx));
+    assert!(
+        !shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
+        "Esc stayed on Pages"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+    shell.update(cx, |shell, cx| shell.task_step_back(cx));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
 /// A picture's click zooms its page out of it, at the picture's place and with its image; what
 /// the task does meanwhile isn't pictured under the page, but is once the page is back.
 #[gpui::test]
@@ -249,9 +414,11 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let request = crate::shell::picture::next_request() - 1;
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
-    shell.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // One page opens on Talk, which has no pictures: Pages has them.
+    assert!(!shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)));
+    view.update(cx, |view, cx| view.show_pages(true, cx));
+    cx.run_until_parked();
     let (tab, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
     assert_eq!(tab, 30);
     host.take();
@@ -565,4 +732,66 @@ fn the_lines_follow_only_while_the_user_reads_at_their_end() {
         "motion reduced"
     );
     assert_eq!(follows(true, false, true, true), Follows::Eased);
+}
+
+/// A step under way that shimmers while nothing else moves draws on the loading dots' clock, not
+/// at every display frame, as each frame draws the whole window again (#1700).
+#[gpui::test]
+fn the_shimmer_draws_on_the_loading_dots_clock(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let mut talk = conversation(1);
+    if let Line::Trace(trace) = &mut talk.lines[0] {
+        (trace.running, trace.took, trace.items) = (
+            true,
+            None,
+            vec![TraceItem::Step(step(0, "Waiting on you", true))],
+        );
+    }
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    // Its trace opens as it first draws, and shimmers from the next frame.
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert!(
+        view.read_with(cx, |view, _| view.moving(false)),
+        "the step under way doesn't shimmer"
+    );
+    assert!(
+        shell.read_with(cx, |shell, _| shell.breath.pending()),
+        "the shimmer isn't on the loading dots' clock"
+    );
+}
+
+/// The reply field's "Reply to …" follows a switch between light and dark while the conversation
+/// stays open, as its lines do, in the placeholder colour of the palette it's drawn in (#1659).
+#[gpui::test]
+fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::FORM_PLACEHOLDER;
+    let (shell, _, cx) = shown(cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let talk = shell.talk.as_ref().expect("the conversation");
+            let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
+            (
+                reply,
+                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
 }

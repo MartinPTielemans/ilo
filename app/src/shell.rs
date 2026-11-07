@@ -31,13 +31,22 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
-#[cfg(test)]
-mod agent_spaces;
 mod assets;
+#[cfg(test)]
+mod autofill_tests;
+#[cfg(test)]
+mod bar_commands_tests;
+mod bar_usage;
+#[cfg(test)]
+mod bar_usage_tests;
+mod battery;
 mod beside;
+#[cfg(test)]
+mod blank_tests;
 mod browser;
 mod card_strip;
 mod cast;
+mod chooser;
 mod chosen;
 mod clean_link;
 #[cfg(test)]
@@ -60,12 +69,14 @@ mod fly_in;
 mod footer;
 #[cfg(test)]
 mod full_screen;
+mod full_screen_escape;
 mod header;
 #[cfg(test)]
 mod help_tests;
 mod history;
 mod hover_cards;
 mod keys;
+mod launch_room;
 mod library;
 mod link;
 #[cfg(test)]
@@ -80,12 +91,15 @@ mod menu_bar;
 mod menus;
 mod naming;
 mod new_space;
+mod new_window;
 mod onboarding;
 mod page_dialog;
 mod page_menu;
 mod page_motion;
 mod panes;
 mod permission;
+#[cfg(test)]
+mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;
@@ -95,6 +109,7 @@ mod recent_downloads;
 #[cfg(test)]
 mod recorder;
 mod rows;
+mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
 pub(crate) mod scaled;
@@ -103,8 +118,9 @@ mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
+mod space_order;
 mod split_targets;
-mod swap;
+pub(crate) mod swap;
 mod swipe;
 mod task_area;
 mod themes;
@@ -112,23 +128,26 @@ mod tile_theme;
 mod trace;
 mod trouble;
 mod undo;
-mod update_sign;
+mod update_banner;
 
 pub use assets::Assets;
+pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
+pub use battery::PAUSED;
 pub use browser::{
-    AgentGrants, Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton,
-    WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
+pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
 use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
-    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarTab, CancelName, Command, CreateSpace, KEY_CONTEXT,
-    KeepName, Match, Run, bar_commands, bind_keys, copy_from_bar, copy_url_of_preview,
-    find_commands, key_name, keystroke_keys, keystroke_label, menu_item, pane_added, run_from_bar,
-    shown_tab, task_page_shown, with_named_rows,
+    BAR_ROWS, BAR_TABS_SHOWN, BarCommand, BarSpace, BarTab, CancelName, Command, CreateSpace,
+    KEY_CONTEXT, KeepName, Match, Run, STAY_ON_TOP, bar_commands, bind_keys, copy_from_bar,
+    copy_url_of_preview, find_commands, key_name, keystroke_keys, keystroke_label, menu_item,
+    pane_added, run_from_bar, shown_tab, task_page_shown, window_became_key, with_named_rows,
 };
-pub use drag::dropped_urls;
+pub use display_face::display_text;
+pub use drag::{WindowDragEnd, dropped_urls};
 pub use drm_note::PlayReady;
 pub use extensions::{
     Extension, ExtensionAction, ExtensionCommand, menu_item as extension_menu_item,
@@ -141,10 +160,12 @@ pub use keys::{
     Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
     recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
 };
+pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
+pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
@@ -155,9 +176,11 @@ pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
 use recent_downloads::RecentDownloads;
 pub use recent_downloads::{FilePreview, HOVER_ALL};
+pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
+pub use sidebar::{SidebarEdge, edge_reveals};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -348,8 +371,6 @@ use crate::tokens::shell::LOADING_SIZE;
 use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
 use crate::tokens::shell::STATUS_LOADING;
-use crate::tokens::shell::STATUS_RING;
-use crate::tokens::shell::STATUS_RING_COLOR;
 // A loading dot's breath, out and back, eased in and out (ours, #321).
 const BREATH: Duration = Duration::from_millis(1600);
 use crate::tokens::shell::TITLE_GAP;
@@ -389,6 +410,8 @@ const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
 use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_DRAGGED;
+use crate::tokens::shell::SPACE_DROP_LINE;
 use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_LEAST;
 use crate::tokens::shell::SPACE_PITCH;
@@ -463,6 +486,7 @@ use crate::tokens::shell::FORM_TEXT;
 use crate::tokens::shell::NAV;
 use crate::tokens::shell::NAV_DISABLED;
 use crate::tokens::shell::NAV_HOVERED;
+use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
 use crate::tokens::shell::SPACE_NAME;
 use crate::tokens::shell::SPACE_NAME_SHUT;
@@ -702,10 +726,10 @@ impl Space {
         split.map_or(0, |split| split.expanded)
     }
 
-    /// Where its rows are in the list, from its top.
-    fn slots(&self) -> HashMap<Slot, f32> {
+    /// Where its rows are in the list, from its top, under a head `head` tall.
+    fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(&pinned, &today)
+        slots(head, &pinned, &today)
     }
 }
 
@@ -725,6 +749,8 @@ struct SpaceForm {
 enum Naming {
     Space(u64),
     Tab(u64),
+    /// The split view a tab is in, in its row in place of its pages' titles.
+    Split(u64),
     /// A pinned tab's pinned URL, in its row in place of its title.
     PinnedUrl(u64),
     Folder(u64),
@@ -736,7 +762,7 @@ impl Naming {
     /// The tab whose row the field is in, if it's a tab's.
     fn tab(self) -> Option<u64> {
         match self {
-            Naming::Tab(tab) | Naming::PinnedUrl(tab) => Some(tab),
+            Naming::Tab(tab) | Naming::Split(tab) | Naming::PinnedUrl(tab) => Some(tab),
             Naming::Space(_) | Naming::Folder(_) | Naming::Profile(_) => None,
         }
     }
@@ -901,6 +927,9 @@ struct Drag {
     /// and since when, for paging to the Space on that side.
     space: u64,
     edge: Option<(bool, Instant)>,
+    /// The Space it last paged to, which the core says it shows only once that Space's page is
+    /// handed over, by when the pointer can be off the edge (#1840).
+    paged: Option<u64>,
     /// Pressed with ⌥, whose click splits once it's let go without having moved, so that a drag
     /// with ⌥ held can drop a copy instead (#690).
     alt_click: bool,
@@ -1058,6 +1087,10 @@ pub struct Shell {
     /// profile whose tab it is. The ids come from one counter, so a Space's never is a profile's.
     all_favorites: Vec<u64>,
     favorite_holders: HashMap<u64, u64>,
+    /// The favorites that are split views, each one favorite, its first tab's tile, and the tab of
+    /// each focused last, by its first, which showing it shows focused in any Space.
+    favorite_splits: Vec<Split>,
+    favorite_focus: HashMap<u64, u64>,
     /// The profiles, by id and name, the one the browser started with first.
     profiles: Vec<(u64, SharedString)>,
     /// The tabs of every Space, and the favorites.
@@ -1204,6 +1237,11 @@ pub struct Shell {
     new_tab: bool,
     /// When the card started to show no page, for the line on it to fade in from.
     empty_since: Option<Instant>,
+    /// Whether the command bar this window opened is up, over the card while it shows no page,
+    /// which then draws nothing: its one offer, New Tab, is the bar.
+    bar_over_card: bool,
+    /// When the bar last left the card, for its content to fade in again from.
+    card_back: Option<Instant>,
     /// The fade has ended and said so.
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
@@ -1223,8 +1261,16 @@ pub struct Shell {
     /// once it has.
     bar_follows: bool,
     drag: Option<Drag>,
+    /// A tab's row dragged out of the window, as the system drags it, until it's let go.
+    window_drag: Option<drag::WindowDrag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
+    /// A Space's dot or card dragged along the switcher or the Library, the dots and cards gliding
+    /// to their places after the Spaces' order changed, and where the one let go was along its
+    /// row, which glides from there.
+    space_drag: Option<space_order::SpaceDrag>,
+    space_slides: space_order::SpaceSlides,
+    space_landing: Option<(space_order::Along, u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1267,6 +1313,12 @@ pub struct Shell {
     text_system: Option<WindowTextSystem>,
     /// Whether the window is full screen, as macOS last told once its transition was over.
     full_screen: bool,
+    /// ⌘N's or ⇧⌘N's window, until its command bar opens once it's on screen.
+    opening: Option<new_window::Opening>,
+    /// Whether Window › Stay On Top keeps it over other apps' windows.
+    on_top: bool,
+    /// The Esc presses its page has had first in full screen, which leave held or twice.
+    escapes: full_screen_escape::EscapeToLeave,
     /// On Linux, whether the window is maximized, which its third button shows.
     maximized: bool,
     /// Whether the window went full screen for the page, so it comes back with it.
@@ -1452,6 +1504,11 @@ pub struct Shell {
     question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tab whose question's card shows, and its moment on screen before Block and Allow work.
     question_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What the tabs' pages ask for a device (chooser.rs), kept as the questions are.
+    choosers: HashMap<u64, chooser::Asked>,
+    chooser_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose chooser shows, and its moment on screen before a click grants.
+    chooser_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1468,16 +1525,17 @@ pub struct Shell {
     /// The tasks in the Archive, the last to leave the foot first, which Archived Tabs lists among
     /// the tabs.
     archived_tasks: Vec<crate::agents::task::ArchivedTask>,
+    /// Library › Agents' past tasks of the window's profile, as read when it shows them.
+    agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
     focus_talk: bool,
-    /// What the agents do and what the user holds from them, for the bar in an agent's Space
+    /// What the agents do and what the user holds from them, for a task's page's strip
     /// (agent_bar.rs).
     agent_status: Vec<crate::agents::Status>,
-    agent_bar_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The Spaces of the tasks the user asked from ⌘T, which the window never lists, and what the
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
@@ -1490,20 +1548,30 @@ pub struct Shell {
     media_dismissed: HashSet<u64>,
     /// The players last drawn, as the log has them, and where the bottom one is.
     media_logged: RefCell<Vec<u64>>,
+    media_stack: media_player::MediaStack,
     media_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Whether an update waits for a restart, which Restart to Update at the sidebar's foot says,
-    /// where that's drawn, and the watch on the updater.
-    update_waiting: bool,
+    /// What the update banner at the foot offers, whether it's open under the pointer or says a
+    /// restart is under way, its opening or closing from a height, and what the log said last
+    /// (update_banner.rs).
+    update_banner: Option<update_banner::Waiting>,
+    update_open: bool,
+    update_restarting: bool,
+    update_motion: Option<(f32, Instant)>,
+    update_said: Option<&'static str>,
+    /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
-    /// Whether a tooltip the agent bar asked for may be up, and whether its bar showed the agent
-    /// at work, so it ends once that bar is gone (agent_bar.rs).
-    agent_tip: Cell<Option<bool>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
+    battery_saver: Option<i32>,
+    /// Where its leaf was drawn last, which the log says when it changes.
+    battery_leaf_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tabs whose pages Chrome froze, as Battery Saver does those busy out of sight.
+    frozen: HashSet<u64>,
     /// Where the note's card was drawn last, which the log says when it changes.
     drm_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The card of each tab whose page died while this window showed it, until it loads again.
@@ -1531,9 +1599,21 @@ pub struct Shell {
     /// watches that draw the window again once either changes.
     system_tone: Tone,
     app_appearance: Appearance,
+    /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
+    /// offers or opens a Little ilo window.
+    little_windows: bool,
+    /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
+    /// as the window last drew.
+    lone_header: bool,
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
+    /// Whether the window is the one the user is in, as the host says (host_watch_window_main):
+    /// its header's glyphs dim while it isn't. Its own overlays and page having the keyboard
+    /// leave it so, unlike GPUI's activation.
+    window_main: bool,
+    /// Whether the header's glyphs were last drawn dimmed, which the log says when it changes.
+    nav_dimmed_drawn: Cell<Option<bool>>,
     /// Whether the host was last asked to draw the material light.
     window_light: Option<bool>,
     /// The menus' look capture mode was last given, which it takes again when it changes (#861).
@@ -1562,6 +1642,10 @@ pub struct Shell {
     card_move: Option<Subscription>,
     /// A private window's: its one Space is its own, unsaved, in an off-the-record session.
     private: bool,
+    /// A Blank Window's: its one Space is its own, unsaved, in the user's profile.
+    blank: bool,
+    /// The user's Spaces a Blank Window's tab can move to, by id, name and profile.
+    blank_targets: Vec<(u64, SharedString, u64)>,
     /// A Little ilo window's (Arc's Little Arc): its one Space is its own, holding its page.
     little: Option<little::Little>,
 }
@@ -1588,6 +1672,8 @@ impl Shell {
             outline_changed: false,
             favorites: Vec::new(),
             all_favorites: Vec::new(),
+            favorite_splits: Vec::new(),
+            favorite_focus: HashMap::new(),
             favorite_holders: HashMap::new(),
             profiles: Vec::new(),
             tabs: HashMap::new(),
@@ -1653,6 +1739,8 @@ impl Shell {
             clearing: Vec::new(),
             new_tab: false,
             empty_since: None,
+            bar_over_card: false,
+            card_back: None,
             empty_settled: false,
             welcome: false,
             onboarding: None,
@@ -1661,7 +1749,11 @@ impl Shell {
             press_closed_bar: false,
             bar_follows: false,
             drag: None,
+            window_drag: None,
             dragged: false,
+            space_drag: None,
+            space_slides: HashMap::new(),
+            space_landing: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -1682,6 +1774,9 @@ impl Shell {
             link: None,
             text_system: None,
             full_screen: false,
+            opening: None,
+            on_top: false,
+            escapes: Default::default(),
             maximized: false,
             window_for_page: false,
             page_held: None,
@@ -1770,6 +1865,9 @@ impl Shell {
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
+            choosers: HashMap::new(),
+            chooser_drawn: Rc::default(),
+            chooser_settling: RefCell::default(),
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
@@ -1779,11 +1877,11 @@ impl Shell {
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
+            agent_history: Vec::new(),
             show_restored: None,
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),
-            agent_bar_drawn: Rc::default(),
             task_spaces: Vec::new(),
             task_area: None,
             task_core: 0,
@@ -1791,13 +1889,20 @@ impl Shell {
             task_strip_drawn: Rc::default(),
             media_dismissed: HashSet::new(),
             media_logged: RefCell::default(),
+            media_stack: Default::default(),
             media_drawn: Rc::default(),
-            update_waiting: crate::updates::ready(cx),
+            update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
+            update_open: false,
+            update_restarting: false,
+            update_motion: None,
+            update_said: None,
             update_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
-            agent_tip: Cell::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            battery_saver: None,
+            battery_leaf_drawn: Rc::default(),
+            frozen: HashSet::new(),
             drm_drawn: Rc::default(),
             crash_cards: HashMap::new(),
             crash_drawn: Rc::default(),
@@ -1820,12 +1925,18 @@ impl Shell {
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
+            little_windows: true,
+            lone_header: false,
             forced_tone: None,
             window_active: true,
+            window_main: true,
+            nav_dimmed_drawn: Cell::new(None),
             window_watches: Vec::new(),
             window_light: None,
             capture_look: None,
             private: false,
+            blank: false,
+            blank_targets: Vec::new(),
             little: None,
         }
     }
@@ -1860,9 +1971,60 @@ impl Shell {
         shell
     }
 
+    /// The extensions the window it opened from heard, for a private window: the core reports
+    /// them only as they change, so a window that opens after hears none of its own.
+    pub fn hear_extensions_from(&mut self, from: &Entity<Shell>, cx: &App) {
+        self.extensions = from.read(cx).extensions.clone();
+    }
+
     /// Whether this is a private window's shell.
     pub fn private(&self) -> bool {
         self.private
+    }
+
+    /// A Blank Window's shell (⌃⌘N, Arc's): one Space of its own, `space` in `profile`, unsaved
+    /// and in no other window, named for what it is, with the square glyph before its name; its
+    /// tabs are Today's alone, and it has no favorites, Space switcher or Library, as a private
+    /// window has none, but the look and the extensions of any window of its profile.
+    pub fn blank_window(
+        browser: Rc<dyn Browser>,
+        space: u64,
+        profile: u64,
+        from: Option<&Entity<Shell>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut shell = Self::new(browser, cx);
+        shell.blank = true;
+        // The user's Spaces for Move to, which the core told the window it came from, and tells
+        // this one only as they change.
+        if let Some(from) = from {
+            shell.blank_targets = (from.read(cx).spaces.iter())
+                .filter(|each| each.agent.is_empty())
+                .map(|each| (each.id, each.name.clone(), each.profile))
+                .collect();
+        }
+        shell.space = space;
+        shell.spaces = vec![Space {
+            id: space,
+            name: BLANK_WINDOW.into(),
+            color: None,
+            theme: None,
+            icon: BLANK_ICON.into(),
+            agent: SharedString::default(),
+            profile,
+            pinned: Vec::new(),
+            today: Vec::new(),
+            splits: Vec::new(),
+            folders: Folders::default(),
+            shown: 0,
+        }];
+        shell
+    }
+
+    /// Whether the window shows one Space of its own and no others: a private window or a Blank
+    /// Window. Its tabs are Today's alone and stay in it.
+    pub fn one_space(&self) -> bool {
+        self.private || self.blank
     }
 
     /// A shell for another window, which starts out knowing what `from` heard from the core about
@@ -1883,7 +2045,11 @@ impl Shell {
         shell.profiles = from.profiles.clone();
         shell.archive = from.archive.clone();
         shell.page_favicons = from.page_favicons.clone();
-        shell.downloads = from.downloads.clone();
+        // Only what this window lists: a private window's session's never reach another.
+        shell.downloads = (from.downloads.iter())
+            .filter(|download| from.private == shell.private && shell.lists_download(download))
+            .cloned()
+            .collect();
         shell.download_icons = from.download_icons.clone();
         shell.captures = from.captures.clone();
         shell.download_previews = from.download_previews.clone();
@@ -1910,9 +2076,7 @@ impl Shell {
         browser: Rc<dyn Browser>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let key = cx
-            .try_global::<ShellHandle>()
-            .map(|handle| handle.0.clone());
+        let key = commands::key_shell(cx);
         let shell = Self::seeded_from(from, browser, cx);
         if let Some(key) = key {
             cx.set_global(ShellHandle(key));
@@ -1949,24 +2113,59 @@ impl Shell {
 
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
+        let head = self.list_head();
         self.shown_space()
-            .map_or_else(|| slots(&[], &[]), Space::slots)
+            .map_or_else(|| slots(head, &[], &[]), |space| space.slots(head))
     }
 
-    /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
+    /// The favorite split holding `tab`, if it's in one.
+    pub(super) fn favorite_split(&self, tab: u64) -> Option<&Split> {
+        (self.favorite_splits.iter()).find(|split| split.tabs.contains(&tab))
+    }
+
+    /// The tabs shown with `tab` in the Space shown, in their order: its split's, a favorite's
+    /// split's too, else `tab` alone.
     fn panes(&self, tab: u64) -> Vec<u64> {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.tabs.clone();
+        }
         self.shown_space()
             .map_or_else(|| vec![tab], |space| space.panes(tab))
     }
 
     /// Whether `tab`'s split view in the Space shown is stacked.
     fn stacked(&self, tab: u64) -> bool {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.stacked;
+        }
         self.shown_space().is_some_and(|space| space.stacked(tab))
+    }
+
+    /// `tab`'s split view in the Space shown.
+    fn split(&self, tab: u64) -> Option<&Split> {
+        let space = self.shown_space()?;
+        space.splits.iter().find(|split| split.tabs.contains(&tab))
     }
 
     /// The tab of `tab`'s split view in the Space shown that took the card, else 0.
     fn expanded(&self, tab: u64) -> u64 {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.expanded;
+        }
         self.shown_space().map_or(0, |space| space.expanded(tab))
+    }
+
+    /// The tab a click on `tab`'s tile shows: the one its split focused last, else `tab`.
+    pub(super) fn favorite_focused(&self, tab: u64) -> u64 {
+        let Some(split) = self.favorite_split(tab) else {
+            return tab;
+        };
+        let lead = split.tabs[0];
+        let focused = self.favorite_focus.get(&lead).copied().unwrap_or(lead);
+        match split.tabs.contains(&focused) {
+            true => focused,
+            false => lead,
+        }
     }
 
     /// The shares of `tab`'s split view in the Space shown, or none while they're even. An
@@ -1983,9 +2182,12 @@ impl Shell {
                 };
                 panes::expanded_shares(panes.len(), focused, f32::from(length))
             }
-            None => self
-                .shown_space()
-                .map_or_else(Vec::new, |space| space.shares(tab)),
+            None => match self.favorite_split(tab) {
+                Some(split) => split.shares.clone(),
+                None => self
+                    .shown_space()
+                    .map_or_else(Vec::new, |space| space.shares(tab)),
+            },
         }
     }
 
@@ -2028,6 +2230,10 @@ impl Shell {
 
     /// The tab a row shows: the one of its split shown last, else the first.
     fn row_tab(&self, row: u64) -> u64 {
+        // A favorite split shows focused where it was focused last, in whichever Space.
+        if self.favorite_split(row).is_some() {
+            return self.favorite_focused(row);
+        }
         let panes = self.panes(row);
         self.recent
             .iter()
@@ -2087,6 +2293,9 @@ impl Shell {
         if self.page_laid != Some(frame) {
             self.page_laid = Some(frame);
             self.browser.lay_out_page(frame.0, frame.1, cx);
+            if let Some(page) = self.preview_page() {
+                self.browser.preview_page_moved(page, cx);
+            }
             // The card moved, such as with the sidebar, and the plate in its corner with it.
             self.show_link(cx);
         }
@@ -2135,18 +2344,15 @@ impl Shell {
     }
 
     /// Whether a link from `tab`'s page to another site opens in a link preview: `tab` is a
-    /// favorite or pinned in the Space shown, as such a tab keeps its own site, and the Space is
-    /// the user's, as a preview is theirs alone.
+    /// favorite or pinned in the Space shown, as such a tab keeps its own site.
     pub fn previews_links_of(&self, tab: u64) -> bool {
-        let kept = self.favorites.contains(&tab) || self.pinned().contains(&tab);
-        kept && !self.agents_space_shown()
+        self.favorites.contains(&tab) || self.pinned().contains(&tab)
     }
 
     /// Whether a link the user asks for in a link preview, by ⇧-click or Open Link in Peek, opens
-    /// in one: they have previews on, the window shows `tab`'s page, whatever tab it is, and the
-    /// Space is theirs, as a preview is theirs alone.
+    /// in one: they have previews on and the window shows `tab`'s page, whatever tab it is.
     pub fn peeks_links_of(&self, tab: u64) -> bool {
-        self.browser.link_previews() && self.shows(tab) && !self.agents_space_shown()
+        self.browser.link_previews() && self.shows(tab)
     }
 
     /// The user asked for `url`, a link at `at` in `tab`'s page, in a link preview: it opens over
@@ -2160,7 +2366,7 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some((page, radius)) = self.page_laid.filter(|_| self.peeks_links_of(tab)) else {
+        let Some((page, radius)) = self.preview_page().filter(|_| self.peeks_links_of(tab)) else {
             return false;
         };
         // check.sh waits for this line.
@@ -2173,6 +2379,20 @@ impl Shell {
     /// Where the page was laid out last, and the radius of its corners.
     pub fn page_laid(&self) -> Option<(Bounds<Pixels>, f32)> {
         self.page_laid
+    }
+
+    /// The part of the page laid out last that the window shows, which a link preview goes over:
+    /// all of it, but while the Library pushes it past the window's right edge, where a preview over
+    /// the whole page would run off the window.
+    pub fn preview_page(&self) -> Option<(Bounds<Pixels>, f32)> {
+        let window = Bounds::new(point(px(0.), px(0.)), self.viewport);
+        self.page_laid.map(|(page, radius)| {
+            let shown = page.intersect(&window);
+            match shown.size.width > px(0.) && shown.size.height > px(0.) {
+                true => (shown, radius),
+                false => (page, radius),
+            }
+        })
     }
 
     /// Where the card's left edge is: past the sidebar, or at the inset once ⌘S has hidden it,
@@ -2198,7 +2418,16 @@ impl Shell {
     /// The Spaces, by id, name, colour, profile, icon and the name of the agent each belongs to,
     /// empty for the user's own, in the switcher's order.
     pub fn set_spaces(&mut self, spaces: Vec<SpaceEntry>, cx: &mut Context<Self>) {
-        if self.private {
+        // A Blank Window keeps the user's Spaces for its tabs' Move to, its way out, and shows its
+        // own alone.
+        if self.blank {
+            self.blank_targets = (spaces.into_iter())
+                .filter(|(.., agent)| agent.is_empty())
+                .map(|(id, name, _, profile, ..)| (id, name, profile))
+                .collect();
+            return;
+        }
+        if self.one_space() {
             return;
         }
         if self.little.is_some() {
@@ -2210,6 +2439,8 @@ impl Shell {
         log!("browser: spaces {}", ids.join(" "));
         let width = self.library_width();
         let filled = !self.spaces.is_empty();
+        let places = self.space_places();
+        let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let listed = &mut self.spaces_listed;
         let made: Vec<u64> = spaces
             .iter()
@@ -2289,6 +2520,12 @@ impl Shell {
                 }
             })
             .collect();
+        // Only the Spaces in both lists say whether the order changed.
+        let now: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
+            of.iter().copied().filter(|id| with.contains(id)).collect()
+        };
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -2396,17 +2633,23 @@ impl Shell {
         self.opened = None;
         self.closing.clear();
         self.clearing.clear();
-        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag ends.
-        match self
-            .drag
-            .as_mut()
-            .filter(|drag| drag.edge.is_some() && !drag.dropped)
-        {
+        // A tab dragged to the sidebar's edge pages with it, to drop there; any other drag goes
+        // back, as its release would put it back.
+        match self.drag.as_mut().filter(|drag| {
+            let paged = drag.edge.is_some() || drag.paged == Some(space);
+            paged && !drag.dropped
+        }) {
             Some(drag) => {
                 drag.to = Place::List(false, usize::MAX);
                 drag.line = None;
             }
-            None => self.drag = None,
+            None => {
+                if let Some(drag) = self.drag.take().filter(|drag| !drag.dropped) {
+                    self.dragged |= drag.moving;
+                    self.putting_back |= drag.moving;
+                    self.retip = true;
+                }
+            }
         }
         if self.show_favorites() {
             self.log_favorites();
@@ -2430,12 +2673,13 @@ impl Shell {
         folders: Folders,
         cx: &mut Context<Self>,
     ) {
+        let head = self.list_head();
         let Some(entry) = self.spaces.iter_mut().find(|entry| entry.id == space) else {
             return self.set_task_tabs(space, pinned, today, cx);
         };
         // The rows of the Space shown move from where they were, unless it's being filled.
         let had_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
-        let before = (space == self.space && had_tabs).then(|| entry.slots());
+        let before = (space == self.space && had_tabs).then(|| entry.slots(head));
         let listed = &mut self.listed;
         let opened: Vec<u64> = pinned
             .iter()
@@ -2445,6 +2689,16 @@ impl Shell {
             .collect();
         entry.pinned = pinned;
         entry.today = today;
+        for split in &splits {
+            let was = entry
+                .splits
+                .iter()
+                .find(|was| was.tabs.first() == split.tabs.first());
+            if was.map_or(!split.name.is_empty(), |was| was.name != split.name) {
+                // check.sh waits for this line.
+                log!("browser: renamed split {} {}", split.tabs[0], split.name);
+            }
+        }
         entry.splits = splits;
         for (folder, (name, _)) in &folders.folders {
             if entry
@@ -2527,10 +2781,34 @@ impl Shell {
 
     /// Every favorite, left to right, each with its holder: the Space it belongs to under Each
     /// Space (the core's `bc_favorite_space`), else its profile.
-    pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
+    /// The favorites, as set_favorites takes them, with those that are split views and the tab of
+    /// each focused last, by its first.
+    pub fn set_split_favorites(
+        &mut self,
+        favorites: Vec<(u64, u64)>,
+        splits: Vec<Split>,
+        focus: HashMap<u64, u64>,
+        cx: &mut Context<Self>,
+    ) {
         if self.private || self.little.is_some() {
             return;
         }
+        self.favorite_splits = splits;
+        self.favorite_focus = focus;
+        self.set_favorites(favorites, cx);
+    }
+
+    pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
+        if self.one_space() || self.little.is_some() {
+            return;
+        }
+        // A favorite split's tabs are favorites still.
+        self.favorite_splits.retain(|split| {
+            split
+                .tabs
+                .iter()
+                .all(|tab| favorites.iter().any(|f| f.0 == *tab))
+        });
         let tiles = self.drawn();
         self.all_favorites = favorites.iter().map(|&(tab, _)| tab).collect();
         self.favorite_holders = favorites.into_iter().collect();
@@ -2566,6 +2844,14 @@ impl Shell {
         // check.sh reads these lines.
         let ids: Vec<String> = self.favorites.iter().map(u64::to_string).collect();
         log!("browser: favorites {}", ids.join(" "));
+        let splits: Vec<String> = (self.favorites.iter())
+            .filter_map(|&tab| self.favorite_split(tab))
+            .map(|split| {
+                let tabs: Vec<String> = split.tabs.iter().map(u64::to_string).collect();
+                tabs.join("+")
+            })
+            .collect();
+        log!("browser: favorite splits {}", splits.join(" "));
     }
 
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
@@ -2593,6 +2879,7 @@ impl Shell {
             })
         });
         self.crash_cards.retain(|tab, _| open(tab));
+        self.forget_switches(open, cx);
         self.recent.retain(open);
         if let Some(tab) = self
             .renaming
@@ -2645,6 +2932,11 @@ impl Shell {
         if self.task_tab_shown(tab, cx) {
             return;
         }
+        // The page of a favorite split focused now is the one it shows focused next, in any Space,
+        // as the core keeps it.
+        if let Some(lead) = self.favorite_split(tab).map(|split| split.tabs[0]) {
+            self.favorite_focus.insert(lead, tab);
+        }
         // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
         // tab's switch ends here.
         match self.switching {
@@ -2666,7 +2958,7 @@ impl Shell {
         self.show_in_space(tab, cx);
         self.scroll_to_row(tab);
         if self.walked.is_none() {
-            self.shown(tab);
+            self.shown(tab, cx);
         }
         self.selected_for_picture(tab, cx);
         self.hid_for_cards(hidden, cx);
@@ -2692,8 +2984,9 @@ impl Shell {
         let new_tab = follows
             && self
                 .browser
-                .command_bar_follows(self.bar_tabs(), self.open_tabs(), cx);
+                .command_bar_follows(self.bar_tabs(cx), self.open_tabs(cx), cx);
         self.set_new_tab(new_tab, cx);
+        self.set_bar_over_card(new_tab, cx);
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
@@ -2709,6 +3002,7 @@ impl Shell {
     /// and the menu bar lists its Space's extensions.
     pub fn became_key(&mut self, cx: &mut Context<Self>) {
         cx.set_global(ShellHandle(cx.weak_entity()));
+        commands::heard_key(&cx.weak_entity());
         // Its tab's dialog goes over its card again, as another window's may have shown since, and
         // its hung page's note shows, which waited while it was behind.
         self.page_dialog_shown = None;
@@ -2721,6 +3015,7 @@ impl Shell {
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
     pub fn command_bar_dismissed(&mut self, cx: &mut Context<Self>) {
+        self.set_bar_over_card(false, cx);
         self.set_new_tab(false, cx);
         if self.adding_pane.take().is_some() {
             self.lay_out_page(cx);
@@ -2765,6 +3060,7 @@ impl Shell {
     /// Makes `tab` the Space's shown tab, whose row a closed folder keeps, and moves the rows if
     /// that changes them.
     fn show_in_space(&mut self, tab: u64, cx: &App) {
+        let head = self.list_head();
         let space = self.spaces.iter_mut().find(|space| space.id == self.space);
         let Some(space) = space.filter(|space| space.shown != tab) else {
             return;
@@ -2774,24 +3070,35 @@ impl Shell {
             space.shown = tab;
             return;
         }
-        let before = space.slots();
+        let before = space.slots(head);
         space.shown = tab;
-        if space.slots() != before {
+        if space.slots(head) != before {
             self.move_rows(before, Curve::Slide, cx);
         }
     }
 
-    /// The row with the selected plate: the tab shown's, or its split's.
-    fn selected_row(&self) -> Row {
-        if self.new_tab {
-            Row::NewTab
-        } else {
-            Row::Tab(self.row_of(self.selected))
+    /// The row with the selected plate: the tab shown's, or its split's, or New Tab's while ⌘T's
+    /// bar is open. None while a task has the page area, as its card has the plate then.
+    fn selected_row(&self) -> Option<Row> {
+        match self.new_tab {
+            true => Some(Row::NewTab),
+            false => self
+                .shown_has_plate()
+                .then(|| Row::Tab(self.row_of(self.selected))),
         }
     }
 
-    fn shown(&mut self, tab: u64) {
+    /// Whether the tab shown has the selected plate, on its row or its tile: not while ⌘T's bar
+    /// gives it to New Tab, or while a task's conversation or page is in the page area.
+    fn shown_has_plate(&self) -> bool {
+        !self.new_tab && self.task_area.is_none()
+    }
+
+    fn shown(&mut self, tab: u64, cx: &mut App) {
         if tab != 0 {
+            if self.recent.first() != Some(&tab) {
+                self.switched_to(tab, cx);
+            }
             self.recent.retain(|&other| other != tab);
             self.recent.insert(0, tab);
         }
@@ -2799,11 +3106,11 @@ impl Shell {
 
     /// ⌃ went up, which ends a ⌃Tab walk on the tab it shows. A click ends it too, and the core
     /// may report the tab the click showed before this runs, so the walk's tab counts first.
-    pub fn control_released(&mut self, _: &mut Context<Self>) {
+    pub fn control_released(&mut self, cx: &mut Context<Self>) {
         if let Some(walked) = self.walked.take().filter(|tab| self.tabs.contains_key(tab)) {
-            self.shown(walked);
+            self.shown(walked, cx);
         }
-        self.shown(self.selected);
+        self.shown(self.selected, cx);
     }
 
     // The core reports a tab's title, favicon and state whenever Chromium touches them, often with
@@ -2877,7 +3184,8 @@ impl Shell {
                 flag(left_pinned_host)
             );
         }
-        if (page.audible, page.muted) != (entry.page.audible, entry.page.muted) {
+        let sounded = (page.audible, page.muted) != (entry.page.audible, entry.page.muted);
+        if sounded {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
@@ -2955,6 +3263,8 @@ impl Shell {
         self.tab_changed(tab, changed, cx);
         // A player is for a tab out of sight, whose row may not be drawn.
         if media_changed && self.lists(tab) {
+            // So the stack's order is when each player came, not when it was next drawn.
+            self.media_players();
             cx.notify();
         }
         if let Some(trouble) = trouble {
@@ -2963,6 +3273,10 @@ impl Shell {
         // View › Developer names it, so only its change rebuilds the menus, not each load.
         if tab == self.selected && self.developer_mode(tab) != developer_mode {
             self.update_menus(cx);
+        }
+        // A task's Pages draw its pages' speakers (#1080).
+        if sounded {
+            self.talk_redraw(cx);
         }
     }
 
@@ -3036,6 +3350,10 @@ impl Shell {
     /// unless a page took it there, and leaving takes that away.
     pub fn set_full_screen(&mut self, entered: bool, cx: &mut Context<Self>) {
         self.full_screen = entered;
+        // A new window waiting for its full screen opens its bar at the next frame.
+        if self.opening.is_some() {
+            cx.notify();
+        }
         // There for the page, or back, with no resize to end the hold, as a window already its
         // screen's size goes: held on, the page stayed put for good, under the Library (#1633).
         if entered == self.page_fullscreen && self.page_held.take().is_some() {
@@ -3051,7 +3369,8 @@ impl Shell {
 
     /// The window's bounds changed, as they do when it's maximized or restored: the third button
     /// shows which it would do next. They change as it goes full screen or comes back too, which
-    /// on Linux nothing else says.
+    /// on Linux nothing else says, and under Wayland the core tells the size again once the window
+    /// has, for one that keeps its size (`window_resized`).
     pub fn bounds_changed(&mut self, cx: &mut Context<Self>) {
         let maximized = self.browser.window_maximized();
         if maximized != std::mem::replace(&mut self.maximized, maximized) {
@@ -3153,19 +3472,9 @@ impl Shell {
     /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
     /// the user's, so its dot is the icon's own.
     fn follow_dock(&self, cx: &mut Context<Self>) {
-        if cx
-            .try_global::<ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity())
-        {
+        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
         }
-    }
-
-    /// Whether the Space shown is an agent's, which no tab moves into, as the browser keeps the
-    /// user's tabs out of its reach.
-    fn agents_space_shown(&self) -> bool {
-        self.shown_space()
-            .is_some_and(|space| !space.agent.is_empty())
     }
 
     /// The core let the agent with the id `agent` act in `tab`, for the activity log: it's at work
@@ -3191,12 +3500,6 @@ impl Shell {
             log!("browser: agent {agent} done in {tab}");
             self.tab_changed(tab, true, cx);
         }
-    }
-
-    /// Whether an agent is at work in `tab`. Only an agent's own Space's tabs are its to act in,
-    /// so one the user moved out of it, into a Space of theirs, no longer shows one.
-    pub(super) fn agent_at_work(&self, tab: u64) -> bool {
-        self.agents_space_shown() && self.agents_at.values().any(|&at| at == tab)
     }
 
     fn show_space_at(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
@@ -3347,7 +3650,7 @@ impl Shell {
 
     /// Eases the selected row back from its hover fill once the pointer or its menu has left it.
     fn unhover(&mut self, row: Row) {
-        if row == self.selected_row() {
+        if Some(row) == self.selected_row() {
             self.unhovered.push((row, Instant::now()));
         }
     }
@@ -3388,6 +3691,22 @@ impl Shell {
                             .ok();
                     }
                 });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// The pointer leaving the window's own view, for the page's or another window, which ends a
+    /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
+    /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
+    /// shell doesn't hear the pointer in, and a pointer passing the edge brought the sidebar out.
+    fn leave_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let shell = shell.clone();
                 window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         shell
@@ -3511,7 +3830,11 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
+        self.lone_header = cx
+            .try_global::<LoneSpaceHeader>()
+            .is_some_and(|kept| kept.0);
         self.full_screen_step("drawn", window.viewport_size());
+        self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
         // to what's drawn.
@@ -3644,8 +3967,10 @@ impl Render for Shell {
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
         self.step_foot(window, cx);
-        self.step_picture(window);
+        self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
+        self.step_media_stack(window, cx);
+        self.step_update_banner(window);
         if let Some((_, left)) = &self.leaving_form {
             if left.elapsed().as_secs_f32() < FORM_LEAVE_TITLE + FORM_LEAVE {
                 window.request_animation_frame();
@@ -3662,18 +3987,21 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
-        self.step_empty(window);
+        self.step_empty(window, cx);
         self.step_crash_cards(window);
+        self.step_little(window, cx);
         let drop_targets = self
             .drag
             .as_ref()
             .is_some_and(|drag| drag.over_page.is_some())
             || self.link_over.is_some()
-            || self.agent_pointer_shown();
+            || self.agent_pointer_shown()
+            || self.download_flying(cx);
         if drop_targets || self.drop_targets_shown {
             self.drop_targets_shown = drop_targets;
             self.browser.show_drop_targets(drop_targets, cx);
@@ -3707,10 +4035,12 @@ impl Render for Shell {
             self.focus_color = Some(focus_color);
             self.browser.set_focus_color(focus_color, cx);
         }
-        // A page shows the card until its first frame, never white (Ardia). Not while the sidebar
-        // pages between Spaces, whose colours cross-fade at every step.
-        let page_color = packed(self.window_fill().blend(self.palette.page.into()));
-        if self.pages().len() == 1 && self.page_color != Some(page_color) {
+        // A page shows the colour of the appearance websites are told until its first frame, as
+        // Arc's does: View › Appearance's, else the system's, whatever the Space's theme.
+        let page_color = packed(self.system_tone.unpainted().into());
+        if self.page_color != Some(page_color) {
+            // check.sh reads this line.
+            log!("browser: page color {page_color:06x}");
             self.page_color = Some(page_color);
             self.browser.set_page_color(page_color, cx);
         }
@@ -3828,12 +4158,19 @@ impl Render for Shell {
                 }),
             )
             .child(self.window_background())
+            .child(self.leave_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {
                 shell
                     .children(self.cards())
                     .children(self.little_bar(cx))
+                    .children(
+                        self.little
+                            .is_some()
+                            .then(|| self.question_card(cx))
+                            .flatten(),
+                    )
                     .children(self.picture_element(cx))
                     .children(self.empty_card(cx))
                     .children(self.crash_cards(cx))
@@ -3948,24 +4285,26 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.chooser_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
-                    .children(self.update_sign())
-                    .children(self.media_player_cards(cx))
                     .children(self.task_foot(cx))
+                    // Over the tasks' plates, which its open grows over.
+                    .children(self.media_player_cards(cx))
+                    // Over the players and the task's foot, which it opens over.
+                    .children(self.update_banner(cx))
                     .children(self.task_ghosts())
-                    .children(self.agent_bar_card(cx))
                     .children(self.drm_note_card(cx))
             }
         };
         sidebar
             .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
-            .children((!self.private).then(|| self.library_button(cx)))
+            .children((!self.blank).then(|| self.library_button(cx)))
+            .children(self.download_bin(cx))
             .children(self.archive_flights())
-            .children((!self.private).then(|| self.plus_button(cx)))
+            .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.switcher(cx))
-            .children(self.flying_icon())
             .child(self.press_listener())
             .children(self.paging_frame(started))
     }
@@ -4119,7 +4458,7 @@ impl Shell {
             .flex_col()
             .when(room > 0., |page| page.child(div().flex_none().h(px(room))))
             .child(
-                name_box(&self.palette, icon.is_some())
+                name_box(&self.palette, icon.is_some(), false)
                     .children(icon)
                     .child(div().truncate().child(space.name.clone())),
             )
@@ -4305,6 +4644,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
@@ -4580,15 +4920,16 @@ pub(crate) fn spring(t: f32, response: f32, damping: f32) -> Option<f32> {
     Some(1. - decay * ((damped * t).cos() + damping * omega / damped * (damped * t).sin()))
 }
 
-/// Where the list's rows are from its top, by the heights they're drawn at in `list`.
-fn slots(pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
+/// Where the list's rows are from its top, under a head `head` tall (`Shell::list_head`), by the
+/// heights they're drawn at in `list`.
+fn slots(head: f32, pinned: &[u64], today: &[u64]) -> HashMap<Slot, f32> {
     let rows = pinned
         .iter()
         .map(|&tab| (Slot::Tab(tab), ROW_PITCH))
         .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
         .chain([(Slot::NewTab, ROW_PITCH)])
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
-    let mut top = NAME_HEIGHT;
+    let mut top = head;
     rows.map(|(slot, height)| {
         top += height;
         (slot, top - height)
@@ -4607,14 +4948,20 @@ fn row_box() -> gpui::Div {
 }
 
 /// The row with the Space's name, over its tabs, with room before the name for the Space's icon if
-/// it has one.
-fn name_box(palette: &Palette, icon: bool) -> gpui::Div {
+/// it has one. A Blank Window's name, `on_titles`, starts on the tab titles' column, where a
+/// Space's starts 2 before them (Arc).
+fn name_box(palette: &Palette, icon: bool, on_titles: bool) -> gpui::Div {
+    let x = match (on_titles, icon) {
+        (true, _) => FAVICON_X + FAVICON_SIZE + TITLE_GAP,
+        (false, true) => NAME_X,
+        (false, false) => ICONLESS_NAME_X,
+    };
     div()
         .flex_none()
         .h(px(NAME_HEIGHT))
         .flex()
         .items_center()
-        .pl(px(if icon { NAME_X } else { ICONLESS_NAME_X }))
+        .pl(px(x))
         .pr(px(FAVICON_X))
         .text_size(px(text::BODY))
         .font_weight(FontWeight::SEMIBOLD)
@@ -4962,6 +5309,20 @@ fn file_name(url: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+thread_local! {
+    static QUIT_GONE_AHEAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The browser's quit has gone ahead (quitting.rs), and its windows are going: from now on nothing
+/// opens over one, as on Wayland a surface made on a window going ends the connection.
+pub fn quit_goes_ahead() {
+    QUIT_GONE_AHEAD.set(true);
+}
+
+pub fn quit_gone_ahead() -> bool {
+    QUIT_GONE_AHEAD.get()
+}
+
 /// The `file:` URL of the file at `path`, with what a URL can't hold escaped, and a Windows path's
 /// drive and backslashes as Chromium reads them.
 pub fn file_url(path: &str) -> String {
@@ -5203,3 +5564,7 @@ mod tests {
         assert!(1. - along(Curve::Room, 280.) < 0.01);
     }
 }
+
+/// A Blank Window's Space's name, and its icon: the square glyph, in the name's ink, before it.
+pub(super) const BLANK_WINDOW: &str = "Blank Window";
+pub(super) const BLANK_ICON: &str = "glyph:square";

@@ -12,7 +12,6 @@ use super::{
     ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
     HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP,
 };
-use crate::agents::runner::Cli;
 use crate::agents::task::{ArchivedTask, Card, Dot};
 use crate::shell::recorder::Recorder;
 use crate::shell::{Folders, Section, Shell};
@@ -44,7 +43,8 @@ fn card() -> Card {
         agent: "task-1".into(),
         home: 1,
         space: 101,
-        cli: Cli::Claude,
+        name: "Claude".into(),
+        replies: true,
         title: "Lisbon museum hours".into(),
         status: "Most open at 10".into(),
         asks: false,

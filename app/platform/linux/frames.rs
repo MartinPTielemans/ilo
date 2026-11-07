@@ -74,6 +74,16 @@ pub(crate) fn sized(ui_view: *mut c_void, size: [f64; 2]) {
     );
 }
 
+/// The size kept for the window of `ui_view` (`sized`).
+pub(crate) fn size_of(ui_view: *mut c_void) -> Option<[f64; 2]> {
+    SIZES.with_borrow(|sizes| {
+        sizes
+            .iter()
+            .find(|(each, _)| *each == ui_view)
+            .map(|(_, size)| *size)
+    })
+}
+
 /// Forgets the window of `ui_view`, closed (host_forget_window).
 pub(crate) fn forget_window(ui_view: *mut c_void) {
     SIZES.with_borrow_mut(|sizes| sizes.retain(|(each, _)| *each != ui_view));
@@ -81,7 +91,7 @@ pub(crate) fn forget_window(ui_view: *mut c_void) {
 
 /// Whether the browser windows are X11's: None before the first window, when nothing has said
 /// which Chromium went to, and a connection could start a compositor's Xwayland.
-fn on_x11() -> Option<bool> {
+pub(crate) fn on_x11() -> Option<bool> {
     if ON_X11.get().is_none() {
         if let Some(first) = WINDOWS.with(|w| w.try_borrow().ok()?.first().map(|w| w.id)) {
             wayland_size(first);
@@ -246,4 +256,43 @@ fn put_under(ui_view: *mut c_void, above_ui_view: *mut c_void) -> Option<()> {
     let mask = xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY;
     connection.send_event(false, *root, mask, message).ok()?;
     connection.flush().ok()
+}
+
+/// Whether a window can stay on top (Window › Stay On Top): on X11, where the window manager takes
+/// _NET_WM_STATE_ABOVE; Wayland gives a client no way.
+pub(crate) fn stays_on_top() -> bool {
+    on_x11() == Some(true)
+}
+
+/// host.h's host_set_window_on_top: asks the window manager to keep the browser window, Chromium's,
+/// which holds GPUI's, in its layer over the others, as the EWMH has a client ask.
+#[unsafe(no_mangle)]
+pub extern "C" fn host_set_window_on_top(ui_view: *mut c_void, on: bool) {
+    if !stays_on_top() {
+        return;
+    }
+    let Some(x) = server() else {
+        return;
+    };
+    let (connection, root) = &*x;
+    let Some(window) = (connection.query_tree(ui_view as usize as u32).ok())
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|tree| tree.parent)
+    else {
+        return;
+    };
+    let atom = |name: &str| {
+        (connection.intern_atom(false, name.as_bytes()).ok())
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom)
+    };
+    let (Some(state), Some(above)) = (atom("_NET_WM_STATE"), atom("_NET_WM_STATE_ABOVE")) else {
+        return;
+    };
+    // 1 adds the state and 0 removes it; 1 at the end says a normal application asks.
+    let event = xproto::ClientMessageEvent::new(32, window, state, [on as u32, above, 0, 1, 0]);
+    let mask = xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY;
+    if connection.send_event(false, *root, mask, event).is_ok() {
+        let _ = connection.flush();
+    }
 }

@@ -47,7 +47,7 @@ impl Picker {
         let changed: Changed =
             Rc::new(move |theme, done, _| recorded.themes.borrow_mut().push((theme, done)));
         // From browser window 2, as a context menu in a window behind another asks (#1432).
-        cx.update(|cx| show(2, 7, theme, point(262., 300.), 900., changed, cx));
+        cx.update(|cx| show(2, 7, theme, At::Row(point(262., 300.)), 900., changed, cx));
         let cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
         Picker { cx, window, host }
@@ -212,7 +212,7 @@ fn a_click_before_the_first_frame_still_places_the_colour(cx: &mut TestAppContex
     // One update, so no frame comes between the opening and the click. Through the window rather
     // than its view, which the press updates.
     cx.update(|cx| {
-        show(2, 7, None, point(262., 300.), 900., changed, cx);
+        show(2, 7, None, At::Row(point(262., 300.)), 900., changed, cx);
         cx.update_window(window.into(), |_, window, cx| {
             let down = MouseDownEvent {
                 position: at,
@@ -454,17 +454,41 @@ fn escape_closes_it_and_a_click_outside_leaves_it_closed(cx: &mut TestAppContext
 #[test]
 fn the_card_centres_on_its_arrow_inside_the_window() {
     // Room above and below: centred, the tip at the card's middle.
-    let (left, top, arrow_y) = placed(point(250., 400.), 1000.);
+    let (left, top, arrow_y) = placed(At::Row(point(250., 400.)), 1000.);
     assert!((left - (250. + GAP - TIP_SHORT)).abs() < 0.01);
-    assert_eq!((top, arrow_y), (400. - HEIGHT / 2., HEIGHT / 2.));
+    assert_eq!((top, arrow_y), (400. - HEIGHT / 2., Some(HEIGHT / 2.)));
     // Near the top, the card stays in and the arrow moves up it, clear of the corner.
-    let (_, top, arrow_y) = placed(point(250., 60.), 1000.);
-    assert_eq!((top, arrow_y), (MARGIN, 52.));
-    let (_, top, arrow_y) = placed(point(250., 10.), 1000.);
-    assert_eq!((top, arrow_y), (MARGIN, RADIUS + ARROW + ARROW_FOOT_RADIUS));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 60.)), 1000.);
+    assert_eq!((top, arrow_y), (MARGIN, Some(52.)));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 10.)), 1000.);
+    assert_eq!(
+        (top, arrow_y),
+        (MARGIN, Some(RADIUS + ARROW + ARROW_FOOT_RADIUS))
+    );
     // Near the bottom, the same.
-    let (_, top, arrow_y) = placed(point(250., 950.), 1000.);
-    assert_eq!((top, arrow_y), (1000. - MARGIN - HEIGHT, 950. - top));
+    let (_, top, arrow_y) = placed(At::Row(point(250., 950.)), 1000.);
+    assert_eq!((top, arrow_y), (1000. - MARGIN - HEIGHT, Some(950. - top)));
+}
+
+/// From the Space's menu the card has no arrow and sits 14 inside the sidebar's edge and the browser
+/// window's top, as Arc 1.171's does inside its 382 × 534 window there, growing in from its top left.
+#[test]
+fn from_the_menu_the_card_sits_against_the_sidebar_at_the_window_s_top() {
+    let (left, top, arrow_y) = placed(At::Edge(240.), 1000.);
+    assert_eq!(arrow_y, None);
+    let (card_left, card_top) = (left + ARROW, top);
+    assert_eq!((card_left, card_top), (254., 14.));
+    let corners = corners(None);
+    assert_eq!(corners.len(), 4, "the card has an arrow");
+    assert_eq!(
+        corners[0],
+        (ARROW, 0., RADIUS),
+        "it doesn't grow in from its top left"
+    );
+    assert!(
+        corners.iter().all(|&(x, _, _)| x >= ARROW),
+        "the card reaches into the arrow's room"
+    );
 }
 
 #[test]
@@ -703,4 +727,100 @@ fn without_a_colour_the_keyboard_has_the_appearance_and_swatches(cx: &mut TestAp
     // With it, the wave comes next.
     picker.keys("tab");
     assert_eq!(picker.keyed(), Some(Target::Intensity));
+}
+
+/// The node with `role` named `label` in what the picker last told VoiceOver.
+fn named(
+    picker: &mut Picker,
+    role: Role,
+    label: &str,
+) -> (gpui::accesskit::NodeId, gpui::accesskit::Node) {
+    let tree = picker.cx.a11y_tree().expect("no accessibility tree");
+    let found = tree
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == role && node.label() == Some(label));
+    found
+        .cloned()
+        .unwrap_or_else(|| panic!("no {role:?} named {label}"))
+}
+
+#[gpui::test]
+fn voiceover_reads_the_picker_and_moves_its_sliders(cx: &mut TestAppContext) {
+    let theme = Theme {
+        intensity: 0.4,
+        grain: 0.3,
+        ..Theme::at(0.5, 0.).with_count(2)
+    };
+    let mut picker = Picker::new(Some(theme), cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    named(&mut picker, Role::Dialog, "Space Theme");
+    named(&mut picker, Role::Group, "Colors, 2");
+    let (_, automatic) = named(&mut picker, Role::RadioButton, "Automatic");
+    assert_eq!(automatic.toggled(), Some(Toggled::True));
+    let (dark, _) = named(&mut picker, Role::RadioButton, "Dark");
+    let (_, intensity) = named(&mut picker, Role::Slider, "Intensity");
+    assert_eq!(intensity.numeric_value(), Some(40.));
+    let (_, grain) = named(&mut picker, Role::Slider, "Grain");
+    assert_eq!(grain.numeric_value(), Some(30.));
+
+    // Its press is a click where the plate is drawn.
+    picker.cx.simulate_a11y_action(dark, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().appearance, Appearance::Dark);
+    let (add, _) = named(&mut picker, Role::Button, "Add Color");
+    picker.cx.simulate_a11y_action(add, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().count, 3);
+    named(&mut picker, Role::Group, "Colors, 3");
+    let (_, add) = named(&mut picker, Role::Button, "Add Color");
+    assert!(add.is_disabled(), "+ at three colours");
+    let (slate, _) = named(&mut picker, Role::Button, "Slate");
+    picker.cx.simulate_a11y_action(slate, Action::Click);
+    picker.cx.run_until_parked();
+    assert_eq!(picker.theme().unwrap().main_color(), SWATCHES[8]);
+
+    // Increment and decrement move to the next tenth and stop at the ends, each move kept.
+    picker.handed_on();
+    let (intensity, _) = named(&mut picker, Role::Slider, "Intensity");
+    picker.cx.simulate_a11y_action(intensity, Action::Increment);
+    picker.cx.run_until_parked();
+    assert!((picker.theme().unwrap().intensity - 0.5).abs() < 0.001);
+    let (grain, _) = named(&mut picker, Role::Slider, "Grain");
+    for _ in 0..4 {
+        picker.cx.simulate_a11y_action(grain, Action::Decrement);
+        picker.cx.run_until_parked();
+    }
+    assert_eq!(picker.theme().unwrap().grain, 0.);
+    assert_eq!(picker.handed_on(), vec![true, true, true, true]);
+    let (_, grain) = named(&mut picker, Role::Slider, "Grain");
+    assert_eq!(grain.numeric_value(), Some(0.));
+}
+
+#[gpui::test]
+fn voiceover_places_the_first_colour_from_the_empty_field(cx: &mut TestAppContext) {
+    let mut picker = Picker::new(None, cx);
+    picker.cx.simulate_a11y_activation();
+    picker.cx.run_until_parked();
+    let (field, node) = named(&mut picker, Role::Group, "Colors, none");
+    assert_eq!(node.description(), Some(HINT));
+    let (_, intensity) = named(&mut picker, Role::Slider, "Intensity");
+    assert!(intensity.is_disabled(), "the wave without a colour");
+    picker.cx.simulate_a11y_action(field, Action::Click);
+    picker.cx.run_until_parked();
+    let theme = picker.theme().expect("no colour placed");
+    assert_eq!(theme.count, 1);
+    named(&mut picker, Role::Group, "Colors, 1");
+}
+
+#[test]
+fn every_swatch_has_its_own_name() {
+    let names = SWATCHES.map(swatch_name);
+    assert_eq!(
+        names,
+        [
+            "White", "Pink", "Purple", "Red", "Orange", "Yellow", "Green", "Blue", "Slate"
+        ]
+    );
 }

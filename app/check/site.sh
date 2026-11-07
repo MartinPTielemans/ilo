@@ -8,15 +8,16 @@
 # "corner" in the title. "x" and "z" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
-# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, and /held one that comes once the
-# run has made held.go in the site's folder. login.html is a login form, its username field
+# ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
+# second, and /held one that comes once the run has made held.go in the site's folder. login.html is a login form, its username field
 # across the page's top half and its password field across the bottom, that posts to /login,
 # which sends the browser on to welcome.html, as a site that took the login would.
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
 # /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
 # address.html and card.html are an address's form and a card's, their first field across the
 # page's top 40%, which post as the login does and put "filled" in the title while Chrome fills
-# that field.
+# that field, and "unfocused" once the page's focus leaves its fields for nothing, which comes after
+# autofill hears of it, as both go the frame's way to the browser in turn.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -91,6 +92,25 @@ const say = () => document.title = "scheme " + (dark.matches ? "dark" : "light")
 say();
 dark.onchange = say;
 </script>' > "$out/site/scheme.html"
+# Its title says all a page can see of the browser's colours: "seen scheme=… contrast=…
+# forced=…", then each CSS system colour the engine has as name=rrggbb, or name=none, which a
+# Space's theme must never change (#684).
+printf '%s' '<title>loading</title><div id=probe></div><script>
+const q = (m) => matchMedia(m).matches;
+const hex = (c) => (c.match(/[0-9.]+/g) || []).slice(0, 3)
+  .map((n) => Math.round(+n).toString(16).padStart(2, "0")).join("") || "none";
+const names = ["AccentColor", "AccentColorText", "Canvas", "CanvasText", "Highlight",
+  "HighlightText", "LinkText", "SelectedItem", "SelectedItemText", "ButtonFace", "Field", "Mark"];
+const colours = names.map((name) => {
+  probe.style.color = "";
+  probe.style.color = name;
+  return name + "=" + (probe.style.color ? hex(getComputedStyle(probe).color) : "none");
+});
+document.title = "seen scheme=" + (q("(prefers-color-scheme: dark)") ? "dark" : "light") +
+  " contrast=" + (q("(prefers-contrast: more)") ? "more"
+    : q("(prefers-contrast: less)") ? "less" : "no-preference") +
+  " forced=" + (q("(forced-colors: active)") ? "active" : "none") + " " + colours.join(" ");
+</script>' > "$out/site/theme.html"
 # Its title says "login" once it has painted, then "filled" each time Chrome fills a saved password
 # in, and "cleared" when the password filled in is edited. Chrome can fill a saved login before the
 # paint, so the page tells of a fill only after it, or the title would never say "login" (#1069).
@@ -161,6 +181,9 @@ setInterval(() => {
     document.title = filled ? "filled" : "cleared";
   }
 }, 100);
+addEventListener("focusout", () => setTimeout(() => {
+  if (document.activeElement == document.body) document.title = "unfocused";
+}));
 </script>' "$1"
 }
 autofill_form address name 'address-line1 address-level2 address-level1 postal-code country email' \
@@ -313,6 +336,27 @@ const found = ["h", "hw", "n", "p", "w"].filter(name => cookies.includes(`${name
 document.title = "session " + (/Chrome\//.test(navigator.userAgent) ? "chromium" : "safari") +
   " sees " + (found.join(" ") || "none");
 </script>' > "$out/site/session.html"
+# The session sign-in page, a sign-in that lives in a session cookie, one with no expiry, and in
+# sessionStorage, as many work sites' do (#1934). Its title says whether it finds each, kept or
+# none, never a value, since the app logs every title, once it has drawn; "s" sets both. Their value
+# is the server's start, so a run finds only its own, and the cookie is named for the page's query,
+# so a step finds only its own: the cookie outlives a relaunch, and a run's steps share the server.
+printf '%s' '<title>loading</title><p>s signs in.</p><script src="painted.js"></script>
+<script>
+const mine = "'"$(date +%s)"'";
+const name = "sign-in" + location.search.replace("?", "-");
+const found = () => "sign-in cookie " +
+  (document.cookie.split("; ").includes(name + "=" + mine) ? "kept" : "none") + " storage " +
+  (sessionStorage.getItem("sign-in") == mine ? "kept" : "none");
+painted(() => document.title = found() + ", drawn");
+onkeydown = e => {
+  if (e.key == "s") {
+    document.cookie = name + "=" + mine + "; path=/";
+    sessionStorage.setItem("sign-in", mine);
+    document.title = found() + ", set";
+  }
+};
+</script>' > "$out/site/session-sign-in.html"
 # A page whose whole area is a link to /bounce, which the server redirects to another site,
 # localhost, and from there, at hop.html, back to this one's engine page, as a sign-in through an
 # identity site does, or at hop.html?away, to localhost's engine page, where it stays.
@@ -384,8 +428,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         agent = self.headers.get("User-Agent", "")
         cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
-        print("GET", "chromium" if "Chrome/" in agent else "safari",
-              self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none")
+        # In one write: print writes each part on its own, so two requests at once, on their own
+        # threads, ran their lines into each other and a run looking for one found neither.
+        sys.stdout.write(" ".join(["GET", "chromium" if "Chrome/" in agent else "safari",
+            self.headers.get("Host", "") + self.path, "cookie", "; ".join(cookies) or "none"]) + "\n")
         path, _, query = self.path.partition("?")
         if path == "/bounce":
             self.send_response(302)
@@ -418,6 +464,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/wait":
             time.sleep(3600)
             return
+        if path == "/slow":
+            time.sleep(1)
+            body = b"slow"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/held":
             # Every request waiting is let go at once, so one Chrome asked for ahead is no matter.
             while not os.path.exists(sys.argv[1] + "/held.go"):
@@ -426,6 +481,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/me":
+            # The session a request from an agent carries and the agent must never see: a cookie
+            # the answer sets, and a token in its body.
+            port = self.server.server_address[1]
+            body = b"{\"name\":\"Ada\",\"accessToken\":\"tok-%d-secret\"}" % port
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "api=s3cret%d; Path=/; Max-Age=3600; HttpOnly" % port)
             self.end_headers()
             self.wfile.write(body)
             return
@@ -455,7 +522,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             pass
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if self.path.startswith("/api/"):
+            # Logged as "POST <host><path> cookie <cookies sorted, or none> body <body>".
+            cookies = sorted(c.strip() for c in self.headers.get("Cookie", "").split(";") if c.strip())
+            print("POST", self.headers.get("Host", "") + self.path, "cookie",
+                  "; ".join(cookies) or "none", "body", body.decode())
+            body = b"{\"id\":8," + body[1:]
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(303)
         self.send_header("Location", "welcome.html")
         self.send_header("Content-Length", "0")

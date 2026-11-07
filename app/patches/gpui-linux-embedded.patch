@@ -1,8 +1,16 @@
 diff --git a/crates/gpui_linux/Cargo.toml b/crates/gpui_linux/Cargo.toml
-index a91818acd0..5ab4a515da 100644
+index a91818acd0..2d1de9aa21 100644
 --- a/crates/gpui_linux/Cargo.toml
 +++ b/crates/gpui_linux/Cargo.toml
-@@ -92,9 +92,10 @@ scap = { workspace = true, optional = true }
+@@ -63,6 +63,7 @@ gpui.workspace = true
+ gpui_util.workspace = true
+ gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+ http_client.workspace = true
++image.workspace = true
+ libc.workspace = true
+ log.workspace = true
+ parking_lot.workspace = true
+@@ -92,9 +93,10 @@ scap = { workspace = true, optional = true }
  
  # Wayland
  calloop-wayland-source = { version = "0.4.1", optional = true }
@@ -14,7 +22,7 @@ index a91818acd0..5ab4a515da 100644
      "log",
  ], optional = true }
  wayland-client = { version = "0.31.11", optional = true }
-@@ -122,6 +123,7 @@ x11rb = { version = "0.13.1", features = [
+@@ -122,6 +124,7 @@ x11rb = { version = "0.13.1", features = [
      "resource_manager",
      "sync",
      "dri3",
@@ -23,7 +31,7 @@ index a91818acd0..5ab4a515da 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..9dd5252986 100644
+index a5390e77f8..ee4eedc021 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,25 @@
@@ -44,17 +52,17 @@ index a5390e77f8..9dd5252986 100644
 +    set_overlay_keyboard,
 +    set_overlay_menu, set_overlay_outline, set_overlay_outlines, set_overlay_panel,
 +    set_overlay_pointer, set_overlay_under,
-+    show_overlay, show_window, shown_keyboard_overlay, start_file_drag, sync_display,
++    show_overlay, show_window, shown_keyboard_overlay, DragEnd, set_drag_icon, start_drag, start_file_drag, sync_display,
 +    take_overlay_keyboard, watch_control,
 +    take_embedder_drops, watch_alt_taps, watch_embedder_swipes, watch_pointer_over,
 +};
 +#[cfg(feature = "wayland")]
 +pub use linux::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..94fd3b6cc0 100644
+index e4da54b52b..cca540937f 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -84,8 +92,8 @@ index e4da54b52b..94fd3b6cc0 100644
 +    item.metadata().is_some_and(|metadata| metadata == PASSWORD_MANAGER_HINT)
 +}
  pub(crate) use display_connection::{Backend, DisplayConnection, select_backend};
-+pub(crate) use file_drag::file_drag_ended;
-+pub use file_drag::start_file_drag;
++pub(crate) use file_drag::drag_ended;
++pub use file_drag::{DragEnd, set_drag_icon, start_drag, start_file_drag};
  pub(crate) use headless::*;
  pub(crate) use keyboard::*;
 +pub use overlay::{
@@ -109,7 +117,7 @@ index e4da54b52b..94fd3b6cc0 100644
  pub(crate) use wayland::*;
 +#[cfg(feature = "wayland")]
 +pub use wayland::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    open_next_window_in_surface, resize_embedded,
 +};
 +#[cfg(feature = "x11")]
@@ -122,10 +130,10 @@ index e4da54b52b..94fd3b6cc0 100644
  
 diff --git a/crates/gpui_linux/src/linux/file_drag.rs b/crates/gpui_linux/src/linux/file_drag.rs
 new file mode 100644
-index 0000000000..846d17431f
+index 0000000000..a202ddef4e
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/file_drag.rs
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,91 @@
 +//! The system's drag of a file out of an embedder's windows, as a browser hands a download to the
 +//! file manager: XDND on X11 (x11/drag.rs), the data device's drag under Wayland. It starts from
 +//! the press the left button holds.
@@ -137,8 +145,20 @@ index 0000000000..846d17431f
 +#[allow(unused_imports)]
 +use super::DisplayConnection;
 +
++/// How a drag `start_drag` started ended.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub enum DragEnd {
++    /// A target took it.
++    Taken,
++    /// Let go where none took it, at this point on the screen, in its logical pixels, where the
++    /// display says, as X11 does and Wayland doesn't.
++    LetGo(Option<(f32, f32)>),
++    /// Cancelled, as Escape does.
++    Cancelled,
++}
++
 +thread_local! {
-+    static ENDED: RefCell<Option<Box<dyn FnOnce(bool)>>> = const { RefCell::new(None) };
++    static ENDED: RefCell<Option<Box<dyn FnOnce(DragEnd)>>> = const { RefCell::new(None) };
 +}
 +
 +/// Starts the system's drag of the file at `path`, a full path, while the left button is held
@@ -150,11 +170,20 @@ index 0000000000..846d17431f
 +        return false;
 +    };
 +    let uri_list = format!("{url}\r\n");
++    start_drag("text/uri-list", uri_list.into_bytes(), move |end| {
++        ended(end == DragEnd::Taken)
++    })
++}
++
++/// Starts the system's drag of `data`, as the type `mime`, as `start_file_drag` does a file's: an
++/// embedder's own type that only its own targets take, such as a browser's tab. `ended` runs once
++/// it ends. Returns false, and `ended` never runs, if it didn't start.
++pub fn start_drag(mime: &str, data: Vec<u8>, ended: impl FnOnce(DragEnd) + 'static) -> bool {
 +    let started = super::platform::with_embedded_connection(|connection| match connection {
 +        #[cfg(feature = "wayland")]
-+        DisplayConnection::Wayland(_) => super::wayland::start_file_drag(uri_list),
++        DisplayConnection::Wayland(_) => super::wayland::start_drag(mime, data),
 +        #[cfg(feature = "x11")]
-+        DisplayConnection::X11(x11) => x11.start_file_drag(uri_list),
++        DisplayConnection::X11(x11) => x11.start_drag(mime, data),
 +        #[allow(unreachable_patterns)]
 +        _ => false,
 +    });
@@ -165,18 +194,43 @@ index 0000000000..846d17431f
 +    false
 +}
 +
-+/// The drag `start_file_drag` started was let go, and `taken` or not.
-+pub(crate) fn file_drag_ended(taken: bool) {
++/// Shows `rgba`, `width` by `height` top-down RGBA pixels at `scale` device pixels a logical one,
++/// under the pointer of the drag `start_drag` started, with the pointer at `hold` in it, in its
++/// pixels, as the picture of what's dragged: XDND's drag icon window on X11, the data device's
++/// icon surface under Wayland. Returns whether it shows.
++pub fn set_drag_icon(width: u32, height: u32, rgba: &[u8], hold: (i32, i32), scale: f32) -> bool {
++    #[allow(unused_variables)]
++    let shown = super::platform::with_embedded_connection(|connection| match connection {
++        #[cfg(feature = "wayland")]
++        DisplayConnection::Wayland(_) => {
++            super::wayland::set_drag_icon(width, height, rgba, hold, scale)
++        }
++        #[cfg(feature = "x11")]
++        DisplayConnection::X11(x11) => {
++            let (Ok(across), Ok(down)) = (u16::try_from(width), u16::try_from(height)) else {
++                return false;
++            };
++            let hold = (hold.0.clamp(0, across.into()) as i16, hold.1.clamp(0, down.into()) as i16);
++            x11.set_drag_icon(across, down, rgba, hold)
++        }
++        #[allow(unreachable_patterns)]
++        _ => false,
++    });
++    shown == Some(true)
++}
++
++/// The drag `start_drag` started ended, `end`.
++pub(crate) fn drag_ended(end: DragEnd) {
 +    if let Some(ended) = ENDED.take() {
-+        ended(taken);
++        ended(end);
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..696efa705a
+index 0000000000..bb6c40d819
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1051 @@
+@@ -0,0 +1,1122 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -273,6 +327,9 @@ index 0000000000..696efa705a
 +    static SHOWN: RefCell<Vec<Shown>> = const { RefCell::new(Vec::new()) };
 +    static SHOWINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 +    static OPS: RefCell<VecDeque<Op>> = const { RefCell::new(VecDeque::new()) };
++    /// Under Wayland, the overlays the last press left, until the ops it led to have run
++    /// (`left_by_press`).
++    static LEFT_BY_PRESS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 +    static PING: RefCell<Option<Ping>> = const { RefCell::new(None) };
 +    /// On X11, the window that had the input focus before each overlay with the keyboard took it.
 +    static FOCUS_FROM: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
@@ -582,9 +639,30 @@ index 0000000000..696efa705a
 +    }) else {
 +        return;
 +    };
++    #[allow(unused_mut)]
++    let mut keyboard = shown.keyboard;
++    // Under Wayland nothing the overlay still has to do touches its parent's surface, which the
++    // embedder can destroy before the hide runs, as a pop-up's window closes under its dialog
++    // (#1999): a subsurface made on it ends the connection, and a commit to it ends the app.
++    #[cfg(feature = "wayland")]
++    if super::platform::with_embedded_connection(|c| matches!(c, DisplayConnection::Wayland(_)))
++        == Some(true)
++    {
++        let showed = OPS.with_borrow_mut(|ops| {
++            let to_show = |op: &Op| matches!(op, Op::Show { view: each, .. } if *each == view);
++            let showed = !ops.iter().any(to_show);
++            ops.retain(|op| {
++                !matches!(op, Op::Show { view: each, .. } | Op::Move { view: each, .. } if *each == view)
++            });
++            showed
++        });
++        super::wayland::overlay_hiding(view as _);
++        // One that never showed never had the keys.
++        keyboard &= showed;
++    }
 +    later(Op::Hide {
 +        view,
-+        keyboard: shown.keyboard,
++        keyboard,
 +        hidden: Box::new(hidden),
 +    });
 +}
@@ -758,6 +836,7 @@ index 0000000000..696efa705a
 +            .filter(|&view| Some(view) != on)
 +            .collect()
 +    });
++    LEFT_BY_PRESS.set(views.clone());
 +    views.into_iter().for_each(left);
 +}
 +
@@ -906,8 +985,24 @@ index 0000000000..696efa705a
 +    #[allow(unused_variables, unused_mut)]
 +    let mut applied = false;
 +    while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++        let gave = match op {
++            Op::Hide {
++                view,
++                keyboard: true,
++                ..
++            }
++            | Op::Keyboard {
++                view,
++                keyboard: false,
++            } => Some(view),
++            _ => None,
++        };
 +        applied |= run_op(op);
++        if let Some(gave) = gave {
++            left_by_press(gave);
++        }
 +    }
++    LEFT_BY_PRESS.with_borrow_mut(Vec::clear);
 +    // The events the display sends for what the ops asked, such as an overlay's new size.
 +    if applied {
 +        sync_display();
@@ -1013,6 +1108,36 @@ index 0000000000..696efa705a
 +            }
 +            true
 +        }
++    }
++}
++
++/// The overlay `gave`, which had the keys, let them go, as the ops a press led to ran: another that
++/// has them back, such as a find bar under the command bar a press on the page hid, is left too if
++/// that press left it, as X11's hide says when the input focus went elsewhere than either. It kept
++/// the keys while the overlay over it had them, to be given them back, and the press was outside
++/// both. Under Wayland only, where the compositor never moves the keys between overlays.
++fn left_by_press(gave: usize) {
++    let wayland = super::platform::with_embedded_connection(|connection| {
++        #[cfg(feature = "wayland")]
++        if let DisplayConnection::Wayland(_) = connection {
++            return true;
++        }
++        false
++    });
++    if wayland != Some(true) {
++        return;
++    }
++    // The overlay that let the keys go isn't one that has them back, though it has them again: a
++    // right-click on another row hides the menu up and shows it again as that row's (#1908).
++    let Some(next) = keyboard_overlay_asked().filter(|&next| next != gave) else {
++        return;
++    };
++    let pressed = LEFT_BY_PRESS.with_borrow_mut(|all| {
++        let at = all.iter().position(|&each| each == next)?;
++        Some(all.remove(at))
++    });
++    if pressed.is_some() {
++        left(next);
 +    }
 +}
 +
@@ -1627,7 +1752,7 @@ index 0c5370db6c..9d0a77223e 100644
      let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
      let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962bcff..bfbb357677 100644
+index cbc962bcff..46c3b3e249 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
 @@ -9,7 +9,13 @@ mod window;
@@ -1636,7 +1761,7 @@ index cbc962bcff..bfbb357677 100644
  
 +pub(crate) use client::dispatch_embedded_queue;
 +pub use client::{
-+    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, marked_range_in,
++    commit_embedded, compose_embedded, drive_commit_in, drive_compose_in, held_key, marked_range_in,
 +    resize_embedded,
 +};
  pub(crate) use client::*;
@@ -1645,7 +1770,7 @@ index cbc962bcff..bfbb357677 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..ba08fc21b3 100644
+index 2d40cf7fa9..c4f4d5b5e8 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -1747,7 +1872,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
      mouse_focused_window: Option<WaylandWindowStatePtr>,
      keyboard_focused_window: Option<WaylandWindowStatePtr>,
      loop_handle: LoopHandle<'static, ()>,
-@@ -513,6 +526,110 @@ pub(crate) enum DataSourceKind {
+@@ -513,10 +526,133 @@ pub(crate) enum DataSourceKind {
      Drag,
  }
  
@@ -1858,7 +1983,30 @@ index 2d40cf7fa9..ba08fc21b3 100644
  pub(crate) struct ExternalDrag {
      source: wl_data_source::WlDataSource,
      bytes: Vec<u8>,
-@@ -636,9 +753,10 @@ impl WaylandClientStatePtr {
+     window: WaylandWindowStatePtr,
++    /// Let go, as the compositor says before it says whether a target took it.
++    dropped: bool,
++    /// The picture of what's dragged, an embedder's (`set_drag_icon`): the surface the compositor
++    /// carries under the pointer, with its buffer and viewport once it has one.
++    icon: Option<DragIcon>,
++}
++
++pub(crate) struct DragIcon {
++    surface: wl_surface::WlSurface,
++    buffer: Option<wl_buffer::WlBuffer>,
++    viewport: Option<wp_viewport::WpViewport>,
++}
++
++impl DragIcon {
++    fn destroy(self) {
++        self.viewport.inspect(|viewport| viewport.destroy());
++        self.buffer.inspect(|buffer| buffer.destroy());
++        self.surface.destroy();
++    }
+ }
+ 
+ fn file_uri_list(paths: &FileDragPaths) -> String {
+@@ -636,9 +772,10 @@ impl WaylandClientStatePtr {
          let state = client.borrow();
          let surface_id = surface_id.clone();
          let this = self.clone();
@@ -1872,7 +2020,16 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let Some(client) = this.0.upgrade() else {
                      return TimeoutAction::Drop;
                  };
-@@ -973,20 +1091,26 @@ impl WaylandConnection {
+@@ -693,6 +830,8 @@ impl WaylandClientStatePtr {
+             source,
+             bytes: uri_list.into_bytes(),
+             window,
++            dropped: false,
++            icon: None,
+         });
+         true
+     }
+@@ -973,20 +1112,26 @@ impl WaylandConnection {
          inherited_socket: Option<UnixStream>,
          activation_token: Option<String>,
      ) -> anyhow::Result<Self> {
@@ -1912,7 +2069,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
          let (globals, mut event_queue) = registry_queue_init::<WaylandClientStatePtr>(&conn)
              .context("failed to initialize Wayland registry")?;
          let qh = event_queue.handle();
-@@ -1009,7 +1133,10 @@ impl WaylandConnection {
+@@ -1009,7 +1154,10 @@ impl WaylandConnection {
                              (),
                          ));
                      }
@@ -1924,7 +2081,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                          let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
                              global.name,
                              wl_output_version(global.version)?,
-@@ -1065,6 +1192,9 @@ impl WaylandConnection {
+@@ -1065,6 +1213,9 @@ impl WaylandConnection {
              wl_keyboard: None,
              pinch_gesture: None,
              pinch_scale: 1.0,
@@ -1934,7 +2091,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
              cursor_shape_device: None,
              data_device,
              primary_selection,
-@@ -1088,6 +1218,7 @@ impl WaylandConnection {
+@@ -1088,6 +1239,7 @@ impl WaylandConnection {
                  position: Point::default(),
                  uri_read_generation: 0,
              },
@@ -1942,7 +2099,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
              external_drag: None,
              click: ClickState {
                  last_click: Instant::now(),
-@@ -1110,6 +1241,8 @@ impl WaylandConnection {
+@@ -1110,6 +1262,8 @@ impl WaylandConnection {
              },
              capslock: Capslock { on: false },
              scroll_event_received: false,
@@ -1951,7 +2108,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
              axis_source: AxisSource::Wheel,
              mouse_location: None,
              continuous_scroll_delta: None,
-@@ -1117,6 +1250,7 @@ impl WaylandConnection {
+@@ -1117,6 +1271,7 @@ impl WaylandConnection {
              vertical_modifier: -1.0,
              horizontal_modifier: -1.0,
              button_pressed: None,
@@ -1959,7 +2116,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
              mouse_focused_window: None,
              keyboard_focused_window: None,
              loop_handle: handle.clone(),
-@@ -1202,6 +1336,16 @@ impl WaylandConnection {
+@@ -1202,6 +1357,16 @@ impl WaylandConnection {
              .context("failed to receive initial Wayland state")
              .log_err();
  
@@ -1976,7 +2133,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
          client.register_source(
              handle.insert_source(WaylandSource::new(conn, event_queue), {
                  let mut client = pointer;
-@@ -1341,6 +1485,17 @@ impl WaylandConnection {
+@@ -1341,6 +1506,17 @@ impl WaylandConnection {
              state.consume_startup_activation_token(&window.0.surface());
          }
          state.windows.insert(surface_id, window.0.clone());
@@ -1994,7 +2151,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
          Ok(Box::new(window))
      }
-@@ -1472,8 +1627,16 @@ impl WaylandConnection {
+@@ -1472,8 +1648,16 @@ impl WaylandConnection {
              };
              let data_source = data_device_manager
                  .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
@@ -2013,7 +2170,16 @@ index 2d40cf7fa9..ba08fc21b3 100644
              }
              data_source.offer(state.clipboard.self_mime());
              data_device.set_selection(Some(&data_source), serial.as_raw());
-@@ -1617,7 +1780,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1517,7 +1701,7 @@ impl WaylandConnection {
+ 
+         let client_state = self.0.borrow();
+         let active_window = client_state.keyboard_focused_window.as_ref();
+-        inner(active_window.map(|aw| aw.surface()))
++        inner(active_window.and_then(|aw| aw.toplevel_surface()))
+     }
+ }
+ 
+@@ -1617,7 +1801,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                      state.wl_seat.release();
                      state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
                  }
@@ -2023,7 +2189,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                      let Ok(version) = wl_output_version(version) else {
                          log::error!("ignoring wl_output below the required version");
                          return;
-@@ -1656,6 +1820,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1656,6 +1841,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
  delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
  delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
@@ -2032,7 +2198,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_data_device_manager::WlDataDeviceManager);
-@@ -1738,6 +1904,82 @@ pub(crate) fn get_window(
+@@ -1738,6 +1925,82 @@ pub(crate) fn get_window(
      state.windows.get(surface_id).cloned()
  }
  
@@ -2115,7 +2281,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  impl Dispatch<wl_surface::WlSurface, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
-@@ -1993,10 +2235,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -1993,10 +2256,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      state.composing = false;
                  }
  
@@ -2130,7 +2296,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                      .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
  
                  if let Some(wl_keyboard) = &state.wl_keyboard {
-@@ -2023,6 +2265,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2023,6 +2286,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          gesture_manager.get_pinch_gesture(&pointer, qh, ())
                      },
                  );
@@ -2145,7 +2311,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
                  if let Some(wl_pointer) = &state.wl_pointer {
                      wl_pointer.release();
-@@ -2057,7 +2307,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2057,7 +2328,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  ..
              } => {
                  if format != wl_keyboard::KeymapFormat::XkbV1 {
@@ -2157,7 +2323,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                      return;
                  }
                  let xkb_context = match new_xkb_context() {
-@@ -2086,16 +2340,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2086,16 +2361,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -2181,7 +2347,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  state.keyboard_focused_window = None;
                  state.enter_token.take();
                  // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
-@@ -2110,7 +2369,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2110,7 +2390,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                      drop(state);
                      window.handle_ime(ImeInput::DeleteText);
                      window.set_focused(false);
@@ -2191,7 +2357,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
              }
              wl_keyboard::Event::Modifiers {
                  mods_depressed,
-@@ -2119,9 +2380,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2119,9 +2401,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  group,
                  ..
              } => {
@@ -2205,7 +2371,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let old_layout =
                      keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
                  keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
-@@ -2138,6 +2401,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2138,6 +2422,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if let Some(focused_window) = focused_window {
                      focused_window.handle_input(input);
                  }
@@ -2214,7 +2380,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
                  if group != old_layout {
                      this.handle_keyboard_layout_change();
-@@ -2152,13 +2417,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2152,13 +2438,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if key_state == wl_keyboard::KeyState::Pressed {
                      state.serial_tracker.update(SerialKind::KeyPress, serial);
                  }
@@ -2254,7 +2420,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let keycode = Keycode::from(key + MIN_KEYCODE);
                  let keysym = keymap_state.key_get_one_sym(keycode);
  
-@@ -2218,16 +2507,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2218,16 +2528,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
                          let id = state.repeat.current_id;
@@ -2276,7 +2442,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                                      let Some(client) = this.0.upgrade() else {
                                          return TimeoutAction::Drop;
                                      };
-@@ -2240,8 +2530,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2240,8 +2551,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                          return TimeoutAction::Drop;
                                      }
  
@@ -2290,7 +2456,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
                                      drop(state);
                                      focused_window.handle_input(input.clone());
-@@ -2249,8 +2542,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2249,8 +2563,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                      // If the new scheduled time is in the past the event will repeat as soon as possible
                                      TimeoutAction::ToInstant(event_timestamp + repeat_interval)
                                  }
@@ -2302,7 +2468,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
                          drop(state);
                          focused_window.handle_input(input);
-@@ -2398,6 +2692,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2398,6 +2713,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  state.serial_tracker.update(SerialKind::MouseEnter, serial);
                  state.mouse_location = Some(position);
                  state.button_pressed = None;
@@ -2313,7 +2479,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  
                  if let Some(window) = get_window(&mut state, &surface.id()) {
                      state.mouse_focused_window = Some(window.clone());
-@@ -2432,9 +2730,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2432,9 +2751,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
              }
              wl_pointer::Event::Leave { .. } => {
@@ -2339,7 +2505,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                          pressed_button: state.button_pressed,
                          modifiers: state.modifiers,
                      });
-@@ -2444,6 +2757,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2444,6 +2778,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.cursor_hidden_window = None;
  
                      drop(state);
@@ -2350,7 +2516,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                      focused_window.handle_input(input);
                      focused_window.set_hovered(false);
                  }
-@@ -2453,12 +2770,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2453,12 +2791,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  surface_y,
                  ..
              } => {
@@ -2381,7 +2547,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  if let Some(window) = state.mouse_focused_window.clone() {
                      if window.is_blocked() {
                          let default_style = CursorStyle::Arrow;
-@@ -2514,11 +2848,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2514,11 +2869,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
                  let button = linux_button_to_gpui(button);
                  let Some(button) = button else { return };
@@ -2424,7 +2590,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                          if let Some(window) = state.keyboard_focused_window.clone() {
                              if state.composing && state.text_input.is_some() {
                                  drop(state);
-@@ -2574,10 +2939,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2574,10 +2960,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      wl_pointer::ButtonState::Released => {
                          state.button_pressed = None;
  
@@ -2442,7 +2608,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                                  modifiers: state.modifiers,
                                  click_count: state.click.current_count,
                              });
-@@ -2595,11 +2965,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2595,11 +2986,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
              } => {
                  state.axis_source = axis_source;
              }
@@ -2463,7 +2629,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  if state.axis_source == AxisSource::Wheel {
                      return;
                  }
-@@ -2688,17 +3067,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2688,17 +3088,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
@@ -2510,7 +2676,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                          }
                      } else if let Some(discrete) = discrete
                          && let Some(window) = state.mouse_focused_window.clone()
-@@ -2733,6 +3132,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
+@@ -2733,6 +3153,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
      }
  }
  
@@ -2579,7 +2745,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
  impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
      for WaylandClientStatePtr
  {
-@@ -2895,6 +3356,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2895,6 +3377,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                      let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                          return;
                      };
@@ -2604,7 +2770,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                      let uri_read_generation = state.drag.begin_uri_read();
  
                      const ACTIONS: DndAction = DndAction::Copy;
-@@ -2968,6 +3447,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2968,6 +3468,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Motion { x, y, .. } => {
@@ -2617,7 +2783,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let Some(drag_window) = state.drag.window.clone() else {
                      return;
                  };
-@@ -2979,6 +3464,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2979,6 +3485,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  drag_window.handle_input(input);
              }
              wl_data_device::Event::Leave => {
@@ -2633,7 +2799,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let input = state.drag.handle_leave();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -2986,6 +3480,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2986,6 +3501,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Drop => {
@@ -2656,7 +2822,7 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let input = state.drag.handle_drop();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -3015,7 +3525,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3015,7 +3546,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -2668,26 +2834,42 @@ index 2d40cf7fa9..ba08fc21b3 100644
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3061,7 +3574,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3059,18 +3593,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+                 let bytes = external_drag.bytes.clone();
+                 state.clipboard.send_bytes(fd, bytes);
              }
++            (DataSourceKind::Drag, wl_data_source::Event::DndDropPerformed) => {
++                if let Some(external_drag) = state.external_drag.as_mut() {
++                    external_drag.dropped = true;
++                }
++            }
              (
                  DataSourceKind::Drag,
 -                wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled,
 +                event @ (wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled),
              ) => {
-                 let Some(external_drag) = state.external_drag.take() else {
+-                let Some(external_drag) = state.external_drag.take() else {
++                let Some(mut external_drag) = state.external_drag.take() else {
                      return;
-@@ -3071,6 +3584,9 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+                 };
+                 external_drag.source.destroy();
++                external_drag.icon.take().map(DragIcon::destroy);
+ 
                  let input = PlatformInput::FileDrop(FileDropEvent::Ended);
                  drop(state);
                  external_drag.window.handle_input(input);
-+                // An embedder's (`start_file_drag`): finished once a target took it, cancelled
++                // An embedder's (`start_drag`): finished once a target took it, cancelled
 +                // where none would.
-+                crate::linux::file_drag_ended(matches!(event, wl_data_source::Event::DndFinished));
++                crate::linux::drag_ended(match event {
++                    wl_data_source::Event::DndFinished => crate::linux::DragEnd::Taken,
++                    // No app picks where the pointer is under Wayland.
++                    _ if external_drag.dropped => crate::linux::DragEnd::LetGo(None),
++                    _ => crate::linux::DragEnd::Cancelled,
++                });
              }
              _ => {}
          }
-@@ -3479,3 +3995,523 @@ mod tests {
+@@ -3479,3 +4027,638 @@ mod tests {
          );
      }
  }
@@ -2930,9 +3112,9 @@ index 2d40cf7fa9..ba08fc21b3 100644
 +    Some(overlay_window(view)?.bounds_size())
 +}
 +
-+/// Starts the data device's drag of `uri_list`, a `text/uri-list`, from the surface the left
-+/// button is held in (`file_drag::start_file_drag`).
-+pub(crate) fn start_file_drag(uri_list: String) -> bool {
++/// Starts the data device's drag of `data`, as `mime`, from the surface the left button is held in
++/// (`file_drag::start_drag`).
++pub(crate) fn start_drag(mime: &str, data: Vec<u8>) -> bool {
 +    let Some(client) = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade()) else {
 +        return false;
 +    };
@@ -2948,17 +3130,114 @@ index 2d40cf7fa9..ba08fc21b3 100644
 +    };
 +    let serial = state.serial_tracker.get(SerialKind::MousePress);
 +    let source = manager.create_data_source(&state.globals.qh, DataSourceKind::Drag);
-+    source.offer(FILE_LIST_MIME_TYPE.to_string());
++    source.offer(mime.to_string());
 +    source.set_actions(DndAction::Copy);
-+    device.start_drag(Some(&source), &window.surface(), None, serial.as_raw());
++    // Empty until the embedder gives it its picture (`set_drag_icon`), which the compositor shows
++    // once it's committed.
++    let icon = state.globals.compositor.create_surface(&state.globals.qh, ());
++    device.start_drag(Some(&source), &window.surface(), Some(&icon), serial.as_raw());
 +    state.external_drag = Some(ExternalDrag {
 +        source,
-+        bytes: uri_list.into_bytes(),
++        bytes: data,
 +        window: window.clone(),
++        dropped: false,
++        icon: Some(DragIcon {
++            surface: icon,
++            buffer: None,
++            viewport: None,
++        }),
 +    });
 +    drop(state);
 +    flush(&window);
 +    true
++}
++
++/// Shows `rgba`, `width` by `height` top-down RGBA pixels at `scale` device pixels a logical one,
++/// as the picture of the drag `start_drag` started, with the pointer at `hold` in it, in its
++/// pixels. The data device's icon surface takes it, in a shared-memory buffer.
++pub(crate) fn set_drag_icon(
++    width: u32,
++    height: u32,
++    rgba: &[u8],
++    hold: (i32, i32),
++    scale: f32,
++) -> bool {
++    let Some(client) = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade()) else {
++        return false;
++    };
++    let mut state = client.borrow_mut();
++    let state = &mut *state;
++    let Some(icon) = (state.external_drag.as_mut()).and_then(|drag| drag.icon.as_mut()) else {
++        return false;
++    };
++    let size = rgba.len();
++    if width == 0 || height == 0 || size != width as usize * height as usize * 4 {
++        return false;
++    }
++    let Some(fd) = shm_file(size) else {
++        return false;
++    };
++    // Wayland's ARGB8888 is BGRA in memory.
++    let bgra: Vec<u8> = (rgba.chunks_exact(4))
++        .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
++        .collect();
++    let Ok(file) = fd.try_clone().map(std::fs::File::from) else {
++        return false;
++    };
++    if std::os::unix::fs::FileExt::write_all_at(&file, &bgra, 0).is_err() {
++        return false;
++    }
++    let qh = &state.globals.qh;
++    let pool = (state.globals.shm).create_pool(std::os::fd::AsFd::as_fd(&fd), size as i32, qh, ());
++    let buffer = pool.create_buffer(
++        0,
++        width as i32,
++        height as i32,
++        width as i32 * 4,
++        wl_shm::Format::Argb8888,
++        qh,
++        (),
++    );
++    pool.destroy();
++    let surface = &icon.surface;
++    // In logical pixels, as the surface is: drawn at the window's scale, with a viewport where
++    // that's fractional, else the buffer's scale.
++    let logical = |n: i32| (n as f32 / scale).round() as i32;
++    match &state.globals.viewporter {
++        Some(viewporter) if scale.fract() != 0. => {
++            let viewport = (icon.viewport)
++                .get_or_insert_with(|| viewporter.get_viewport(surface, qh, ()));
++            viewport.set_destination(logical(width as i32), logical(height as i32));
++        }
++        _ => surface.set_buffer_scale(scale.round().max(1.) as i32),
++    }
++    let (dx, dy) = (-logical(hold.0), -logical(hold.1));
++    if surface.version() >= 5 {
++        surface.offset(dx, dy);
++        surface.attach(Some(&buffer), 0, 0);
++    } else {
++        surface.attach(Some(&buffer), dx, dy);
++    }
++    surface.damage_buffer(0, 0, width as i32, height as i32);
++    surface.commit();
++    if let Some(old) = icon.buffer.replace(buffer) {
++        old.destroy();
++    }
++    if let Some(drag) = &state.external_drag {
++        flush(&drag.window);
++    }
++    true
++}
++
++/// An anonymous file of `size` bytes, to share with the compositor.
++fn shm_file(size: usize) -> Option<std::os::fd::OwnedFd> {
++    use std::os::fd::FromRawFd as _;
++    let fd = unsafe { libc::memfd_create(c"gpui-drag-icon".as_ptr(), libc::MFD_CLOEXEC) };
++    if fd < 0 {
++        return None;
++    }
++    let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
++    (unsafe { libc::ftruncate(fd.as_raw_fd(), size as libc::off_t) } == 0).then_some(fd)
 +}
 +
 +/// Whether Control is held in the embedder's surfaces, as their keys last said.
@@ -3092,6 +3371,17 @@ index 2d40cf7fa9..ba08fc21b3 100644
 +    }
 +}
 +
++/// The key GPUI repeats while it's held in the embedder's surfaces, as its keysym and a number
++/// that changes with each press: None once it's let go. Every key reaches both the embedder and
++/// GPUI, so the embedder's own repeats of a key GPUI had the press of are the held key's.
++pub fn held_key() -> Option<(u32, u64)> {
++    let client = EMBEDDED_CLIENT.with_borrow(|client| client.as_ref()?.upgrade())?;
++    let state = client.borrow();
++    let keycode = state.repeat.current_keycode?;
++    let keysym = state.keymap_state.as_ref()?.key_get_one_sym(keycode);
++    Some((keysym.raw(), state.repeat.current_id))
++}
++
 +/// Whether the compositor has given the keyboard to one of GPUI's windows or the embedder's.
 +pub(crate) fn keyboard_entered() -> bool {
 +    EMBEDDED_CLIENT
@@ -3198,6 +3488,13 @@ index 2d40cf7fa9..ba08fc21b3 100644
 +    }
 +}
 +
++/// The overlay window of the `view` surface is to hide: see `hiding_over`.
++pub(crate) fn overlay_hiding(view: *mut std::ffi::c_void) {
++    if let Some(window) = overlay_window(view) {
++        window.hiding_over();
++    }
++}
++
 +pub(crate) fn hide_overlay(view: *mut std::ffi::c_void, keyboard: bool) {
 +    if let Some(window) = overlay_window(view) {
 +        if keyboard {
@@ -3273,7 +3570,7 @@ index 86dc7da97b..91362b8937 100644
          if let Some(text) = self
              .primary_contents
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234ef1..3cda5c06c5 100644
+index 8d92234ef1..2ea3302106 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -11,12 +11,13 @@ use calloop::ping::Ping;
@@ -3447,7 +3744,7 @@ index 8d92234ef1..3cda5c06c5 100644
              presentation: PresentationState::Unpresented,
              pending_frame_callback: None,
              in_progress_window_controls: None,
-@@ -896,6 +971,271 @@ impl WaylandWindowStatePtr {
+@@ -896,6 +971,293 @@ impl WaylandWindowStatePtr {
          self.state.borrow().surface.clone()
      }
  
@@ -3521,6 +3818,20 @@ index 8d92234ef1..3cda5c06c5 100644
 +    pub fn embedded_parent_surface(&self) -> Option<wl_surface::WlSurface> {
 +        match &self.state.borrow().surface_state {
 +            WaylandSurfaceState::Sub(_, parent) => Some(parent.clone()),
++            _ => None,
++        }
++    }
++
++    /// The toplevel this window shows in, for a portal's dialog to be parented to: its own, or
++    /// the embedder's for a window in or over it. Exporting a surface that isn't a toplevel is a
++    /// protocol error, which ends the connection the embedder shares.
++    pub fn toplevel_surface(&self) -> Option<wl_surface::WlSurface> {
++        let state = self.state.borrow();
++        match &state.surface_state {
++            WaylandSurfaceState::Xdg(_) => Some(state.surface.clone()),
++            WaylandSurfaceState::Sub(_, parent) | WaylandSurfaceState::Over(_, parent) => {
++                Some(parent.clone())
++            }
 +            _ => None,
 +        }
 +    }
@@ -3606,6 +3917,14 @@ index 8d92234ef1..3cda5c06c5 100644
 +        match &state.surface_state {
 +            WaylandSurfaceState::Over(_, parent) => Some((state.surface.clone(), parent.clone())),
 +            _ => None,
++        }
++    }
++
++    /// The overlay that shows is to hide, which it does later (`hide_over`): its frames until then
++    /// commit no more to its parent, which the embedder may destroy first.
++    pub fn hiding_over(&self) {
++        if let Ok(mut state) = self.state.try_borrow_mut() {
++            state.commit_parent = false;
 +        }
 +    }
 +
@@ -3719,7 +4038,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
          self.state.borrow().surface_state.toplevel().cloned()
      }
-@@ -936,6 +1276,21 @@ impl WaylandWindowStatePtr {
+@@ -936,6 +1298,21 @@ impl WaylandWindowStatePtr {
      }
  
      pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
@@ -3741,7 +4060,7 @@ index 8d92234ef1..3cda5c06c5 100644
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
-@@ -966,7 +1321,8 @@ impl WaylandWindowStatePtr {
+@@ -966,7 +1343,8 @@ impl WaylandWindowStatePtr {
          let mut state = self.state.borrow_mut();
  
          let frame_loop = self.frame_loop.get();
@@ -3751,7 +4070,7 @@ index 8d92234ef1..3cda5c06c5 100644
              return;
          }
  
-@@ -1024,6 +1380,12 @@ impl WaylandWindowStatePtr {
+@@ -1024,6 +1402,12 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3764,7 +4083,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn retry_timer_fired(&self, signal_at: Instant) {
          if self.frame_loop.get() == FrameLoop::RetryScheduled {
              self.frame(
-@@ -1060,6 +1422,10 @@ impl WaylandWindowStatePtr {
+@@ -1060,6 +1444,10 @@ impl WaylandWindowStatePtr {
      }
  
      fn update_ime_enabled(&self) {
@@ -3775,7 +4094,7 @@ index 8d92234ef1..3cda5c06c5 100644
          let mut state = self.state.borrow_mut();
          if !state.active {
              return;
-@@ -1493,6 +1859,17 @@ impl WaylandWindowStatePtr {
+@@ -1493,6 +1881,17 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3793,7 +4112,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
          let mut state = self.state.borrow_mut();
          let mut bounds: Option<Bounds<Pixels>> = None;
-@@ -1598,6 +1975,29 @@ impl WaylandWindowStatePtr {
+@@ -1598,6 +1997,29 @@ impl WaylandWindowStatePtr {
          }
      }
  
@@ -3823,7 +4142,7 @@ index 8d92234ef1..3cda5c06c5 100644
      pub fn set_focused(&self, focus: bool) {
          self.state.borrow_mut().active = focus;
          let callback = self.callbacks.borrow_mut().active_status_change.take();
-@@ -1888,9 +2288,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -1888,9 +2310,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn set_title(&mut self, title: &str) {
@@ -3836,7 +4155,7 @@ index 8d92234ef1..3cda5c06c5 100644
      }
  
      fn set_app_id(&mut self, app_id: &str) {
-@@ -2011,6 +2413,13 @@ impl PlatformWindow for WaylandWindow {
+@@ -2011,6 +2435,13 @@ impl PlatformWindow for WaylandWindow {
      fn draw(&self, scene: &Scene) {
          let mut state = self.borrow_mut();
          let state = &mut *state;
@@ -3850,7 +4169,7 @@ index 8d92234ef1..3cda5c06c5 100644
          let Some(renderer) = &mut state.renderer else {
              return;
          };
-@@ -2046,6 +2455,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2046,6 +2477,11 @@ impl PlatformWindow for WaylandWindow {
          if renderer.draw(scene) {
              state.presentation = PresentationState::Presented;
              self.0.frame_loop.set(FrameLoop::AwaitingCallback);
@@ -3862,7 +4181,7 @@ index 8d92234ef1..3cda5c06c5 100644
          } else {
              state.presentation = state.presentation.failed();
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
-@@ -2208,6 +2622,11 @@ impl PlatformWindow for WaylandWindow {
+@@ -2208,6 +2644,11 @@ impl PlatformWindow for WaylandWindow {
      }
  
      fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -3874,6 +4193,20 @@ index 8d92234ef1..3cda5c06c5 100644
          let state = self.borrow();
          if !state.active {
              return;
+@@ -2215,6 +2656,13 @@ impl PlatformWindow for WaylandWindow {
+         state.client.update_ime_position(bounds);
+     }
+ 
++    fn render_to_image(&self, scene: &gpui::Scene) -> anyhow::Result<image::RgbaImage> {
++        let mut state = self.borrow_mut();
++        let renderer = state.renderer.as_mut().context("no renderer")?;
++        let (width, height, pixels) = renderer.render_to_image(scene)?;
++        image::RgbaImage::from_raw(width, height, pixels).context("the image's size")
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.borrow().renderer.as_ref()?.gpu_specs()
+     }
 diff --git a/crates/gpui_linux/src/linux/x11.rs b/crates/gpui_linux/src/linux/x11.rs
 index f9b9727330..6d0cfcaabb 100644
 --- a/crates/gpui_linux/src/linux/x11.rs
@@ -3899,7 +4232,7 @@ index f9b9727330..6d0cfcaabb 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..b7d7bf1182 100644
+index e21f019c64..c104123566 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -4423,9 +4756,17 @@ index e21f019c64..b7d7bf1182 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1157,6 +1532,9 @@ impl X11Client {
+@@ -1156,7 +1531,17 @@ impl X11Client {
+                     let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
++                    // Escape cancels a drag out of GPUI's windows (drag.rs).
++                    if keysym == xkbc::Keysym::Escape && state.file_drag.is_some() {
++                        drop(state);
++                        self.drag_cancelled();
++                        return Some(());
++                    }
++
                      if keysym.is_modifier_key() {
 +                        drop(state);
 +                        let alt = matches!(keysym, xkbc::Keysym::Alt_L | xkbc::Keysym::Alt_R);
@@ -4433,7 +4774,7 @@ index e21f019c64..b7d7bf1182 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1578,7 @@ impl X11Client {
+@@ -1200,6 +1585,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -4441,7 +4782,7 @@ index e21f019c64..b7d7bf1182 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1599,9 @@ impl X11Client {
+@@ -1220,6 +1606,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -4451,7 +4792,7 @@ index e21f019c64..b7d7bf1182 100644
                          return Some(());
                      }
  
-@@ -1230,7 +1612,24 @@ impl X11Client {
+@@ -1230,7 +1619,24 @@ impl X11Client {
              }
              Event::XinputButtonPress(event) => {
                  let window = self.get_window(event.event)?;
@@ -4476,7 +4817,7 @@ index e21f019c64..b7d7bf1182 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1307,7 +1706,12 @@ impl X11Client {
+@@ -1307,7 +1713,12 @@ impl X11Client {
                      }
                  }
              }
@@ -4490,7 +4831,7 @@ index e21f019c64..b7d7bf1182 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1332,7 +1736,26 @@ impl X11Client {
+@@ -1332,7 +1743,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -4518,7 +4859,7 @@ index e21f019c64..b7d7bf1182 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,15 +1807,15 @@ impl X11Client {
+@@ -1384,15 +1814,15 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -4540,7 +4881,7 @@ index e21f019c64..b7d7bf1182 100644
              Event::XinputEnter(event) if event.mode == xinput::NotifyMode::NORMAL => {
                  let window = self.get_window(event.event)?;
                  window.set_hovered(true);
-@@ -1413,9 +1836,15 @@ impl X11Client {
+@@ -1413,9 +1843,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -4556,7 +4897,7 @@ index e21f019c64..b7d7bf1182 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +1952,35 @@ impl X11Client {
+@@ -1523,6 +1959,35 @@ impl X11Client {
          };
      }
  
@@ -4592,7 +4933,7 @@ index e21f019c64..b7d7bf1182 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1842,8 +2300,9 @@ impl X11Client {
+@@ -1842,8 +2307,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -4603,7 +4944,7 @@ index e21f019c64..b7d7bf1182 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -2052,6 +2511,9 @@ impl X11ClientState {
+@@ -2052,6 +2518,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -4613,7 +4954,7 @@ index e21f019c64..b7d7bf1182 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,6 +2549,469 @@ impl X11ClientState {
+@@ -2087,6 +2556,469 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -5083,7 +5424,7 @@ index e21f019c64..b7d7bf1182 100644
      fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
          if let Some(cursor) = self.cursor_cache.get(&style) {
              return *cursor;
-@@ -2246,10 +3171,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +3178,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -5138,7 +5479,7 @@ index e21f019c64..b7d7bf1182 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +3242,27 @@ fn detect_compositor_gpu(
+@@ -2273,73 +3249,27 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -5231,7 +5572,7 @@ index e21f019c64..b7d7bf1182 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +3388,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +3395,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -5252,7 +5593,7 @@ index e21f019c64..b7d7bf1182 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +3435,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +3442,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -5261,7 +5602,7 @@ index e21f019c64..b7d7bf1182 100644
                          },
                      ))
                  }
-@@ -2539,10 +3478,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +3485,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -5275,7 +5616,7 @@ index e21f019c64..b7d7bf1182 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +3496,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +3503,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -5292,7 +5633,7 @@ index e21f019c64..b7d7bf1182 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +3511,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +3518,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -5328,7 +5669,7 @@ index e21f019c64..b7d7bf1182 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +3590,11 @@ fn get_scale_factor(
+@@ -2620,6 +3597,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -5340,7 +5681,7 @@ index e21f019c64..b7d7bf1182 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +3873,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +3880,130 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -5471,7 +5812,7 @@ index e21f019c64..b7d7bf1182 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +4312,101 @@ mod tests {
+@@ -3213,3 +4319,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
@@ -5667,10 +6008,10 @@ index 9835786efe..a44725263b 100644
  
 diff --git a/crates/gpui_linux/src/linux/x11/drag.rs b/crates/gpui_linux/src/linux/x11/drag.rs
 new file mode 100644
-index 0000000000..84f66f7604
+index 0000000000..704677746c
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/x11/drag.rs
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,492 @@
 +//! A file's drag out of GPUI's windows on X11, as XDND's source (freedesktop.org's XDND, version
 +//! 5): the window the left button went down in owns `XdndSelection`, the pointer is grabbed until
 +//! it's let go, and the top-level window under it that takes XDND hears where it is and, if it
@@ -5679,9 +6020,13 @@ index 0000000000..84f66f7604
 +use gpui_util::ResultExt as _;
 +use x11rb::{
 +    connection::Connection as _,
-+    protocol::xproto::{
-+        self, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, GrabMode, PropMode,
-+        SelectionNotifyEvent, SelectionRequestEvent,
++    protocol::{
++        shape::{self, ConnectionExt as _},
++        xproto::{
++            self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _,
++            CreateWindowAux, EventMask, GrabMode, ImageFormat, PropMode, SelectionNotifyEvent,
++            SelectionRequestEvent, StackMode, WindowClass,
++        },
 +    },
 +    xcb_ffi::XCBConnection,
 +};
@@ -5691,7 +6036,11 @@ index 0000000000..84f66f7604
 +pub(crate) struct FileDrag {
 +    /// GPUI's window it started in, which owns `XdndSelection` and hears from the targets.
 +    window: xproto::Window,
-+    uri_list: Vec<u8>,
++    /// The type it carries, and what.
++    kind: xproto::Atom,
++    data: Vec<u8>,
++    /// Where the pointer last was on the root, for where it's let go.
++    last: (i16, i16),
 +    /// Until it's let go.
 +    held: bool,
 +    /// The top-level window under the pointer that takes XDND, with its version.
@@ -5704,17 +6053,33 @@ index 0000000000..84f66f7604
 +    accepted: bool,
 +    /// Let go while the target hadn't answered, when.
 +    released: Option<u32>,
++    /// The picture of what's dragged, an override-redirect window the pointer carries, and where
++    /// the pointer holds it, until it's let go.
++    icon: Option<DragIcon>,
++}
++
++struct DragIcon {
++    window: xproto::Window,
++    pixmap: xproto::Pixmap,
++    hold: (i16, i16),
 +}
 +
 +impl X11Client {
-+    /// Starts dragging `uri_list`, a `text/uri-list`, from the window the left button went down in,
-+    /// which it's held in.
-+    pub(crate) fn start_file_drag(&self, uri_list: String) -> bool {
++    /// Starts dragging `data`, as `mime`, from the window the left button went down in, which
++    /// it's held in.
++    pub(crate) fn start_drag(&self, mime: &str, data: Vec<u8>) -> bool {
 +        let mut state = self.0.borrow_mut();
 +        let Some(window) = state.pressed_window.filter(|_| state.file_drag.is_none()) else {
 +            return false;
 +        };
 +        let xcb = state.xcb_connection.clone();
++        let kind = match mime {
++            "text/uri-list" => state.atoms.TextUriList,
++            _ => match xcb.intern_atom(false, mime.as_bytes()).ok().and_then(|c| c.reply().ok()) {
++                Some(reply) => reply.atom,
++                None => return false,
++            },
++        };
 +        let root = xcb.setup().roots[state.x_root_index].root;
 +        let owned = xcb.set_selection_owner(window, state.atoms.XdndSelection, x11rb::CURRENT_TIME);
 +        if owned.log_err().is_none() {
@@ -5736,14 +6101,116 @@ index 0000000000..84f66f7604
 +        xcb.flush().log_err();
 +        state.file_drag = Some(FileDrag {
 +            window,
-+            uri_list: uri_list.into_bytes(),
++            kind,
++            data,
++            last: (0, 0),
 +            held: true,
 +            target: None,
 +            asked: false,
 +            moved: None,
 +            accepted: false,
 +            released: None,
++            icon: None,
 +        });
++        true
++    }
++
++    /// Shows `rgba`, `width` by `height` top-down RGBA pixels, under the pointer of the drag
++    /// that's held, with the pointer at `hold` in it, as the picture of what's dragged.
++    pub(crate) fn set_drag_icon(
++        &self,
++        width: u16,
++        height: u16,
++        rgba: &[u8],
++        hold: (i16, i16),
++    ) -> bool {
++        let mut state = self.0.borrow_mut();
++        let state = &mut *state;
++        let xcb = &state.xcb_connection;
++        let Some(drag) = state.file_drag.as_mut().filter(|drag| drag.held) else {
++            return false;
++        };
++        let screen = &xcb.setup().roots[state.x_root_index];
++        let (root, depth, visual) = (screen.root, screen.root_depth, screen.root_visual);
++        if width == 0 || height == 0 || rgba.len() != usize::from(width) * usize::from(height) * 4
++        {
++            return false;
++        }
++        let made = || -> anyhow::Result<DragIcon> {
++            let pixmap = xcb.generate_id()?;
++            xcb.create_pixmap(depth, pixmap, root, width, height)?;
++            let gc = xcb.generate_id()?;
++            xcb.create_gc(gc, pixmap, &Default::default())?;
++            // The X server's pixels are BGRX, in bands that each fit in a request.
++            let bgrx: Vec<u8> = (rgba.chunks_exact(4))
++                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], 0xff])
++                .collect();
++            let row = usize::from(width) * 4;
++            let band = (60_000 / row).max(1);
++            for (index, rows) in bgrx.chunks(row * band).enumerate() {
++                let top = (index * band) as i16;
++                let rows_high = (rows.len() / row) as u16;
++                xcb.put_image(
++                    ImageFormat::Z_PIXMAP,
++                    pixmap,
++                    gc,
++                    width,
++                    rows_high,
++                    0,
++                    top,
++                    0,
++                    depth,
++                    rows,
++                )?;
++            }
++            xcb.free_gc(gc)?;
++            let window = xcb.generate_id()?;
++            xcb.create_window(
++                depth,
++                window,
++                root,
++                0,
++                0,
++                width,
++                height,
++                0,
++                WindowClass::INPUT_OUTPUT,
++                visual,
++                &CreateWindowAux::new()
++                    .override_redirect(1)
++                    .background_pixmap(pixmap),
++            )?;
++            // It takes no input, so the window under it is the one the pointer is over, for XDND
++            // as for the pointer.
++            xcb.shape_rectangles(
++                shape::SO::SET,
++                shape::SK::INPUT,
++                xproto::ClipOrdering::UNSORTED,
++                window,
++                0,
++                0,
++                &[],
++            )?;
++            Ok(DragIcon {
++                window,
++                pixmap,
++                hold,
++            })
++        };
++        let Some(icon) = made().log_err() else {
++            return false;
++        };
++        // Where the pointer is now, as it may not have moved since the drag started.
++        let (x, y) = match xcb.query_pointer(root).ok().and_then(|c| c.reply().ok()) {
++            Some(pointer) => (pointer.root_x, pointer.root_y),
++            None => drag.last,
++        };
++        place_icon(xcb, &icon, x, y);
++        xcb.map_window(icon.window).log_err();
++        if let Some(old) = drag.icon.replace(icon) {
++            remove_icon(xcb, old);
++        }
++        xcb.flush().log_err();
 +        true
 +    }
 +
@@ -5761,6 +6228,10 @@ index 0000000000..84f66f7604
 +            return;
 +        };
 +        let root = xcb.setup().roots[state.x_root_index].root;
++        drag.last = (x, y);
++        if let Some(icon) = &drag.icon {
++            place_icon(xcb, icon, x, y);
++        }
 +        let target = xdnd_target(xcb, atoms, root, x, y);
 +        if target.map(|(window, _)| window) != drag.target.map(|(window, _)| window) {
 +            if let Some((window, _)) = drag.target.take() {
@@ -5773,7 +6244,7 @@ index 0000000000..84f66f7604
 +                    xcb,
 +                    window,
 +                    atoms.XdndEnter,
-+                    [drag.window, version, atoms.TextUriList, 0, 0],
++                    [drag.window, version, drag.kind, 0, 0],
 +                );
 +                drag.target = target;
 +            }
@@ -5796,6 +6267,9 @@ index 0000000000..84f66f7604
 +                return;
 +            };
 +            drag.held = false;
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(&state.xcb_connection, icon);
++            }
 +            state
 +                .xcb_connection
 +                .ungrab_pointer(x11rb::CURRENT_TIME)
@@ -5818,6 +6292,7 @@ index 0000000000..84f66f7604
 +    /// Drops the file on the target if it accepted it where the pointer was let go, or else ends
 +    /// the drag with nothing taking it.
 +    fn file_drag_let_go(&self, time: u32) {
++        let at = self.drag_let_go_at();
 +        {
 +            let mut state = self.0.borrow_mut();
 +            let state = &mut *state;
@@ -5837,11 +6312,41 @@ index 0000000000..84f66f7604
 +            }
 +            state.file_drag = None;
 +        }
-+        crate::linux::file_drag_ended(false);
++        crate::linux::drag_ended(crate::linux::DragEnd::LetGo(at));
++    }
++
++    /// Where the drag's pointer last was on the root, in the screen's logical pixels.
++    fn drag_let_go_at(&self) -> Option<(f32, f32)> {
++        let state = self.0.borrow();
++        let (x, y) = state.file_drag.as_ref()?.last;
++        let scale = state.scale_factor;
++        Some((f32::from(x) / scale, f32::from(y) / scale))
++    }
++
++    /// Escape was pressed while dragging: the target hears it left, and nothing takes it.
++    pub(crate) fn drag_cancelled(&self) {
++        {
++            let mut state = self.0.borrow_mut();
++            let state = &mut *state;
++            let (xcb, atoms) = (&state.xcb_connection, &state.atoms);
++            let Some(mut drag) = state.file_drag.take() else {
++                return;
++            };
++            if let Some((window, _)) = drag.target {
++                send(xcb, window, atoms.XdndLeave, [drag.window, 0, 0, 0, 0]);
++            }
++            if let Some(icon) = drag.icon.take() {
++                remove_icon(xcb, icon);
++            }
++            xcb.ungrab_pointer(x11rb::CURRENT_TIME).log_err();
++            xcb.flush().log_err();
++        }
++        crate::linux::drag_ended(crate::linux::DragEnd::Cancelled);
 +    }
 +
 +    /// Handles `message` if it's the target's answer, XdndStatus or XdndFinished.
 +    pub(crate) fn file_drag_message(&self, message: &ClientMessageEvent) -> bool {
++        let at = self.drag_let_go_at();
 +        let (let_go, ended) = {
 +            let mut state = self.0.borrow_mut();
 +            let state = &mut *state;
@@ -5883,7 +6388,10 @@ index 0000000000..84f66f7604
 +            self.file_drag_let_go(time);
 +        }
 +        if let Some(taken) = ended {
-+            crate::linux::file_drag_ended(taken);
++            crate::linux::drag_ended(match taken {
++                true => crate::linux::DragEnd::Taken,
++                false => crate::linux::DragEnd::LetGo(at),
++            });
 +        }
 +        true
 +    }
@@ -5903,15 +6411,15 @@ index 0000000000..84f66f7604
 +            x11rb::NONE => request.target,
 +            property => property,
 +        };
-+        let given = request.target == atoms.TextUriList
++        let given = request.target == drag.kind
 +            && (xcb.change_property(
 +                PropMode::REPLACE,
 +                request.requestor,
 +                property,
-+                atoms.TextUriList,
++                drag.kind,
 +                8,
-+                drag.uri_list.len() as u32,
-+                &drag.uri_list,
++                drag.data.len() as u32,
++                &drag.data,
 +            ))
 +            .log_err()
 +            .is_some();
@@ -5976,13 +6484,28 @@ index 0000000000..84f66f7604
 +    }
 +}
 +
++/// Puts `icon` with the pointer at (x, y) on the root where it holds it, over every other window.
++fn place_icon(xcb: &XCBConnection, icon: &DragIcon, x: i16, y: i16) {
++    let place = ConfigureWindowAux::new()
++        .x(i32::from(x) - i32::from(icon.hold.0))
++        .y(i32::from(y) - i32::from(icon.hold.1))
++        .stack_mode(StackMode::ABOVE);
++    xcb.configure_window(icon.window, &place).log_err();
++}
++
++fn remove_icon(xcb: &XCBConnection, icon: DragIcon) {
++    xcb.destroy_window(icon.window).log_err();
++    xcb.free_pixmap(icon.pixmap).log_err();
++    xcb.flush().log_err();
++}
++
 +fn send(xcb: &XCBConnection, to: xproto::Window, type_: xproto::Atom, data: [u32; 5]) {
 +    let message = ClientMessageEvent::new(32, to, type_, data);
 +    xcb.send_event(false, to, EventMask::NO_EVENT, message)
 +        .log_err();
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76ae8c..dfbe903dd4 100644
+index f6ee76ae8c..286264936f 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -75,6 +75,7 @@ x11rb::atom_manager! {
@@ -6450,3 +6973,17 @@ index f6ee76ae8c..dfbe903dd4 100644
          }
  
          // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87
+@@ -1976,6 +2239,13 @@ impl PlatformWindow for X11Window {
+         client.update_ime_position(bounds);
+     }
+ 
++    fn render_to_image(&self, scene: &gpui::Scene) -> anyhow::Result<image::RgbaImage> {
++        let mut state = self.0.state.borrow_mut();
++        let renderer = state.renderer.as_mut().context("no renderer")?;
++        let (width, height, pixels) = renderer.render_to_image(scene)?;
++        image::RgbaImage::from_raw(width, height, pixels).context("the image's size")
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.0.state.borrow().renderer.as_ref()?.gpu_specs()
+     }

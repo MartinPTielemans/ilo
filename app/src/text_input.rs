@@ -114,11 +114,14 @@ pub fn on_lose_keyboard<T: 'static>(
     let (left, away, deactivated) = (listener.clone(), listener.clone(), listener);
     let input = field.downgrade();
     let focus = field.focus_handle(cx);
+    // Each says which way it went, for a check that finds a field ended it didn't end (#1664).
     vec![
         on_leave(&focus, window, cx, move |view, window, cx| {
+            crate::log!("browser: field lost the keyboard to another element");
             left(view, window, cx)
         }),
         cx.subscribe_in(field, window, move |view, _, _: &Away, window, cx| {
+            crate::log!("browser: field lost the keyboard to a press away");
             away(view, window, cx)
         }),
         cx.observe_window_activation(window, move |_, window, cx| {
@@ -133,6 +136,7 @@ pub fn on_lose_keyboard<T: 'static>(
             cx.spawn_in(window, async move |view, cx| {
                 view.update_in(cx, |view, window, cx| {
                     if left_window(&input, window, cx) {
+                        crate::log!("browser: field lost the keyboard with its window");
                         deactivated(view, window, cx)
                     }
                 })
@@ -298,6 +302,8 @@ pub struct TextInput {
     secure: bool,
     /// The field's own menu shows, with the keyboard its window had.
     menu_shown: bool,
+    /// What an assistive app calls it, where its placeholder, such as "https://", doesn't say.
+    spoken: Option<SharedString>,
 }
 
 impl TextInput {
@@ -323,7 +329,20 @@ impl TextInput {
             paste_and_go: false,
             secure: false,
             menu_shown: false,
+            spoken: None,
         }
+    }
+
+    /// An assistive app calls it `name`, not by its placeholder.
+    pub fn spoken(mut self, name: impl Into<SharedString>) -> Self {
+        self.spoken = Some(name.into());
+        self
+    }
+
+    /// As `spoken`, once it's made, as a list's field does when its row moves.
+    pub fn set_spoken(&mut self, name: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.spoken = Some(name.into());
+        cx.notify();
     }
 
     /// With `secure`, it shows a dot for each character typed and won't copy or cut them, as a
@@ -373,6 +392,20 @@ impl TextInput {
         self
     }
 
+    /// The placeholder's colour as the ground under the field changes, such as with the appearance.
+    pub fn set_placeholder_color(&mut self, color: impl Into<Hsla>, cx: &mut Context<Self>) {
+        let color = color.into();
+        if color != self.placeholder_color {
+            self.placeholder_color = color;
+            cx.notify();
+        }
+    }
+
+    /// The placeholder's colour now.
+    pub fn placeholder_hsla(&self) -> Hsla {
+        self.placeholder_color
+    }
+
     /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
     /// change with the Space.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
@@ -414,6 +447,18 @@ impl TextInput {
     /// An input method is composing in the field, so its text isn't what the user means yet.
     pub fn composing(&self) -> bool {
         self.marked_range.is_some()
+    }
+
+    /// The field's text without what an input method is still composing in it.
+    pub fn committed(&self) -> String {
+        match &self.marked_range {
+            Some(marked) => format!(
+                "{}{}",
+                &self.content[..marked.start],
+                &self.content[marked.end..]
+            ),
+            None => self.content.to_string(),
+        }
     }
 
     /// The field's own menu shows, which has its window's keyboard until it closes, so the field
@@ -1488,7 +1533,10 @@ impl Render for TextInput {
             // as AT-SPI's Text, which Orca reads, has text only from runs. A secure field gives
             // its dots, never what was typed.
             .when(window.is_a11y_active(), |field| {
-                let name = self.placeholder.trim_end_matches('…').to_owned();
+                let name = match &self.spoken {
+                    Some(name) => name.to_string(),
+                    None => self.placeholder.trim_end_matches('…').to_owned(),
+                };
                 let role = if self.secure {
                     Role::PasswordInput
                 } else {

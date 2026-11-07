@@ -200,6 +200,15 @@ plutil -replace CFBundleVersion -string "$build" "$plist"
 # macOS 15 (Sequoia) or later, the owner's call (#678). Below it macOS won't open the app, and
 # Sparkle's generate_appcast copies it into the feed's entry, so an older Mac is offered no update.
 plutil -replace LSMinimumSystemVersion -string 15.0 "$plist"
+# No script reaches Chromium's AppleScript dictionary, which its code answers outside the core: a
+# script could read every window's tabs and their URLs, and save a page, view its source or run
+# JavaScript in it (#704). Quit and open-location Apple Events have handlers of their own. ilo's
+# own takes its place (platform/mac/ilo.sdef), which answers only once Settings › Agents lets
+# scripts in, through the UI's own paths.
+rm -f "$app/Contents/Resources/scripting.sdef"
+cp platform/mac/ilo.sdef "$app/Contents/Resources/"
+plutil -replace NSAppleScriptEnabled -bool YES "$plist"
+plutil -replace OSAScriptingDefinition -string ilo.sdef "$plist"
 rm "$app/Contents/Resources/app.icns"
 cp branding/Assets.car "branding/$name.icns" "$app/Contents/Resources/"
 plutil -replace CFBundleIconFile -string "$name" "$plist"

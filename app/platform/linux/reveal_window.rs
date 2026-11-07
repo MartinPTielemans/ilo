@@ -44,7 +44,7 @@ pub extern "C" fn host_show_reveal(ui_view: *mut c_void, width: f64) {
         point(px(0.), px(0.)),
         size(px(width as f32), content.height),
     );
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), false, ignore_left);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), false, ignore_left);
     if !was_shown {
         // check.sh reads it, as the Mac's host says it.
         eprintln!("browser: reveal window shown");

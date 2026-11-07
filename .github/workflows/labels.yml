@@ -30,6 +30,8 @@ jobs:
               ["agents", "5319e7", "Agents, the MCP server, and their permissions."],
               ["via-triage", "c5def5", "Filed by an agent following .github/triage/PLAYBOOK.md."],
               ["needs-triage", "fbca04", "Needs a maintainer's first look."],
+              // Triage.
+              ["needs-mac-repro", "fef2c0", "macOS-only, needs a human repro on a Mac."],
               // stale-needs-more-info.yml closes these after 7 quiet days.
               ["needs more info", "d876e3", "Waiting on the reporter for details."],
               // pr-vouch.yml.

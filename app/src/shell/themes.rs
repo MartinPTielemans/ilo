@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ColorSpace, Context, Global, Hsla, Point, Rgba, canvas, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, size,
+    App, ColorSpace, Context, Global, Hsla, Rgba, canvas, div, linear_color_stop, linear_gradient,
+    point, prelude::*, px, rgb, size,
 };
 
 use super::{
@@ -67,10 +67,16 @@ impl Shell {
     /// Whether `space`'s window is dark or light: as its theme's appearance forces it, else as
     /// the system's is, as Arc's follows it. A private window is dark, as Arc's is.
     pub(super) fn tone_of(&self, space: u64) -> Tone {
+        self.tone_with(self.theme_of(space).as_ref())
+    }
+
+    /// The tone a Space with `theme` draws in: the theme's, else the system's; dark in a private
+    /// window.
+    pub(super) fn tone_with(&self, theme: Option<&Theme>) -> Tone {
         if self.private {
             return Tone::Dark;
         }
-        match self.theme_of(space).map(|theme| theme.appearance) {
+        match theme.map(|theme| theme.appearance) {
             Some(Appearance::Light) => Tone::Light,
             Some(Appearance::Dark) => Tone::Dark,
             Some(Appearance::Automatic) | None => self.system_tone,
@@ -156,20 +162,17 @@ impl Shell {
             self.capture_look = Some(look);
             self.browser.capture_look(self.selected, look, cx);
         }
-        if cx
-            .try_global::<super::commands::ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity())
-        {
+        if super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             palette::set_current(palette, cx);
         }
     }
 
-    /// Shows the theme picker for `space` pointing at `anchor`, the middle of a row's right end
-    /// in the window, with the Space's theme, or its colour alone if it has no theme.
+    /// Shows the theme picker for `space` `at` its place in the window, with the Space's theme, or
+    /// its colour alone if it has no theme.
     pub(super) fn show_theme_picker(
         &mut self,
         space: u64,
-        anchor: Point<f32>,
+        at: theme_picker::At,
         cx: &mut Context<Self>,
     ) {
         let Some(entry) = self.spaces.iter().find(|each| each.id == space) else {
@@ -190,15 +193,7 @@ impl Shell {
         let height = f32::from(self.viewport.height);
         // A card showing would stay under the picker, as rows' cards wait while it shows.
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
-        theme_picker::show(
-            self.browser.window(),
-            space,
-            theme,
-            anchor,
-            height,
-            changed,
-            cx,
-        );
+        theme_picker::show(self.browser.window(), space, theme, at, height, changed, cx);
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is

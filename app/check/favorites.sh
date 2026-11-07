@@ -12,7 +12,8 @@
 # tile's icon until Remove Icon, and duplicates it to the top of Today. Launched again, the app
 # brings the favorite back, shown, with the icon it was given before the quit, and Remove from
 # Favorites in its menu puts it at the top of Today. A row dragged onto the tiles turns into a tile, and a tile dragged into the list
-# into a row. Today rows dragged onto the tiles become favorites where they're dropped, a tile
+# into a row. A split's row dragged onto the tiles is one favorite, shown focused where it was
+# focused last, with its pages on its card, and Remove from Favorites puts it whole in Today. Today rows dragged onto the tiles become favorites where they're dropped, a tile
 # dragged across the other goes before it, one dragged into the list goes there, and escape puts a
 # dragged tile back. Tiles taller than 40 % of the window scroll with the list. ⌘, from the page and
 # the UI opens Settings, where switches turn the warning before quitting and the haptics off and the
@@ -204,6 +205,7 @@ send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for tab $a on emoji\$" \
   "Change Icon… on the tile didn't open the icon picker for the favorite"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the tile"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 # The arrow's tip is 13 in from the picker's left, 12 under the tile's middle at $tile.
 at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 echo "$at $tile" | awk '{ x = $1 + 13 - $5; y = $2 - 12 - $6; exit !(x > -2 && x < 2 && y > -2 && y < 2) }' ||
@@ -306,31 +308,35 @@ send click 600 150
 in_browser RenderWidgetHostViewCocoa "a click on the page didn't give it the keyboard"
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
-# ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off, the
-# menu of its pop-up button sets how long Today tabs wait for the archive, the switch on its
-# Advanced tab turns the haptics off, and ⌘W hides it.
+# ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off;
+# on Tabs & Sidebar, the menu of the profile's pop-up button sets how long its Today tabs wait for
+# the archive, the favorites' sets who shares them, and on the Mac, the haptics' switch turns them
+# off; and ⌘W hides it.
 send key , cmd
 expect '^browser: command settings via page$' "⌘, from the page didn't run Settings"
-expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
 settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
-send clickkey 592 126
-expect '^browser: warn before quitting off$' "a click on Warn before quitting didn't turn it off"
-post clickkey 500 168
-expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days$' \
-  "a click on Archive tabs after didn't show the times, with 12 hours chosen"
+send clickkey $(drawn "switch warn before quitting")
+expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+post clickkey $(drawn "archive [0-9]*")
+expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
+  "a click on Archive Today tabs after didn't show the times, with 12 hours chosen"
 send choose 24 hours
-expect '^browser: archive tabs after 24 hours$' "choosing 24 hours in Settings didn't set it"
-post clickkey 500 250
+expect '^browser: profile [0-9]* archive tabs after 24 hours$' \
+  "choosing 24 hours in Settings didn't set it"
+post clickkey $(drawn favorites)
 expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (checked), In Each Space")\$" \
-  "a click on Favorites didn't show the choices, with Each Profile's Spaces chosen"
+  "a click on Share favorites didn't show the choices, with Each Profile's Spaces chosen"
 send choose "$(cased 'In Each Space')"
 expect "^browser: favorites scope In Each Space\$" "choosing In Each Space in Settings didn't set it"
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
-send clickkey 592 126
-expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
+if [ "$(uname)" = Darwin ]; then
+  send clickkey $(drawn "switch haptics")
+  expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
+fi
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 none_since '^browser: command close-tab' || fail "⌘W in Settings closed a tab"
@@ -342,6 +348,7 @@ expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace F
   "a right-click on the tile before the quit didn't offer Change Icon…"
 send choose "$(cased 'Change Icon…')"
 expect '^browser: icon picker shown$' "Change Icon… before the quit didn't show the icon picker"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: page $a icon 🌟\$" "the picker's pick before the quit didn't become the favorite's icon"
@@ -473,6 +480,51 @@ none_since '^browser: dragged' || fail "a tile's drag escape put back dropped it
 [ "$(favorites)" = "$a" ] || fail "a tile's drag escape put back moved it: \"$(favorites)\""
 # A press hits the frame drawn, so the next drag waits for the put-back's.
 expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
+# A split's row dragged onto the tiles is one favorite, a split, its tile showing each page's
+# favicon (#689, ours: Arc's tile isn't recorded). It shows focused where it was focused last: a
+# click in its right page focuses that one, and ⌘2 from another tab shows the split focused there.
+# Resting on it, its card has its pages. Remove from Favorites puts it whole at the top of Today,
+# where Separate All Tabs leaves the rows as they were for the steps after.
+send click $(tiled_row 0)
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today row didn't show it"
+send click $(tiled_row 1) alt
+expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
+send drag $(tiled_row 0) 180 112
+expect "^browser: dragged $x to favorites 1\$" "the split's row dragged onto the tiles didn't go there"
+expect "^browser: favorites $a $x\$" "the split isn't one favorite: the favorites are \"$(favorites)\""
+expect "^browser: favorite splits $x+$y\$" "the split dragged onto the tiles isn't a favorite split"
+expect '^browser: today $' "the split's tabs are still in Today: \"$(today)\""
+expect '^browser: tiles settled$' "the tiles didn't settle after the split's drop"
+../tools/window-screenshot.sh "$pid" "$out/favorite-split-tile.png" || fail "no window to capture"
+# Its right page, three quarters across the card the sidebar leaves.
+width=$(grep '^browser: drawn at' "$log" | tail -1 | sed 's/^browser: drawn at \([0-9]*\).*/\1/')
+# The pointer goes there first, as a real one does: the Mac's click alone doesn't tell GPUI the
+# pointer left the tile, and resting on it again below would then be no new hover.
+send move $((228 + (width - 238) * 3 / 4)) 400
+send click $((228 + (width - 238) * 3 / 4)) 400
+expect "^browser: selected $y\( in .*\)\{0,1\}\$" "a click in the split's right page didn't focus it"
+switch "1 cmd" "$a"
+switch "2 cmd" "$y"
+switch "1 cmd" "$a"
+# Two tiles across the sidebar: the split's is the second, 118 in and 102 wide.
+send move 169 113
+expect "^browser: hover card shown $x unfavorite \(picture\|favicon\)\$" \
+  "resting on the split's tile didn't show its card"
+expect '^browser: hover card settled$' "the split's card didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/favorite-split-card.png" || fail "no window to capture"
+send move $page_point
+post rightclick 169 113
+expect "^browser: menu shown $(cased 'Back to Favorite URL (disabled), Replace Favorite URL with Current (disabled), Duplicate Tab, Separate All Tabs, Remove from Favorites, Change Icon…, Close Tab')\$" \
+  "a right-click on the split's tile didn't show its menu"
+send choose "$(cased 'Remove from Favorites')"
+expect "^browser: favorites $a\$" "Remove from Favorites left the split a favorite: \"$(favorites)\""
+expect "^browser: today $x $y\$" "Remove from Favorites didn't put the split at the top of Today"
+expect "^browser: splits $x+$y\$" "the split removed from the favorites isn't a split in Today"
+send key 2 cmd
+expect "^browser: selected \($x\|$y\) in " "⌘2 didn't show the split put back in Today"
+bar_command separate-split "Separate All Tabs" "separate all"
+expect '^browser: splits $' "Separate All Tabs didn't end the split"
+expect "^browser: today $x $y\$" "Separate All Tabs didn't leave the rows as they were: \"$(today)\""
 # Three tiles in the sidebar at its narrowest take two rows, 110 points, more than 40 % of a window
 # 220 tall, so they scroll with the list, under the URL field (Ardia).
 send drag $(tiled_row 0) 200 112
@@ -496,25 +548,15 @@ send resize 1000 220
 expect '^browser: tiles scroll with the list$' \
   "two rows of tiles in a window 220 tall didn't scroll with the list"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-tall.png" || fail "no window to capture"
-# Scrolls the list $1 points down, twice, at 100, 150, as the Mac's and X11's scroll does in GPUI.
-# Wayland's driver makes each scroll a notch of the wheel, which takes the list past the tiles, so
-# there two fingers on the touchpad move it, by the points given (#1577).
-scroll_tiles() {
-  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    send swipe 100 150 0 $((0 - $1)) 2
-  else
-    send scroll 100 150 "$1" 2
-  fi
-}
 # Scrolled 40, the tiles went up 40 with the rows, and the first tile's place holds the third's.
-scroll_tiles 20
+send scroll 100 150 20 2
 expect '^browser: scroll edge shown$' "the list scrolled with the tiles didn't show its edge"
 ../tools/window-screenshot.sh "$pid" "$out/tiles-scrolled.png" || fail "no window to capture"
 send click 40 117
 expect '^browser: command select via favorite$' "a click on the scrolled tiles didn't reach one"
 expect "^browser: selected $y\( in .*\)\{0,1\}\$" \
   "the third tile isn't 40 up with the list: a click there didn't show its favorite"
-scroll_tiles -20
+send scroll 100 150 -20 2
 expect '^browser: scroll edge hidden$' "the list back at its top didn't hide its edge"
 send resize $size
 expect '^browser: tiles stay put$' "the tiles in a window back at its height still scroll"
@@ -594,46 +636,44 @@ fi
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
 # Settings kept the time, the haptics and the warning across the quit. ⌘, from the UI opens it,
-# its close button hides it, and More Settings… opens Chromium's settings in a tab.
+# its close button hides it, and Chromium settings at the column's foot opens them in a tab.
 send click $sidebar_point
 send key , cmd
 expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
 expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
 settings_drew General
-post clickkey 500 168
-expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days$' \
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+post clickkey $(drawn "archive [0-9]*")
+expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days, Never$' \
   "Settings didn't keep 24 hours across the quit"
 send choose "12 hours (default)"
-expect '^browser: archive tabs after 12 hours (default)$' "choosing 12 hours didn't set it"
-post clickkey 500 250
+expect '^browser: profile [0-9]* archive tabs after 12 hours (default)$' \
+  "choosing 12 hours didn't set it"
+post clickkey $(drawn favorites)
 expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces, In Each Space (checked)")\$" \
   "Settings didn't keep Each Space across the quit"
 send choose "$(cased "In Each Profile's Spaces")"
 expect "^browser: favorites scope In Each Profile's Spaces\$" "choosing Each Profile's Spaces didn't set it"
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
-send clickkey 592 126
-expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
+if [ "$(uname)" = Darwin ]; then
+  send clickkey $(drawn "switch haptics")
+  expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
+fi
 # The driver's done for a click that closes its window can be lost with the window, as it always
 # was in a VM, so the click isn't waited for; Settings going is.
 settings_close
 post clickkey $close
 expect '^browser: settings hidden$' "the close button didn't hide Settings"
 send menu Settings…
-expect '^browser: settings shown Advanced$' "Settings… didn't show Settings on the tab it showed"
-settings_drew Advanced
-# More Settings… sits under Advanced's box of four switch rows, the haptics', the link previews',
-# the Mini Player's and restoring windows', and on the Mac and Linux ⌥'s 42 under them, and the
-# box of Export…'s row. On Linux the box of Widevine's module, which Chromium downloads there, puts
-# it 93 lower.
-case $(uname) in Darwin | Linux) option_row=42 ;; *) option_row=0 ;; esac
-[ "$(uname)" = Linux ] && widevine=93 || widevine=0
-send clickkey 120 $((345 + option_row + widevine))
-expect '^browser: more settings$' "a click on More Settings… didn't run it"
-expect '^browser: settings hidden$' "More Settings… didn't hide Settings"
+expect '^browser: settings shown Tabs & Sidebar$' \
+  "Settings… didn't show Settings on the section it showed"
+settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "chromium settings")
+expect '^browser: more settings$' "a click on Chromium settings didn't run it"
+expect '^browser: settings hidden$' "Chromium settings didn't hide Settings"
 expect '^browser: loaded [0-9]* chrome://settings/$' \
-  "More Settings… didn't open Chromium's settings"
+  "Chromium settings didn't open them"
 # The warning stayed off, so ⌘Q quits without asking. It's the driver's last command.
 echo "key q cmd" >&3
 exec 3>&-
@@ -647,7 +687,7 @@ grep -q '^browser: dialog shown Quit' "$log" && fail "⌘Q asked first with the 
 # URL of its own.
 python3 -I -c '
 import json, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8") as f:
     session = json.load(f)
 kept = session["favorites"]
 copies = []
@@ -656,7 +696,7 @@ for i in range(13):
     copy["pinned_url"] = f"{sys.argv[2]}favorite-{i}.html"
     copies.append(copy)
 session["favorites"] = copies
-with open(sys.argv[1], "w") as f:
+with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(session, f)
 ' "$saved" "$site" || fail "the saved favorites couldn't be made 13"
 log="$out/favorites-most.log"
@@ -711,4 +751,4 @@ none_since "^browser: dragged $r to favorites" || fail "with 12 favorites, a row
 [ "$(favorites)" = "$twelve" ] || fail "with 12 favorites, the drag changed them: \"$(favorites)\""
 exec 3>&-
 quit
-echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and More Settings… opens Chromium's settings. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"
+echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. A split's row dragged onto the tiles is one favorite, a click in its right page focuses it and ⌘2 shows it focused there, its card has its pages, and Remove from Favorites puts it whole at the top of Today. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and Chromium settings at its column.s foot opens them. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/favorite-split-tile.png, $out/favorite-split-card.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"

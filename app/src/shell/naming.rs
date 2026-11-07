@@ -12,7 +12,6 @@ use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, pre
 use super::{
     CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
     NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
-    ShellHandle,
     undo::{Prop, Value},
 };
 use crate::{
@@ -29,7 +28,7 @@ impl Shell {
     /// Shows the Space with its name in a field, all selected, to type a new one over.
     pub(super) fn rename_space(&mut self, space: u64, cx: &mut Context<Self>) {
         // A private window's Space is named for what it is.
-        if self.private {
+        if self.one_space() {
             return;
         }
         let Some(name) = self
@@ -111,17 +110,25 @@ impl Shell {
         cx.notify();
     }
 
-    /// Shows the tab's title in a field, all selected, to type a name over.
+    /// Shows the tab's title in a field, all selected, to type a name over. A split view's tab
+    /// names its split instead, as Arc's split menu's Rename… does, in a field holding the split's
+    /// name, else empty.
     pub(super) fn rename_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
-        log!("browser: rename tab {tab}");
-        let title = self.title(tab);
+        let (naming, placeholder, text) = match self.split_of(tab) {
+            Some((tabs, look)) => (Naming::Split(tabs[0]), "Split View", look.name),
+            None => (Naming::Tab(tab), "Tab name", self.title(tab)),
+        };
+        match naming {
+            Naming::Split(first) => log!("browser: rename split {first}"),
+            _ => log!("browser: rename tab {tab}"),
+        }
         let name = cx.new(|cx| {
-            TextInput::new("Tab name", cx)
+            TextInput::new(placeholder, cx)
                 .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
-                .with_text(title)
+                .with_text(text)
         });
         self.renaming = Some(Renaming {
-            naming: Naming::Tab(tab),
+            naming,
             name,
             in_library: false,
             _watches: Vec::new(),
@@ -156,8 +163,10 @@ impl Shell {
     }
 
     /// Shows the icon picker under the tab's favicon, once its row has stopped moving, with the
-    /// sidebar docked.
+    /// sidebar docked. A split view's tab gives its split the icon, as Arc's split menu's Change
+    /// Icon… does, from the split's first tab, where its row has its one icon.
     pub(super) fn change_icon(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let tab = self.split_of(tab).map_or(tab, |(tabs, _)| tabs[0]);
         self.pick_icon_from_row(Subject::Tab(tab), cx);
     }
 
@@ -182,8 +191,8 @@ impl Shell {
         self.open_picker(space, Pending::Icon(Subject::Space(space)), cx);
     }
 
-    /// Shows the Space, and the theme picker beside its name row once the row has stopped
-    /// moving: Arc's Edit Theme Color…, whose picker opened from there isn't recorded.
+    /// Shows the Space, and once its name row has stopped moving the theme picker against the
+    /// sidebar's edge at the window's top: Arc 1.171's Edit Theme Color….
     pub(super) fn edit_space_theme(&mut self, space: u64, cx: &mut Context<Self>) {
         self.open_picker(space, Pending::Theme(space), cx);
     }
@@ -242,7 +251,7 @@ impl Shell {
             return;
         };
         let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        self.show_theme_picker(space, anchor, cx);
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
         self.light_card_while_picking(space, cx);
     }
 
@@ -303,8 +312,9 @@ impl Shell {
     /// Opens the picker asked for once the row it points at has drawn where it drew the frame
     /// before, and the Library has gone, as the sidebar, the Library or a Space's slide may be
     /// moving it. A Space's icon picker points at where its icon goes in the name row, a tab's at
-    /// its favicon, and the theme picker at the name row's end. It gives up if the row doesn't
-    /// settle in two seconds, such as in a full-screen page, which has no sidebar.
+    /// its favicon, and the theme picker waits for the row too, for the sidebar's edge it opens
+    /// against to have settled. It gives up if the row doesn't settle in two seconds, such as in a
+    /// full-screen page, which has no sidebar.
     pub(super) fn open_picker_when_settled(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((picker, asked)) = self.picker_pending else {
             return;
@@ -330,9 +340,7 @@ impl Shell {
         }
         self.picker_pending = None;
         // The picker shows over the key window, which may have changed while the row moved.
-        let key = cx
-            .try_global::<ShellHandle>()
-            .is_some_and(|key| key.0 == cx.weak_entity());
+        let key = super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity());
         if !key {
             return;
         }
@@ -357,8 +365,7 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                let anchor = point(f32::from(row.right()), f32::from(row.center().y));
-                return self.show_theme_picker(space, anchor, cx);
+                return self.show_theme_picker(space, theme_picker::At::Edge(self.width()), cx);
             }
         };
         let shell = cx.weak_entity();
@@ -378,14 +385,20 @@ impl Shell {
                     }
                 };
                 let anchor = point(x, f32::from(row.center().y));
+                let split = self.split_of(tab).map(|(_, look)| look.icon);
+                let prop = if split.is_some() {
+                    Prop::SplitIcon(tab)
+                } else {
+                    Prop::TabIcon(tab)
+                };
                 let picked: Picked = Rc::new(move |icon, cx| {
                     shell
                         .update(cx, |shell, cx| {
-                            shell.change(Prop::TabIcon(tab), Value::Text(icon.to_string()), cx)
+                            shell.change(prop, Value::Text(icon.to_string()), cx)
                         })
                         .ok();
                 });
-                (self.page(tab).icon, anchor, picked)
+                (split.unwrap_or_else(|| self.page(tab).icon), anchor, picked)
             }
             Subject::Folder(folder) => {
                 // The folder's middle, in from the row by the folders it's in.
@@ -564,6 +577,8 @@ impl Shell {
             // Left as it was, the title stays the page's, which changes with it.
             Naming::Tab(tab) if *name == *self.title(tab) => {}
             Naming::Tab(tab) => self.change(Prop::TabName(tab), Value::Text(name), cx),
+            // Kept empty, it shows its pages' titles again.
+            Naming::Split(tab) => self.change(Prop::SplitName(tab), Value::Text(name), cx),
             // Kept empty, it stays where it went back to.
             Naming::PinnedUrl(tab) => {
                 if let Some(url) = self.browser.typed_url(&name).filter(|_| !name.is_empty()) {
@@ -612,6 +627,9 @@ impl Shell {
     pub fn keyboard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = self.renaming.as_ref();
         if !renaming.is_some_and(|renaming| renaming.name.read(cx).menu_shown()) {
+            if renaming.is_some() {
+                log!("browser: field lost the keyboard to the page");
+            }
             self.name_left(window, cx)
         }
     }
@@ -657,6 +675,9 @@ impl Shell {
 
 #[cfg(test)]
 mod leave_tests;
+
+#[cfg(test)]
+mod split_tests;
 
 #[cfg(test)]
 mod tests {

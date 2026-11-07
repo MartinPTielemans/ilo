@@ -7,17 +7,17 @@ use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;
 
 use gpui::{
-    Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
+    App, Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
     prelude::*, px, size, svg,
 };
 
 use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
-    NAV_GLYPH, NAV_HOVERED, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE, NAV_TOP, NAV_TRAIL,
-    PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped, TILE_HOVERED,
-    TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
-    URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
+    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
+    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
+    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -47,10 +47,14 @@ use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::text;
 
 impl Shell {
-    /// The tab whose page the header is about: a task's page watched in place, else the tab
-    /// selected. The URL field shows its address, and its buttons act on it.
+    /// The tab whose page the header is about, the one in the page area: a task's page watched in
+    /// place, none while a task's conversation is there, else the tab selected. The URL field
+    /// shows its address, and its buttons act on it.
     pub(super) fn field_tab(&self) -> u64 {
-        self.task_page_live().unwrap_or(self.selected)
+        match self.task_area {
+            Some(_) => self.task_page_live().unwrap_or(0),
+            None => self.selected,
+        }
     }
 
     /// A header button at `x`, with the glyph `icon`, that runs `command`. One that can't dims, as
@@ -63,7 +67,7 @@ impl Shell {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let color = Hsla::from(self.palette.glyph(if enabled { NAV } else { NAV_DISABLED }));
+        let color = self.nav_glyph(enabled);
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match matches!(command, Command::Reload | Command::Stop) {
             true => self.swaps.glyph(
@@ -139,6 +143,18 @@ impl Shell {
                     .on_mouse_up(MouseButton::Left, cx.listener(release))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(release))
             })
+            // Reload's lists its kinds of reload, right-clicked, also while it's stop (menus.rs).
+            .when(
+                matches!(command, Command::Reload | Command::Stop),
+                |button| {
+                    button.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.reload_menu(event.position, cx)
+                        }),
+                    )
+                },
+            )
             .when(enabled && lists, |button| {
                 button.on_mouse_down(
                     MouseButton::Right,
@@ -291,9 +307,33 @@ impl Shell {
         }
     }
 
+    /// The window became the one the user is in, or stopped being, as the host says: its header's
+    /// glyphs take the disabled alpha while it isn't, as Arc's do.
+    pub fn set_window_main(&mut self, main: bool, cx: &mut Context<Self>) {
+        if self.window_main != main {
+            self.window_main = main;
+            cx.notify();
+        }
+    }
+
+    /// A header button's glyph colour: the disabled alpha while it's disabled, raised to the glyph
+    /// floor, and the same alpha as it is, under the floor, while the window isn't the user's.
+    pub(super) fn nav_glyph(&self, enabled: bool) -> Hsla {
+        match (self.window_main, enabled) {
+            (false, _) => self.palette.faint(NAV_INACTIVE),
+            (true, true) => self.palette.glyph(NAV),
+            (true, false) => self.palette.glyph(NAV_DISABLED),
+        }
+    }
+
     /// The sidebar button, back, forward, and reload, which is stop while the page loads, as many
     /// as fit.
     pub(super) fn nav_buttons(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let dimmed = !self.window_main;
+        if self.nav_dimmed_drawn.replace(Some(dimmed)) != Some(dimmed) {
+            // check.sh reads this line.
+            log!("browser: nav glyphs dimmed {dimmed}");
+        }
         let page = self.page(self.field_tab());
         let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
         let reload = match page.loading {
@@ -343,31 +383,25 @@ impl Shell {
             .collect()
     }
 
-    /// A mouse's back and forward buttons anywhere over the UI show the previous and next Space,
-    /// as Arc's do (the owner's call); over a page, the page takes them itself and goes back and
-    /// forward. The window hears them, as the sidebar keeps its presses from what's under it.
+    /// A mouse's back and forward buttons anywhere over the UI walk the row a swipe pages, the
+    /// Library, the Spaces and a new Space, a step a press (the owner's call, #1852); over a page,
+    /// the page takes them itself and goes back and forward. The window hears them, as the
+    /// sidebar keeps its presses from what's under it.
     pub(super) fn navigate_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let shell = cx.weak_entity();
         canvas(
             |_, _, _| {},
             move |_, _, window, _| {
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                     let MouseButton::Navigate(direction) = event.button else {
                         return;
                     };
                     if phase != DispatchPhase::Bubble {
                         return;
                     }
-                    let command = match direction {
-                        NavigationDirection::Back => Command::PreviousSpace,
-                        NavigationDirection::Forward => Command::NextSpace,
-                    };
+                    let back = direction == NavigationDirection::Back;
                     shell
-                        .update(cx, |shell, cx| {
-                            if shell.offers(command) {
-                                shell.run(command, "mouse", cx);
-                            }
-                        })
+                        .update(cx, |shell, cx| shell.navigate(back, window, cx))
                         .ok();
                 });
             },
@@ -437,9 +471,14 @@ impl Shell {
     }
 
     /// What the URL field says, in its colour: the page's host, or with no page shown, the
-    /// command bar's placeholder, there from the frame the card's mark is.
-    pub(super) fn url_field_words(&self, url: &str) -> (SharedString, Hsla) {
-        self.url_words(self.field_tab(), url, self.empty_opacity(Instant::now()))
+    /// command bar's placeholder, there from the frame the card's mark is, or at once with a
+    /// task's conversation, which shows at once.
+    pub(super) fn url_field_words(&self, url: &str, cx: &App) -> (SharedString, Hsla) {
+        let shown = match self.task_area {
+            Some(_) => 1.,
+            None => self.empty_opacity(cx.background_executor().now()),
+        };
+        self.url_words(self.field_tab(), url, shown)
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, its whole
@@ -461,7 +500,7 @@ impl Shell {
 
     pub(super) fn url_field(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let url = self.url(self.field_tab());
-        let (words, color) = self.url_field_words(&url);
+        let (words, color) = self.url_field_words(&url, cx);
         if *self.url_field_drawn.borrow() != words {
             // check.sh reads this line.
             log!("browser: url field {words}");
@@ -546,6 +585,55 @@ impl Shell {
                         .text_color(self.palette.glyph(NAV)),
                 )
         });
+        // While Battery Saver is on, its leaf, before the tools and in that place while they're
+        // gone, so it says so whether or not the pointer's over the sidebar. A press shows its
+        // toast again, with Turn Off (battery.rs).
+        let slots = if self.page(self.field_tab()).developer_mode {
+            3.
+        } else {
+            2.
+        };
+        let leaf_end = end + slots * TOOL_PITCH;
+        let leaf = self.battery_saver.map(|_| {
+            let drawn = self.battery_leaf_drawn.clone();
+            let frame = canvas(
+                move |bounds, _, _| {
+                    if drawn.replace(Some(bounds)) != Some(bounds) {
+                        let (origin, size) = (bounds.origin, bounds.size);
+                        // check.sh reads this line.
+                        log!(
+                            "browser: battery saver leaf at {} {} {} {}",
+                            f32::from(origin.x),
+                            f32::from(origin.y),
+                            f32::from(size.width),
+                            f32::from(size.height),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full();
+            self.field_tool("battery-saver", leaf_end)
+                .opacity(1.)
+                .when(self.a11y, |button| button.button_named("Battery Saver"))
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.show_battery_notice(cx);
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("icons/leaf.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.accent),
+                )
+                .child(frame)
+        });
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -581,6 +669,10 @@ impl Shell {
             true => end + TOOL_PITCH + URL_BUTTON_SIZE,
             false if actions.is_empty() => URL_FIELD_TEXT_X - PLATE_INSET,
             false => URL_BUTTON_INSET + buttons_width,
+        };
+        let text_end = match leaf {
+            Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
+            None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
@@ -623,6 +715,7 @@ impl Shell {
             )
             .children(engine)
             .children(key)
+            .children(leaf)
             .children(devtools)
             .children(copy)
             .children(site_controls)

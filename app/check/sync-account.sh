@@ -10,10 +10,11 @@
 # driver's, which holds them no longer 90 s later (#641); Linux's copy is sync-devices', and
 # Windows' is unrun. Then what the server keeps: each item it holds of a type Chromium encrypts is
 # ciphertext alone, nameless or named "encrypted", the Spaces among them, and the device is named
-# by its label, such as "ilo on Linux", not its owner's name. No request in Chromium's net log of
-# the whole run goes to Google's servers. Sign Out, as the account's only device, asks first, and
-# the server forgets the device. Signed out, the passkey signs in again, on a key in the next
-# window that holds it. The domain is the check's alone. Agents never get DevTools: it runs any
+# by its label, such as "ilo on Linux", not its owner's name, and the Sync tab, shown again, says
+# when it last synced. No request in Chromium's net log of the whole run goes to Google's servers.
+# Sign Out, as the account's only device, asks first, and the server forgets the device. Signed
+# out, the passkey signs in again, on a key in the next window that holds it, and on Linux Delete
+# Account, asked first, leaves the server nothing of the account and the browser signed out. The domain is the check's alone. Agents never get DevTools: it runs any
 # script in any page.
 
 if [ -z "${ILO_SERVER:-}" ]; then
@@ -50,7 +51,7 @@ key_window() {
 
 scratch=$(mktemp -d)
 start_with_cdp 'data:text/html,<title>account check</title>' "$profile_dir" "" \
-  --sync-url="$server_url" --log-net-log="$netlog"
+  --sync-url="$server_url" --log-net-log="$(app_path "$PWD/$netlog")"
 await_load
 await 'browser: sync service disabled, not signed in$' ||
   fail "signed out, sync isn't disabled for want of an account"
@@ -59,7 +60,7 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 send clickkey $(drawn "toolbar Sync")
 expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
 at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out.png" || fail "no window to capture"
 send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In didn't start signing in"
 await 'browser: sync sign-in loaded /authorize$' ||
@@ -82,7 +83,7 @@ if [ "$(uname)" = Darwin ]; then
     sleep 0.1
   done
 fi
-../tools/window-screenshot.sh "$pid" "$out/sync-passkey-dialog.png" all ||
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-passkey-dialog.png" all ||
   fail "no window to capture"
 if [ "$(uname)" = Darwin ] && { [ "$keyed" = "$sign_in_key" ] || [ "$keyed" = none ]; }; then
   fail "Chrome's passkey dialog didn't take the keyboard from the sign-in window, $keyed:" \
@@ -90,11 +91,12 @@ if [ "$(uname)" = Darwin ] && { [ "$keyed" = "$sign_in_key" ] || [ "$keyed" = no
 fi
 # Escape closes the dialog, which on the Mac has the keyboard. Elsewhere one may go to the page
 # first, which gives the dialog the keyboard for the next (DidGetIgnoredUIEvent, in Chromium's
-# WebContentsModalDialogManager); on Linux it's the X server's, to whichever window has it.
+# WebContentsModalDialogManager); on X11 it's the X server's, to whichever window has it, and on
+# Wayland the driver's, to the window sway focuses.
 [ "$(uname)" != Darwin ] || send key escape
 for _ in $(seq 100); do
   grep -q 'browser: sync sign-in dialog closed$' "$log" && break
-  if [ "$(uname)" = Linux ]; then
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     xdotool key Escape
   elif [ "$(uname)" != Darwin ]; then
     send key escape
@@ -139,10 +141,12 @@ await '^browser: account FirstDevice None$' ||
   fail "the server didn't keep the account's passkey"
 await '^browser: account On None$' || fail "the first device's recovery words didn't turn sync on"
 settings_keyboard
-at=$(drawn "sync done") || fail "Settings › Sync didn't show the recovery words with Done"
-../tools/window-screenshot.sh "$pid" "$out/sync-words.png" || fail "no window to capture"
+# The words and Done show from FirstDevice on, where On can move them: a frame drawn once it's on.
+on='^browser: account On None$'
+at=$(drawn_after "sync done" "$on") || fail "Settings › Sync didn't show the recovery words with Done"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-words.png" || fail "no window to capture"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "sync copy")
+  send clickkey $(drawn_after "sync copy" "$on")
   copied_at=$(date +%s)
   words='^browser: pasteboard text \([^ ][^ ]* \)\{23\}[^ ][^ ]*$'
   for _ in $(seq 30); do
@@ -152,7 +156,7 @@ if [ "$(uname)" = Darwin ]; then
   done
   expect "$words" "Copy didn't put the 24 recovery words on the run's pasteboard"
 fi
-send clickkey $(drawn "sync done")
+send clickkey $(drawn_after "sync done" "$on")
 await 'browser: sync service active$' ||
   fail "sync's service didn't become active: $(grep 'browser: sync service ' "$log" | tail -1)"
 grep -q 'browser: sync engine ' "$log" || fail "sync's engine made no request"
@@ -258,6 +262,16 @@ case $devices in
 *) fail "the server knows the device as \"$devices\", not by its label" ;;
 esac
 
+# Once the Spaces have reached the server, the Sync tab, shown again, says when it last synced:
+# it reads that as it shows, and nothing stops sync.
+send clickkey $(drawn "toolbar General")
+expect '^browser: settings tab General$' "a click on General didn't show its tab"
+send clickkey $(drawn "toolbar Sync")
+expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab again"
+expect '^browser: sync activity synced None$' \
+  "shown again after the Spaces reached the server, Sync didn't say it had synced"
+../tools/window-screenshot.sh "$pid" "$out/sync-status.png" || fail "no window to capture"
+
 # The words leave the pasteboard 90 s after the copy, which the pasteboard's own change shows.
 if [ "$(uname)" = Darwin ]; then
   while [ $(($(date +%s) - copied_at)) -le 100 ]; do
@@ -285,7 +299,7 @@ fi
 # Not send: the alert runs its own loop until it closes, so the driver may only finish after.
 post key return
 await '^browser: account SignedOut None$' || fail "Sign Out didn't sign out"
-../tools/window-screenshot.sh "$pid" "$out/sync-signed-out-again.png" || fail "no window to capture"
+../tools/window-screenshot.sh "$(app_pid)" "$out/sync-signed-out-again.png" || fail "no window to capture"
 for _ in $(seq 50); do
   left=$(stored "SELECT count(*) FROM devices")
   [ "$left" = 0 ] && break
@@ -296,7 +310,10 @@ done
 # Signing in again, Use a Passkey, after the address field and Continue, signs in with it, on a key
 # in the new window's page that holds it, with none of Chrome's dialogs: asked for any passkey, as
 # the server names none, its dialog would ask which, even of one.
-send clickkey $(drawn "sync sign-in")
+# Sign In as the signed-out frame draws it: the one before is the signed-in layout's (#1885).
+at=$(drawn_after "sync sign-in" '^browser: account SignedOut None$') ||
+  fail "Settings › Sync didn't draw Sign In once signed out"
+send clickkey $at
 expect '^browser: account SigningIn None$' "Sign In, signed out, didn't start signing in again"
 for _ in $(seq 300); do
   [ "$(grep -c 'browser: sync sign-in loaded /authorize$' "$log")" -ge 2 ] && break
@@ -320,6 +337,28 @@ grep -q '^cdp: credential asserted$' "$cdp_log" ||
   fail "Use a Passkey didn't sign in with the passkey"
 await '^browser: account NeedsSecret None$' ||
   fail "signed in with the passkey, the device didn't need the account's secret"
+
+# Delete Account, on a device without the secret too, asks first, where only a click on its
+# button deletes, and the server then has nothing of the account, and the browser is signed out.
+# Settings' own dialog says where that button is, on Linux; the Mac's and Windows' alerts don't,
+# and their return chooses Cancel, so there it's unrun.
+deleted=,
+if [ "$(uname)" = Linux ]; then
+  post clickkey $(drawn "sync delete-account")
+  expect "^browser: dialog shown Delete the account $email?\$" "Delete Account didn't ask first"
+  expect '^browser: dialog settled$' "Settings' dialog didn't settle"
+  expect '^browser: dialog confirm at ' "Delete Account's question didn't say where its button is"
+  ../tools/window-screenshot.sh "$pid" "$out/sync-delete-asked.png" || fail "no window to capture"
+  # In Settings' window, which has the keyboard, as the dialog is drawn in it.
+  send clickkey $(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)
+  expect '^browser: dialog confirmed$' "a click on Delete Account didn't delete it"
+  expect '^browser: account SignedOut None$' "Delete Account didn't sign the browser out"
+  for table in accounts devices sync_entities sync_stores passkeys; do
+    left=$(stored "SELECT count(*) FROM $table")
+    [ "$left" = 0 ] || fail "the account deleted, the server still has $left in $table"
+  done
+  deleted=", deleted the account, after which the server held nothing of it,"
+fi
 exec 3>&- 5>&-
 quit
 # The runs after start signed out.
@@ -337,5 +376,5 @@ rm -rf "$scratch"
 scratch=
 echo "ok: signed in to a local ilo-server as $email, where Chrome's passkey dialog showed" \
   "over the sign-in window and escape failed the page's request, added a passkey, synced" \
-  "($store), signed out and in again with the passkey, nothing sent to Google's servers." \
+  "($store), signed out and in again with the passkey$deleted nothing sent to Google's servers." \
   "Log: $log, the server's: $server_log, the dialog: $out/sync-passkey-dialog.png"

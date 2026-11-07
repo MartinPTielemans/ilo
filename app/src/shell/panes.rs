@@ -296,21 +296,19 @@ impl Shell {
     }
 
     /// Duplicate on a split's row copies the whole split, as Arc's does: each page with its history,
-    /// joined again in the same order and orientation. A tab alone is copied alone.
+    /// joined again in the same order and orientation, with the split's name and icon. A tab alone
+    /// is copied alone.
     pub(super) fn duplicate_row(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let (panes, stacked) = (self.panes(tab), self.stacked(tab));
+        let Some((panes, look)) = self.split_of(tab) else {
+            self.browser.duplicate(tab, cx);
+            return;
+        };
         let copies: Vec<u64> = panes
             .iter()
             .map(|&pane| self.browser.duplicate(pane, cx))
             .collect();
-        if copies.len() < 2 || copies.contains(&0) {
-            return;
-        }
-        for pair in copies.windows(2) {
-            self.browser.split_with(pair[1], pair[0], false, cx);
-        }
-        if stacked {
-            self.browser.set_split_stacked(copies[0], true, cx);
+        if !copies.contains(&0) {
+            self.join_again(&copies, &look, cx);
         }
     }
 
@@ -381,11 +379,17 @@ impl Shell {
 impl Shell {
     /// The tabs whose pages show in the card, in their order, with where the core puts each.
     pub fn shown_pages(&self) -> Vec<(u64, Bounds<Pixels>)> {
+        self.shown_pages_at(self.viewport)
+    }
+
+    /// As `shown_pages`, in a window whose content is `viewport`: a resize lays the pages out at
+    /// the window's new size before the shell draws there (`window_page_frame`).
+    pub fn shown_pages_at(&self, viewport: Size<Pixels>) -> Vec<(u64, Bounds<Pixels>)> {
         if self.selected == 0 {
             return Vec::new();
         }
         let panes = self.panes(self.selected);
-        let (frame, _) = self.page_frame(self.viewport);
+        let (frame, _) = self.page_frame(viewport);
         let frames = pane_frames(
             frame,
             panes.len(),
@@ -610,9 +614,9 @@ mod tests {
             let (tabs, shares) = (tabs.to_vec(), shares.to_vec());
             let split = Split {
                 tabs: tabs.clone(),
-                stacked: false,
                 shares,
                 expanded,
+                ..Split::default()
             };
             shell.set_tabs(1, Vec::new(), tabs, vec![split], Folders::default(), cx);
         });

@@ -466,12 +466,13 @@ none_since "^browser: loaded $c ${site}notes.txt" || fail "the unloaded tab load
 outline() {
   grep '^browser: outline' "$log" | tail -1 | sed 's/^browser: outline *//'
 }
-# Waits for the rows moving since the last outline to come to rest, so a press lands on the row
-# drawn there.
+# Waits for the rows moving since the outline last changed to come to rest, so a press lands on the
+# row drawn there. An outline the same as the one before moves no row, and so brings no "rows
+# settled" after it: the pages of a folder dropped from the desktop log theirs again as they load.
 settled() {
   for _ in $(seq 300); do
-    awk '/^browser: outline/ { s = 0 } /^browser: rows settled/ { s = 1 } END { exit !s }' \
-      "$log" && return 0
+    awk '/^browser: outline/ { if ($0 != last) s = 0; last = $0 } /^browser: rows settled/ { s = 1 }
+      END { exit !s }' "$log" && return 0
     sleep 0.1
   done
   fail "the rows didn't come to rest"
@@ -632,6 +633,15 @@ bar_command expand-folders "Expand All Folders" "expand all"
 expect "^browser: outline $f+\\[$c\\]\$" "Expand All Folders didn't open the folder: $(outline)"
 bar_command collapse-folders "Collapse All Folders" "collapse all"
 expect "^browser: outline $f-\\[$c\\]\$" "Collapse All Folders didn't close the folder again: $(outline)"
+# The preview coming and going, recorded for its motion: 0.45 s after the pointer comes onto the
+# folder's row it fades in over 90 ms as it grows from 0.85 about the middle of its left edge, and
+# 40 ms after the pointer leaves both it fades out over 80 ms (docs/ux-spec.md › Folders › Preview).
+record folder-preview-motion 3
+send move $(pinned_row 0)
+expect "^browser: folder preview shown $f at " "resting on the closed folder didn't preview it to record"
+send move $page_point
+expect '^browser: folder preview hidden$' "the pointer leaving the folder's row didn't hide its preview"
+recorded
 # The pointer resting on the closed folder previews its tab with the keyboard in its search, where
 # typing its title selects it and ↩ shows it, keeping the folder closed.
 send move $(pinned_row 0)
@@ -706,32 +716,31 @@ expect "^browser: menu shown $(cased 'Rename Folder, Change Icon…, Duplicate')
 send choose "$(cased 'Change Icon…')"
 expect "^browser: icon picker for folder $f on emoji\$" "Change Icon… didn't open the icon picker for the folder"
 expect '^browser: icon picker shown$' "Change Icon… didn't show the icon picker under the folder"
+expect '^browser: icon picker drawn$' "the icon picker didn't draw itself on screen"
 send insert glowing star
 send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
-# Export… in Settings › Advanced, in the box under the four switch rows, writes the Space's pinned
+# Export… in Settings › Import & Export, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(drawn "toolbar Advanced")
-expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-settings_drew Advanced
+send clickkey $(drawn "toolbar Import & Export")
+expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+settings_drew 'Import & Export'
 # Copy All Links' toast is mostly still up, and the click lands all the same (#1134): a toast lets
 # clicks through, but on its plate while it has buttons, which this one hasn't. A slow run says
 # when the toast had gone first, so the click didn't have one to go past.
 shown=$(grep -n '^browser: toast shown Copied Links as Markdown$' "$log" | tail -1 | cut -d: -f1)
-advanced=$(grep -n '^browser: settings tab Advanced$' "$log" | tail -1 | cut -d: -f1)
+section=$(grep -n '^browser: settings tab Import & Export$' "$log" | tail -1 | cut -d: -f1)
 hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | head -1 | cut -d: -f1)
-if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$advanced" ]; then
-  echo "skip: the click on Advanced with a toast up, as Copy All Links' toast had gone first (#1134)."
+if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
+  echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-# On the Mac and Linux, where the host hears ⌥ alone, its switch row is 42 under the other four.
-case $(uname) in Darwin | Linux) option_row=42 ;; *) option_row=0 ;; esac
-send clickkey 575 $((302 + option_row))
+send clickkey $(drawn "export spaces")
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"
@@ -794,8 +803,8 @@ expect '^browser: dropped 1 in today 2$' "the dropped text wasn't taken under th
 expect_lists "$e $c" "$t $d [0-9][0-9]*" "after dropping text"
 s=$(today | cut -d' ' -f3)
 expect "^browser: selected $s\$" "the dropped text's search didn't show"
-expect "^browser: loaded $s https://duckduckgo.com/?q=dogs+and+cats" \
-  "the dropped text didn't load a search for it: $(grep "^browser: loaded $s " "$log" | tail -1)"
+searching 'dogs+and+cats' \
+  "the dropped text didn't start a search for it: $(grep "^browser: page $s " "$log" | tail -1)" "$s"
 ../tools/window-screenshot.sh "$pid" "$out/dropped-text.png" || fail "no window to capture"
 
 # Under the pointer the Space's name row lights as a tab row does, with its chevron after the name

@@ -13,7 +13,7 @@ use super::{Fold, markdown};
 use crate::agents::task::{Conversation, Line, Opens, Trace, TraceItem, TraceStep};
 use crate::shell::cubic_bezier;
 use crate::tokens::shell::conversation::motion::{
-    CHEVRON, LAND, PICK_FADE, PICTURE, RING_DELAY, RISE, STAGGER, STREAM, SWAP,
+    CHEVRON, LAND, PICK_FADE, PICTURE, RISE, STAGGER, STREAM, SWAP,
 };
 use crate::tokens::shell::task::motion::{
     CHIPS, CHIPS_DELAY, CHIPS_STAGGER, CROSSFADE, EASE, FADE, HEIGHT, ROLL, ROLL_RISE,
@@ -86,15 +86,6 @@ pub(super) struct Answered {
     pub since: Instant,
 }
 
-/// The Signal ring going from a picture to another, by their places in the row, or coming or
-/// going.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Ring {
-    pub from: Option<usize>,
-    pub to: Option<usize>,
-    pub since: Instant,
-}
-
 /// The lines following what came at their end, from where they were, and where they were last set.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Follow {
@@ -117,7 +108,6 @@ pub(super) struct Motion {
     counts: HashMap<usize, (SharedString, Instant)>,
     status: Option<(SharedString, Instant)>,
     stop: Option<Instant>,
-    pub ring: Option<Ring>,
     /// The traces folding as their turn ended, by their keys.
     folded: HashMap<usize, Instant>,
     written: HashMap<usize, Written>,
@@ -254,13 +244,16 @@ fn steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
             TraceItem::Step(step) => Some(step),
             TraceItem::Said(_) => None,
         })
-        .flat_map(|step| {
-            let inner = match &step.opens {
-                Opens::Steps(steps) => steps.as_slice(),
-                _ => &[],
-            };
-            std::iter::once(step).chain(inner)
-        })
+        .flat_map(and_inner)
+}
+
+/// A step, and each tab's line it opens to, as a turn's same step on several tabs.
+fn and_inner(step: &TraceStep) -> impl Iterator<Item = &TraceStep> {
+    let inner = match &step.opens {
+        Opens::Steps(steps) => steps.as_slice(),
+        _ => &[],
+    };
+    std::iter::once(step).chain(inner)
 }
 
 /// The status at the end of what a conversation's header says it runs on: "Working".
@@ -289,15 +282,6 @@ impl Motion {
                 self.came.insert(Key::Picture(*tab), now);
             }
         }
-        if old.on != new.on {
-            let place =
-                |on: Option<u64>| on.and_then(|on| new.tabs.iter().position(|(tab, _)| *tab == on));
-            self.ring = Some(Ring {
-                from: place(old.on),
-                to: place(new.on),
-                since: now,
-            });
-        }
         // The answer comes once the trace above it has folded.
         let mut after = now;
         for (index, line) in new.lines.iter().enumerate() {
@@ -315,6 +299,9 @@ impl Motion {
                     if let Some(folded) = folded.filter(|_| !self.still) {
                         after = after.max(folded);
                     }
+                }
+                (Some(Line::Step(was)), Line::Step(step)) if was.key == step.key => {
+                    self.steps_changed(and_inner(was), and_inner(step), now);
                 }
                 (Some(Line::Thinking { key, failed: None }), Line::Trace(trace))
                     if *key == trace.key =>
@@ -397,28 +384,7 @@ impl Motion {
         folds: bool,
         now: Instant,
     ) -> Option<Instant> {
-        let before: HashMap<usize, &TraceStep> = steps(was).map(|step| (step.key, step)).collect();
-        for step in steps(trace) {
-            match before.get(&step.key) {
-                None => _ = self.came.insert(Key::Step(step.key), now),
-                Some(old) if old.title != step.title => {
-                    let was = Was {
-                        title: old.title.clone(),
-                        note: old.description.clone(),
-                        chevron: true,
-                        since: now,
-                    };
-                    self.swaps.insert(Fold::Step(step.key), was);
-                    if old.description != step.description {
-                        self.notes.insert(step.key, now);
-                    }
-                }
-                Some(old) if old.description != step.description => {
-                    _ = self.notes.insert(step.key, now)
-                }
-                _ => {}
-            }
-        }
+        self.steps_changed(steps(was), steps(trace), now);
         for (index, item) in trace.items.iter().enumerate() {
             let new = !matches!(was.items.get(index), Some(TraceItem::Said(_)));
             if matches!(item, TraceItem::Said(_)) && new {
@@ -446,6 +412,38 @@ impl Motion {
         }
         self.folded.insert(trace.key, now);
         Some(now + Duration::from_secs_f32(HEIGHT))
+    }
+
+    /// Steps changed from `was`: one that came rises, and one that finished says so, its title
+    /// crossfading to its past tense, then its note fading in.
+    fn steps_changed<'a>(
+        &mut self,
+        was: impl Iterator<Item = &'a TraceStep>,
+        steps: impl Iterator<Item = &'a TraceStep>,
+        now: Instant,
+    ) {
+        let before: HashMap<usize, &TraceStep> = was.map(|step| (step.key, step)).collect();
+        for step in steps {
+            match before.get(&step.key) {
+                None => _ = self.came.insert(Key::Step(step.key), now),
+                Some(old) if old.title != step.title => {
+                    let was = Was {
+                        title: old.title.clone(),
+                        note: old.description.clone(),
+                        chevron: true,
+                        since: now,
+                    };
+                    self.swaps.insert(Fold::Step(step.key), was);
+                    if old.description != step.description {
+                        self.notes.insert(step.key, now);
+                    }
+                }
+                Some(old) if old.description != step.description => {
+                    _ = self.notes.insert(step.key, now)
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Message `line` grew to `text` as it's written: what it didn't have fades in, as one run
@@ -523,9 +521,6 @@ impl Motion {
         self.counts.retain(|_, (_, since)| !over(*since, ROLL));
         self.status = self.status.take().filter(|(_, since)| !over(*since, ROLL));
         self.stop = self.stop.filter(|since| !over(*since, RISE));
-        self.ring = self
-            .ring
-            .filter(|ring| !over(ring.since, RING_DELAY + PICTURE));
         self.folded
             .retain(|_, since| !over(*since, HEIGHT.max(CHEVRON)));
         for written in self.written.values_mut() {
@@ -554,7 +549,6 @@ impl Motion {
             || !self.counts.is_empty()
             || self.status.is_some()
             || self.stop.is_some()
-            || self.ring.is_some()
             || !self.folded.is_empty()
             || writing
             || self

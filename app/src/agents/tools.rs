@@ -16,9 +16,15 @@ pub const INSTRUCTIONS: &str = concat!(
      Open a page with open_tab, then click, type, press_key and scroll by ref (like e12), using \
      the page's outline. A new page answers with its outline whole; an action on the same page \
      answers with what changed in it since the last outline you had, and snapshot gives it whole \
-     again. A ref stays the element's while its page does. Use read_page for a long page's text \
-     and screenshot when the layout matters.\n\n\
-     Payments, orders, sending messages and banks' sites ask the user first. If they say no, \
+     again. A ref stays the element's while its page does. Choose in a select or a dropdown with \
+     select, by the option's text. Each action waits for its element to be \
+     ready and for the page to settle before it answers, and says when the page was still busy. \
+     Use read_page for a long page's text and screenshot when the layout matters. Where a site's \
+     page uses an API, request sends its HTTP requests from the tab, signed in as the page is. split_tabs shows two or \
+     three of your tabs side by side in a split view, add_to_split adds one to it, separate_tab \
+     takes one out, and list_split says which are together.\n\n\
+     Payments, orders, sending messages, banks' sites and every request that may change \
+     something ask the user first. If they say no, \
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off. The user can take a tab \
      over too; it's theirs until they hand it back, and ask_for_tab asks them for it. Use \
@@ -57,10 +63,13 @@ pub const MAX_TEXT: usize = 40_000;
 /// The tools `agent` may call, for tools/list: a task's own too.
 pub fn list(agent: &str) -> Value {
     let mut tools = shared();
-    if super::is_task(agent)
-        && let Some(tools) = tools.as_array_mut()
-    {
-        tools.extend(task_tools());
+    if let Some(tools) = tools.as_array_mut() {
+        match super::is_task(agent) {
+            true => tools.extend(task_tools()),
+            // A task's pages live in the task, in a Space the user doesn't see, so only an agent
+            // from outside pins.
+            false => tools.extend(pin_tools()),
+        }
     }
     tools
 }
@@ -71,6 +80,40 @@ pub fn names(agent: &str) -> Vec<String> {
     (list.as_array().into_iter().flatten())
         .filter_map(|tool| Some(tool.get("name")?.as_str()?.to_string()))
         .collect()
+}
+
+/// Pinning, as the user pins in the sidebar: an agent pins its own tabs, and unpins or removes
+/// only those it pinned.
+fn pin_tools() -> Vec<Value> {
+    let tab = tab_schema();
+    let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
+    vec![
+        json!({
+            "name": "pin_tab",
+            "title": "Pin tab",
+            "description": "Pin a tab in your Space at the page it's at, where it stays, even closed, until you unpin or remove it.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": tabs,
+        }),
+        json!({
+            "name": "unpin_tab",
+            "title": "Unpin tab",
+            "description": "Unpin a tab you pinned, to the top of your Today tabs. Tabs the user pinned stay pinned.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": tabs,
+        }),
+        json!({
+            "name": "remove_tab",
+            "title": "Remove pinned tab",
+            "description": "Remove a tab you pinned from your Space: it's unpinned and closed, and goes to the archive, where the user can still find it. Tabs the user pinned stay.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "openWorldHint": false,
+            },
+        }),
+    ]
 }
 
 /// A task's own tools: its title, a question for the user, and finishing.
@@ -141,12 +184,17 @@ fn task_tools() -> Vec<Value> {
     ]
 }
 
-/// The tools every agent may call.
-fn shared() -> Value {
-    let tab = json!({
+/// A tool's tab argument.
+fn tab_schema() -> Value {
+    json!({
         "type": "integer",
         "description": "The tab's id, from list_tabs or open_tab. Without it, the tab you used last, else your first."
-    });
+    })
+}
+
+/// The tools every agent may call.
+fn shared() -> Value {
+    let tab = tab_schema();
     let element = json!({
         "type": "string",
         "description": "The element's ref, from the latest outline, like e12."
@@ -157,11 +205,12 @@ fn shared() -> Value {
         "description": "What of the page's outline the answer gives: what changed since the last outline you had of the tab (changes, the default, which is the whole outline on a new page), all of it (full), or only what the action did (none)."
     });
     let acts = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": true });
+    let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     json!([
         {
             "name": "list_tabs",
             "title": "List tabs",
-            "description": "List the tabs in your Space: each one's id, title and URL. * marks the tab you used last.",
+            "description": "List the tabs in your Space, pinned first: each one's id, title and URL, then who pinned it if it's pinned. * marks the tab you used last.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
@@ -179,13 +228,66 @@ fn shared() -> Value {
         {
             "name": "close_tab",
             "title": "Close tab",
-            "description": "Close a tab in your Space.",
-            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "description": "Close a tab in your Space. A page that may have unsaved changes stays open unless discard is true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab": tab,
+                    "discard": { "type": "boolean", "description": "Close it even if its page may have unsaved changes, losing them. In a tab you didn't open, the user is asked first." },
+                },
+            },
             "annotations": {
                 "readOnlyHint": false,
-                "destructiveHint": false,
+                "destructiveHint": true,
                 "openWorldHint": false,
             },
+        },
+        {
+            "name": "split_tabs",
+            "title": "Split tabs",
+            "description": "Show two or three tabs of your Space side by side in a split view, left to right in the order given, as one row in the sidebar. A tab in another split leaves it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tabs": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "minItems": 2,
+                        "maxItems": SPLIT_TABS,
+                        "description": "The tabs' ids, from list_tabs or open_tab, left to right.",
+                    },
+                },
+                "required": ["tabs"],
+            },
+            "annotations": tabs,
+        },
+        {
+            "name": "add_to_split",
+            "title": "Add to split view",
+            "description": "Add a tab of your Space to a split view, at its right end. A split view holds three tabs at most.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab": { "type": "integer", "description": "The tab to add, from list_tabs or open_tab." },
+                    "split": { "type": "integer", "description": "A tab of the split view." },
+                },
+                "required": ["tab", "split"],
+            },
+            "annotations": tabs,
+        },
+        {
+            "name": "separate_tab",
+            "title": "Separate from split view",
+            "description": "Take a tab out of its split view, to just below the tabs left in it. The split view goes once one tab is left.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab }, "required": ["tab"] },
+            "annotations": tabs,
+        },
+        {
+            "name": "list_split",
+            "title": "List split view",
+            "description": "The tabs in a tab's split view, left to right, or that it's in none.",
+            "inputSchema": { "type": "object", "properties": { "tab": tab } },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
             "name": "navigate",
@@ -250,6 +352,21 @@ fn shared() -> Value {
             "annotations": acts,
         },
         {
+            "name": "select",
+            "title": "Select",
+            "description": "Choose an option in a select or a dropdown by its ref and the option's text: the option with that name, else the one with it in another case. A dropdown whose options don't show is opened first. With no such option, or several, it chooses none and answers with the options there are. Answers with the page's outline.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": element,
+                    "option": { "type": "string", "description": "The option's text, as the outline or the page shows it." },
+                    "tab": tab,
+                },
+                "required": ["ref", "option"],
+            },
+            "annotations": acts,
+        },
+        {
             "name": "press_key",
             "title": "Press key",
             "description": "Press a key in a tab, in the element that has the keyboard. Answers with what changed in the page's outline.",
@@ -267,7 +384,7 @@ fn shared() -> Value {
         {
             "name": "scroll",
             "title": "Scroll",
-            "description": "Scroll a page down or up most of its height, or to bring an element into view by its ref. Answers with what changed in the page's outline.",
+            "description": "Scroll down or up most of a screen, as a mouse wheel does at the middle of the page, or of the element whose ref you give, such as a panel or a frame. With a ref and no direction, brings the element into view. Answers with what changed in the page's outline, or an error when nothing scrolled, as at the end.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -287,6 +404,34 @@ fn shared() -> Value {
             "annotations": { "readOnlyHint": true, "openWorldHint": true },
         },
         {
+            "name": "request",
+            "title": "Send HTTP requests",
+            "description": "Send HTTP requests from a tab's page to its own site, as the page's own script could, signed in as the page is: for a site's API, such as the JSON its page reads, when that's quicker than its pages. GET and HEAD go at once. Any other method may change something, so it asks the user first, every time: all of a call's changes in one question, and none is sent if they say no. The browser adds the page's cookies, which you never see; you can't set Cookie, Authorization or a header the browser sets. Answers with each request's status, type and text body, never its headers, with values that look like sign-in tokens or secrets hidden. They go one after another; one that gets no answer stops the rest.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "requests": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": super::request::MAX,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "method": { "type": "string", "description": "GET, POST, PUT, PATCH, DELETE or another method." },
+                                "path": { "type": "string", "description": "A path on the tab's site, such as /api/items?page=2, or a whole address on it." },
+                                "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+                                "body": { "description": "JSON, sent as application/json, or a string, sent as text unless headers give its Content-Type. 1 MB at most." },
+                            },
+                            "required": ["method", "path"],
+                        },
+                    },
+                    "tab": tab,
+                },
+                "required": ["requests"],
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true },
+        },
+        {
             "name": "run_steps",
             "title": "Run steps",
             "description": "Run several actions in a tab in one call, in order: each is checked as it would be alone. Stops at the first that fails, asks the user first, or is refused. Answers with what each did, then what changed in the page's outline, as outline says.",
@@ -304,14 +449,17 @@ fn shared() -> Value {
                                 "ref": element,
                                 "text": { "type": "string" },
                                 "submit": { "type": "boolean" },
+                                "option": { "type": "string" },
                                 "key": { "type": "string", "enum": page::KEYS },
                                 "url": { "type": "string" },
                                 "direction": { "type": "string", "enum": ["down", "up"] },
+                                "gone": { "type": "string" },
+                                "until": { "type": "string", "enum": ["quiet"] },
                                 "seconds": { "type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT },
                             },
                             "required": ["action"],
                         },
-                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, press_key a key, navigate a url. wait waits for text to show in the page, up to seconds (5 if not given), or without text, waits the seconds.",
+                        "description": "Each step is an action and what that tool takes: click and scroll a ref, type a ref and text, select a ref and an option, press_key a key, navigate a url. wait waits for text to show in the page, for gone text to go from it, or until \"quiet\", for the page to settle, each up to seconds (5 if not given); or with none of those, waits the seconds.",
                     },
                     "outline": outline,
                     "tab": tab,
@@ -352,31 +500,56 @@ fn shared() -> Value {
 }
 
 /// The actions run_steps takes: those of the tools that act in a tab, not a screenshot, and wait.
-pub const STEPS: [&str; 7] = [
+pub const STEPS: [&str; 8] = [
     "navigate",
     "snapshot",
     "click",
     "type",
+    "select",
     "press_key",
     "scroll",
     "wait",
 ];
+/// The tabs a split view holds at most, as the core keeps it (bc_tab_split_with).
+pub const SPLIT_TABS: usize = 3;
 /// The steps one run_steps takes at most.
 pub const MAX_STEPS: usize = 20;
+/// What a wait step until "quiet" waits for, as its title says it.
+pub const SETTLE: &str = "the page to settle";
 /// How long a wait step waits for its text, in seconds, unless it says, and at most.
 pub const WAIT: f64 = 5.0;
 pub const MAX_WAIT: f64 = 30.0;
 
 /// list_tabs' answer.
-pub fn tab_list(tabs: &[TabInfo], current: Option<u64>) -> String {
+pub fn tab_list(tabs: &[TabInfo], current: Option<u64>, mine: &[u64]) -> String {
     if tabs.is_empty() {
         return "Your Space has no tabs yet. The user can open pages in it for you.".into();
     }
     let lines = tabs.iter().map(|tab| {
         let mark = if Some(tab.id) == current { '*' } else { ' ' };
-        format!("{mark} {}  {}  {}", tab.id, tab.title, tab.url)
+        let pinned = match (tab.pinned, mine.contains(&tab.id)) {
+            (false, _) => "",
+            (true, true) => "  pinned by you",
+            (true, false) => "  pinned by the user",
+        };
+        format!("{mark} {}  {}  {}{pinned}", tab.id, tab.title, tab.url)
     });
     lines.collect::<Vec<_>>().join("\n")
+}
+
+/// list_split's answer, and what split_tabs, add_to_split and separate_tab answer with: the tabs
+/// shown with `tab`, left to right, as the core lists them (bc_tab_split).
+pub fn split_list(tab: u64, split: &[u64]) -> String {
+    match split.len() > 1 {
+        true => {
+            let tabs: Vec<String> = split.iter().map(u64::to_string).collect();
+            format!(
+                "Tab {tab}'s split view, left to right: {}.",
+                tabs.join(", ")
+            )
+        }
+        false => format!("Tab {tab} is in no split view."),
+    }
 }
 
 /// read_page's answer: which page it is, then its text, cut at `MAX_TEXT` bytes.
@@ -402,9 +575,16 @@ pub fn page_text(tab: &TabInfo, text: &str) -> String {
 pub fn tab_argument(arguments: &Value) -> Result<Option<u64>, String> {
     match arguments.get("tab") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number.as_u64().map(Some).ok_or_else(not_a_tab),
-        Some(Value::String(text)) => text.trim().parse().map(Some).map_err(|_| not_a_tab()),
-        Some(_) => Err(not_a_tab()),
+        Some(id) => tab_id(id).map(Some).ok_or_else(not_a_tab),
+    }
+}
+
+/// A tab's id, as a number or a string of one.
+pub fn tab_id(id: &Value) -> Option<u64> {
+    match id {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
     }
 }
 
@@ -422,8 +602,9 @@ pub struct Did {
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, the address it opened, whole, or what it typed when that may show: never
-    /// into a password field, and at most `TYPED_SHOWN` characters.
+    /// A thought's text, the address it opened, whole, what it typed when that may show (never
+    /// into a password field, and at most `TYPED_SHOWN` characters), or the way it scrolled in an
+    /// element.
     pub text: String,
     /// The tab it acted on, by which a turn's same step on several tabs is one line (#1476). None
     /// for a page it opens, whose tab it makes, and for what isn't on a tab.
@@ -492,22 +673,43 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 (Tense::Failed, _) => format!("Couldn't type in {into}"),
             };
         }
+        "select" => {
+            let into = target("a list");
+            return match (tense, did.text.is_empty()) {
+                (Tense::Now, true) => format!("Choosing in {into}"),
+                (Tense::Now, false) => format!("Choosing “{}” in {into}", did.text),
+                (Tense::Done, true) => format!("Chose in {into}"),
+                (Tense::Done, false) => format!("Chose “{}” in {into}", did.text),
+                (Tense::Failed, true) => format!("Couldn't choose in {into}"),
+                (Tense::Failed, false) => format!("Couldn't choose “{}” in {into}", did.text),
+            };
+        }
         "press_key" => ("Pressing", "Pressed", "Couldn't press", target("a key")),
+        "request" => {
+            let to = format!("{} to {}", target("a request"), site("its site"));
+            ("Sending", "Sent", "Couldn't send", to)
+        }
         "scroll" => {
-            let to = match did.target.as_str() {
-                "up" | "down" | "" => format!("{} on {}", target("down"), site("the page")),
-                element => format!("to {element}"),
+            let to = match (did.target.as_str(), did.text.as_str()) {
+                ("up" | "down" | "", _) => format!("{} on {}", target("down"), site("the page")),
+                (element, "") => format!("to {element}"),
+                (element, way) => format!("{way} in {element}"),
             };
             ("Scrolling", "Scrolled", "Couldn't scroll", to)
         }
-        "wait" => match did.target.starts_with('“') {
-            true => (
+        "wait" => match did.target.strip_suffix(" to go") {
+            // Text that should go: “Loading” to go.
+            Some(text) if tense == Tense::Failed => return format!("Didn't see {text} go"),
+            _ if did.target == SETTLE => {
+                ("Waiting for", "Waited for", "Couldn't wait for", target(""))
+            }
+            _ if did.target.starts_with('“') => (
                 "Waiting for",
                 "Waited for",
                 "Didn't see",
                 target("the page"),
             ),
-            false => ("Waiting", "Waited", "Couldn't wait", target("")),
+            _ => ("Waiting", "Waited", "Couldn't wait", target("")),
         },
         "list_tabs" => (
             "Looking over",
@@ -516,6 +718,38 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "its tabs".to_string(),
         ),
         "close_tab" => ("Closing", "Closed", "Couldn't close", site("a tab")),
+        "pin_tab" => ("Pinning", "Pinned", "Couldn't pin", site("a tab")),
+        "unpin_tab" => ("Unpinning", "Unpinned", "Couldn't unpin", site("a tab")),
+        "remove_tab" => (
+            "Removing",
+            "Removed",
+            "Couldn't remove",
+            site("a pinned tab"),
+        ),
+        "split_tabs" => (
+            "Putting",
+            "Put",
+            "Couldn't put",
+            format!("{} in a split view", site("tabs")),
+        ),
+        "add_to_split" => (
+            "Adding",
+            "Added",
+            "Couldn't add",
+            format!("{} to a split view", site("a tab")),
+        ),
+        "separate_tab" => (
+            "Separating",
+            "Separated",
+            "Couldn't separate",
+            format!("{} from its split view", site("a tab")),
+        ),
+        "list_split" => (
+            "Looking over",
+            "Looked over",
+            "Couldn't look over",
+            "a split view".to_string(),
+        ),
         "hand_off" => (
             "Handing you",
             "Handed you",
@@ -559,7 +793,8 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
             step_title(&on("pages"), tense)
         }
-        "close_tab" | "hand_off" | "ask_for_tab" => step_title(&on("tabs"), tense),
+        "close_tab" | "pin_tab" | "unpin_tab" | "remove_tab" | "hand_off" | "ask_for_tab"
+        | "split_tabs" | "add_to_split" | "separate_tab" => step_title(&on("tabs"), tense),
         _ => format!("{} on {pages} pages", step_title(did, tense)),
     }
 }
@@ -570,11 +805,15 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "read_page" | "snapshot" => "icons/text-align-start.svg",
         "click" => "icons/mouse-pointer-2.svg",
         "type" => "icons/type.svg",
+        "select" => "icons/chevrons-up-down.svg",
         "press_key" => "icons/keyboard.svg",
         "scroll" => "icons/arrow-down.svg",
         "screenshot" => "icons/eye.svg",
+        "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
-        "list_tabs" | "close_tab" | "hand_off" | "ask_for_tab" => "icons/app-window.svg",
+        "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
+        | "add_to_split" | "separate_tab" | "list_split" => "icons/app-window.svg",
+        "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "thought" => "icons/lightbulb.svg",
         _ => "icons/globe.svg",
@@ -610,6 +849,7 @@ pub fn reason(error: &str) -> String {
         "not a web page"
     } else if has(&[
         "there's no element",
+        "there's no option",
         "no tab",
         "isn't open",
         "not found",
@@ -649,9 +889,11 @@ pub fn describe(action: &str) -> &'static str {
         "snapshot" => "Looked at the page",
         "click" => "Clicked",
         "type" => "Typed",
+        "select_option" => "Chose an option",
         "press_key" => "Pressed a key",
         "scroll" => "Scrolled",
         "screenshot" => "Took a screenshot",
+        "request" => "Sent a request",
         "connected" => "Connected",
         "disconnected" => "Disconnected",
         "released" => "Let go of the tab",
@@ -659,8 +901,18 @@ pub fn describe(action: &str) -> &'static str {
         "handed back" => "You handed the tab back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
+        "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "close_tab" => "Closed a tab",
+        "discard_tab" => "Closed a tab without saving",
+        "download" => "Downloaded a file",
+        "pin_tab" => "Pinned a tab",
+        "unpin_tab" => "Unpinned a tab",
+        "remove_tab" => "Removed a pinned tab",
+        "split_tabs" => "Put tabs in a split view",
+        "add_to_split" => "Added a tab to a split view",
+        "separate_tab" => "Separated a tab from its split view",
+        "list_split" => "Looked over a split view",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

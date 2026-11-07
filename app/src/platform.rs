@@ -1,15 +1,28 @@
 use std::ffi::{c_char, c_int, c_void};
 
+/// Where a window `width` by `height` goes centred on the screen the windows open on, in the core's
+/// terms, at whole points: the host's centre is half a point off whenever the screen's visible
+/// height is odd, and the core would open the window a point taller (#1568).
+pub fn centered(width: f64, height: f64) -> (f64, f64) {
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(width, height, &mut x, &mut y) };
+    browser::window_frames::whole_point((x, y))
+}
+
 unsafe extern "C" {
+    #[cfg(target_os = "macos")]
+    pub fn host_set_scripting(scripting: *const host_scripting);
     #[cfg(not(target_os = "linux"))]
     pub fn drive_start();
     #[cfg(target_os = "windows")]
     pub fn drive_watch_menus(
         menus: extern "C" fn(ui_view: *mut c_void, title: *const c_char, bar: bool) -> bool,
+        dialog: extern "C" fn(label: *const c_char) -> bool,
     );
     #[cfg(target_os = "linux")]
     pub fn host_choose(title: *const c_char) -> bool;
-    pub fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
+    // Through `centered` alone, which takes its point to whole points.
+    fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
     #[cfg(not(target_os = "linux"))]
     pub fn host_ui_view() -> *mut c_void;
     #[cfg(target_os = "linux")]
@@ -21,7 +34,8 @@ unsafe extern "C" {
     #[cfg(target_os = "linux")]
     pub fn host_window_active(ui_view: *mut c_void, active: bool, whole_window: bool);
     pub fn host_capture_name(name: *mut c_char, capacity: usize);
-    pub fn host_set_window_little(ui_view: *mut c_void);
+    pub fn host_set_window_little(ui_view: *mut c_void, grows: bool);
+    pub fn host_grow_little_window(ui_view: *mut c_void);
     pub fn host_show_window(ui_view: *mut c_void);
     pub fn host_show_window_behind(ui_view: *mut c_void, above_ui_view: *mut c_void);
     pub fn host_show_launch_window(
@@ -31,8 +45,13 @@ unsafe extern "C" {
         width: f64,
         height: f64,
         maximized: bool,
+        picture_width: f64,
+        picture_height: f64,
+        foot_top: f64,
     );
     pub fn host_screens(frames: *mut f64, count: usize) -> usize;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    pub fn host_app_icon(bundle_id: *const c_char, size: usize, rgba: *mut u8) -> bool;
     pub fn host_pointer(x: *mut f64, y: *mut f64) -> bool;
     pub fn host_window_frame(
         ui_view: *mut c_void,
@@ -43,10 +62,19 @@ unsafe extern "C" {
     ) -> bool;
     pub fn host_close_launch_window();
     pub fn host_watch_finished_launching(finished: extern "C" fn());
+    #[cfg(not(target_os = "windows"))]
     pub fn host_save_launch_picture(
         ui_view: *mut c_void,
         profile_dir: *const c_char,
         width: f64,
+    ) -> bool;
+    #[cfg(target_os = "windows")]
+    pub fn host_save_launch_pixels(
+        ui_view: *mut c_void,
+        profile_dir: *const c_char,
+        pixels: *const u8,
+        columns: usize,
+        rows: usize,
     ) -> bool;
     pub fn host_cascaded(
         ui_view: *mut c_void,
@@ -63,12 +91,16 @@ unsafe extern "C" {
     pub fn host_window_shown(ui_view: *mut c_void) -> bool;
     pub fn host_add_dock_items(little: extern "C" fn() -> c_int, chosen: extern "C" fn(c_int));
     pub fn host_set_little_status_item(clicked: Option<extern "C" fn()>);
+    pub fn host_set_little_task(title: *const c_char, arguments: *const c_char);
     pub fn host_watch_key_window(changed: extern "C" fn(*mut c_void));
     pub fn host_watch_full_screen(changed: extern "C" fn(*mut c_void, bool));
+    pub fn host_watch_window_main(changed: extern "C" fn(*mut c_void, bool));
     pub fn host_watch_swipes(swiped: extern "C" fn(*mut c_void, f64, f64, bool) -> bool);
     pub fn host_watch_option_taps(tapped: extern "C" fn(*mut c_void));
     #[cfg(not(target_os = "linux"))]
     pub fn host_watch_ui_keyboard(left: extern "C" fn(*mut c_void));
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_page_presses(pressed: extern "C" fn(*mut c_void));
     pub fn host_after_menus(apply: extern "C" fn()) -> bool;
     pub fn host_watch_resigning_active(resigning: extern "C" fn());
     pub fn host_watch_active(became_active: extern "C" fn());
@@ -98,6 +130,7 @@ unsafe extern "C" {
     pub fn host_set_overlay_radius(overlay: c_int, radius: f64);
     pub fn host_set_overlay_growth(overlay: c_int, x: f64, y: f64);
     pub fn host_set_overlay_shrink(overlay: c_int);
+    pub fn host_set_overlay_motion(overlay: c_int, from: f64, seconds: f64, out: f64);
     pub fn host_set_overlays_still(still: bool);
     pub fn host_show_overlay(
         overlay: c_int,
@@ -149,6 +182,11 @@ unsafe extern "C" {
     pub fn host_focus(view: *mut c_void);
     pub fn host_show_window_buttons(ui_view: *mut c_void, shown: bool);
     pub fn host_press_window_button(ui_view: *mut c_void, button: i32);
+    pub fn host_set_window_on_top(ui_view: *mut c_void, on: bool);
+    #[cfg(target_os = "macos")]
+    pub fn host_enter_full_screen(ui_view: *mut c_void) -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_window_on_active_space(ui_view: *mut c_void) -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_window_buttons(
         ui_view: *mut c_void,
@@ -180,6 +218,12 @@ unsafe extern "C" {
     pub fn host_detent();
     pub fn host_dock_dot_launch(profile_dir: *const c_char);
     pub fn host_dock_dot(colored: bool, color: u32);
+    pub fn host_app_active() -> bool;
+    pub fn host_needs_you_badge(count: c_int);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_needs_you_notify(id: u64, title: *const c_char, body: *const c_char);
+    #[cfg(not(target_os = "linux"))]
+    pub fn host_watch_needs_you(clicked: extern "C" fn(id: u64));
     pub fn host_watch_control(released: extern "C" fn());
     pub fn host_take_drops(
         dragged: extern "C" fn(
@@ -193,6 +237,18 @@ unsafe extern "C" {
     );
     pub fn host_trash(path: *const c_char) -> bool;
     pub fn host_drag_file(path: *const c_char, ended: extern "C" fn(taken: bool)) -> bool;
+    #[allow(clippy::too_many_arguments)]
+    pub fn host_drag_tab(
+        ui_view: *mut c_void,
+        tab: u64,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        grab_x: f64,
+        grab_y: f64,
+        ended: extern "C" fn(tab: u64, how: c_int, placed: bool, x: f64, y: f64),
+    ) -> bool;
     pub fn host_file_preview(
         path: *const c_char,
         id: u64,
@@ -350,6 +406,8 @@ unsafe extern "C" {
     #[cfg(not(target_os = "linux"))]
     pub fn host_check_for_updates_quietly();
     #[cfg(not(target_os = "linux"))]
+    pub fn host_set_automatic_update_checks(on: bool);
+    #[cfg(not(target_os = "linux"))]
     pub fn host_install_update();
     #[cfg(not(target_os = "linux"))]
     pub fn host_relaunch_into_update() -> bool;
@@ -368,13 +426,40 @@ pub const UPDATE_FOUND: c_int = 3;
 pub const UPDATE_DOWNLOADING: c_int = 4;
 pub const UPDATE_READY: c_int = 5;
 pub const UPDATE_FAILED: c_int = 6;
+pub const UPDATE_AVAILABLE: c_int = 7;
+
+/// How the system's drag of a tab ended (host_drag_tab).
+pub const TAB_TAKEN: c_int = 0;
+pub const TAB_LET_GO: c_int = 1;
 
 /// What host_take_drops hears of a drag.
 pub const DRAG_OVER: c_int = 0;
 pub const DRAG_DROP: c_int = 2;
 
+/// host.h's host_scripting: what scripts ask of the app (scripting_host.rs).
+#[repr(C)]
+pub struct host_scripting {
+    pub allowed: extern "C" fn(u64, *const c_char, *const c_char) -> bool,
+    pub windows: extern "C" fn(*mut u64, usize) -> usize,
+    pub window_space: extern "C" fn(u64) -> u64,
+    pub window_tab: extern "C" fn(u64) -> u64,
+    pub window_name: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub spaces: extern "C" fn(*mut u64, usize) -> usize,
+    pub space_name: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub tabs: extern "C" fn(u64, u64, *mut u64, usize) -> usize,
+    pub tab_title: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub tab_url: extern "C" fn(u64, *mut c_char, usize) -> usize,
+    pub focus_space: extern "C" fn(u64, *const c_char, u64, u64, *mut c_char, usize) -> bool,
+    pub select_tab: extern "C" fn(u64, *const c_char, u64, u64, *mut c_char, usize) -> bool,
+    pub new_window: extern "C" fn(u64, *const c_char, *mut c_char, usize) -> u64,
+    pub new_tab:
+        extern "C" fn(u64, *const c_char, u64, u64, *const c_char, *mut c_char, usize) -> u64,
+}
+
 #[repr(C)]
 pub struct host_dragged {
     pub url: *const c_char,
     pub file: bool,
+    /// A tab of the app's that host_drag_tab drags, else 0.
+    pub tab: u64,
 }

@@ -9,19 +9,22 @@ use gpui::{
 };
 
 use crate::{
-    dock_dot::QUIET,
     hover_card::{Action, Event},
     icon_picker::{self, Picked, Recents, Subject},
+    shell::hover_cards::PICTURE_HIDDEN,
     shell::{Folders, Page, Row, Shell, recorder::Recorder},
     theme_picker,
 };
 
 /// A drawn shell with the pinned tab 1, the Today tabs 2, 3 and 4, and the favorite 10, showing 2.
+/// Under Reduce Motion, so the rows are in their places from the first frame: their motion runs on
+/// real time, and a press at a row's frame drawn mid-slide lands on its neighbour.
 fn with_tabs(
     cx: &mut TestAppContext,
 ) -> (gpui::Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
     shell.update(cx, |shell, cx| {
         shell.set_spaces(
@@ -59,7 +62,7 @@ fn with_tabs(
         shell.set_selected(2, cx);
     });
     cx.run_until_parked();
-    cx.executor().advance_clock(QUIET * 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN * 2);
     cx.run_until_parked();
     host.take();
     (shell, cx, host)
@@ -288,9 +291,8 @@ fn a_picker_closes_the_card(cx: &mut TestAppContext) {
         host.take().iter().any(|call| call.starts_with("card rest"))
     };
     rest_on(&shell, cx, &host, 3);
-    shell.update(cx, |shell, cx| {
-        shell.show_theme_picker(1, point(200., 100.), cx)
-    });
+    let at = theme_picker::At::Row(point(200., 100.));
+    shell.update(cx, |shell, cx| shell.show_theme_picker(1, at, cx));
     assert!(host.take().contains(&"card close".to_string()));
     assert!(!rests(cx, 4), "the theme picker shows");
     cx.update(|_, cx| theme_picker::dismissed(cx));
@@ -393,13 +395,16 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
             .collect()
     };
     assert!(pictured(&host).is_empty(), "nothing on the switch");
-    cx.executor().advance_clock(QUIET / 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.executor().advance_clock(QUIET / 2);
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    cx.executor().advance_clock(QUIET);
+    // Asked once the last switch has been quiet for the Dock dot's 400 ms, while the core may
+    // still keep the page it left on screen, which it holds for the picture (#1658).
+    cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
+    assert_eq!(PICTURE_HIDDEN, std::time::Duration::from_millis(400));
     assert_eq!(pictured(&host), ["card picture 2", "card picture 4"]);
 }
 
@@ -501,7 +506,14 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
     let titles: Vec<String> = (host.folder_preview.borrow().iter())
         .flat_map(|rest| rest.items.iter().map(|item| item.title.to_string()))
         .collect();
-    assert_eq!(titles, ["News", "Book"]);
+    assert_eq!(
+        titles,
+        ["News", "Book"],
+        "unseen, they keep the sidebar's order"
+    );
+    let aged = (host.folder_preview.borrow().iter())
+        .any(|rest| rest.items.iter().any(|item| !item.age.is_empty()));
+    assert!(!aged, "a tab never seen has an age");
     // An open folder's rows show what's in it, and a tab has its card instead.
     preview_on(&shell, cx, 9);
     preview_on(&shell, cx, 1);
@@ -511,6 +523,28 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
         shell.folder_preview(Row::Tab(5), false, cx)
     });
     assert_eq!(host.take(), ["folder preview left 5"]);
+}
+
+#[gpui::test]
+fn a_preview_lists_the_tab_seen_last_first_with_how_long_ago(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_folders(cx);
+    let (minute, now) = (60_000., super::super::recent_downloads::now());
+    host.seen
+        .borrow_mut()
+        .extend([(6, now - 3. * 24. * 60. * minute), (8, now - 31.5 * minute)]);
+    preview_on(&shell, cx, 5);
+    assert_eq!(host.take(), ["folder preview rest 5 8 6"]);
+    let row = |item: &crate::folder_preview::Item| (item.title.to_string(), item.age.to_string());
+    let rows: Vec<(String, String)> = (host.folder_preview.borrow().iter())
+        .flat_map(|rest| rest.items.iter().map(row))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Book".into(), "31 minutes ago".into()),
+            ("News".into(), "3 days ago".into())
+        ]
+    );
 }
 
 /// A hover lost while the preview is open, with the pointer last moved onto the folder's row, isn't

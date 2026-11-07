@@ -59,6 +59,13 @@ pub fn place(saved: Frame, screens: &[Frame]) -> Option<Frame> {
     })
 }
 
+/// `point`, a window's origin, at the whole point nearest it. The core makes a frame the whole
+/// points around it, so a window placed at half a point would open a point bigger than it's meant
+/// to be, as the first window did centred on a screen of odd height (#1568).
+pub fn whole_point((x, y): (f64, f64)) -> (f64, f64) {
+    (x.round(), y.round())
+}
+
 /// Where a Little ilo window opens from `centered`, centred on its screen: a little above the
 /// middle, four tenths of the room over it rather than half, on the screen holding its centre
 /// (ux-spec.md › Little Arc). Unmoved with no screens, as under Wayland, or when the host didn't
@@ -75,13 +82,9 @@ pub fn raised(centered: Frame, screens: &[Frame]) -> Frame {
         return centered;
     }
     let room = (screen.height - centered.height).max(0.);
-    // At whole points: the core makes a frame the whole points around it, so a fractional one
-    // would open a point bigger, and each window after it bigger again, at the last one's size.
-    Frame {
-        x: centered.x.round(),
-        y: (screen.y + room * 0.4).round(),
-        ..centered
-    }
+    // At whole points, or each window after it would open bigger again, at the last one's size.
+    let (x, y) = whole_point((centered.x, screen.y + room * 0.4));
+    Frame { x, y, ..centered }
 }
 
 /// Where a Little ilo window of `size` opens on the screen holding `pointer`, as Arc's opens on the
@@ -104,9 +107,75 @@ pub fn on_screen_of(pointer: (f64, f64), size: (f64, f64), screens: &[Frame]) ->
     ))
 }
 
+/// Where a page's pop-up opens from a Little ilo window at `opener`, as a window of its own (#1919):
+/// its page gets the `content` size the page asked for, under a Little ilo bar, a side it didn't
+/// ask for the opener's, at least 100 as Blink's least. At `asked`, the screen point the page asked
+/// for its content's top-left, else centred on the opener and 10 under its top, as Chrome puts
+/// one near the window that opened it. Kept on a screen, as `place` keeps one.
+pub fn popup(
+    opener: Frame,
+    content: (f64, f64),
+    asked: Option<(f64, f64)>,
+    screens: &[Frame],
+) -> Frame {
+    use crate::tokens::shell::{CARD_INSET, LITTLE_BAR};
+    let (bar, inset) = (f64::from(LITTLE_BAR), f64::from(CARD_INSET));
+    let side = |asked: f64, opener: f64| match asked > 0. {
+        true => asked.max(MINIMUM),
+        false => opener,
+    };
+    let width = side(content.0, opener.width - 2. * inset) + 2. * inset;
+    let height = side(content.1, opener.height - bar - inset) + bar + inset;
+    let (x, y) = match asked {
+        Some((x, y)) => (x - inset, y - bar),
+        None => (
+            opener.x + (opener.width - width) / 2.,
+            opener.y + POPUP_DROP,
+        ),
+    };
+    let (x, y) = whole_point((x, y));
+    let frame = Frame {
+        x,
+        y,
+        width,
+        height,
+    };
+    place(frame, screens).unwrap_or(frame)
+}
+
+/// The least a page's pop-up is on a side, as Blink makes a window.open() asking for less.
+const MINIMUM: f64 = 100.;
+/// How far under its opener's top a page's pop-up opens, Chrome's cascade (kWindowTilePixels).
+const POPUP_DROP: f64 = 10.;
+
+/// The saved window a browser window opens as, at its frame, which comes back in the state it quit
+/// in: with no window it opens from (`first`), the launch's first, the front one, and `saved`, one
+/// behind it. None for a window that isn't `regular`: a private or Little ilo window, or one at a
+/// frame of its own.
+pub fn saved_at(first: bool, regular: bool, saved: Option<usize>) -> Option<usize> {
+    match (regular, saved) {
+        (false, _) => None,
+        (true, Some(index)) => Some(index),
+        (true, None) => first.then_some(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launch's first window is the front one saved, and those it opens behind it the others,
+    /// each by its index, so each comes back maximized if it quit so (#1454). A window opened from
+    /// another, a private or Little ilo window, or one at a frame of its own is none of them.
+    #[test]
+    fn each_window_a_launch_brings_back_is_the_one_saved_at_its_place() {
+        assert_eq!(saved_at(true, true, None), Some(0));
+        assert_eq!(saved_at(false, true, Some(1)), Some(1));
+        assert_eq!(saved_at(false, true, Some(3)), Some(3));
+        assert_eq!(saved_at(false, true, None), None);
+        assert_eq!(saved_at(true, false, None), None);
+        assert_eq!(saved_at(false, false, Some(1)), None);
+    }
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
         Frame {
@@ -250,6 +319,17 @@ mod tests {
         assert_eq!(raised(placed, &[LAPTOP, DISPLAY]), placed);
     }
 
+    /// The hosted Mac's 1920 by 971 visible frame centres a 1280 by 800 window at 116.5 down,
+    /// which the core made 116 and 801 tall; Windows' work area over its scale can be any fraction.
+    /// The origin goes to the nearest whole point, and one already whole stays (#1568).
+    #[test]
+    fn a_centred_window_opens_at_whole_points() {
+        assert_eq!(whole_point((320., 116.5)), (320., 117.));
+        assert_eq!(whole_point((319.6, 85.25)), (320., 85.));
+        assert_eq!(whole_point((-1280.5, 0.)), (-1281., 0.));
+        assert_eq!(whole_point((0., 0.)), (0., 0.));
+    }
+
     /// A screen 674 tall under a 31-point menu bar, as the hosted Mac's, where a Little ilo window
     /// raised to 44.6 down opened 900 by 641, and an odd 1023 wide, which centres it at 61.5 across.
     #[test]
@@ -262,5 +342,40 @@ mod tests {
         };
         let opened = on_screen_of((500., 300.), (900., 640.), &[SMALL]);
         assert_eq!(opened, Some(frame(62., 45., 900., 640.)));
+    }
+
+    /// A sign-in's pop-up from a Little ilo window gets the size its page asked for, its bar
+    /// over that, centred on the opener 10 under its top; where the page asked, there; a side it
+    /// didn't ask, the opener's; and on a screen, however far off the page asked (#1919).
+    #[test]
+    fn a_popup_gets_its_pages_size_over_its_opener() {
+        use crate::tokens::shell::{CARD_INSET, LITTLE_BAR};
+        let (bar, inset) = (f64::from(LITTLE_BAR), f64::from(CARD_INSET));
+        let opener = frame(300., 200., 900., 640.);
+        let screens = [LAPTOP];
+        let asked = popup(opener, (500., 600.), None, &screens);
+        assert_eq!(
+            (asked.width, asked.height),
+            (500. + 2. * inset, 600. + bar + inset)
+        );
+        assert_eq!(asked.x + asked.width / 2., opener.x + opener.width / 2.);
+        assert_eq!(asked.y, opener.y + 10.);
+
+        let placed = popup(opener, (500., 600.), Some((100., 150.)), &screens);
+        assert_eq!((placed.x, placed.y), (100. - inset, 150. - bar));
+
+        let unasked = popup(opener, (0., 0.), None, &screens);
+        assert_eq!(
+            (unasked.width, unasked.height),
+            (opener.width, opener.height)
+        );
+        let tiny = popup(opener, (20., 20.), None, &screens);
+        assert_eq!(tiny.width, 100. + 2. * inset);
+
+        let off = popup(opener, (500., 600.), Some((5000., -400.)), &screens);
+        assert!(
+            off.x + off.width <= LAPTOP.x + LAPTOP.width && off.y >= LAPTOP.y,
+            "{off:?}"
+        );
     }
 }

@@ -630,11 +630,13 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.0.1"
+version = "0.1.6"
 dependencies = [
  "async-io",
+ "base64 0.22.1",
  "bindgen",
  "cc",
+ "chrono",
  "emojis",
  "futures",
  "futures-lite",
@@ -645,10 +647,12 @@ dependencies = [
  "gpui_platform",
  "gpui_windows",
  "image",
+ "libc",
  "plist",
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "unicode-properties",
  "unicode-segmentation",
  "wayland-client",
  "wayland-protocols-misc",
@@ -664,6 +668,7 @@ name = "browser-linux"
 version = "0.1.0"
 dependencies = [
  "browser",
+ "futures-lite",
  "gpui",
  "gpui_linux",
  "gpui_platform",
@@ -2071,6 +2076,7 @@ dependencies = [
  "gpui_util",
  "gpui_wgpu",
  "http_client",
+ "image",
  "libc",
  "log",
  "notify-rust",

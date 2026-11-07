@@ -8,11 +8,12 @@
 # buttons pause it and float it in Picture in Picture, whose click shows the tab, and whose × puts
 # it away. A private window's music has a player in that window alone. View › Cast… and the page
 # menu's Cast… open the tab's Cast card, and × closes it. A video's page menu floats it in Picture
-# in Picture, the Mini Player, which a scroll or a drag moves, ⌘ or Ctrl with a scroll sizes, and a
-# double-click puts back in its tab, shown. Chromium's fake camera and microphone stand in for real
-# ones, and the share takes the tab titled Shared without its picker; the question for the camera
-# is answered with Allow, as the user would, since the fake question Chromium can put in its place
-# never tells the browser what's captured.
+# in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
+# moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
+# shows where it was left, and coming back to its tab's window from another puts it back in the tab.
+# Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
+# Shared without its picker; the question for the camera is answered with Allow, as the user would,
+# since the fake question Chromium can put in its place never tells the browser what's captured.
 
 serve
 # "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
@@ -47,7 +48,9 @@ onkeydown = async e => {
       for (let i = 0; i < n; i++) {
         wav.setUint8(44 + i, 128);
       }
-      const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
+      // Kept by the window: a paused element nothing refers to is garbage, and its player goes
+      // with it, so Chrome ends the session, and the sidebar loses its player.
+      const music = window.music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
       music.loop = true;
       music.onplaying = () => document.title = "playing";
       music.onpause = () => document.title = "paused";
@@ -287,19 +290,19 @@ floats() {
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
   send click $page_point
 }
-# mini_player: Settings' Advanced switch for it, which says it went <on or off>.
+# mini_player: Settings' Features switch for it, which says it went <on or off>.
 mini_player() {
   send key , cmd
   expect '^browser: settings shown ' "⌘, from the page didn't show Settings"
   # A click before its first frame finds no tabs to land on.
   expect '^browser: settings drew ' "Settings didn't draw"
-  # Settings opens at the tab it last showed.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Advanced$'; then
-    send clickkey $(drawn "toolbar Advanced")
-    expect '^browser: settings tab Advanced$' "a click on Advanced didn't show its tab"
-    settings_drew Advanced
+  # Settings opens at the section it last showed.
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+    settings_drew Features
   fi
-  send clickkey 592 208
+  send clickkey $(drawn "switch mini player")
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"
@@ -373,33 +376,63 @@ expect "^browser: page $a media 1 playing 1 next 1 pip 1 Quiet\$" "the page's mu
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
-expect "^browser: media player $a at " "the player wasn't drawn"
-read -r mx my mw mh <<EOF
-$(grep "^browser: media player $a at " "$log" | tail -1 | cut -d' ' -f6-)
+# player_at <height> <failure> [<step>]: waits for the front card drawn <height> tall, 33 at rest
+# and 66 open, since the last command or <step>, and reads where it is into mx, my, mw and mh.
+player_at() {
+  expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2" "${3:-}"
+  read -r mx my mw mh <<EOF
+$(grep "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$log" | tail -1 | cut -d' ' -f6-)
 EOF
+}
+# open_stack: rests the pointer on the front card, which opens the stack.
+open_stack() {
+  send move $((mx + mw / 2)) $((my + mh - 16))
+  expect '^browser: media stack open$' "the stack didn't open under the pointer"
+  player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+}
+player_at 33 "the player wasn't drawn 33 tall at rest"
+expect '^browser: media stack rest$' "the stack didn't rest"
 ../tools/window-screenshot.sh "$pid" "$out/media-player.png" || fail "no window to capture"
-# Its buttons from the right, 8 in, 24 wide and 6 apart: ×, the next track, pause, then Picture in
-# Picture, as Arc's Back to PiP, there while the page can float and doesn't.
-button_x() { echo $((mx + mw - 8 - 12 - $1 * 30)); }
-send click "$(button_x 2)" $((my + mh / 2))
+# At rest its controls are thirds of the card: the favicon, pause and the next track.
+send click $((mx + mw / 2)) $((my + mh / 2))
 expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
 expect "^browser: page $a media 1 playing 0 next 1 pip 1 Quiet\$" "the player didn't show it paused"
-send click "$(button_x 3)" $((my + mh / 2))
+# The pointer resting there opens it: the title row's buttons from the right, 4.5 in, 24 wide and
+# 2 apart: ×, then Picture in Picture, as Arc's Back to PiP, there while the page can float and
+# doesn't.
+expect '^browser: media stack open$' "the stack didn't open under the pointer"
+player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+../tools/window-screenshot.sh "$pid" "$out/media-player-open.png" || fail "no window to capture"
+button_x() { echo $((mx + mw - 5 - 12 - $1 * 26)); }
+title_y=$((my + 19))
+send click "$(button_x 1)" $title_y
 expect '^browser: command media-picture-in-picture via player$' \
   "the player's Picture in Picture didn't take the click"
 expect "^browser: title $a floating\$" "the player's Picture in Picture didn't float the page"
 expect "^browser: page $a media 1 playing 0 next 1 pip 0 Quiet\$" \
   "the player kept Picture in Picture while the page floated"
-send click $((mx + 60)) $((my + mh / 2))
+# On the Mac the floating window takes the keyboard, and GPUI then reads the pointer from AppKit,
+# whose real one the driver's events never move: off the stack, which closes as it's left. On
+# Linux and Windows the driver's pointer stays on the open stack. The pointer leaves it here too,
+# and the card is pressed once it rests, wherever that is.
+floated=$step
+send move $page_point
+expect '^browser: media stack rest$' "the stack didn't rest once the pointer left it" "$floated"
+player_at 33 "the player wasn't drawn at rest once the page floated" "$floated"
+send click $((mx + 40)) $((my + mh / 2))
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the player didn't show its tab"
 expect "^browser: title $a landed\$" "the floating page didn't land as its tab showed"
 expect '^browser: media players $' "the tab shown kept its player"
+send move $page_point
 shown "$b"
 expect "^browser: media players $a\$" "the paused tab out of sight had no player"
-send click "$(button_x 0)" $((my + mh / 2))
+player_at 33 "the paused tab's player wasn't drawn at rest"
+open_stack
+send click "$(button_x 0)" $title_y
 expect '^browser: command media-dismiss via player$' "the player's × didn't take the click"
 expect '^browser: media players $' "× didn't put the player away"
+send move $page_point
 
 # A private window's music out of sight has a player there alone. Every window hears every tab,
 # but the regular window's players are its Spaces' tabs, so its music, playing again, is its one.
@@ -410,6 +443,7 @@ send key n cmd shift
 expect '^browser: private window opened [0-9]* profile [0-9]*$' "⇧⌘N didn't open a private window"
 private=$(grep '^browser: private window opened ' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: window opened $private\$" "the private window didn't open"
+new_window_bar
 send window 2
 # private_page <name>: opens the call page named <name> in the private window, as $p.
 private_page() {
@@ -441,12 +475,15 @@ send key m
 expect "^browser: title $a playing\$" "m in the page didn't play its silence again"
 switch "$key_b cmd" "$b"
 expect "^browser: media players $a\$" "the regular window's players weren't its music alone"
-expect "^browser: media player $a at " "the regular window's player wasn't drawn again"
+player_at 33 "the regular window's player wasn't drawn again"
 ../tools/window-screenshot.sh "$pid" "$out/media-player-own.png" || fail "no window to capture"
-send click "$(button_x 2)" $((my + mh / 2))
+send click $((mx + mw / 2)) $((my + mh / 2))
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
-send click "$(button_x 0)" $((my + mh / 2))
+expect '^browser: media stack open$' "the stack didn't open under the pointer"
+player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
+send click "$(button_x 0)" $title_y
 expect '^browser: media players $' "× didn't put the player away"
+send move $page_point
 send window 2
 send key w cmd shift
 expect "^browser: window closed $private\$" "⇧⌘W didn't close the private window"
@@ -509,6 +546,17 @@ expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
 ../tools/window-screenshot.sh "$pid" "$out/video-menu.png" || fail "no window to capture"
 send choose "$(cased 'Picture in Picture')"
 expect "^browser: title $v floating\$" "the video menu's Picture in Picture didn't float the video"
+# The core's last place for a Mini Player, x, y, w and h, then its screen's work area's.
+placed() {
+  grep 'browser: mini player placed at ' "$log" | tail -1 | sed 's/.* placed at //; s/ on / /'
+}
+# The first shows 10 in from the top right of its screen's work area, as Arc's.
+expect 'browser: mini player placed at ' "the core didn't place the Mini Player"
+read -r fx fy fw fh wx wy ww wh <<PLACED
+$(placed)
+PLACED
+[ "$((fx + fw))" = "$((wx + ww - 10))" ] && [ "$fy" = "$((wy + 10))" ] ||
+  fail "the first Mini Player was at $fx $fy $fw $fh, not 10 in from the top right of $wx $wy $ww $wh"
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
@@ -516,10 +564,11 @@ expect "^browser: title $v floating\$" "the video menu's Picture in Picture didn
 if [ "$(uname)" = Linux ]; then
   px=0 py=0 pw=0 ph=0
   send pip
-  mini_player_at 1 "the floating video had no Mini Player"
-  # Two notches down move it up as far as the content would go, 120 a notch.
-  send pip wheel $((pw / 2)) $((ph / 3)) 2
-  mini_player_at "x == px && y == py - 240 && w == pw && h == ph" \
+  mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
+    "the floating video had no Mini Player 10 in from the top right of the screen"
+  # Two notches up move it down as far as the content would go, 120 a notch: it starts at the top.
+  send pip wheel $((pw / 2)) $((ph / 3)) -2
+  mini_player_at "x == px && y == py + 240 && w == pw && h == ph" \
     "a scroll over the Mini Player didn't move it with the content"
   # Off its controls, left of the 10 seconds back by more than its width, and away from the
   # screen's right edge, which would push it in as it grows.
@@ -552,7 +601,44 @@ else
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
 fi
+# The next shows where the last was left, at that one's corner nearest its screen's.
+read -r lx ly lw lh <<LEFT
+$(grep 'browser: mini player left at ' "$log" | tail -1 | sed 's/.* left at //')
+LEFT
+[ -n "$lh" ] || fail "the core didn't hear where the Mini Player was left"
+post rightclick $page_point
+expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
+  "the video's menu had no Picture in Picture the second time"
+send choose "$(cased 'Picture in Picture')"
+expect "^browser: title $v floating\$" "the video didn't float a second time"
+expect 'browser: mini player placed at ' "the core didn't place the second Mini Player"
+read -r nx ny nw nh wx wy ww wh <<PLACED
+$(placed)
+PLACED
+ex=$lx across="x == $lx"
+if [ $((lx + lw / 2)) -gt $((wx + ww / 2)) ]; then
+  ex=$((lx + lw - nw)) across="x + w == $((lx + lw))"
+fi
+ey=$ly down="y == $ly"
+if [ $((ly + lh / 2)) -gt $((wy + wh / 2)) ]; then
+  ey=$((ly + lh - nh)) down="y + h == $((ly + lh))"
+fi
+[ "$nx $ny" = "$ex $ey" ] ||
+  fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
+none_since 'browser: mini player back in its tab$' ||
+  fail "the Mini Player went back to its tab as the menu that floated it closed"
+if [ "$(uname)" = Linux ]; then
+  send pip
+  mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
+fi
+# Another window and back to its tab's: the Mini Player goes back in the tab, as Arc's does.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+send window 1
+expect 'browser: mini player back in its tab$' \
+  "coming back to the video's window didn't put the Mini Player back in its tab"
+expect "^browser: title $v landed\$" "the Mini Player didn't land as its window came back"
 exec 3>&-
 quit
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab."
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, and coming back to its tab's window from another puts it back in the tab."

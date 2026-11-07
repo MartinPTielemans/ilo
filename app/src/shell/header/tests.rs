@@ -235,10 +235,8 @@ fn a_press_with_no_move_before_it_puts_the_pointer_over_the_sidebar(cx: &mut Tes
     assert!(!tools(&shell, cx).0);
 }
 
-/// A mouse's back and forward buttons over the sidebar show the previous and next Space, as Arc's
-/// do, never past the first or last, and leave the page's history alone.
-#[gpui::test]
-fn mouse_back_and_forward_over_the_sidebar_switch_spaces(cx: &mut TestAppContext) {
+/// A shell with Spaces One and Two, One shown, its tab 10 on a page with history both ways.
+fn two_spaces(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = drawn_shell(cx);
     let page = Page {
         url: "https://example.org/".into(),
@@ -254,21 +252,97 @@ fn mouse_back_and_forward_over_the_sidebar_switch_spaces(cx: &mut TestAppContext
         shell.set_selected(10, cx);
         shell.set_page(10, page, cx);
     });
-    let press = |direction, cx: &mut VisualTestContext| {
-        cx.run_until_parked();
-        host.take();
-        let button = MouseButton::Navigate(direction);
-        cx.simulate_mouse_down(point(px(100.), px(300.)), button, Modifiers::none());
-        cx.run_until_parked();
-        // The page's history is left alone.
-        assert!(host.take().iter().all(|call| !call.ends_with(" 10")));
-        host.shown.take()
+    cx.run_until_parked();
+    host.take();
+    host.shown.take();
+    (shell, cx, host)
+}
+
+/// A press of the mouse's back or forward button over the sidebar: the Spaces it showed and what
+/// else it asked of the core. The page's history is never one of them: over the UI the buttons
+/// are the Spaces', and over a page, which takes them itself, they're its history's.
+fn navigate(back: bool, cx: &mut VisualTestContext, host: &Recorder) -> (Vec<u64>, Vec<String>) {
+    let direction = match back {
+        true => NavigationDirection::Back,
+        false => NavigationDirection::Forward,
     };
-    assert!(press(NavigationDirection::Back, cx).is_empty());
-    assert_eq!(press(NavigationDirection::Forward, cx), [2]);
+    let button = MouseButton::Navigate(direction);
+    cx.simulate_mouse_down(point(px(100.), px(300.)), button, Modifiers::none());
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(calls.iter().all(|call| !call.ends_with(" 10")), "{calls:?}");
+    (host.shown.take(), calls)
+}
+
+fn library_open(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    shell.read_with(cx, |shell, _| shell.library_open)
+}
+
+/// Between Spaces the mouse's buttons show the one before and after, as Arc's do, and Back on the
+/// first Space shows the Library, as a swipe from it does (#1852).
+#[gpui::test]
+fn mouse_back_on_the_first_space_shows_the_library(cx: &mut TestAppContext) {
+    let (shell, cx, host) = two_spaces(cx);
+    assert_eq!(navigate(false, cx, &host).0, [2]);
     shell.update(cx, |shell, cx| shell.set_space(2, cx));
-    assert!(press(NavigationDirection::Forward, cx).is_empty());
-    assert_eq!(press(NavigationDirection::Back, cx), [1]);
+    assert_eq!(navigate(true, cx, &host).0, [1]);
+    shell.update(cx, |shell, cx| shell.set_space(1, cx));
+    assert!(!library_open(&shell, cx));
+    assert!(navigate(true, cx, &host).0.is_empty());
+    assert!(library_open(&shell, cx));
+}
+
+/// Forward on the last Space starts a new one after it, with its form, as the pull past it does;
+/// Forward again makes no second, and Back cancels it (#1852).
+#[gpui::test]
+fn mouse_forward_on_the_last_space_starts_a_new_space(cx: &mut TestAppContext) {
+    let (shell, cx, host) = two_spaces(cx);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    let (_, calls) = navigate(false, cx, &host);
+    assert!(
+        calls.contains(&"create space Space 3 after 2".to_string()),
+        "{calls:?}"
+    );
+    shell.update(cx, |shell, cx| {
+        let space = |id, name: &str| (id, name.into(), None, 0, "".into(), "".into(), "".into());
+        let spaces = vec![space(1, "One"), space(2, "Two"), space(7, "Space 3")];
+        shell.set_spaces(spaces, cx);
+        shell.set_space(7, cx);
+    });
+    cx.run_until_parked();
+    let form = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.form().map(|form| form.space))
+    };
+    assert_eq!(form(&shell, cx), Some(7));
+    let (_, calls) = navigate(false, cx, &host);
+    assert!(
+        calls.iter().all(|call| !call.starts_with("create space")),
+        "{calls:?}"
+    );
+    assert_eq!(form(&shell, cx), Some(7));
+    host.take_edits();
+    navigate(true, cx, &host);
+    assert_eq!(host.take_edits(), ["delete space 7"]);
+    assert_eq!(form(&shell, cx), None);
+}
+
+/// In the Library, opened from any Space, Forward shows the first Space as a swipe out of it does,
+/// and Back does nothing; neither moves the Space behind it (#1852).
+#[gpui::test]
+fn mouse_buttons_in_the_library_leave_the_space_behind_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = two_spaces(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_space(2, cx);
+        shell.run(Command::ViewLibrary, "test", cx);
+    });
+    cx.run_until_parked();
+    assert!(library_open(&shell, cx));
+    host.take();
+    host.shown.take();
+    assert!(navigate(true, cx, &host).0.is_empty());
+    assert!(library_open(&shell, cx));
+    assert_eq!(navigate(false, cx, &host).0, [1]);
+    assert!(!library_open(&shell, cx));
 }
 
 /// Whether the pointer is over the sidebar and Clear and the URL field's buttons show, once the
@@ -368,6 +442,44 @@ fn copy_url_shows_the_toast_and_the_checkmark(cx: &mut TestAppContext) {
     assert_eq!(host.toasts.take(), ["Copied Current URL"]);
     assert!(host.command_bars.take().is_empty());
     assert!(shell.read_with(cx, |shell, _| shell.url_copied.is_some()));
+}
+
+/// Where there's a share sheet, ⇧⌘C's toast has the capture toast's Share button, which shares the
+/// page from where it was pressed in the toast. Copy URL as Markdown's toast has none.
+#[gpui::test]
+fn copy_url_s_toast_shares_the_page(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    host.share_sheet.set(true);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        shell.set_selected(1, cx);
+        shell.set_title(1, "Example".into(), cx);
+        let page = Page {
+            url: "https://example.org/?utm_source=x".into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page, cx);
+        shell.run(Command::CopyUrl, "ui", cx);
+    });
+    assert_eq!(host.toasts.take(), ["Copied Current URL [share]"]);
+    let share = host
+        .toast_share
+        .take()
+        .expect("the toast has no Share button");
+    host.take();
+    cx.update(|_, cx| share(point(px(240.), px(23.)), cx));
+    assert_eq!(
+        host.take(),
+        ["share from toast https://example.org/ Example at 240 23"]
+    );
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyMarkdownLink, "ui", cx)
+    });
+    assert_eq!(host.toasts.take(), ["Copied URL as Markdown"]);
+    assert!(host.toast_share.take().is_none());
+    // The URL field's button shows ⇧⌘C's toast, Share and all.
+    shell.update(cx, |shell, cx| shell.copy_url_from_button(cx));
+    assert_eq!(host.toasts.take(), ["Copied Current URL [share]"]);
 }
 
 /// The password manager's key shows after the host of the tab it's for. A press on it brings back
@@ -570,7 +682,7 @@ fn the_url_field_shows_the_whole_url_in_developer_mode(cx: &mut TestAppContext) 
             };
             shell.set_page(1, page, cx);
             shell.set_selected(1, cx);
-            shell.url_field_words(url).0.to_string()
+            shell.url_field_words(url, cx).0.to_string()
         })
     };
     assert_eq!(words(false), "localhost");
@@ -645,4 +757,54 @@ fn devtools_rests_in_the_url_field_in_developer_mode(cx: &mut TestAppContext) {
     };
     assert_eq!(at(true, cx), AtRest::DevTools);
     assert_eq!(at(false, cx), AtRest::Field);
+}
+
+/// The header's glyphs take the disabled alpha, 0.26, as it is while the host says the window isn't
+/// the one the user is in, as Arc's do, under the glyph floor that would leave the dim unseen, and
+/// 0.60 again once it is. In the user's window a disabled glyph, as back's with no history, keeps
+/// the floor. GPUI's window losing the keyboard, as it does to the window's own page on X11 and to
+/// its command bar or menu on the Mac, leaves them lit, and so does the command bar open over it.
+#[gpui::test]
+fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let round = |alpha: f32| (alpha * 100.).round() / 100.;
+    let alphas = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            let [lit, disabled] = [true, false].map(|enabled| round(shell.nav_glyph(enabled).a));
+            (shell.nav_dimmed_drawn.get(), lit, disabled)
+        })
+    };
+    let set_main = |main: bool, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_window_main(main, cx));
+    };
+    let floor = round(shell.read_with(cx, |shell, _| shell.palette.glyph_floor));
+    assert!(
+        floor > 0.26,
+        "the test's Space needs a floor over 0.26, not {floor}"
+    );
+    let lit = (Some(false), 0.6, floor);
+    cx.update(|window, _| window.activate_window());
+    assert_eq!(alphas(cx), lit, "not lit in the user's window");
+    // The page or an overlay has the keyboard: GPUI's window isn't active, the host's still main.
+    cx.deactivate_window();
+    assert_eq!(
+        alphas(cx),
+        lit,
+        "dimmed as the page or an overlay took the keys"
+    );
+    host.bar_open.set(true);
+    assert_eq!(alphas(cx), lit, "dimmed under the window's command bar");
+    host.bar_open.set(false);
+    // Another window came to the front: 0.26 for every glyph, under the floor.
+    set_main(false, cx);
+    assert_eq!(
+        alphas(cx),
+        (Some(true), 0.26, 0.26),
+        "not 0.26 behind another window"
+    );
+    // Back, by a click in its page, which doesn't give GPUI's window the keys.
+    set_main(true, cx);
+    assert_eq!(alphas(cx), lit, "not lit once it's the user's again");
 }
