@@ -600,9 +600,14 @@ alike() {
     [ "$d" -ge -8 ] && [ "$d" -le 8 ] || return 1
   done
 }
-# Not on Windows yet, where each page is a window of its own and keeps its size.
-windows || { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
-  fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
+# Not on Windows yet, where each page is a window of its own and keeps its size. Nor under Xvfb,
+# which has no compositor: the capture is the targets' window alone, black where it's clear.
+if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
+  echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
+elif ! windows; then
+  { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
+    fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
+fi
 send dragto 100 300
 expect '^browser: drop targets gone$' "the targets stayed with the tab back over the sidebar"
 expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
