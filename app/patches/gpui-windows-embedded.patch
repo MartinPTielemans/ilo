@@ -496,7 +496,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..b1cd3624a5 100644
+index 095e009e23..53f98b9031 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -372,10 +372,17 @@ impl WindowsPlatform {
@@ -531,7 +531,22 @@ index 095e009e23..b1cd3624a5 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1637,10 +1649,43 @@ fn file_save_dialog(
+@@ -748,6 +760,14 @@ impl Platform for WindowsPlatform {
+             .map(|inner| inner.handle)
+     }
+ 
++    // The foreground window is this process's: GPUI's window inside an embedder's, a child
++    // window, hears no activation of its own.
++    fn is_active(&self) -> Option<bool> {
++        let mut process = 0;
++        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut process)) };
++        Some(process == std::process::id())
++    }
++
+     fn open_window(
+         &self,
+         handle: AnyWindowHandle,
+@@ -1637,10 +1657,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -576,7 +591,7 @@ index 095e009e23..b1cd3624a5 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2025,12 @@ mod tests {
+@@ -1980,3 +2033,12 @@ mod tests {
          );
      }
  }
