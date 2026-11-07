@@ -1242,7 +1242,9 @@ send key return
 expect "^browser: spaces $first\$" "Delete didn't delete the Space it brought back"
 expect "^browser: today $a\$" "the Space shown didn't come back: Today is \"$(today)\""
 send key t cmd shift
-expect '^browser: command reopen-closed-tab via ui$' "⇧⌘T didn't reach the UI"
+# From the UI or the page, whichever the dialog gave the keyboard back to: the page, on X11, since
+# the export's ⌘Z showed it.
+expect '^browser: command reopen-closed-tab via \(ui\|page\)$' "⇧⌘T didn't reach the browser"
 expect "^browser: today [0-9]* $a\$" "⇧⌘T didn't reopen the deleted Space's tab here: Today is \"$(today)\""
 expect "^browser: loaded $(today | cut -d' ' -f1) https://example.com/\$" \
   "the reopened tab didn't load its page"
