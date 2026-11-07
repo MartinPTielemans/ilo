@@ -16,9 +16,9 @@ use gpui::{
 use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, DIVIDER, EMOJI_SIZE, FAVICON_DRAWN,
-    FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName, LOADING_ROW_MIN,
-    LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
+    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, EMOJI_SIZE,
+    FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName,
+    LOADING_ROW_MIN, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
@@ -223,9 +223,23 @@ impl Shell {
 
     /// Opens or closes the folder as it's pressed, as Arc's does, even if the press becomes a drag.
     fn press_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
-        let open = self
-            .shown_space()
-            .is_some_and(|space| space.is_open(folder));
+        let head = self.list_head();
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == self.space) else {
+            return;
+        };
+        let open = space.is_open(folder);
+        let before = space.slots(head);
+        let shown = space.panes(space.shown)[0];
+        let holds_shown = space.holders(shown).any(|holder| holder == folder);
+        // A closed folder still listing tabs shown before closes over them for good, as Arc's
+        // does, and opens on the next click. Opening or closing one lets go of them too, so it
+        // closes whole next time.
+        if space.drop_peeks(folder) && !open && !holds_shown {
+            log!("browser: folder {folder} closed for good");
+            self.move_rows(before, Curve::Slide, cx);
+            cx.notify();
+            return;
+        }
         log!("browser: command toggle-folder via sidebar");
         self.folding = Some(!open);
         self.browser.set_folder_open(folder, !open, cx);
@@ -528,7 +542,7 @@ impl Shell {
                 .swaps
                 .glyph(
                     Swapped::Folder(folder),
-                    folder_glyph(open, self.eliding() == Some(folder)),
+                    folder_glyph(open, self.elides(folder)),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
                     cx,
@@ -2898,6 +2912,91 @@ mod tests {
             folds(Command::CollapseFolders, cx),
             (vec!["folder open 20 false".into()], Some(false))
         );
+    }
+
+    /// A tab shown in closed folders stays listed there, with its dots, as another tab shows, as
+    /// Arc keeps it (#1405). A click on the folder then closes it over the tab for good, and the
+    /// next click opens it. While the tab shown is in the folder, a click opens it as ever.
+    #[gpui::test]
+    fn a_peeked_tab_stays_listed_until_its_folder_is_clicked(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        let listed = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let space = shell.shown_space().unwrap();
+                (space.pinned_rows(false).collect::<Vec<_>>(), space.dotted())
+            })
+        };
+        assert_eq!(listed(cx), (vec![10, 3], vec![(10, 3)]));
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            listed(cx),
+            (vec![10, 3], vec![(10, 3)]),
+            "kept after 4 shows"
+        );
+        // A second tab shown there is kept with the first.
+        shell.update(cx, |shell, cx| shell.set_selected(6, cx));
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        cx.run_until_parked();
+        assert_eq!(listed(cx), (vec![10, 3, 6], vec![(10, 3)]));
+
+        host.take();
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.take(),
+            Vec::<String>::new(),
+            "closed for good, not opened"
+        );
+        assert_eq!(listed(cx), (vec![10], vec![]));
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        assert_eq!(host.take(), ["folder open 10 true"]);
+    }
+
+    /// While the tab shown is in a folder that keeps tabs shown before, a click opens it as ever,
+    /// and lets go of the kept tabs, so it closes whole next time.
+    #[gpui::test]
+    fn a_click_with_the_tab_shown_in_the_folder_opens_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        shell.update(cx, |shell, cx| shell.set_selected(6, cx));
+        cx.run_until_parked();
+        host.take();
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        assert_eq!(host.take(), ["folder open 10 true"]);
+        let peeked = shell.read_with(cx, |shell, _| shell.shown_space().unwrap().peeked.clone());
+        assert_eq!(peeked, Vec::<u64>::new());
+    }
+
+    /// A folder opened and closed again from anywhere, as by Expand All Folders, lets go of the
+    /// tabs it kept, so it closes whole.
+    #[gpui::test]
+    fn a_folder_opened_elsewhere_lets_go_of_its_kept_tabs(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        let fold = |open, cx: &mut VisualTestContext| {
+            let mut folders = work_and_plans();
+            folders.folders.insert(10, ("Work".into(), open));
+            shell.update(cx, |shell, cx| {
+                shell.set_tabs(1, vec![10, 11, 3, 6], vec![4], Vec::new(), folders, cx)
+            });
+            cx.run_until_parked();
+        };
+        fold(true, cx);
+        fold(false, cx);
+        let listed = shell.read_with(cx, |shell, _| {
+            let space = shell.shown_space().unwrap();
+            space.pinned_rows(false).collect::<Vec<_>>()
+        });
+        assert_eq!(listed, [10]);
+    }
+
+    /// Work, closed, holds Plans, closed, which holds 3; Work also holds 6.
+    fn work_and_plans() -> Folders {
+        Folders {
+            folders: [(10, ("Work".into(), false)), (11, ("Plans".into(), false))].into(),
+            parents: [(11, 10), (3, 11), (6, 10)].into(),
+            ..Default::default()
+        }
     }
 
     /// A dragged row that rests on another tab's row's middle for less than SPLIT_REST still goes
