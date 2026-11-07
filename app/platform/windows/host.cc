@@ -1846,6 +1846,22 @@ class FileDropSource : public IDropSource {
   bool cancelled_ = false;
 };
 
+// The driver's (drive.cc) in a driven run, in place of DoDragDrop: Windows' drag waits for the real
+// pointer's messages before it starts, which the driver keeps from the app's windows, so it stopped
+// the app there (#1583). The driver carries the drag as it carries another app's, and says where it
+// was let go.
+HRESULT (*g_drive_drag)(IDataObject* data, DWORD allowed, DWORD* effect, POINT* at) = nullptr;
+
+// DoDragDrop, or the driver's, and where the drag was let go, on the screen.
+HRESULT Drag(IDataObject* data, IDropSource* source, DWORD allowed, DWORD* effect, POINT* at) {
+  if (g_drive_drag) {
+    return g_drive_drag(data, allowed, effect, at);
+  }
+  const HRESULT dropped = DoDragDrop(data, source, allowed, effect);
+  GetCursorPos(at);
+  return dropped;
+}
+
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
 // its drag image; null if there's no such file.
 ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
@@ -4464,6 +4480,11 @@ void* host_drop_target(void* hwnd) {
   return found == DropTargets().end() ? nullptr : static_cast<IDropTarget*>(found->second);
 }
 
+// The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
+void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
+  g_drive_drag = drag;
+}
+
 bool host_trash(const char* path) {
   // Double-null-terminated, as the shell asks.
   std::wstring from = Wide(path) + L'\0';
@@ -4627,9 +4648,8 @@ bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width
     ComPtr<IDropSource> holding;
     holding.Attach(source);
     DWORD effect = DROPEFFECT_NONE;
-    const HRESULT dropped = DoDragDrop(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect);
     POINT at{};
-    GetCursorPos(&at);
+    const HRESULT dropped = Drag(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect, &at);
     RECT point{at.x, at.y, at.x, at.y};
     double x = 0, y = 0, width = 0, height = 0;
     Logical(point, &x, &y, &width, &height);
@@ -4665,7 +4685,7 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     const HWND over = WindowFromPoint(at);
     LogIn("drag", "starts at %ld %ld over %p %s", at.x, at.y, static_cast<void*>(over),
           ClassName(over).c_str());
-    const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    const HRESULT dropped = Drag(data.Get(), source.Get(), DROPEFFECT_COPY, &effect, &at);
     LogIn("drag", "ends: %lx, effect %lu", static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);

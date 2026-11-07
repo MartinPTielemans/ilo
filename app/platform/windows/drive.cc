@@ -33,7 +33,8 @@
 // to a file and logs its size. dragover, dragdrop and dragleave hand a drag from another app, a shell
 // data object carrying what Explorer or a browser would, straight to the drop target Windows would
 // pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
-// unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
+// unsupported. A drag the app starts, a file's or a tab's, the driver carries the same way, from
+// dragto to release, as Windows' own waits for the real pointer (#1583). ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
 // Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
 // input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
 // modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
@@ -91,6 +92,7 @@ bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
 // The app's, on GPUI's window |hwnd|, for two fingers as a precision touchpad's.
 bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
+void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*));
 bool host_drive_window_part(void* hwnd, double x, double y, double width, double height,
                             const char* path, long* pixels_wide, long* pixels_high);
 void* host_drive_little_tray(void);
@@ -1104,6 +1106,91 @@ bool DragOver(double x, double y, std::istringstream& words, bool* taken) {
   return true;
 }
 
+// The app's own drag, a file's or a tab's, which the host hands the driver in place of DoDragDrop
+// (host_drive_drags): Windows' drag waits for the real pointer, which the driver keeps from the
+// app, and stopped the app there (#1583). It's held from the move that starts it to the release,
+// and goes to the targets under the driver's pointer as another app's drag does: the UI's take it
+// or not, and over the page, whose target is Chromium's, nothing takes it.
+struct AppDrag {
+  bool held = true;
+  bool taken = false;
+  DWORD effect = DROPEFFECT_NONE;
+  POINT at{};
+};
+AppDrag* g_app_drag = nullptr;
+
+// Moves the app's drag to |x|, |y| of the driven window, if it holds one.
+bool AppDragTo(double x, double y) {
+  if (!g_app_drag || !g_app_drag->held) {
+    return false;
+  }
+  std::istringstream none;
+  if (!DragOver(x, y, none, &g_app_drag->taken)) {
+    g_app_drag->taken = false;
+    if (g_drag_target) {
+      g_drag_target->DragLeave();
+    }
+    g_drag_view = nullptr;
+    g_drag_target = nullptr;
+  }
+  return true;
+}
+
+// Lets the app's drag go at |x|, |y| of the driven window, if it holds one.
+bool AppDragLetGo(double x, double y, int modifiers) {
+  if (!g_app_drag || !g_app_drag->held) {
+    return false;
+  }
+  AppDragTo(x, y);
+  g_app_drag->at = OnScreen(Driven(), x, y);
+  if (g_app_drag->taken) {
+    DWORD effect = DROPEFFECT_COPY | DROPEFFECT_LINK | DROPEFFECT_MOVE;
+    g_drag_target->Drop(g_drag, MK_LBUTTON, {g_app_drag->at.x, g_app_drag->at.y}, &effect);
+    g_app_drag->effect = effect;
+  } else if (g_drag_target) {
+    g_drag_target->DragLeave();
+  }
+  fprintf(stderr, "browser: drive: the app's drag let go, effect %lu\n", g_app_drag->effect);
+  EndDrag();
+  HoldKeys(modifiers, 0);
+  g_app_drag->held = false;
+  return true;
+}
+
+// The host's DoDragDrop in a driven run: a loop of its own until the release, as DoDragDrop's.
+HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
+  if (g_drag_target) {
+    g_drag_target->DragLeave();
+  }
+  EndDrag();
+  data->AddRef();
+  g_drag = data;
+  AppDrag drag;
+  g_app_drag = &drag;
+  fprintf(stderr, "browser: drive: holds the app's drag\n");
+  MSG message;
+  while (drag.held) {
+    const BOOL got = GetMessageW(&message, nullptr, 0, 0);
+    if (got <= 0) {
+      // The app quits: its own loop hears it too.
+      if (got == 0) {
+        PostQuitMessage(static_cast<int>(message.wParam));
+      }
+      if (g_drag_target) {
+        g_drag_target->DragLeave();
+      }
+      EndDrag();
+      break;
+    }
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+  }
+  g_app_drag = nullptr;
+  *effect = drag.effect;
+  *at = drag.at;
+  return drag.held ? DRAGDROP_S_CANCEL : DRAGDROP_S_DROP;
+}
+
 // Adds the steps of |line|'s command. Returns false for one it can't do.
 bool Run(const std::string& line) {
   std::istringstream words(line);
@@ -1166,7 +1253,7 @@ bool Run(const std::string& line) {
   }
   // tabpicture <x> <y> <width> <height> <path>: the picture host_drag_tab shows for that part of
   // the driven window, the row a drag holds, written to <path> as a BMP, logging its size: the
-  // driver can't hold the system's drag itself (#1583).
+  // driver carries the app's drag without Windows' own, which shows it (#1583).
   if (action == "tabpicture") {
     double x, y, width, height;
     std::string path;
@@ -1420,11 +1507,20 @@ bool Run(const std::string& line) {
     } else if (!TargetAt(x, y, &target)) {
       return false;
     }
+    // The app's own drag, if it has started one since, takes them in place of its window.
     if (step == "dragto") {
-      g_steps.push_back({[=] { Move(target, keys, button); }});
+      g_steps.push_back({[=] {
+        if (!AppDragTo(x, y)) {
+          Move(target, keys, button);
+        }
+      }});
     } else {
       g_pressed = nullptr;
-      g_steps.push_back({[=] { Release(target, button, keys); }});
+      g_steps.push_back({[=] {
+        if (!AppDragLetGo(x, y, keys)) {
+          Release(target, button, keys);
+        }
+      }});
     }
     return true;
   }
@@ -1947,6 +2043,7 @@ void drive_start(void) {
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
+  host_drive_drags(DriveDrag);
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
   HWND driver = g_driver;
