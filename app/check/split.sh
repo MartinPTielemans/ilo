@@ -18,15 +18,15 @@
 # command bar opens a URL beside the page, and ⌘W closes the focused pane, leaving the page beside
 # it alone, which ⇧⌘T puts back. The ✕ on a split's row closes all its panes, and the window shows
 # the tab above them. ⇧⌘T brings them back together. A row dragged onto the page brings a target to
-# each of the card's sides, over the page it would join, which go when it's back over the sidebar,
-# its tab shown again, and let go on the left one, the tab joins the page shown on its left. The
-# command bar's Flip Split View, Move Pane Right and Separate All Tabs reorder and end a split. A
-# tab rested 0.4 s on another's row joins it, which ⌘Z takes back to its row and ⇧⌘Z joins again,
-# ⌥-click on a split's row takes its tab out and on another tab's joins it to the page shown, and a
-# split's menu is Arc's, with Mute under each tab, a Rename… that names the split, its row then one
-# plate with the name, and a Duplicate that copies the whole split, name and all. A row let go with
-# ⌥ held leaves a copy of its tab there, which ⌘Z closes, and ⌥-click on the shown tab's own row
-# splits it with a copy.
+# each of the card's sides, over the page it would join, drawn smaller, which go when it's back over
+# the sidebar, its tab shown again, and let go on the left one, the tab joins the page shown on its
+# left. The command bar's Flip Split View, Move Pane Right and Separate All Tabs reorder and end a
+# split. A tab rested 0.4 s on another's row joins it, which ⌘Z takes back to its row and ⇧⌘Z joins
+# again, ⌥-click on a split's row takes its tab out and on another tab's joins it to the page shown,
+# and a split's menu is Arc's, with Mute under each tab, a Rename… that names the split, its row
+# then one plate with the name, and a Duplicate that copies the whole split, name and all. A row let
+# go with ⌥ held leaves a copy of its tab there, which ⌘Z closes, and ⌥-click on the shown tab's own
+# row splits it with a copy.
 
 # Split view, from the served page with example.org beside it.
 serve
@@ -578,9 +578,34 @@ expect "^browser: drop targets for $a\$" "a row dragged onto the page didn't bri
 expect "^browser: panes $a\$" "the page under the targets isn't $a's, which the tab would join"
 expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
+# Under the tab the pages draw at Arc's 0.92 of their size about the card's centre, so 12 in from
+# the card's left edge, low down, the window's colour shows, as above the card, where the page was.
+expect '^browser: page scale 0.92$' "the pages didn't draw smaller under the tab"
 ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
+content=$(grep '^browser: layout content' "$log" | tail -1 |
+  sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
+# awk, as Git Bash on Windows has no bc.
+seen_at() {
+  pixel "$out/split-targets.png" "$(awk "BEGIN { print $1 / ${content%x*} }")" \
+    "$(awk "BEGIN { print $2 / ${content#*x} }")"
+}
+low=$((y + h * 9 / 10))
+fill=$(seen_at $((x + 12)) $((y - 5)))
+edge=$(seen_at $((x + 12)) $low)
+page=$(seen_at $((x + w * 3 / 4)) $low)
+# Whether the colours "r g b" and "r2 g2 b2" are within 8 of each other in each channel.
+alike() {
+  set -- $1 $2
+  for d in $(($1 - $4)) $(($2 - $5)) $(($3 - $6)); do
+    [ "$d" -ge -8 ] && [ "$d" -le 8 ] || return 1
+  done
+}
+# Not on Windows yet, where each page is a window of its own and keeps its size.
+windows || { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
+  fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
 send dragto 100 300
 expect '^browser: drop targets gone$' "the targets stayed with the tab back over the sidebar"
+expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
 expect '^browser: drop targets hidden$' "the targets' window stayed"
 expect "^browser: panes $c\$" "the tab pressed didn't show again with the targets gone"
 send dragto $target

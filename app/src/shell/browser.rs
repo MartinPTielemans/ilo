@@ -477,6 +477,9 @@ pub trait Browser {
     /// hasn't drawn at its new size yet shows its last frame stretched to fill the view, rather
     /// than at its old size in the corner, so its right edge and scrollbar stay with the frame's.
     fn page_moving(&self, moving: bool, cx: &mut App);
+    /// Draws the pages shown at `scale` of their size about the page frame's centre, without
+    /// laying them out again, as under a tab dragged over them; 1 is their own size.
+    fn set_page_scale(&self, scale: f32, cx: &mut App);
     /// Keeps the find bar, the zoom HUD and the toast at the top right corner of a split view's
     /// focused page, `right` points further in from the window's right edge and `top` further
     /// down, and the toast's window from that page's left edge, `left` points from the window's.

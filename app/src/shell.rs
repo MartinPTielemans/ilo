@@ -1413,6 +1413,10 @@ pub struct Shell {
     page_color: Option<u32>,
     /// The window over the page that draws the drop targets and the agent's pointer shows.
     drop_targets_shown: bool,
+    /// The pages' scale, smaller under a tab or a link dragged over them, and the one the core
+    /// was last given.
+    content_scale: split_targets::ContentScale,
+    content_scale_told: f32,
     /// The agent's pointer at an element in the page, while it acts there.
     agent_pointer: Option<agent_pointer::AgentPointer>,
     /// A link dragged over the page, and its targets.
@@ -1819,6 +1823,8 @@ impl Shell {
             focus_color: None,
             page_color: None,
             drop_targets_shown: false,
+            content_scale: Default::default(),
+            content_scale_told: 1.,
             agent_pointer: None,
             link_over: None,
             pane_corner: (0., 0., 0.),
@@ -3995,6 +4001,7 @@ impl Render for Shell {
         self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
+        self.step_content_scale(window, cx);
         let drop_targets = self
             .drag
             .as_ref()
@@ -4196,6 +4203,14 @@ impl Shell {
     /// being added, its card is there, empty.
     fn cards(&self) -> Vec<gpui::Div> {
         let (frame, _) = self.page_frame(self.viewport);
+        // At the pages' scale, as a tab or a link over them draws them smaller.
+        let scale = self.content_scale.now();
+        let card = |bounds, fill| {
+            card(
+                split_targets::scaled_about(bounds, frame.center(), scale),
+                fill,
+            )
+        };
         let panes = self.panes(self.selected);
         let glow = BoxShadow {
             color: Hsla::from(self.palette.accent).opacity(FOCUS_GLOW_ALPHA),
