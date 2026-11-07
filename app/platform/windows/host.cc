@@ -2432,6 +2432,9 @@ void LittleHiding(HWND root) {
   wchar_t title[128] = L"";
   InternalGetWindowText(behind, title, static_cast<int>(std::size(title)));
   fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+  fprintf(stderr, "browser: diag: little %p gave way to %p, foreground now %p, active %p\n",
+          static_cast<void*>(root), static_cast<void*>(behind),
+          static_cast<void*>(GetForegroundWindow()), static_cast<void*>(GetActiveWindow()));
 }
 
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
@@ -2439,6 +2442,9 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
   switch (message) {
     case WM_WINDOWPOSCHANGING:
       if (reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_HIDEWINDOW) {
+        fprintf(stderr, "browser: diag: frame %p hiding, flags %x, active %p, foreground %p\n",
+                static_cast<void*>(hwnd), reinterpret_cast<WINDOWPOS*>(lparam)->flags,
+                static_cast<void*>(GetActiveWindow()), static_cast<void*>(GetForegroundWindow()));
         LittleHiding(hwnd);
       }
       break;
@@ -2492,6 +2498,9 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       AppActivating(wparam, static_cast<DWORD>(lparam));
       break;
     case WM_NCDESTROY:
+      fprintf(stderr, "browser: diag: frame %p destroyed, active %p, foreground %p\n",
+              static_cast<void*>(hwnd), static_cast<void*>(GetActiveWindow()),
+              static_cast<void*>(GetForegroundWindow()));
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {

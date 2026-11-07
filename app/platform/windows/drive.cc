@@ -1898,7 +1898,83 @@ LRESULT CALLBACK DropRealPointer(int code, WPARAM wparam, LPARAM lparam) {
 
 // Each window that comes to the front or takes the keyboard, logged from inside the call that
 // moves it, so the log shows which of the app's steps moved it, as no "drive done" line can.
+// Proof for #2025 only, never merged: who activates a window, as module!export+offset frames.
+std::string DiagWindow(HWND hwnd) {
+  DWORD process = 0;
+  GetWindowThreadProcessId(hwnd, &process);
+  char text[200];
+  snprintf(text, sizeof text, "%p %s%s%s index %ld", static_cast<void*>(hwnd),
+           Utf8(ClassOf(hwnd)).c_str(), process == GetCurrentProcessId() ? "" : " other",
+           IsWindowVisible(hwnd) ? "" : " hidden", BrowserIndex(hwnd));
+  return text;
+}
+std::string DiagFrame(void* address) {
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          static_cast<LPCWSTR>(address), &module)) {
+    return "?";
+  }
+  char path[MAX_PATH] = "";
+  GetModuleFileNameA(module, path, MAX_PATH);
+  const char* name = strrchr(path, '\\') ? strrchr(path, '\\') + 1 : path;
+  auto* base = reinterpret_cast<unsigned char*>(module);
+  const uintptr_t rva = static_cast<unsigned char*>(address) - base;
+  auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+  auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+  const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+  std::string best;
+  uintptr_t best_rva = 0;
+  if (dir.Size) {
+    auto* exports = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(base + dir.VirtualAddress);
+    auto* names = reinterpret_cast<DWORD*>(base + exports->AddressOfNames);
+    auto* ordinals = reinterpret_cast<WORD*>(base + exports->AddressOfNameOrdinals);
+    auto* functions = reinterpret_cast<DWORD*>(base + exports->AddressOfFunctions);
+    for (DWORD i = 0; i < exports->NumberOfNames; i++) {
+      const uintptr_t at = functions[ordinals[i]];
+      if (at <= rva && at > best_rva) {
+        best_rva = at;
+        best = reinterpret_cast<char*>(base + names[i]);
+      }
+    }
+  }
+  char text[300];
+  if (best.empty()) {
+    snprintf(text, sizeof text, "%s+0x%llx", name, static_cast<unsigned long long>(rva));
+  } else {
+    snprintf(text, sizeof text, "%s!%s+0x%llx", name, best.c_str(),
+             static_cast<unsigned long long>(rva - best_rva));
+  }
+  return text;
+}
+void DiagActivate(HWND hwnd, const CBTACTIVATESTRUCT* how) {
+  std::string line = "browser: diag: activate " + DiagWindow(hwnd);
+  line += how && how->fMouse ? ", mouse" : "";
+  line += ", active " + (how && how->hWndActive ? DiagWindow(how->hWndActive) : "none");
+  HWND front = GetForegroundWindow();
+  line += ", foreground " + (front ? DiagWindow(front) : "none");
+  line += ", z";
+  int listed = 0;
+  for (HWND next = GetTopWindow(nullptr); next && listed < 8; next = GetWindow(next, GW_HWNDNEXT)) {
+    if (IsWindowVisible(next) && !(GetWindowLongPtrW(next, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) {
+      line += " [" + DiagWindow(next) + "]";
+      listed++;
+    }
+  }
+  fprintf(stderr, "%s\n", line.c_str());
+  void* frames[32];
+  const USHORT count = RtlCaptureStackBackTrace(2, 32, frames, nullptr);
+  std::string stack = "browser: diag: from";
+  for (USHORT i = 0; i < count; i++) {
+    stack += " " + DiagFrame(frames[i]);
+  }
+  fprintf(stderr, "%s\n", stack.c_str());
+}
+
 LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HCBT_ACTIVATE) {
+    DiagActivate(reinterpret_cast<HWND>(wparam), reinterpret_cast<CBTACTIVATESTRUCT*>(lparam));
+  }
   if (code == HCBT_ACTIVATE || code == HCBT_SETFOCUS) {
     HWND hwnd = reinterpret_cast<HWND>(wparam);
     const std::string name = code == HCBT_ACTIVATE
