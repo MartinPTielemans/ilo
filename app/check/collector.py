@@ -10,6 +10,7 @@ import email.parser
 import email.policy
 import http.server
 import json
+import socketserver
 import struct
 import sys
 
@@ -99,7 +100,9 @@ class Collector(http.server.BaseHTTPRequestHandler):
         pass
 
 
-server = http.server.HTTPServer(("127.0.0.1", 0), Collector)
+# TCPServer, as site.sh's server binds: HTTPServer's bind looks 127.0.0.1's name up, 35 s
+# on the hosted Mac (#2022).
+server = socketserver.TCPServer(("127.0.0.1", 0), Collector)
 with open(sys.argv[1], "w", encoding="utf-8") as port:
-    port.write(str(server.server_port))
+    port.write(str(server.server_address[1]))
 server.serve_forever()

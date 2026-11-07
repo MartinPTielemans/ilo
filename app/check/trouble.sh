@@ -202,7 +202,13 @@ expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send insert "http://127.0.0.1:$free/"
 send key return
 expect "^browser: page $tab trouble network -102\$" "a port with no server wasn't refused"
-python3 -I -m http.server "$free" --bind 127.0.0.1 --directory "$out/site" > "$out/late-server.log" 2>&1 &
+# A TCPServer, as site.sh's binds: http.server's looks 127.0.0.1's name up, which takes 35 s on the
+# hosted Mac (#2022).
+python3 -I -c '
+import functools, http.server, socketserver, sys
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[2])
+socketserver.ThreadingTCPServer(("127.0.0.1", int(sys.argv[1])), handler).serve_forever()
+' "$free" "$out/site" > "$out/late-server.log" 2>&1 &
 stuck=$!
 expect_hung "^browser: loaded $tab http://127.0.0.1:$free/\$" "the refused page didn't load once the server was there"
 expect "^browser: page $tab trouble fine\$" "the page that came wasn't fine"
