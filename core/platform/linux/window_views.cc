@@ -40,6 +40,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
+#include "ui/base/ime/input_method.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
@@ -568,18 +569,19 @@ class WindowViews : public views::WidgetObserver,
   void OverlayTakesKeyboard(bool takes) {
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
-    // The page lets its focus go before the UI takes the input method, as the input method commits
-    // what the page composed to whichever field has it as the focus moves, which would put it in
-    // the overlay's field too.
-    if (OnWayland() && takes) {
-      PageLendsFocusToOverlay(true);
-    }
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
+    if (OnWayland()) {
+      // A page composing keeps its focus until the overlay's field takes the input method from it,
+      // as the field's caret comes a frame later. Text input v3 has no reset, so the input method
+      // still holds what the page composed, and only its client changing straight from the page
+      // to the field keeps it from coming to the field too (InputMethodAuraLinux::ResetContext).
+      lend_awaits_ui_text_input_ = takes && PageComposing();
+      if (!lend_awaits_ui_text_input_) {
+        PageLendsFocusToOverlay(takes);
+      }
+    }
     if (takes) {
       return;
-    }
-    if (OnWayland()) {
-      PageLendsFocusToOverlay(false);
     }
     const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
     if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
@@ -598,6 +600,22 @@ class WindowViews : public views::WidgetObserver,
 
   void WhenOverlayLetsGo(base::OnceClosure let_go) {
     overlay_let_go_.push_back(std::move(let_go));
+  }
+
+  // The UI's field's caret came or went: a page that waited for the overlay's field to take the
+  // input method lends its focus now that it has.
+  void UITextInputChanged() {
+    if (lend_awaits_ui_text_input_ && overlay_has_keyboard_ && ui_text_input_.attached()) {
+      lend_awaits_ui_text_input_ = false;
+      PageLendsFocusToOverlay(true);
+    }
+  }
+
+  // Whether the input method's client is a page with a composition open.
+  bool PageComposing() {
+    ui::InputMethod* ime = widget_->GetInputMethod();
+    ui::TextInputClient* client = ime ? ime->GetTextInputClient() : nullptr;
+    return client && client != &ui_text_input_ && client->HasCompositionText();
   }
 
   // On Wayland an overlay is a subsurface of the window, which keeps the compositor's keyboard, so
@@ -1147,6 +1165,9 @@ class WindowViews : public views::WidgetObserver,
   aura::WindowTracker page_lent_;
   // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
   aura::WindowTracker overlay_lent_;
+  // On Wayland, whether a page composing as an overlay took the keyboard keeps its focus until the
+  // overlay's field takes the input method.
+  bool lend_awaits_ui_text_input_ = false;
   // The keys typed while the overlay with the keyboard didn't have the input focus yet.
   std::vector<x11::KeyEvent> early_keys_;
   // Whether the core took the input focus back down to the UI's window since the focus last left or
@@ -1612,6 +1633,7 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->ui_text_input().SetCaret(caret);
+    views->UITextInputChanged();
   }
 }
 
