@@ -911,7 +911,7 @@ log="$out/pinned-collapsed.log"
 step=0
 # It names the file the +'s Add File or Folder… adds, as it can't drive the system's open panel.
 notes="$(cd "$out" && pwd)/Notes"
-BROWSER_ADD_PATHS="$notes/A.txt" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_LOG=drag BROWSER_ADD_PATHS="$notes/A.txt" BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
@@ -954,23 +954,42 @@ settled
 # The dropped file's row, under the folder's four, dragged onto the page hands the file to the
 # system's drag, to upload it there, as a download's row does, and goes back to its place. On
 # Windows the app stops in DoDragDrop under the driver (#1583).
-if windows; then
-  echo "skip: a file's row dragged onto the page: Windows' system drag stops under the driver (#1583)."
-else
+# Probe for #1583, never for main: where the UI thread is once the drag hasn't ended.
+probe_1583() {
+  local cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe" syms winpid
+  [ -x "$cdb" ] || { echo "probe-1583: no cdb at $cdb"; ls "/c/Program Files (x86)/Windows Kits/10/" || true; return; }
+  syms=$(cd .. && engine/fetch.sh symbols 2> "$out/probe-1583-fetch.log") || { echo "probe-1583: no symbols"; cat "$out/probe-1583-fetch.log"; }
+  syms=$(dirname "$(find "$(dirname "$syms")" -name chrome.dll.pdb | head -1)")
+  echo "probe-1583: symbols in $syms"
+  winpid=$(cat "/proc/$pid/winpid")
+  timeout 900 "$cdb" -pv -p "$winpid" \
+    -y "$(cygpath -w "$syms");srv*C:\\symcache*https://msdl.microsoft.com/download/symbols" \
+    -c ".symfix+ C:\\symcache; .sympath+ $(cygpath -w "$syms"); .reload; ~0 kn 120; ~* kn 40; qd" \
+    > "$out/probe-1583-stacks.txt" 2>&1
+  echo "probe-1583: cdb exited $?"
+  sed -n '/~0 kn/,/~\* kn/p' "$out/probe-1583-stacks.txt" | head -150
+}
+if true; then
   press=$((step + 1))
   send press $(pinned_row 4)
   send dragto 150 $(($(pinned_row 4 | cut -d' ' -f2) + 10))
-  send dragto 600 300
-  expect "^browser: tab $e file drag\$" \
-    "a file's row dragged onto the page didn't start the system's drag"
-  send release 600 300
+  # Posted, not sent, so a stuck UI thread still reaches the probe below.
+  post dragto 600 300
+  sleep 2
+  grep -q "^browser: tab $e file drag\$" "$log" ||
+    echo "probe-1583: no file drag logged; drive lines: $(grep '^browser: drive ' "$log" | tail -3 | tr '\n' '|')"
+  post release 600 300
   # No real button holds the system's drag, so it may end before the release reaches it.
   for _ in $(seq 100); do
     sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' && break
     sleep 0.1
   done
-  sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended ' ||
+  if ! sed -n "/^browser: drive $press: /,\$p" "$log" | grep -q '^browser: file drag ended '; then
+    grep '^browser: \[drag\]' "$log" | tail -20
+    timeout 60 ../tools/window-screenshot.sh "$pid" "$out/probe-1583-stuck.png" || true
+    probe_1583
     fail "the file row's drag didn't end"
+  fi
   case "$(outline)" in
     "$n+["*"] $e $c") ;;
     *) fail "the file's row didn't go back to its place: $(outline)" ;;
