@@ -1,0 +1,164 @@
+# Temporary, for #1090, never for main: clicks the … on a Space's name row in the released DMG,
+# with real clicks the window server delivers, with ilo active, with another app in front, with
+# another app's window over ilo's, and in a second ilo window.
+name: Space edit release repro
+
+on:
+  push:
+    branches: ['fix/space-edit-outside-1090-*']
+    paths: [.github/workflows/space-edit-release.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: space-edit-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repro:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: 0.1.9
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App
+        run: |
+          swift .github/scripts/display-mode.swift 1920 1080 || true
+          mkdir -p "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/app"
+          gh release download "v$VERSION" -R MartinPTielemans/ilo -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          ditto "$RUNNER_TEMP/mnt/ilo.app" "$RUNNER_TEMP/app/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+          cc -o "$RUNNER_TEMP/click" app/check/click.c -framework ApplicationServices
+
+      # Screen capture and posting events for the job's processes, the app and the clicker, as
+      # check-mac.yml grants them.
+      - name: Grants
+        run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          paths="$(find -L "$RUNNER_TEMP/app" -path '*/Contents/MacOS/*' -type f -perm -u+x)
+          $RUNNER_TEMP/click
+          /usr/bin/osascript
+          /System/Library/CoreServices/System Events.app/Contents/MacOS/System Events"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in /*) paths="$paths
+          $path" ;; esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            for service in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+              sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+                auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+                VALUES ('$service', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            done
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      - name: Cases
+        working-directory: app
+        run: |
+          out=$RUNNER_TEMP/out
+          mkdir -p "$out"
+          app=$RUNNER_TEMP/app/ilo.app
+          exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
+          stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
+          count() { grep -c "$1" "$log" || true; }
+          wait_for() {
+            local i
+            for i in $(seq $(($2 * 10))); do
+              grep -q "$1" "$log" && return 0
+              sleep 0.1
+            done
+            return 1
+          }
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            wait_for "browser: drive $step done" 30 || echo "driver didn't finish $*"
+          }
+          front() {
+            osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'
+          }
+          log=$out/ilo.log
+          : > "$log"
+          fifo=$RUNNER_TEMP/drive
+          mkfifo "$fifo"
+          step=0
+          defaults delete "$id" > /dev/null 2>&1 || true
+          defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+          (BROWSER_DRIVE=1 BROWSER_URL='data:text/html,<title>white</title>' \
+            BROWSER_PROFILE_DIR="$RUNNER_TEMP/profile" "$exe" < "$fifo" 2>&1 | stamp >> "$log") &
+          exec 3> "$fifo"
+          for _ in $(seq 100); do
+            pid=$(pgrep -n -f "^$exe" || true)
+            [ -n "$pid" ] && break
+            sleep 0.1
+          done
+          wait_for 'browser: loaded' 60 || echo "the page didn't load"
+          sleep 2
+          # The … at the end of the Space's name row, in the window's points (check/spaces.sh).
+          edit="202 112"
+          # Real clicks at the … of window $1, the window server's, with "moved" and "bare".
+          clicks() {
+            local window=$1 label=$2 at how n shown
+            send order
+            at=$(sed -n "/browser: drive $step: /,\$p" "$log" | sed -n "s/.*browser: frame window $window //p" |
+              tail -1 | awk -v at="$edit" '{ split(at, p, " "); print $1 + p[1], $2 + p[2] }')
+            echo "$label: window $window's … at $at"
+            for how in moved bare; do
+              [ -z "$3" ] || eval "$3"
+              n=$(count 'browser: menu shown ')
+              echo "$label $how: before, front $(front)"
+              "$RUNNER_TEMP/click" $at $how
+              shown="not shown"
+              for _ in $(seq 30); do
+                [ "$(count 'browser: menu shown ')" -gt "$n" ] && { shown=shown; break; }
+                sleep 0.1
+              done
+              screencapture -x "$out/$label-$how.png" || true
+              echo "RESULT $label $how: menu $shown, front $(front)"
+              if [ "$shown" = shown ]; then send dismiss; fi
+              sleep 0.5
+            done
+          }
+          # ilo in front.
+          clicks 1 active 'osascript -e "tell application id \"$id\" to activate"; sleep 0.5'
+          # Another app in front, its window away from ilo's.
+          clicks 1 finder 'osascript -e "tell application \"Finder\" to activate"; sleep 0.5'
+          # Another app's window over ilo's page, in front, the … clear of it.
+          osascript -e 'tell application "TextEdit" to make new document' \
+            -e 'tell application "TextEdit" to set bounds of front window to {400, 60, 1200, 700}' \
+            -e 'tell application "TextEdit" to activate' || echo "TextEdit didn't open"
+          clicks 1 overlapped 'osascript -e "tell application \"TextEdit\" to activate"; sleep 0.5'
+          osascript -e 'tell application "TextEdit" to quit saving no' || true
+          # A second ilo window, in front.
+          osascript -e "tell application id \"$id\" to activate"
+          send key n cmd
+          wait_for 'browser: window opened ' 15 || echo "⌘N opened no window"
+          sleep 1
+          send key escape
+          sleep 1
+          clicks 2 second-window ''
+          exec 3>&-
+          kill "$pid" 2> /dev/null || true
+          sleep 2
+          pkill -9 -f "$RUNNER_TEMP/app/" || true
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: space-edit-release
+          path: ${{ runner.temp }}/out
