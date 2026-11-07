@@ -181,6 +181,9 @@ typedef struct bc_archived_tab {
   // Whether it closed in a Little ilo window, by its window closing or auto-archive, as the
   // Library's filter picks them out (Arc's Little Arc filter).
   bool little;
+  // The Space it closed in, while that's still one of the user's, which bc_window_restore_archived
+  // reopens it in, and where a preview of it that's kept goes with bc_tab_move_to_space; else 0.
+  bc_id space;
 } bc_archived_tab;
 
 // One of an extension's keyboard commands that has a key, as Chrome's Keyboard Shortcuts page
@@ -2060,9 +2063,10 @@ BC_EXPORT bc_id bc_window_reopen_closed_tab(bc_id window);
 // isn't among those that reopen: it came back already, or 25 others closed since.
 BC_EXPORT bc_id bc_window_reopen_tab(bc_id window, bc_id closed);
 
-// Reopens the archived tab at the top of the Today tabs of the Space the window shows, unloaded,
-// and shows it: with its history if it closed since the browser started, else at its page. It
-// leaves the archive. Returns the tab, or 0 if the archive has no such tab. Then space_changed,
+// Reopens the archived tab at the top of the Today tabs of its Space, else of the Space the window
+// shows, unloaded, and shows it, the window showing its Space: with its history if it closed since
+// the browser started, else at its page. It leaves the archive. Returns the tab, or 0 if the
+// archive has no such tab. Then space_changed, window_space_shown if its Space wasn't shown,
 // archive_changed and window_selected.
 BC_EXPORT bc_id bc_window_restore_archived(bc_id window, bc_id archived);
 
