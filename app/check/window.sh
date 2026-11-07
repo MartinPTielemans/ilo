@@ -1135,13 +1135,20 @@ keeps=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}keeps-escape.html\$|\1|p" "
 send click $page_point
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen for the page that keeps Esc"
+# The two presses go back to back and are checked after: the check's own reads between two sends
+# can outlast 500 ms on a hosted Windows runner (#2009). The page keeps the first, and the second
+# leaves before the page sees it.
+first=$((step + 1))
+post key escape
 send key escape
-expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
-none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
-send key escape
-expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
-expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
-none_since "^browser: title $keeps kept 2\$" || fail "the second Esc that left full screen reached the page too"
+expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen" "$first"
+expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen" "$first"
+expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen" "$first"
+! sed -n "/^browser: drive $first: /,/^browser: escape twice leaves full screen\$/p" "$log" |
+  grep -q '^browser: window left full screen$' ||
+  fail "one Esc the page kept took the window out of full screen"
+! logged "^browser: title $keeps kept 2\$" "$first" ||
+  fail "the second Esc that left full screen reached the page too"
 # Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
 # repeats come as presses, so a held Esc leaves there as one pressed twice.
 if [ "$(uname)" = Darwin ]; then
