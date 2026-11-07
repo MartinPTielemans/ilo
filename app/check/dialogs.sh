@@ -173,38 +173,30 @@ if windows; then
   sleep 2
   send key escape
   look "2 second window opened, its bar closed"
-  # 3. The second window told it's on a display at 125%, then a real display change.
-  send window 2
-  send dpi 125
-  look "3a second window: WM_DPICHANGED for 125%"
-  powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1600 -Height 900 -Force' > /dev/null 2>&1
-  sleep 2
-  powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' > /dev/null 2>&1
-  look "3b display change, 1920x1080 to 1600x900 and back"
-  # 4. Links into the main window's Space, the main window in front, the second back at 100%.
-  send window 2
-  send dpi 100
+  # 3-5. The display's own scale changed while both windows are up, as Settings' Scale does,
+  # which sends WM_DPICHANGED to every window of the app's, the bar's hidden one too, as a move to
+  # a display at another scale does.
+  scale() { python3 -I ../.github/scripts/display-scale.py "$1" >> "$out/stray.txt" 2>&1; sleep 3; }
   send window 1
-  look "4a main window in front"
+  scale 125
+  look "3 display at 125%, both windows up, main window's bar closed"
   from_app "${site}?main1"
-  look "4b link from another app, into the main window"
+  look "4a link from another app at 125%, into the main window"
   go links.html
   send click 400 400
-  look "4c plain link in the main window"
-  # 5. The same with the second window at 125%.
+  look "4b plain link in the main window at 125%"
   send window 2
-  send dpi 125
+  bar_closed "the second window at 125%"
   send window 1
-  look "5a second window at 125%, main window in front"
+  look "4c second window's bar opened and closed at 125%, main window in front"
+  scale 150
+  look "5a display at 150%"
   from_app "${site}?main2"
-  look "5b link from another app, into the main window"
-  go links.html
-  send click 400 400
-  look "5c plain link in the main window"
-  send window 2
-  send dpi 100
-  send window 1
-  look "end: second window back at 100%, main window in front"
+  look "5b link from another app at 150%, into the main window"
+  scale 100
+  look "5c display back at 100%"
+  from_app "${site}?main3"
+  look "5d link from another app at 100%, into the main window"
   cat "$out/stray.txt"
   echo "ok: exploration only"
   quit
