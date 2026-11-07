@@ -151,6 +151,16 @@ fn command_o_moves_the_page_to_its_space_in_the_main_window(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn it_turns_its_pages_developer_mode_off_and_on(cx: &mut TestAppContext) {
+    let (shell, host) = little(cx, "https://example.com/");
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.offers(Command::ToggleDeveloperMode))
+    });
+    run(&shell, cx, Command::ToggleDeveloperMode, "command bar");
+    assert_eq!(host.take(), ["developer mode 10 true"]);
+}
+
+#[gpui::test]
 fn open_in_main_window_is_little_ilos_alone(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let main = main_window(cx, &host);
