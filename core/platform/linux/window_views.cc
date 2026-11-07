@@ -568,12 +568,18 @@ class WindowViews : public views::WidgetObserver,
   void OverlayTakesKeyboard(bool takes) {
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
-    ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (OnWayland()) {
-      PageLendsFocusToOverlay(takes);
+    // The page lets its focus go before the UI takes the input method, as the input method commits
+    // what the page composed to whichever field has it as the focus moves, which would put it in
+    // the overlay's field too.
+    if (OnWayland() && takes) {
+      PageLendsFocusToOverlay(true);
     }
+    ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
     if (takes) {
       return;
+    }
+    if (OnWayland()) {
+      PageLendsFocusToOverlay(false);
     }
     const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
     if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
