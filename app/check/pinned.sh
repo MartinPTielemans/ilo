@@ -958,7 +958,7 @@ settled
 probe_1583() {
   local cdb="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64/cdb.exe" syms winpid
   [ -x "$cdb" ] || { echo "probe-1583: no cdb at $cdb"; ls "/c/Program Files (x86)/Windows Kits/10/" || true; return; }
-  syms=$(cd .. && engine/fetch.sh symbols 2> "$out/probe-1583-fetch.log") || { echo "probe-1583: no symbols"; cat "$out/probe-1583-fetch.log"; }
+  syms=$(../engine/fetch.sh symbols 2> "$out/probe-1583-fetch.log") || { echo "probe-1583: no symbols"; cat "$out/probe-1583-fetch.log"; }
   syms=$(dirname "$(find "$(dirname "$syms")" -name chrome.dll.pdb | head -1)")
   echo "probe-1583: symbols in $syms"
   winpid=$(cat "/proc/$pid/winpid")
