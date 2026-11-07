@@ -218,6 +218,22 @@ fi
 send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
 close_popup
+# The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
+# expect, so a build without the row shows what's there instead.
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+send type check popup
+await '^browser: command bar commands "check popup": Check Popup$' || true
+../tools/window-screenshot.sh "$pid" "$out/bar-extension.png" || fail "no window to capture"
+expect '^browser: command bar commands "check popup": Check Popup$' \
+  "the command bar didn't find Check Popup by its name: $(grep \
+    '^browser: command bar commands "check popup"' "$log" | tail -1)"
+send key return
+expect '^browser: command run-extension via command bar$' "Check Popup didn't run from the bar"
+expect "^browser: run extension $popup ran\$" "the bar's Check Popup didn't run its action"
+expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the bar"
+../tools/window-screenshot.sh "$pid" "$out/bar-extension-popup.png" || fail "no window to capture"
+close_popup
 # In a Little ilo window the pinned actions end its bar's title, as they end the URL field, and a
 # click on one runs it there, its popup hanging from its button (#693).
 send key n cmd alt
