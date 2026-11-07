@@ -20,6 +20,34 @@
 # Features, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind.
 
 serve
+# The page ⌘O moves, live: a field holding text, and music, silence a second at a time, which the
+# first key starts as a page's play needs one. Its title says the field's text, whether the music
+# plays and the seconds it has played, so a reload, which would lose both, or a pause shows.
+printf '%s' '<title>loading</title>
+<textarea id=field style="position:absolute;inset:0;width:100%;height:100%;font:16px system-ui"></textarea>
+<script>
+const rate = 8000, n = rate * 10, wav = new DataView(new ArrayBuffer(44 + n));
+const text = (at, s) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+text(0, "RIFF"); wav.setUint32(4, 36 + n, true); text(8, "WAVEfmt ");
+wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+wav.setUint32(24, rate, true); wav.setUint32(28, rate, true); wav.setUint16(32, 1, true);
+wav.setUint16(34, 8, true); text(36, "data"); wav.setUint32(40, n, true);
+for (let i = 0; i < n; i++) wav.setUint8(44 + i, 128);
+const music = new Audio(URL.createObjectURL(new Blob([wav], {type: "audio/wav"})));
+music.loop = true;
+let played = 0, last = 0;
+const say = () => document.title =
+  `live ${field.value} ${music.paused ? "paused" : "playing"} ${Math.floor(played)}`;
+music.ontimeupdate = () => {
+  const now = music.currentTime, before = Math.floor(played);
+  played += now >= last ? now - last : now;
+  last = now;
+  Math.floor(played) == before || say();
+};
+music.onplaying = music.onpause = field.oninput = say;
+field.addEventListener("keydown", () => music.play(), {once: true});
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+</script>' > "$out/site/little-live.html"
 log="$out/little.log"
 step=0
 rm -f "$saved" "$launch_frame" "$(dirname "$saved")/little-size" "$(dirname "$saved")/little-in-menu-bar"
@@ -95,12 +123,17 @@ bar_top=$((ui_height / 3))
 [ "$1" = "$bar_left" ] && [ "${2%%.*}" = "$bar_top" ] && [ "$3" = 500 ] ||
   fail "⌘L's command bar in the Little ilo window is at $*, not at $bar_left $bar_top and 500 wide in its ${content} UI"
 ../tools/window-screenshot.sh "$pid" "$out/little-bar.png" all || fail "no window to capture"
-send insert "${site}notes.txt"
+send insert "${site}little-live.html"
 send key return
-expect "^browser: loaded [0-9]* ${site}notes.txt\$" \
+expect "^browser: loaded [0-9]* ${site}little-live.html\$" \
   "the command bar's URL didn't load in the Little ilo window"
-moved=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}notes.txt\$|\1|p" "$log" | tail -1)
+moved=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}little-live.html\$|\1|p" "$log" | tail -1)
 expect "^browser: window $little shows $moved\$" "the Little ilo window didn't show its page"
+expect "^browser: title $moved ready\$" "the Little ilo window's page didn't draw"
+send click 250 300
+send type ada
+expect "^browser: title $moved live ada playing [1-9][0-9]*\$" \
+  "the Little ilo window's page didn't take the typing and play its music"
 ../tools/window-screenshot.sh "$pid" "$out/little.png" all || fail "no window to capture"
 
 # The bar's chevron, its plate ending 4 in from the window's right edge, opens the Spaces menu:
@@ -119,7 +152,9 @@ send key escape
 expect '^browser: command bar hidden$' "escape didn't close the Spaces menu"
 none_since "^browser: little window $little put " || fail "escape in the Spaces menu moved the page"
 
-# ⌘O moves its page to its Space in the main window, which shows it, and closes it.
+# ⌘O moves its page to its Space in the main window, which shows it, and closes it. The page goes
+# live (Arc): its field keeps its text and its music plays on, with no reload.
+before=$(sed -n "s/^browser: title $moved live ada playing \([0-9]*\)\$/\1/p" "$log" | tail -1)
 send key o cmd
 expect '^browser: command open-in-main-window via ' "⌘O didn't run Open in Main Window"
 expect "^browser: little window $little put $moved in window $main space $home\$" \
@@ -127,6 +162,16 @@ expect "^browser: little window $little put $moved in window $main space $home\$
 expect "^browser: window closed $little\$" "⌘O didn't close the Little ilo window"
 expect "^browser: window $main shows $moved\$" "the main window doesn't show the page ⌘O moved"
 expect "^browser: today $moved $a\$" "the moved page isn't at the top of Today: \"$(today)\""
+# Three seconds more played than just before the move, the music playing all along.
+for _ in $(seq 100); do
+  now=$(sed -n "s/^browser: title $moved live ada playing \([0-9]*\)\$/\1/p" "$log" | tail -1)
+  [ "${now:-0}" -ge $((before + 3)) ] && break
+  sleep 0.1
+done
+[ "${now:-0}" -ge $((before + 3)) ] ||
+  fail "the moved page's music didn't play on with its text kept: $(grep "^browser: title $moved " "$log" | tail -1)"
+none_since "^browser: title $moved live ada paused " || fail "the move paused the page's music"
+[ "$(grep -c "^browser: loaded $moved " "$log")" = 1 ] || fail "the move reloaded the page"
 send window 1
 ../tools/window-screenshot.sh "$pid" "$out/little-moved.png" || fail "no window to capture"
 send key w cmd
@@ -843,4 +888,4 @@ if [ "$(uname)" = Linux ]; then
   exec 3>&-
   quit
 fi
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window live, its text kept and its music playing on, and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
