@@ -292,26 +292,30 @@ jobs:
           esac
           dir=$out/$where
           mkdir -p "$dir"
-          for run in $RUNS; do
+          # Proof for #1999 only, never merged: each run named runs 20 times, each with its own
+          # log, and the check job keeps the first failure.
+          n=0
+          for run in $(for i in $(seq 20); do printf '%s ' $RUNS; done); do
+            n=$((n + 1))
             start=$SECONDS
             status=0
             # The updates run builds a Flatpak first.
             limit=20m
             [ "$run" != updates ] || limit=45m
-            timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
-            [ ! -d build/check ] || mv build/check "$dir/$run"
+            timeout "$limit" ./check.sh "$run" > "$dir/$run-$n.log" 2>&1 || status=$?
+            [ ! -d build/check ] || mv build/check "$dir/$run-$n"
             pkill -9 -f "$PWD/build/Browser/" || true
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
-            skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
+            skipped=$(grep '^skip: ' "$dir/$run-$n.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
             if [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
-              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
+              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run-$n.log" | cut -c7- | tr '|\t' '/ ')"
               echo "::warning::The $run run failed on $SESSION. Its log: $where$run.log in the artifact."
             fi
             printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
-            echo "| $run | $result |"
+            echo "| $run #$n | $result |"
           done
 
       # Drags from other apps under Wayland, which check.sh's driver, X11's, can't make.
@@ -441,7 +445,7 @@ jobs:
             leg=$(printf '%s' "$LEGS" | jq -r --arg s "$1" --arg r "$2" 'first(.[] | select(.session == $s
               and ($s == "ime" or ((" " + .runs + " ") | contains(" " + $r + " "))))) | "\(.shard) \(.of)"')
             set -- "$1" "$2" ${leg:-1 1}
-            said=$(awk -F '\t' -v run="$2" '$1 == run { said = $2 } END { print said }' "$RESULTS/$1-$3.tsv" 2> /dev/null)
+            said=$(awk -F '\t' -v run="$2" '$1 == run && said !~ /^failed/ { said = $2 } END { print said }' "$RESULTS/$1-$3.tsv" 2> /dev/null)
             if [ -n "$said" ]; then
               echo "$said"
               return
