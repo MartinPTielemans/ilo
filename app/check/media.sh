@@ -84,9 +84,10 @@ spki=$(openssl x509 -in "$out/tls.pem" -pubkey -noout | openssl pkey -pubin -out
 rm -f "$out/tls.port"
 mkfifo "$out/tls.port"
 python3 -I -u -c '
-import functools, http.server, ssl, sys
+import functools, http.server, socketserver, ssl, sys
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(sys.argv[2], sys.argv[3])
 server.socket = tls.wrap_socket(server.socket, server_side=True)
