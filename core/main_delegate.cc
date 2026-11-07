@@ -88,6 +88,9 @@
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "net/cookies/cookie_change_dispatcher.h"
+#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "url/gurl.h"
 
@@ -252,7 +255,26 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
 
   void PostProfileInit(Profile* profile, bool is_initial_profile) override {
     crash_reports::ProfileStarted(profile);
+    // Proof for #1998 only, never merged: every change to the profile's cookies, with its cause.
+    static base::NoDestructor<mojo::ReceiverSet<network::mojom::CookieChangeListener>> listeners;
+    static base::NoDestructor<CookieWatch> watch;
+    fprintf(stderr, "browser: diag: watching the cookies of %s\n",
+            profile->GetBaseName().AsUTF8Unsafe().c_str());
+    mojo::PendingRemote<network::mojom::CookieChangeListener> remote;
+    listeners->Add(watch.get(), remote.InitWithNewPipeAndPassReceiver());
+    profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
+        ->AddGlobalChangeListener(std::move(remote));
   }
+
+  class CookieWatch : public network::mojom::CookieChangeListener {
+   public:
+    void OnCookieChange(const net::CookieChangeInfo& change) override {
+      fprintf(stderr, "browser: diag: cookie change %s on %s, %s, cause %d\n",
+              change.cookie.Name().c_str(), change.cookie.Domain().c_str(),
+              change.cookie.IsPersistent() ? "persistent" : "session",
+              static_cast<int>(change.cause));
+    }
+  };
 
   void PreBrowserStart() override {
     // A tab's "Leave site?" asks with the app's dialog, in place of the NSAlert Chrome installed.
