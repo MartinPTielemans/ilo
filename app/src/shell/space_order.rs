@@ -318,10 +318,15 @@ impl Shell {
 
     /// Drops the glides that are done, and keeps frames coming for the rest.
     pub(super) fn step_space_slides(&mut self, window: &mut Window) {
+        let gliding = !self.space_slides.is_empty();
         self.space_slides
             .retain(|_, (_, start)| Curve::Slide.at(start.elapsed().as_secs_f32()).is_some());
         if !self.space_slides.is_empty() {
             window.request_animation_frame();
+        } else if gliding {
+            // check.sh waits for this line before it presses a dot that moved: a press goes to the
+            // dot drawn there, which can still be the one that was there (#2026).
+            log!("browser: spaces settled");
         }
     }
 

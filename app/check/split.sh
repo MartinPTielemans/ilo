@@ -17,9 +17,9 @@
 # as each pane's split controls do. Separate Page from Split View shows the page alone, ⌥↩ in the
 # command bar opens a URL beside the page, and ⌘W closes the focused pane, leaving the page beside
 # it alone, which ⇧⌘T puts back. The ✕ on a split's row closes all its panes, and the window shows
-# the tab above them. ⇧⌘T brings them back together. A row dragged onto the page brings a target to
-# each of the card's sides, over the page it would join, which go when it's back over the sidebar,
-# its tab shown again, and let go on the left one, the tab joins the page shown on its left. The
+# the tab above them. ⇧⌘T brings them back together. A row dragged onto the page brings one target,
+# at the card's side nearest it, over the page it would join, which goes when it's back over the
+# sidebar, its tab shown again, and let go on the left one, the tab joins the page on its left. The
 # command bar's Flip Split View, Move Pane Right and Separate All Tabs reorder and end a split. A
 # tab rested 0.4 s on another's row joins it, which ⌘Z takes back to its row and ⇧⌘Z joins again,
 # ⌥-click on a split's row takes its tab out and on another tab's joins it to the page shown, and a
@@ -172,6 +172,7 @@ send dragover $((x + 60)) $((y + 40))
 # enters, and Aura's with the first, as XDND's first position enters and updates at once.
 await "^browser: drop targets for $a\$" || fail "a link dragged over the page didn't bring the targets"
 send dragover $right_target
+expect '^browser: drop target shown right$' "the target nearest the link isn't the one shown"
 expect '^browser: drop target right$' "the right target isn't under the dragged link"
 expect '^browser: drag over [A-Za-z]* taken$' "the page's view didn't take the link on the target"
 ../tools/window-screenshot.sh "$pid" "$out/split-link-targets.png" || fail "no window to capture"
@@ -565,16 +566,17 @@ expect '^browser: hover tab [0-9][0-9]* close 1 favicon none$' "the split's row 
 send click 202 $(row 2 | cut -d' ' -f2)
 expect '^browser: command close-tab via sidebar$' "a click on the split's ✕ didn't run Close Tab"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "closing the split a third time didn't show $a"
-# A row dragged onto the page becomes a picture of a window, and a target slides in at each of the
-# card's sides, over the page it would join, which shows again in place of the one the press showed
-# (#1467). Back over the sidebar it's a row again, its tab shown again, and let go over the left
-# target it joins the page shown on its left, focused.
+# A row dragged onto the page becomes a picture of a window, and one target, Arc's one region,
+# slides in at the card's side nearest the pointer, over the page it would join, which shows again
+# in place of the one the press showed (#1467). Back over the sidebar it's a row again, its tab
+# shown again, and let go over the left target it joins the page shown on its left, focused.
 target="$((x + 140)) $((y + h / 2))"
 send press $(row 0)
 send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto $target
 none_since '^browser: detent$' || fail "a row dragged onto the page clicked the trackpad"
 expect "^browser: drop targets for $a\$" "a row dragged onto the page didn't bring the targets"
+expect '^browser: drop target shown left$' "the target shown isn't the left one, nearest the tab"
 expect "^browser: panes $a\$" "the page under the targets isn't $a's, which the tab would join"
 expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
@@ -601,6 +603,7 @@ top="$((x + w / 2)) $((y + 80))"
 send press $(row 0)
 send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto $top
+expect '^browser: drop target shown top$' "the target shown isn't the top one, nearest the tab"
 expect '^browser: drop target top$' "the top target isn't under the tab"
 ../tools/window-screenshot.sh "$pid" "$out/split-targets-top.png" || fail "no window to capture"
 send release $top
@@ -748,4 +751,4 @@ case " $(pinned) " in *" $c "*) ;; *) fail "⌘W in the pinned split took its ro
 ../tools/window-screenshot.sh "$pid" "$out/pinned-split-unloaded.png" || fail "no window to capture"
 exec 3>&-
 quit
-echo "ok: Add Split View narrows the page at once for a pane on the right, with the command bar over it, which escape takes back, and ⌃+ from the page, ⌥-click on \"+ New Tab\" and the tab menu's, its bar taking typing, do it too. ⌥-click on a link and the link menu's Open Link in Split View open it in a pane on the right. The link menu is Arc's, and its Open Link in New Window and in Incognito Window open the link in a window and a private window. A link dragged onto the page's right target opens in a pane there. A URL there opens in the pane, focused. The panes share the card 10 apart, the focused one ringed, a click focuses a pane and gives its page the keyboard, ⌘L edits that pane's URL, and a toast shows at that pane's corner. The split is one row in the sidebar, which ⌘1–⌘9 count once and show with the pane focused last, and a click on a segment focuses that pane. The gap between the panes drags their widths, or stacked their heights, down to Chrome's least and snapping to even, and a double-click evens them. Expand Current Split gives the focused pane the card and the other 220 wide, also as the window is resized, and again changes nothing. Convert to Vertical Split View stacks the panes, with the find bar at the focused one's corner, and the split comes back stacked after a quit with both pages at the heights they were dragged to, until Convert to Horizontal Split View puts them side by side again. Separate Page from Split View shows the page alone, ⌥↩ in the command bar opens a URL beside the page, ⌘W closes the focused pane, which ⇧⌘T puts back in its split, and the ✕ on a split's row closes all its panes, which ⇧⌘T brings back together. A row dragged onto the page brings a target to each of the card's sides, which go when it's back over the sidebar, and let go on the left one the tab joins the page on its left. Flip Split View and Move Pane Right in the command bar reorder a split's pages, and Separate All Tabs ends it. A page alone has a target at the card's top too, where the tab joins it in a stacked split. A tab rested on another's row joins it in a split, which ⌘Z takes back to its row and ⇧⌘Z joins again, ⌥-click on a split's row takes its tab out and on another tab's row joins it to the page shown, each pane's split controls convert the split to vertical and back, and a split's menu is Arc's, mutes each of its tabs, renames the split, which then shows its name as one row, and duplicates the whole split with its name. A row let go with ⌥ held stays, and a copy of its tab goes where it was let go, which ⌘Z closes, and ⌥-click on the shown tab's own row splits it with a copy of itself. ⌘Z after Separate Page from Split View puts the page back in its split, and ⇧⌘Z takes it out again. Windows: $out/split-tab-menu.png, $out/split.png, $out/split-left.png, $out/split-toast.png, $out/split-resized.png, $out/split-expanded.png, $out/split-stacked.png, $out/split-targets.png, $out/split-separated.png, $out/split-targets-top.png, $out/split-link-targets.png, $out/split-menu.png, $out/split-named.png, $out/alt-drag-copy.png, $out/alt-click-copy.png, $out/pinned-split-unloaded.png"
+echo "ok: Add Split View narrows the page at once for a pane on the right, with the command bar over it, which escape takes back, and ⌃+ from the page, ⌥-click on \"+ New Tab\" and the tab menu's, its bar taking typing, do it too. ⌥-click on a link and the link menu's Open Link in Split View open it in a pane on the right. The link menu is Arc's, and its Open Link in New Window and in Incognito Window open the link in a window and a private window. A link dragged onto the page's right target opens in a pane there. A URL there opens in the pane, focused. The panes share the card 10 apart, the focused one ringed, a click focuses a pane and gives its page the keyboard, ⌘L edits that pane's URL, and a toast shows at that pane's corner. The split is one row in the sidebar, which ⌘1–⌘9 count once and show with the pane focused last, and a click on a segment focuses that pane. The gap between the panes drags their widths, or stacked their heights, down to Chrome's least and snapping to even, and a double-click evens them. Expand Current Split gives the focused pane the card and the other 220 wide, also as the window is resized, and again changes nothing. Convert to Vertical Split View stacks the panes, with the find bar at the focused one's corner, and the split comes back stacked after a quit with both pages at the heights they were dragged to, until Convert to Horizontal Split View puts them side by side again. Separate Page from Split View shows the page alone, ⌥↩ in the command bar opens a URL beside the page, ⌘W closes the focused pane, which ⇧⌘T puts back in its split, and the ✕ on a split's row closes all its panes, which ⇧⌘T brings back together. A row dragged onto the page brings one target, at the card's side nearest it, which goes when it's back over the sidebar, and let go on the left one the tab joins the page on its left. Flip Split View and Move Pane Right in the command bar reorder a split's pages, and Separate All Tabs ends it. A page alone has a target at the card's top too, where the tab joins it in a stacked split. A tab rested on another's row joins it in a split, which ⌘Z takes back to its row and ⇧⌘Z joins again, ⌥-click on a split's row takes its tab out and on another tab's row joins it to the page shown, each pane's split controls convert the split to vertical and back, and a split's menu is Arc's, mutes each of its tabs, renames the split, which then shows its name as one row, and duplicates the whole split with its name. A row let go with ⌥ held stays, and a copy of its tab goes where it was let go, which ⌘Z closes, and ⌥-click on the shown tab's own row splits it with a copy of itself. ⌘Z after Separate Page from Split View puts the page back in its split, and ⇧⌘Z takes it out again. Windows: $out/split-tab-menu.png, $out/split.png, $out/split-left.png, $out/split-toast.png, $out/split-resized.png, $out/split-expanded.png, $out/split-stacked.png, $out/split-targets.png, $out/split-separated.png, $out/split-targets-top.png, $out/split-link-targets.png, $out/split-menu.png, $out/split-named.png, $out/alt-drag-copy.png, $out/alt-click-copy.png, $out/pinned-split-unloaded.png"

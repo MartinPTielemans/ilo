@@ -398,8 +398,8 @@ impl Space {
     fn card_lines(&self) -> Vec<Line> {
         let (pinned, today) = self.rows();
         let line = |row: u64| match self.is_folder(row) {
-            true => Line::Folder(row, self.depth(row)),
-            false => Line::Tab(row, self.depth(row)),
+            true => Line::Folder(row, self.listed_depth(row)),
+            false => Line::Tab(row, self.listed_depth(row)),
         };
         let divider = (!today.is_empty()).then_some(Line::Divider);
         let lines = pinned.into_iter().map(line).chain(divider);
@@ -1678,7 +1678,8 @@ impl Shell {
                     .get(&folder)
                     .map(|(name, _)| name.clone());
                 let name = title(&palette, name.unwrap_or_default(), false).pr(px(PLATE_INSET));
-                let icon = folder_icon(&palette, space.is_open(folder));
+                let elided = space.eliding() == Some(folder);
+                let icon = folder_icon(&palette, space.is_open(folder), elided);
                 card_row(depth, plate(icon, name))
             }
             Line::Tab(tab, depth) => {
@@ -3348,6 +3349,46 @@ mod tests {
         assert_eq!(card.card_lines(), [Line::Folder(10, 0)]);
         card.shown = 3;
         assert_eq!(card.card_lines(), [Line::Folder(10, 0), Line::Tab(3, 1)]);
+    }
+
+    /// The tab shown two closed folders down is listed one under the outermost, the folder
+    /// between staying hidden, and the outermost marks it with its dots, as Arc's does (#1405).
+    /// One folder down, it's listed where it is, with no dots.
+    #[test]
+    fn the_tab_shown_in_nested_closed_folders_is_listed_under_the_outermost() {
+        let folders = |inner_open| Folders {
+            folders: [
+                (10, ("Work".into(), false)),
+                (11, ("Plans".into(), inner_open)),
+            ]
+            .into(),
+            parents: [(11, 10), (3, 11)].into(),
+            ..Default::default()
+        };
+        for inner_open in [false, true] {
+            let mut card = space(&[10, 11, 3, 4], &[], folders(inner_open), Vec::new());
+            card.shown = 3;
+            assert_eq!(
+                card.card_lines(),
+                [Line::Folder(10, 0), Line::Tab(3, 1), Line::Tab(4, 0)],
+                "Plans open: {inner_open}"
+            );
+            assert_eq!(card.eliding(), Some(10), "Plans open: {inner_open}");
+            assert_eq!(card.depth(3), 2, "the drop's depth is where it is");
+        }
+
+        // With Work open and Plans closed, Plans is listed and the tab one under it, as ever.
+        let mut card = space(&[10, 11, 3], &[], folders(false), Vec::new());
+        card.folders.folders.insert(10, ("Work".into(), true));
+        card.shown = 3;
+        assert_eq!(
+            card.card_lines(),
+            [Line::Folder(10, 0), Line::Folder(11, 1), Line::Tab(3, 2)]
+        );
+        assert_eq!(card.eliding(), None);
+        // Nothing shown there, nothing is listed in them.
+        card.shown = 0;
+        assert_eq!(card.eliding(), None);
     }
 
     /// A right-click on a card shows its Space's menu at the pointer, as a right-click on the

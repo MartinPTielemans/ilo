@@ -464,6 +464,57 @@ fn separating_a_favorite_split_keeps_its_first_page_the_favorite(cx: &mut TestAp
     assert_eq!(host.take_edits(), ["separate 11", "move 11 false 0 0"]);
 }
 
+/// ⌘Z after Separate All Tabs makes the favorite split again at its tile, its first page joined
+/// to the others through the top of Today, and ⇧⌘Z separates it again (#1776).
+#[gpui::test]
+fn separating_a_favorite_split_undoes(cx: &mut TestAppContext) {
+    use crate::shell::{Command, Split};
+
+    let (shell, cx, host) = with_split_tile(cx);
+    shell.update(cx, |shell, cx| shell.separate_favorite(10, cx));
+    host.take_edits();
+    host.take();
+    // The core has left 10 the favorite and put 11 at the top of Today.
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![11, 1],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_split_favorites(vec![(10, 1), (12, 1)], Vec::new(), [].into(), cx);
+        shell.run(Command::Undo, "ui", cx);
+    });
+    assert_eq!(
+        host.take_edits(),
+        [
+            "move 10 false 0 0",
+            "split 11 10 false",
+            "favorite split 10 0"
+        ]
+    );
+    // Tab 1 stays shown, where the core shows the split it joins.
+    assert_eq!(host.take().last().map(String::as_str), Some("select 1"));
+    // The core has made them the favorite split again.
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        let split = Split {
+            tabs: vec![10, 11],
+            ..Default::default()
+        };
+        shell.set_split_favorites(
+            vec![(10, 1), (11, 1), (12, 1)],
+            vec![split],
+            [(10, 11)].into(),
+            cx,
+        );
+        shell.run(Command::Redo, "ui", cx);
+    });
+    assert_eq!(host.take_edits(), ["separate 11", "move 11 false 0 0"]);
+}
+
 /// A split's row dragged over the tiles is a tile there, its pages one favorite once it's let go,
 /// a split counting one of the most.
 #[gpui::test]

@@ -1309,6 +1309,12 @@ BC_EXPORT bool bc_window_dialog(bc_id window, bc_rect* frame);
 // window's content. For the test driver, which can't see them, as the Mac's sees their views.
 BC_EXPORT bool bc_window_devtools(bc_id window, bc_rect* devtools, bc_rect* page);
 
+// On Linux, the frames of Chromium's own popups that show over |window|, such as autofill's
+// dropdown, from the top-left of the window's content and from the bottom up. Copies up to |count|
+// into |frames| and returns how many there are. For the test driver, which can't see them on
+// Wayland, as the Mac's sees them as child windows.
+BC_EXPORT size_t bc_window_popups(bc_id window, bc_rect* frames, size_t count);
+
 // On Linux, while an overlay of the app's over |window|, such as the command bar, has the keyboard:
 // neither the window's pages nor its UI get keys, and the page or UI that had them keeps its focus,
 // to have them back once the overlay gives them up (|takes| false).
@@ -2269,6 +2275,25 @@ BC_EXPORT void bc_set_send_crash_reports(bool send);
 // The user's answer to crash_report_offered: send that one report, though Send Crash Reports is
 // off, or delete it. Nothing once answered, or without an offer.
 BC_EXPORT void bc_answer_crash_report(bool send);
+
+// The daily usage count, which Settings › Privacy › Send a Daily Usage Count turns off. Posts one
+// count, as JSON, to the endpoint the app named with --daily-count-url, https or a loopback http,
+// the only place it ever posts: this copy's |version|, digits and dots, and |channel|, "release"
+// or "nightly", which the app gives; the OS, its major version and the chip, which the core adds;
+// whether this is the copy's |first| run; that it's the first count today, always; and whether
+// it's the first this ISO week (|weekly|) and this month (|monthly|). Nothing else: no ID, no
+// cookie, nothing about pages, tabs, Spaces, agents, accounts or settings. The app keeps the
+// switch and the date of the last count, and decides when to send. |sent| gets, always after the
+// call returns and on the main thread, whether the endpoint took it: false without an endpoint,
+// with another on its way, or for a |version| or |channel| that isn't one of those. No agent tool
+// reaches it.
+BC_EXPORT void bc_send_daily_count(const char* version,
+                                   const char* channel,
+                                   bool first,
+                                   bool weekly,
+                                   bool monthly,
+                                   void (*sent)(void* context, bool ok),
+                                   void* context);
 
 // What bc_download_act does: opens the file, or for one still running, opens it once it's done or
 // no longer; shows it in the system's file manager; pauses, resumes or cancels it; takes it off

@@ -79,10 +79,17 @@ index 98a13f304c..367e44dfd4 100644
          &mut self,
          scene: &Scene,
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..8ca65ba255 100644
+index 08f91bd626..a9f41be3fa 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -109,7 +109,7 @@ impl WindowsWindowInner {
+@@ -103,13 +103,14 @@ impl WindowsWindowInner {
+             WM_TIMER => self.handle_timer_msg(handle, wparam),
+             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
+             WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
++            WM_DPICHANGED_AFTERPARENT => self.handle_dpi_changed_after_parent_msg(handle),
+             WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
+             WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
+             WM_PAINT => self.handle_paint_msg(handle),
              WM_CLOSE => self.handle_close_msg(),
              WM_DESTROY => self.handle_destroy_msg(handle),
              WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
@@ -91,7 +98,7 @@ index 08f91bd626..8ca65ba255 100644
              WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
              // Treat double click as a second single click, since we track the double clicks ourselves.
              // If you don't interact with any elements, this will fall through to the windows default
-@@ -146,11 +146,18 @@ impl WindowsWindowInner {
+@@ -146,11 +147,18 @@ impl WindowsWindowInner {
              }
              WM_MOUSEWHEEL => self.handle_mouse_wheel_msg(handle, wparam, lparam),
              WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
@@ -110,7 +117,7 @@ index 08f91bd626..8ca65ba255 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -169,7 +176,7 @@ impl WindowsWindowInner {
+@@ -169,7 +177,7 @@ impl WindowsWindowInner {
          }
      }
  
@@ -119,7 +126,7 @@ index 08f91bd626..8ca65ba255 100644
          let origin = logical_point(
              lparam.signed_loword() as f32,
              lparam.signed_hiword() as f32,
-@@ -381,8 +388,28 @@ impl WindowsWindowInner {
+@@ -381,8 +389,28 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -149,7 +156,7 @@ index 08f91bd626..8ca65ba255 100644
          // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
          // the flag for tight `is_cursor_visible()` semantics.
          self.state.cursor_visible.store(true, Ordering::Relaxed);
-@@ -439,6 +466,31 @@ impl WindowsWindowInner {
+@@ -439,6 +467,31 @@ impl WindowsWindowInner {
          if handled { Some(0) } else { Some(1) }
      }
  
@@ -181,7 +188,7 @@ index 08f91bd626..8ca65ba255 100644
      fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
          let Some(input) = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
              PlatformInput::KeyUp(KeyUpEvent { keystroke })
-@@ -710,6 +762,72 @@ impl WindowsWindowInner {
+@@ -710,6 +763,72 @@ impl WindowsWindowInner {
          }
      }
  
@@ -254,16 +261,39 @@ index 08f91bd626..8ca65ba255 100644
      fn handle_ime_composition(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          let ctx = ImeContext::get(handle)?;
          self.handle_ime_composition_inner(*ctx, lparam)
-@@ -933,7 +1051,7 @@ impl WindowsWindowInner {
+@@ -933,7 +1052,30 @@ impl WindowsWindowInner {
          Some(0)
      }
  
 -    fn handle_display_change_msg(&self, handle: HWND) -> Option<isize> {
++    // A child window, as GPUI's is inside an embedder's, hears no WM_DPICHANGED: this comes once
++    // its parent has taken a display's new scale. Its size in pixels may stay the same, which
++    // sends no WM_SIZE, so it lays out again at the new scale here.
++    fn handle_dpi_changed_after_parent_msg(&self, handle: HWND) -> Option<isize> {
++        let new_scale_factor =
++            unsafe { GetDpiForWindow(handle) } as f32 / USER_DEFAULT_SCREEN_DPI as f32;
++        if new_scale_factor <= 0. || new_scale_factor == self.state.scale_factor.get() {
++            return Some(0);
++        }
++        self.state.scale_factor.set(new_scale_factor);
++        self.state
++            .direct_manipulation
++            .set_scale_factor(new_scale_factor);
++        let mut client = RECT::default();
++        unsafe { GetClientRect(handle, &mut client) }.log_err();
++        let device_size = size(
++            DevicePixels(client.right.max(1)),
++            DevicePixels(client.bottom.max(1)),
++        );
++        self.handle_size_change(device_size, new_scale_factor, true);
++        Some(0)
++    }
++
 +    fn handle_display_change_msg(self: &Rc<Self>, handle: HWND) -> Option<isize> {
          let new_monitor = unsafe { MonitorFromWindow(handle, MONITOR_DEFAULTTONULL) };
          if new_monitor.is_invalid() {
              log::error!("No monitor detected!");
-@@ -944,12 +1062,21 @@ impl WindowsWindowInner {
+@@ -944,12 +1086,21 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -290,7 +320,7 @@ index 08f91bd626..8ca65ba255 100644
      }
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
-@@ -1021,6 +1148,12 @@ impl WindowsWindowInner {
+@@ -1021,6 +1172,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_nc_mouse_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -303,7 +333,7 @@ index 08f91bd626..8ca65ba255 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1823,3 +1956,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1823,3 +1980,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -509,7 +539,7 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..b1cd3624a5 100644
+index 095e009e23..53f98b9031 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -372,10 +372,17 @@ impl WindowsPlatform {
@@ -544,7 +574,22 @@ index 095e009e23..b1cd3624a5 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -1637,10 +1649,43 @@ fn file_save_dialog(
+@@ -748,6 +760,14 @@ impl Platform for WindowsPlatform {
+             .map(|inner| inner.handle)
+     }
+ 
++    // The foreground window is this process's: GPUI's window inside an embedder's, a child
++    // window, hears no activation of its own.
++    fn is_active(&self) -> Option<bool> {
++        let mut process = 0;
++        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut process)) };
++        Some(process == std::process::id())
++    }
++
+     fn open_window(
+         &self,
+         handle: AnyWindowHandle,
+@@ -1637,10 +1657,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -589,7 +634,7 @@ index 095e009e23..b1cd3624a5 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2025,12 @@ mod tests {
+@@ -1980,3 +2033,12 @@ mod tests {
          );
      }
  }

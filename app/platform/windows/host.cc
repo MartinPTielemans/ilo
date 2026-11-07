@@ -2428,6 +2428,21 @@ HWND WindowBehind(HWND root) {
   return nullptr;
 }
 
+// Set while a Little ilo window gives way (LittleHiding), with the hook that holds ilo's windows
+// back meanwhile.
+HHOOK g_giving_way = nullptr;
+
+// Windows hides a closing window inside its DestroyWindow. Handing the foreground on there
+// activates the UI's holder, whose focus takes the activation back for the closing window, and
+// Windows then activates the app's next window as that one goes, in front of the other app's
+// (#2025). So none of ilo's windows activates until the close is over.
+LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HCBT_ACTIVATE) {
+    return 1;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
 // A Little ilo window going with the keyboard leaves another app's window right behind it in front
 // and active, as closing any app's window does (#1689): Windows would hand the keyboard to the
 // window of the app's that had it before, the main window, and bring it in front of that app's.
@@ -2441,6 +2456,11 @@ void LittleHiding(HWND root) {
   DWORD owner = 0;
   if (!behind || (GetWindowThreadProcessId(behind, &owner), owner == GetCurrentProcessId())) {
     return;
+  }
+  if (!g_giving_way) {
+    g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
+    // Once the call hiding it, a close's DestroyWindow, is over.
+    Later([] { UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr)); });
   }
   // The foreground's app may give the foreground away.
   SetForegroundWindow(behind);

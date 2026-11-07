@@ -4,7 +4,8 @@ double-click goes back to its tab. Chrome makes the window's background a captio
 it and the window never hears the press; while the core's hook is set it's the window's own, and
 the core moves it as a caption would, through Widget::RunMoveLoop. The core also places it, the
 first time 10 pt from the top right of the screen's work area, then where the last was left, which
-it hears as each one closes or hides.
+it hears as each one closes or hides. It keeps that across launches in local state, in a pref of
+its own that it registers through Chrome's RegisterLocalState.
 
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
@@ -132,3 +133,36 @@ it hears as each one closes or hides.
  
    // display::DisplayObserver:
    void OnDisplayMetricsChanged(const display::Display& display,
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/prefs/browser_prefs.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <array>
+ #include <optional>
+@@ -1518,6 +1519,10 @@
+       g_browser_process->variations_service()->GetStoredPermanentCountry());
+ }
+ 
++// browser_core: the core registers its own local state prefs (//browser_core/hooks.h).
++void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry) =
++    nullptr;
++
+ void RegisterLocalState(PrefRegistrySimple* registry) {
+   // Call outs to individual subsystems that register Local State (browser-wide)
+   // prefs en masse. See RegisterProfilePrefs for per-profile prefs. Please
+@@ -1840,6 +1845,11 @@
+       policy::policy_prefs::kLocalNetworkAccessPermissionsPolicyDefaultEnabled,
+       false);
+ 
++  // browser_core: its own (//browser_core/hooks.h).
++  if (g_browser_core_register_local_state) {
++    g_browser_core_register_local_state(registry);
++  }
++
+   // This is intentionally last.
+   RegisterLocalStatePrefsForMigration(registry);
+ }

@@ -171,6 +171,10 @@ void host_set_little_task(const char* title, const char* arguments);
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
 
+// Mac only: whether the window of |ui_view|, any of the app's, is the key window now. GPUI hears
+// it in a task of its own, after a menu's window has handed the keyboard back (#2019).
+bool host_window_is_key(void* ui_view);
+
 // Calls |changed| with the view of a browser window as it becomes the window the user is in, or
 // stops being, and with each one's state as the watch starts and as it shows. That's the active
 // app's main window on the Mac, so its own overlays, menus and sheets over it don't count; the

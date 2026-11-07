@@ -2302,7 +2302,8 @@ impl Settings {
     }
 
     /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
-    /// profile's browsing data, and crash reports where the build names a collector.
+    /// profile's browsing data, crash reports where the build names a collector, and the daily
+    /// usage count where it names a server.
     fn privacy(
         &self,
         profiles: &[Profile],
@@ -2397,6 +2398,8 @@ impl Settings {
         if !clear.is_empty() {
             blocks.push(Block::Rows(clear));
         }
+        // What the browser sends of its own, one row each.
+        let mut sending = Vec::new();
         let collector = crash_reports_collector();
         if !collector.is_empty() {
             let send = unsafe { bc::bc_send_crash_reports() };
@@ -2413,7 +2416,29 @@ impl Settings {
                 collector_name(&collector)
             );
             let row = setting(look, "Send crash reports", Some(line.into()), vec![send]);
-            blocks.push(Block::Rows(vec![row]));
+            sending.push(row);
+        }
+        // Only in a build that names a server, as only that build sends it (#1977).
+        if crate::daily_count_host::named() {
+            let count = self.toggle(
+                "send a daily usage count",
+                "Send a daily usage count",
+                crate::daily_count_host::on(),
+                crate::daily_count_host::set_on,
+                accent,
+                cx,
+            );
+            let line = browser::daily_count::words(env!("APP_NAME"));
+            let row = setting(
+                look,
+                "Send a daily usage count",
+                Some(line.into()),
+                vec![count],
+            );
+            sending.push(row);
+        }
+        if !sending.is_empty() {
+            blocks.push(Block::Rows(sending));
         }
         Page::new(
             Section::Privacy,

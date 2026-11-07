@@ -600,6 +600,10 @@ pub(crate) fn finish_opening(
     unsafe {
         platform::host_take_drops(dragged);
         platform::host_watch_key_window(key_window_changed);
+        #[cfg(target_os = "macos")]
+        browser::text_input::set_window_has_keyboard(|window| {
+            platform::host_window_is_key(ns_view(window))
+        });
         platform::host_watch_full_screen(full_screen_changed);
         platform::host_watch_window_main(window_main_changed);
         platform::host_watch_swipes(swiped);
