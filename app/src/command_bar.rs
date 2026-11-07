@@ -367,7 +367,9 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::InspectElements => "icons/square-mouse-pointer.svg",
         Command::JavaScriptConsole => "icons/terminal.svg",
         Command::RecordTrace => "icons/activity.svg",
-        Command::ManageExtensions | Command::AddExtension => "icons/puzzle.svg",
+        Command::ManageExtensions | Command::AddExtension | Command::RunExtension(_) => {
+            "icons/puzzle.svg"
+        }
         Command::RenameSpace | Command::RenameTab => "icons/pencil.svg",
         Command::EditTheme => "icons/palette.svg",
         Command::ExportSpace => "icons/file.svg",
