@@ -459,6 +459,7 @@ using Fetched = base::OnceCallback<void(int status, std::optional<base::DictValu
 // This device asking the others for the secret (protocol.md, Pairing: the requester).
 struct Request {
   PairingRequest pairing;
+  PairingWait wait;
   std::string id;
   base::OneShotTimer expiry;
 };
@@ -703,18 +704,30 @@ class Account : public syncer::SyncServiceObserver,
       return;
     }
     problem_ = BC_SYNC_PROBLEM_NONE;
-    if (!relay_open_) {
-      problem_ = BC_SYNC_PROBLEM_SERVER;
-      Notify();
-      return;
-    }
     request_ = std::make_unique<Request>();
+    request_->wait.Start(relay_open_, base::BindOnce(&Account::SendRequest, base::Unretained(this)),
+                         base::BindOnce(&Account::RelayDidntOpen, base::Unretained(this)));
+    // A relay waiting out its backoff tries now, as the user waits on it.
+    if (relay_retry_.IsRunning()) {
+      relay_retry_.Stop();
+      ConnectRelay();
+    }
+    Notify();
+  }
+
+  // The request's pair_request, once the relay is open.
+  void SendRequest() {
     base::DictValue frame;
     frame.Set("type", "pair_request");
     frame.Set("commitment", Base64Url(request_->pairing.commitment()));
     frame.Set("name", device_name_);
     frame.Set("os", kOs);
     relay_->Send(Frame(std::move(frame)));
+  }
+
+  void RelayDidntOpen() {
+    request_.reset();
+    problem_ = BC_SYNC_PROBLEM_SERVER;
     Notify();
   }
 
@@ -1496,6 +1509,9 @@ class Account : public syncer::SyncServiceObserver,
   void OnRelayOpen() override {
     relay_open_ = true;
     relay_backoff_ = base::TimeDelta();
+    if (request_) {
+      request_->wait.Opened();
+    }
     // Anything another device committed while this one wasn't listening.
     if (Profile* start = StartProfile(); start && secret_) {
       if (auto* invalidations = static_cast<RelayInvalidations*>(
@@ -1508,7 +1524,8 @@ class Account : public syncer::SyncServiceObserver,
   void OnRelayClosed(uint16_t code, int response_code) override {
     relay_open_ = false;
     base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(relay_));
-    if (request_) {
+    // One yet to go out waits on through RetryRelay's next tries.
+    if (request_ && !request_->wait.waiting()) {
       request_.reset();
       problem_ = BC_SYNC_PROBLEM_EXPIRED;
     }

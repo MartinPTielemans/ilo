@@ -27,6 +27,7 @@
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/session.h"
 #include "browser_core/window.h"
+#include "chrome/browser/lifetime/application_lifetime_desktop.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
 #include "ui/aura/client/focus_change_observer.h"
@@ -381,6 +382,21 @@ bool Tapped(HWND root) {
 
 }  // namespace alt_taps
 
+// What runs once the window in front changes, while an overlay that has a window's keyboard is
+// (WhenOverlayLetsGo), and the hook that hears it, set only then.
+std::vector<base::OnceClosure>& OverlayLetGo() {
+  static base::NoDestructor<std::vector<base::OnceClosure>> let_go;
+  return *let_go;
+}
+HWINEVENTHOOK g_front_changes = nullptr;
+
+void CALLBACK FrontChanged(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+  UnhookWinEvent(std::exchange(g_front_changes, nullptr));
+  for (base::OnceClosure& each : std::exchange(OverlayLetGo(), {})) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+  }
+}
+
 // A child widget, one HWND, holding one pane's page and its docked DevTools, or the side panel.
 struct Slot {
   std::unique_ptr<views::Widget> widget;
@@ -679,6 +695,14 @@ class WindowViews : public views::WidgetObserver,
                      WPARAM w_param,
                      LPARAM l_param,
                      LRESULT* result) override {
+    // Signing out or restarting, Windows ends the process once the windows have heard it. Chrome's
+    // own windows end the session then, as SIGTERM does elsewhere, writing what must be kept, the
+    // Spaces among it; these aren't Chrome's, so they do it here (#1990). It ends the process,
+    // unless the session is ending already.
+    if (message == WM_ENDSESSION && w_param) {
+      chrome::SessionEnding();
+      return false;
+    }
     if (message == WM_SYSCOMMAND && (w_param & 0xFFF0) == SC_KEYMENU && l_param == 0 &&
         alt_taps::Tapped(hwnd)) {
       *result = 0;
@@ -1058,6 +1082,15 @@ bool OverlayHasKeyboard(views::Widget* widget) {
     }
   }
   return false;
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  OverlayLetGo().push_back(std::move(let_go));
+  // Out of context, so it's heard on this thread, from its message loop.
+  if (!g_front_changes) {
+    g_front_changes = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                      &FrontChanged, 0, 0, WINEVENT_OUTOFCONTEXT);
+  }
 }
 
 void UITakesKeyboard(views::Widget* widget, bool until_page) {
