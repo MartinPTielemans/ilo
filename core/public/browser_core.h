@@ -1683,12 +1683,15 @@ BC_EXPORT size_t bc_profile_search_engine(bc_id profile, char* keyword, size_t c
 // returns whether it did.
 BC_EXPORT bool bc_profile_set_search_engine(bc_id profile, const char* keyword);
 // How long, in seconds, a Today tab in the profile's Spaces that no window shows waits before it
-// goes in the archive, BC_ARCHIVE_NEVER for Never, or 0 for a profile that isn't loaded.
+// goes in the archive, and a download of the profile's that has ended before it leaves the list,
+// keeping its file, as Arc's downloads archive like its tabs: BC_ARCHIVE_NEVER for Never, or 0 for
+// a profile that isn't loaded.
 BC_EXPORT double bc_profile_archive_after(bc_id profile);
 // Sets it, and returns whether it did: not for a profile that isn't loaded or a time that isn't
 // positive. The tabs that have waited that long go in the archive at once. BC_ARCHIVE_NEVER is
-// Never: auto-archive takes none of the profile's tabs however long they wait, while Clear and
-// Close Tab still archive them (Arc had no Never; ours, #1636).
+// Never: auto-archive takes none of the profile's tabs however long they wait, and no download
+// leaves the list by itself, while Clear and Close Tab still archive them (Arc had no Never; ours,
+// #1636).
 #define BC_ARCHIVE_NEVER -1.0
 BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
 
