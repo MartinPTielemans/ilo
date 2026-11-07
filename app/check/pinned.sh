@@ -10,7 +10,8 @@
 # unpins it, without showing it, and escape puts it back. New Folder makes a folder under the pinned
 # tabs, which takes the name typed, as New Folder… in the sidebar's empty space does, and a tab's
 # Add to Folder › moves it into a folder or a new one in its place, named for its site, each one
-# step for ⌘Z. A row dragged right under it goes in and dragged left comes out,
+# step for ⌘Z; the tab shown in that folder, closed in a closed one, is listed under the outer
+# one, whose glyph has three dots. A row dragged right under it goes in and dragged left comes out,
 # a folder drags as a row, a click closes and opens it, and closed, it previews its tab, which the
 # keyboard shows. Launched again, the app brings it back closed and a double-click renames it. In
 # its menu, Copy All Links is Copy All Links as Markdown with ⌥ held and Change Icon… gives it an
@@ -582,6 +583,28 @@ expect "^browser: outline $f+\\[\\] $g+\\[$h+\\[$c\\]\\]\$" \
 settled
 ../tools/window-screenshot.sh "$pid" "$out/site-folder.png" || fail "no window to capture"
 send key escape
+# The tab shown two closed folders down is listed one under the outer one, the folder between
+# hidden, and the outer folder's glyph has three dots (#1405). Captured before the expect on the
+# dots, so a build without them shows the tab where it was.
+send click $(pinned_row 3)
+expect "^browser: selected $c in " "a click on the tab in the site's folder didn't show it"
+send click $(pinned_row 2)
+expect "^browser: outline $f+\\[\\] $g+\\[$h-\\[$c\\]\\]\$" \
+  "a click on the site's folder didn't close it: $(outline)"
+# Its tab stays listed where it was, so no row moves to wait for.
+send click $(pinned_row 1)
+expect "^browser: outline $f+\\[\\] $g-\\[$h-\\[$c\\]\\]\$" "a click on read didn't close it: $(outline)"
+settled
+../tools/window-screenshot.sh "$pid" "$out/folder-nested.png" || fail "no window to capture"
+expect "^browser: folder $g dots over $c\$" \
+  "read, closed over the site's closed folder, didn't draw its dots for the tab shown"
+send click $(pinned_row 1)
+expect "^browser: outline $f+\\[\\] $g+\\[$h-\\[$c\\]\\]\$" "a click on read didn't open it again: $(outline)"
+settled
+send click $(pinned_row 2)
+expect "^browser: outline $f+\\[\\] $g+\\[$h+\\[$c\\]\\]\$" \
+  "a click on the site's folder didn't open it again: $(outline)"
+switch "9 cmd" "$a"
 # Each is one step for ⌘Z, and the empty folder goes with Delete Folder.
 send key z cmd
 expect "^browser: outline $f+\\[\\] $g+\\[$c\\]\$" \

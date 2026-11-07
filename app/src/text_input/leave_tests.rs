@@ -227,3 +227,27 @@ fn a_profile_name_is_kept_as_its_menu_closes_away_from_it(cx: &mut TestAppContex
         }
     }
 }
+
+/// GPUI can hear the window lost the keyboard once the window has it back, as when a menu's
+/// window hands it back as its choice opens the field. The field asks the platform, and stays open
+/// while the window has the keyboard (#2019); once it's gone, the name is kept.
+#[gpui::test]
+fn a_profile_name_stays_open_while_its_window_has_the_keyboard(cx: &mut TestAppContext) {
+    let (profiles, cx) = settings(cx);
+    set_window_has_keyboard(|_| true);
+    rename(&profiles, cx);
+    cx.simulate_input("Work");
+    cx.deactivate_window();
+    assert!(
+        renaming(&profiles, cx),
+        "GPUI's late word ended the field while its window had the keyboard"
+    );
+    set_window_has_keyboard(|_| false);
+    cx.update(|window, _| window.activate_window());
+    cx.deactivate_window();
+    assert!(
+        !renaming(&profiles, cx),
+        "leaving the window left the field open"
+    );
+    assert_eq!(kept(&profiles, cx), ["Work"]);
+}

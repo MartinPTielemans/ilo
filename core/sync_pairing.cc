@@ -1,8 +1,11 @@
 #include "browser_core/sync_pairing.h"
 
 #include <string_view>
+#include <utility>
 
 #include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/location.h"
 #include "base/strings/stringprintf.h"
 #include "crypto/aead.h"
 #include "crypto/hash.h"
@@ -150,6 +153,30 @@ bool PairingAnswer::Reveal(const PairingKey& requester) {
 std::optional<std::vector<uint8_t>> PairingAnswer::Seal(const std::string& pairing,
                                                         const SyncSecret& secret) const {
   return requester_ ? SealPairing(keys_, *requester_, pairing, secret) : std::nullopt;
+}
+
+void PairingWait::Start(bool open, base::OnceClosure send, base::OnceClosure gave_up) {
+  if (open) {
+    std::move(send).Run();
+    return;
+  }
+  send_ = std::move(send);
+  gave_up_ = std::move(gave_up);
+  timer_.Start(FROM_HERE, kWait, base::BindOnce(&PairingWait::GiveUp, base::Unretained(this)));
+}
+
+void PairingWait::Opened() {
+  if (send_.is_null()) {
+    return;
+  }
+  timer_.Stop();
+  gave_up_.Reset();
+  std::move(send_).Run();
+}
+
+void PairingWait::GiveUp() {
+  send_.Reset();
+  std::move(gave_up_).Run();
 }
 
 }  // namespace browser_core

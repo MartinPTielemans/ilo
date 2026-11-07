@@ -380,7 +380,7 @@ impl Shell {
                     false => {
                         f32::from(row.left())
                             + FAVICON_X
-                            + self.depth(tab) as f32 * FOLDER_INDENT
+                            + self.listed_depth(tab) as f32 * FOLDER_INDENT
                             + FAVICON_SIZE / 2.
                     }
                 };

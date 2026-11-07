@@ -140,6 +140,7 @@ pub fn rebindable(command: Command) -> bool {
             | Command::PinToSpace(_)
             | Command::OpenFolder(_)
             | Command::MoveToFolder(_)
+            | Command::RunExtension(_)
             | Command::EditTheme
     )
 }

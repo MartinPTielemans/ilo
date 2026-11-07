@@ -9,7 +9,7 @@
 //! A single-line text field, with IME support through GPUI's input handler. GPUI has no text
 //! field of its own; Zed's is its editor.
 
-use std::{ops::Range, rc::Rc};
+use std::{cell::Cell, ops::Range, rc::Rc};
 
 use crate::menu::Closed;
 use crate::shell::MenuEntry;
@@ -147,12 +147,26 @@ pub fn on_lose_keyboard<T: 'static>(
     ]
 }
 
+thread_local! {
+    /// Whether a window has the keyboard now, as its platform says, where GPUI's own word can come
+    /// late (`set_window_has_keyboard`).
+    static HAS_KEYBOARD: Cell<fn(&Window) -> bool> = const { Cell::new(Window::is_window_active) };
+}
+
+/// Asks `has_keyboard` whether a field's window has the keyboard, for one whose platform knows
+/// sooner than GPUI. On the Mac, GPUI hears a window became key in a task of its own, which can
+/// come after the field heard of the menu's window taking the keyboard, so it ended a field the
+/// menu's choice had just opened (#2019).
+pub fn set_window_has_keyboard(has_keyboard: fn(&Window) -> bool) {
+    HAS_KEYBOARD.set(has_keyboard);
+}
+
 /// Whether the field's window is inactive, with no menu of the field's up.
 fn left_window(input: &WeakEntity<TextInput>, window: &Window, cx: &App) -> bool {
     let menu = input
         .upgrade()
         .is_some_and(|input| input.read(cx).menu_shown);
-    !window.is_window_active() && !menu
+    !HAS_KEYBOARD.get()(window) && !menu
 }
 
 /// `text` without the `javascript:` schemes it starts with, past any whitespace and control

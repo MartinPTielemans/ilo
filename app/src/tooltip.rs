@@ -339,8 +339,6 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Tooltip>> {
         is_resizable: false,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
-        // Off the Mac, GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {

@@ -272,7 +272,7 @@ impl Shell {
         // In from its folders, or where a dragged row would go.
         let depth = match (row, &self.drag) {
             (_, Some(drag)) if ghost => drag.depth,
-            (Row::Tab(tab), _) => self.depth(tab),
+            (Row::Tab(tab), _) => self.listed_depth(tab),
             (Row::NewTab, _) => 0,
         };
         let ring = match row {
@@ -441,7 +441,7 @@ impl Shell {
             .opacity((1. - done).clamp(0., 1.))
             .child(plate(
                 match row.folder {
-                    Some(open) => folder_icon(&self.palette, open),
+                    Some(open) => folder_icon(&self.palette, open, false),
                     None if !row.icon.is_empty() => emoji(row.icon.clone()),
                     None => favicon(&self.palette, row.favicon.clone()),
                 },
@@ -528,7 +528,7 @@ impl Shell {
                 .swaps
                 .glyph(
                     Swapped::Folder(folder),
-                    folder_glyph(open),
+                    folder_glyph(open, self.eliding() == Some(folder)),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
                     cx,
@@ -1078,7 +1078,7 @@ impl Shell {
                     .then(|| self.row_button(panes.clone(), closable, cx))
                     .flatten();
                 let count = panes.len() + usize::from(drop.is_some());
-                let width = self.segment_width(self.depth(first), count);
+                let width = self.segment_width(self.listed_depth(first), count);
                 let slot = drop.map(|(_, left)| if left { 0 } else { panes.len() });
                 let mut segments: Vec<_> = panes
                     .iter()
