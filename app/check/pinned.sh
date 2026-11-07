@@ -591,7 +591,7 @@ expect "^browser: selected $c in " "a click on the tab in the site's folder didn
 send click $(pinned_row 2)
 expect "^browser: outline $f+\\[\\] $g+\\[$h-\\[$c\\]\\]\$" \
   "a click on the site's folder didn't close it: $(outline)"
-settled
+# Its tab stays listed where it was, so no row moves to wait for.
 send click $(pinned_row 1)
 expect "^browser: outline $f+\\[\\] $g-\\[$h-\\[$c\\]\\]\$" "a click on read didn't close it: $(outline)"
 settled
@@ -604,7 +604,6 @@ settled
 send click $(pinned_row 2)
 expect "^browser: outline $f+\\[\\] $g+\\[$h+\\[$c\\]\\]\$" \
   "a click on the site's folder didn't open it again: $(outline)"
-settled
 switch "9 cmd" "$a"
 # Each is one step for ⌘Z, and the empty folder goes with Delete Folder.
 send key z cmd
