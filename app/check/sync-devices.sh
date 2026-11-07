@@ -142,6 +142,8 @@ await '^browser: dialog shown Add the device that asked at ' || fail "A didn't a
 await '^browser: dialog confirm at ' || fail "A's question didn't say where Add is"
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-a-asked.png" || fail "no window to capture"
 add=$(sed -n 's/^browser: dialog confirm at //p' "$log" | tail -1)
+# Adding a device grants it the account, so Add ignores clicks for its first moment on screen.
+await '^browser: dialog takes input$' || fail "A's question never took input"
 send click $add
 expect '^browser: dialog confirmed$' "a click on Add didn't add B"
 device b
