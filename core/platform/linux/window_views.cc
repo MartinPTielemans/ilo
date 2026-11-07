@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
@@ -23,10 +24,15 @@
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/platform/linux/ui_text_input.h"
 #include "browser_core/platform/linux/wayland.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -55,8 +61,10 @@
 #include "ui/base/hit_test.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -151,6 +159,44 @@ gfx::Size ContentPixelsOf(views::Widget* widget) {
 // The window's content, in DIPs.
 gfx::Size ContentSizeOf(views::Widget* widget) {
   return gfx::ScaleToFlooredSize(ContentPixelsOf(widget), 1 / ScaleOf(widget));
+}
+
+// Whether |widget| or a bubble of its has the keyboard: under Wayland Chromium makes a bubble
+// active in its window's place, such as Chrome's prompt on a Mini Player.
+bool HasKeyboard(views::Widget* widget) {
+  if (widget->IsActive()) {
+    return true;
+  }
+  for (views::Widget* owned : views::Widget::GetAllOwnedWidgets(widget->GetNativeView())) {
+    if (owned->IsActive()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The Mini Player that Chrome floated by itself as its tab hid, a page's window or a video's, if
+// it's open and has the keyboard.
+views::Widget* AutoMiniPlayerWithKeyboard() {
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  content::WebContents* opener = manager->GetWebContents();
+  auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
+  if (!helper || !helper->IsInAutoPictureInPicture()) {
+    return nullptr;
+  }
+  views::Widget* floating = nullptr;
+  if (content::WebContents* child = manager->GetChildWebContents()) {
+    floating = views::Widget::GetTopLevelWidgetForNativeView(child->GetNativeView());
+  } else {
+    for (aura::Window* window : views::DesktopWindowTreeHostPlatform::GetAllOpenWindows()) {
+      views::Widget* widget = window ? views::Widget::GetWidgetForNativeWindow(window) : nullptr;
+      // VideoOverlayWindowViews's name.
+      if (widget && widget->GetName() == "PictureInPictureWindow") {
+        floating = widget;
+      }
+    }
+  }
+  return floating && HasKeyboard(floating) ? floating : nullptr;
 }
 
 // An aura window in the browser window holding one pane's page and its docked DevTools, or the side
@@ -474,9 +520,26 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
+    if (takes) {
+      return;
+    }
+    const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
+    if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
     }
+    // Back in the window on X11, which the window hears only after this, or elsewhere: as the user
+    // went to another app or window with the overlay open.
+    std::vector<base::OnceClosure> let_go = std::exchange(overlay_let_go_, {});
+    if (!OnWayland() && IsWithin(focus, window())) {
+      return;
+    }
+    for (base::OnceClosure& each : let_go) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+    }
+  }
+
+  void WhenOverlayLetsGo(base::OnceClosure let_go) {
+    overlay_let_go_.push_back(std::move(let_go));
   }
 
   // The UI lets the keyboard go to the window, which KeyboardForPage counts as the page's, and on
@@ -565,6 +628,32 @@ class WindowViews : public views::WidgetObserver,
       AfterStateConfigured(widget_,
                            base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
     }
+  }
+
+  // A window can't map under Wayland without the compositor giving it the keyboard, as sway and
+  // Hyprland do, so the Mini Player that floats as the user leaves its tab takes it from the
+  // browser window, where on the Mac and X11 it never has it (#1961). The window has it back with
+  // an xdg-activation token, which Chromium's Activate asks for, once: a click in the Mini Player
+  // later gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard
+  // after telling the window it lost it.
+  void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    if (!active && OnWayland()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  void TakeKeyboardFromMiniPlayer() {
+    static base::NoDestructor<base::WeakPtr<views::Widget>> taken_from;
+    views::Widget* floating = AutoMiniPlayerWithKeyboard();
+    if (!floating || floating == taken_from->get()) {
+      return;
+    }
+    *taken_from = floating->GetWeakPtr();
+    // check.sh reads this line.
+    LOG(ERROR) << "browser: mini player gave the keyboard back";
+    widget_->Activate();
   }
 
   // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
@@ -696,6 +785,12 @@ class WindowViews : public views::WidgetObserver,
         connection->Flush();
       }
     }
+    if (!ui_has_keyboard_ && !overlay_has_keyboard_ &&
+        event->type() == ui::EventType::kKeyPressed &&
+        ReachesNoPage(static_cast<aura::Window*>(event->target()))) {
+      KeyToBrowser(event);
+      return;
+    }
     // On X11 only one typed before the overlay that took the keyboard had the input focus reaches
     // the window, as fast typing after ⌃F does once the keys held for the bar were given to it, as
     // GPUI moves the focus on its next turn. They go to the overlay once it has the focus.
@@ -820,6 +915,55 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
+  // Whether a key the page has goes nowhere from |target|, aura's focus: the window or a pane, with
+  // no page view in it focused. The view that had it went, as a page's leaving its pane or dying
+  // does, and the core focuses the next page's once the loop has run its tasks (Window::FocusPage),
+  // which Chromium runs after every key the X server or the compositor has queued, as a quick
+  // second ⇧⌘T after the first's tab shows (#1519). A view of the window's own has its own keys.
+  bool ReachesNoPage(aura::Window* target) const {
+    if (!target) {
+      return false;
+    }
+    if (target == content()) {
+      views::FocusManager* focus = widget_->GetFocusManager();
+      return !focus || !focus->GetFocusedView();
+    }
+    return std::ranges::any_of(panes_, [target](const Slot& slot) {
+      return slot.holder &&
+             (target == slot.holder.get() || target == slot.page || target == slot.devtools);
+    });
+  }
+
+  // Gives the browser the key |event| for the page shown, which no page view hears, as Chromium
+  // gives it a page's that its page doesn't keep: ilo's reserved and Prefer ilo shortcuts first,
+  // then the rest, then the window's menus. Its tab or window can close in either.
+  void KeyToBrowser(ui::KeyEvent* event) {
+    content::WebContents* contents = nullptr;
+    for (Window* window : Window::All()) {
+      if (window->widget() == widget_) {
+        contents = Tab::FromId(window->selected());
+      }
+    }
+    if (!contents || !contents->GetDelegate()) {
+      return;
+    }
+    event->StopPropagation();
+    const input::NativeWebKeyboardEvent key(*event);
+    // Never which key, which may be typed text.
+    fprintf(stderr, "browser: key for tab %llu, with no page view to hear it, to the browser\n",
+            static_cast<unsigned long long>(Tab::IdOf(contents)));
+    base::WeakPtr<content::WebContents> alive = contents->GetWeakPtr();
+    const content::KeyboardEventProcessingResult before =
+        contents->GetDelegate()->PreHandleKeyboardEvent(contents, key);
+    if (before != content::KeyboardEventProcessingResult::NOT_HANDLED &&
+        before != content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT) {
+      return;
+    }
+    if (alive && alive->GetDelegate()) {
+      alive->GetDelegate()->HandleKeyboardEvent(alive.get(), key);
+    }
+  }
+
   // Whether |window| is a page or DevTools a slot holds, or in one.
   bool InSlot(aura::Window* window) const {
     auto holds = [window](const Slot& slot) {
@@ -909,6 +1053,8 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
+  std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
@@ -1201,6 +1347,12 @@ bool OverlayHasKeyboard(views::Widget* widget) {
   return views && views->overlay_has_keyboard();
 }
 
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->WhenOverlayLetsGo(std::move(let_go));
+  }
+}
+
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {
   WindowViews* views = ViewsOf(widget);
   const bool ui = views && views->ui_has_keyboard();
@@ -1303,6 +1455,38 @@ std::u16string ChildTitle(views::Widget* widget) {
     }
   }
   return {};
+}
+
+std::vector<gfx::Rect> PopupFrames(views::Widget* widget) {
+  // A popup, as autofill's dropdown, is a window of its own, on Wayland an xdg_popup that no other
+  // client sees. Its tree host keeps the window it was opened over as its parent, which the owned
+  // widgets of Chromium's that DialogFrame walks leave out on Linux.
+  using Host = views::DesktopWindowTreeHostPlatform;
+  Host* browser =
+      Host::GetHostForWidget(widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+  std::vector<gfx::Rect> frames;
+  if (!browser) {
+    return frames;
+  }
+  // The topmost comes first.
+  const aura::Window::Windows open = Host::GetAllOpenWindows();
+  for (auto window = open.rbegin(); window != open.rend(); ++window) {
+    views::Widget* popup = *window ? views::Widget::GetWidgetForNativeView(*window) : nullptr;
+    if (!popup || popup == widget || !popup->IsVisible() || !(*window)->GetHost()) {
+      continue;
+    }
+    // Over the window, or over one of its popups, as a submenu is.
+    Host* parent = Host::GetHostForWidget((*window)->GetHost()->GetAcceleratedWidget());
+    while (parent && parent != browser) {
+      parent = parent->window_parent();
+    }
+    if (parent) {
+      gfx::Rect frame = popup->GetWindowBoundsInScreen();
+      frame.Offset(-widget->GetClientAreaBoundsInScreen().OffsetFromOrigin());
+      frames.push_back(frame);
+    }
+  }
+  return frames;
 }
 
 void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
