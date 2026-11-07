@@ -77,7 +77,7 @@ await '^browser: account On None$' || fail "B didn't turn sync on with A's words
 await 'browser: sync service active$' || fail "B's sync didn't become active"
 await '^browser: account syncs settings true extensions true$' ||
   fail "B, signed in, didn't start syncing its settings and extensions"
-await '^browser: sync settings took little_windows off$' ||
+await 'browser: sync settings took little_windows off$' ||
   fail "B didn't take Little ilo's setting: $(grep 'sync settings took' "$log" | tr '\n' ' ')"
 # Sync asks the store for the extension, as an update check would, and installs it.
 installed=
