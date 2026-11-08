@@ -40,9 +40,9 @@ Sidebar, Spaces (with the Agent Space kind in the data model), command bar, spli
 
 ## Phase 4: polish, parity and agents
 
-Peek, Little Arc, link rules (Arc's Air Traffic Control), themes, Boosts (CSS and Zap first, then scripts after their own review), end-to-end encrypted sync (not iCloud-only), Widevine, passkeys.
+Peek, Little Arc, link rules (Arc's Air Traffic Control), themes, Boosts, end-to-end encrypted sync (not iCloud-only), Widevine, passkeys.
 
-Agents (decision 8): the built-in local MCP server, Agent Spaces (their hidden tabs keep running unthrottled, as Chrome keeps a tab it captures), engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server. This can move earlier if it becomes the launch pitch. The core API and data model are built for it from Phase 3 either way.
+Agents (decision 8): the built-in local MCP server, Agent Spaces (their hidden tabs keep running unthrottled, as Chrome keeps a tab it captures), engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server. This can move earlier if it becomes the launch pitch. The core API and data model are built for it from Phase 3.
 
 ## Phase 5: Windows, then Linux
 
