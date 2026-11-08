@@ -228,6 +228,19 @@ void StripTint(CALayer* layer) {
 }
 @end
 
+// An overlay's shadow, round it by the shadow's reach. Near the browser window's top that reaches
+// past the screen's, and AppKit would keep it below the menu bar, away from the overlay, its
+// cut-out showing the page under the overlay's bottom edge (#2075). It goes where the host puts it,
+// as the overlay does (Unconstrained).
+@interface HostShadowWindow : NSWindow
+@end
+
+@implementation HostShadowWindow
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen*)screen {
+  return frame;
+}
+@end
+
 // The view the link preview's page goes in, over the UI's: flipped, so the core places the page
 // from its top left at any size, and the mouse goes through it but for the page.
 @interface HostPageHolder : NSView
@@ -1118,10 +1131,10 @@ void AddBlurAndShadow(Overlay& overlay) {
   [overlay.view.superview addSubview:overlay.blur
                           positioned:NSWindowBelow
                           relativeTo:overlay.view];
-  overlay.shadow = [[NSWindow alloc] initWithContentRect:NSZeroRect
-                                               styleMask:NSWindowStyleMaskBorderless
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:YES];
+  overlay.shadow = [[HostShadowWindow alloc] initWithContentRect:NSZeroRect
+                                                       styleMask:NSWindowStyleMaskBorderless
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:YES];
   overlay.shadow.releasedWhenClosed = NO;
   overlay.shadow.opaque = NO;
   overlay.shadow.backgroundColor = NSColor.clearColor;
