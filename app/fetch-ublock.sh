@@ -39,7 +39,8 @@ key=$(git config -f ublock.ini ublock.key)
 dir=$PWD/.deps/ublock/$sha256
 if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifest.json" ||
   [ "$(head -n 1 "$dir/js/tab.js")" != "$changed" ] ||
-  [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ]; then
+  [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ] ||
+  [ "$(head -n 1 "$dir/js/background.js")" != "$changed" ]; then
   mkdir -p .deps/ublock
   rm -rf "$dir" "$dir.part" "$dir.zip"
   echo "fetch-ublock: downloading uBlock Origin $version" >&2
@@ -80,6 +81,8 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # ready (#744): it listens to an event only ChromeOS's kiosk apps are sent (core/ad_block.cc).
   edit js/traffic.js '            vAPI.net.setSuspendableListener(onBeforeRequest);' \
     $'            vAPI.net.setSuspendableListener(onBeforeRequest);\n            chrome.runtime.onRestartRequired.addListener(( ) => { });'
+  # Experiment (#2069): its cache keeps values uncompressed.
+  edit js/background.js '    cacheStorageCompression: true,' '    cacheStorageCompression: false,'
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
   # Earlier versions go.
