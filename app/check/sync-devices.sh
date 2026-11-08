@@ -220,13 +220,18 @@ grep -q "^browser: loaded $b_tab " "$b_log" && fail "B loaded the Today tab sync
 # A busy run on A: ten pages opened at once, as links are, ten navigations and ten closes. Its
 # commits, which the server counts against the account's minute, are counted, and none is
 # throttled.
+# Each commit locks the account's store once, and each item it keeps takes the store's next version.
 commits() {
-  grep -c 'summary="UPDATE sync_stores' "$server_log" || true
+  grep -c 'UPDATE sync_stores SET version = version WHERE' "$server_log" || true
+}
+kept() {
+  grep -c 'UPDATE sync_stores SET version = version + 1' "$server_log" || true
 }
 sent_lines() {
   grep -c 'browser: sync spaces sent ' "$log" || true
 }
 busy_commits=$(commits)
+busy_kept=$(kept)
 busy_sent=$(sent_lines)
 busy_started=$(now_ms)
 for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -252,6 +257,7 @@ done
 sleep 2
 busy_ms=$(($(now_ms) - busy_started))
 busy_commits=$(($(commits) - busy_commits))
+busy_kept=$(($(kept) - busy_kept))
 busy_looks=$(($(sent_lines) - busy_sent))
 busy_items=$(grep 'browser: sync spaces sent ' "$log" | tail -n "$busy_looks" |
   awk '{ n += $(NF - 4) + $(NF - 2); b += $NF } END { printf "%d items, %d bytes", n, b }')
@@ -405,7 +411,7 @@ ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
   "a Today tab A opened, navigated, moved and archived did the same on B, unloaded, in ms:$took_all;" \
   "a busy run of 10 opens, 10 navigations and 10 closes on A in $busy_ms ms looked $busy_looks times," \
-  "sent $busy_items and made $busy_commits commits, none throttled;" \
+  "sent $busy_items, and the account's devices made $busy_commits commits of $busy_kept items, none throttled;" \
   "A's Little ilo tab reached B, whose command bar listed and opened it, and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
   "and B and C signed out, on a local ilo-server as $email. A synced: $types." \
