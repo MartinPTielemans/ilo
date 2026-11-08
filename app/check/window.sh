@@ -1072,24 +1072,28 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# rest_cpu: the CPU the browser's processes take in 2 s with the pointer still, below the rows.
+# rest_cpu: $rest, the CPU in seconds the browser's processes take in 2 s with the pointer still,
+# below the rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1
   local from
   from=$(cpu)
   sleep 2
-  echo "$from $(cpu)" | awk '{ printf "%.2f", $3 - $1 }'
+  set -- $from $(cpu)
+  rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
-docked_cpu=$(rest_cpu)
+rest_cpu
+docked_cpu=$rest
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
 send move 400 300
 reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
 hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
-out_cpu=$(rest_cpu)
-echo "window: at rest for 2 s, the browser took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
+rest_cpu
+out_cpu=$rest
+echo "window: at rest for 2 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
 awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.5) }' &&
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 2 s, against ${docked_cpu} s docked"
 send move 600 300
