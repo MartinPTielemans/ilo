@@ -14,6 +14,8 @@
 //! the other browser's files, and it adds through the core's calls a user's actions make, so a
 //! second run adds nothing the first did (plan.rs).
 
+// Linux's alone, so in the platform layer; it only reads files, so the tests run it everywhere.
+#[path = "../platform/linux/app_icons.rs"]
 pub mod app_icons;
 pub mod arc;
 mod arrival;
