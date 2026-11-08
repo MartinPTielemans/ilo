@@ -507,6 +507,62 @@ send click $((228 + (width - 238) * 3 / 4)) 400
 expect "^browser: selected $y\( in .*\)\{0,1\}\$" "a click in the split's right page didn't focus it"
 switch "1 cmd" "$a"
 switch "2 cmd" "$y"
+# It keeps that pane across a Space switch and a relaunch (#1398). A second Space, made and left
+# with ⌃1, gives the split back focused there, and deleted it leaves the first Space as it was.
+first=$(grep '^browser: spaces ' "$log" | tail -1 | cut -d' ' -f3)
+send menu New Space…
+expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space"
+expect "^browser: spaces $first [0-9]*\$" "New Space didn't make a second Space"
+second=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: space $second in " "the window didn't show the new Space"
+send type Elsewhere
+send key return
+expect "^browser: create space $second Elsewhere\$" "return didn't name the second Space"
+expect '^browser: space form gone$' "the form didn't leave after Create"
+send key 1 ctrl
+expect "^browser: space $first in " "⌃1 didn't show the first Space"
+expect "^browser: selected $y\( in .*\)\{0,1\}\$" \
+  "⌃1 back didn't show the favorite split focused on its right page"
+../tools/window-screenshot.sh "$pid" "$out/favorite-split-space.png" || fail "no window to capture"
+send key 2 ctrl
+expect "^browser: space $second in " "⌃2 didn't show the second Space"
+# The second Space has no favorites, so its name is where the first's was before its tiles.
+post rightclick 100 112
+expect "^browser: menu shown $(cased 'Change Space Icon…'), " \
+  "a right-click on the second Space's name didn't show its menu"
+post choose "$(cased 'Delete Space')"
+expect "^browser: spaces $first\$" "Delete didn't delete the second Space"
+expect "^browser: space $first\( in .*\)\{0,1\}\$" "deleting the second Space didn't show the first"
+exec 3>&-
+quit
+
+# Launched again, the favorite split comes back shown, focused on its right page, with new ids.
+log="$out/favorites-split.log"
+step=0
+BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
+pid=$!
+exec 3> "$out/drive"
+await '^browser: restored in ' || fail "the relaunch with the favorite split shown didn't restore"
+await '^browser: favorite splits [0-9][0-9]*+[0-9][0-9]*$' ||
+  fail "the relaunch didn't bring the favorite split back a split"
+set -- $(grep '^browser: favorite splits' "$log" | tail -1 | sed 's/^browser: favorite splits //; s/+/ /')
+x=$1
+y=$2
+await "^browser: favorites [0-9][0-9]* $x\$" ||
+  fail "the relaunch didn't keep the favorite split second: \"$(favorites)\""
+a=$(favorites | cut -d' ' -f1)
+await "^browser: selected $y\$" ||
+  fail "the relaunch didn't show the favorite split focused on its right page: $(grep '^browser: selected' "$log" | tail -1)"
+await "^browser: loaded $y " || fail "the favorite split's right page didn't load"
+../tools/window-screenshot.sh "$pid" "$out/favorite-split-restored.png" || fail "no window to capture"
+send move $page_point
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the restored favorite split's card and menu. Browser wasn't the active app, so the"
+  echo "  page ignored the clicks."
+  exit 0
+fi
 switch "1 cmd" "$a"
 # Two tiles across the sidebar: the split's is the second, 118 in and 102 wide.
 send move 169 113
@@ -768,4 +824,4 @@ none_since "^browser: dragged $r to favorites" || fail "with 12 favorites, a row
 [ "$(favorites)" = "$twelve" ] || fail "with 12 favorites, the drag changed them: \"$(favorites)\""
 exec 3>&-
 quit
-echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. A split's row dragged onto the tiles is one favorite, a click in its right page focuses it and ⌘2 shows it focused there, its card has its pages, and Remove from Favorites puts it whole at the top of Today. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and Chromium settings at its column.s foot opens them. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/favorite-split-tile.png, $out/favorite-split-card.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"
+echo "ok: a Today tab's menu is Arc's, whose Copy Link with ⌥ held copies a Markdown link to the tab, and its row dragged onto the Space's name makes the tab a tile above the Space's rows, which shows its hover card beside the rows, with its page's picture once another tab is shown, which other apps don't take for the window in front, while the Library and sidebar buttons name themselves and their keys in a tooltip, which a click shows and ⌘1–⌘9 count first, with an edge under them while the list is scrolled, which scrolls to the row of a tab shown under its bottom, and marks the row of the tab shown scrolled out of it at that edge, a click on the mark scrolling back to it. A double-click on the tile takes it back to its URL, and ⌘W unloads it and keeps the tile. Its menu duplicates it into Today, and after a quit the favorite comes back, shown, and Remove from Favorites puts it at the top of Today. Rows dragged onto the tiles turn into tiles, and tiles dragged into the list into rows. Rows dragged onto the tiles become favorites where they're dropped, tiles reorder and go into Today, and Escape puts a dragged tile back. A split's row dragged onto the tiles is one favorite, a click in its right page focuses it and ⌘2 shows it focused there, as do a Space switch and a relaunch, its card has its pages, and Remove from Favorites puts it whole at the top of Today. Tiles taller than 40 % of the window scroll with the list, under the URL field. ⌘, from the page and the UI opens Settings, whose switches set the warning before quitting and the haptics and whose pop-ups set the archive's time and who shares the favorites (Each Space, with the favorite kept in it across the quit, and back), all kept across a quit, when ⌘Q quits without asking; ⌘W and its close button hide it, and Chromium settings at its column.s foot opens them. Three tiles with a long, a medium and a short title each show their card beside the rows at their own top, along them and back, placed where the UI asked, and inside a narrow window. Remove from Favorites offers Undo, and ⌘Z puts the tile back with the tab out of Today, and ⇧⌘Z removes it again. Change Icon… on the tile hangs the icon picker under it, its pick is the tile's icon and Remove Icon takes it out. 13 favorites saved come back whole, and with 12 a pinned tab's menu dims Add to Favorites and its row dragged over the tiles stays a row. Windows: $out/tab-menu-option.png, $out/favorite-icon-picker.png, $out/favorite-icon.png, $out/favorites-most.png, $out/favorites-full-menu.png, $out/favorite-card.png, $out/favorite-cards.png, $out/favorite-card-narrow.png, $out/library-tooltip.png, $out/header-tooltip.png, $out/favorites.png, $out/scroll-edge.png, $out/list-scrolled.png, $out/shown-marker.png, $out/favorite-unloaded.png, $out/favorites-restored.png, $out/favorite-drag.png, $out/favorite-drag-out.png, $out/favorite-split-tile.png, $out/favorite-split-space.png, $out/favorite-split-restored.png, $out/favorite-split-card.png, $out/tiles-tall.png, $out/tiles-scrolled.png, $out/settings.png"
