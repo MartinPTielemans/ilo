@@ -2,7 +2,8 @@
 # Downloads the uBlock Origin ublock.ini names, checked against its hash, into .deps/ublock, adds
 # our key to its manifest so its id doesn't depend on where the app is, takes out the timers that
 # wake an idle browser and the reload as it first starts, has it say when it's ready to block, for the
-# core to hold the first pages until then (below), and prints its folder.
+# core to hold the first pages until then, keeps its cache uncompressed (below), and prints its
+# folder.
 # Nothing in the download runs here: it's unzipped into a folder of its own and only read.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -13,7 +14,7 @@ fail() {
 }
 
 # What starts each file this changes, as GPL 3 asks of a changed file.
-changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, and it says when it's ready to block."
+changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, it says when it's ready to block, and its cache isn't compressed."
 
 # Puts $3, which may be several lines or none, in place of the line $2 of uBlock Origin's file $1,
 # and fails unless that line is there once, so a new release is read again before it ships.
@@ -39,7 +40,8 @@ key=$(git config -f ublock.ini ublock.key)
 dir=$PWD/.deps/ublock/$sha256
 if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifest.json" ||
   [ "$(head -n 1 "$dir/js/tab.js")" != "$changed" ] ||
-  [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ]; then
+  [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ] ||
+  [ "$(head -n 1 "$dir/js/background.js")" != "$changed" ]; then
   mkdir -p .deps/ublock
   rm -rf "$dir" "$dir.part" "$dir.zip"
   echo "fetch-ublock: downloading uBlock Origin $version" >&2
@@ -80,6 +82,12 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # ready (#744): it listens to an event only ChromeOS's kiosk apps are sent (core/ad_block.cc).
   edit js/traffic.js '            vAPI.net.setSuspendableListener(onBeforeRequest);' \
     $'            vAPI.net.setSuspendableListener(onBeforeRequest);\n            chrome.runtime.onRestartRequired.addListener(( ) => { });'
+  # It compressed each value over 64 KiB it cached, its lists and its filters' selfie, by encoding
+  # the whole string to bytes, compressing them and turning them back into a string, which took its
+  # process to 937 MB of commit on Windows with the lists ilo ships and ran it out of memory on
+  # machines with little (#2069). Uncompressed it peaked at 379 MB, and its cache is half the size,
+  # as the compressed bytes were stored as text. It reads a value cached compressed as before.
+  edit js/background.js '    cacheStorageCompression: true,' '    cacheStorageCompression: false,'
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
   # Earlier versions go.
