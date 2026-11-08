@@ -138,7 +138,7 @@ pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -3352,6 +3352,10 @@ impl Shell {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
+        if page.volume != entry.page.volume {
+            // check.sh waits for this line.
+            log!("browser: page {tab} volume {:.2}", page.volume.0);
+        }
         let capture = |page: &Page| [page.camera, page.microphone, page.sharing, page.shared];
         if capture(&page) != capture(&entry.page) {
             let [camera, microphone, sharing, shared] = capture(&page).map(flag);
@@ -3373,6 +3377,7 @@ impl Shell {
             (
                 page.media,
                 page.media_playing,
+                page.media_previous,
                 page.media_next,
                 pip,
                 page.media_title.clone(),
@@ -3382,9 +3387,10 @@ impl Shell {
         if media_changed {
             // check.sh waits for this line.
             log!(
-                "browser: page {tab} media {} playing {} next {} pip {} {}",
+                "browser: page {tab} media {} playing {} previous {} next {} pip {} {}",
                 flag(page.media),
                 flag(page.media_playing),
+                flag(page.media_previous),
                 flag(page.media_next),
                 flag(page.media_picture_in_picture),
                 page.media_title

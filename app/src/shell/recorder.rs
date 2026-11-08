@@ -525,6 +525,10 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        self.record(format!("volume {tab} {volume:.2}"));
+    }
+
     fn cast(&self, tab: u64, _: &mut App) {
         self.record(format!("cast {tab}"));
     }

@@ -5,9 +5,10 @@
 # Picture while its tab is hidden, and comes back with it, unless its Site Controls block that, or
 # Settings turns it off for the sites they don't allow; its window moves by its top bar and sizes
 # from its corner. A tab playing music out of sight has a player at the sidebar's foot, whose
-# buttons pause it and float it in Picture in Picture, whose click shows the tab, and whose × puts
-# it away. A private window's music has a player in that window alone. View › Cast… and the page
-# menu's Cast… open the tab's Cast card, and × closes it. A video's page menu floats it in Picture
+# buttons pause it, skip back and float it in Picture in Picture, whose volume drawer's slider sets
+# the tab's volume, whose click shows the tab, and whose × puts it away. A private window's music
+# has a player in that window alone. View › Cast… and the page menu's Cast… open the tab's Cast
+# card, and × closes it. A video's page menu floats it in Picture
 # in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
 # moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
@@ -19,8 +20,8 @@
 serve
 # "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
 # opens that tab, the same page with ?Shared, whose title is what follows the ?, "p" one titled
-# Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a next
-# track: long enough for Chrome to give it controls, and no sound. Asked to float in Picture in
+# Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a previous
+# and a next track: long enough for Chrome to give it controls, and no sound. Asked to float in Picture in
 # Picture through its media session, it opens a floating window, which closes as its tab shows.
 printf '%s' '<title>loading</title><body style="background:#333">
 <script>
@@ -56,6 +57,7 @@ onkeydown = async e => {
       music.onplaying = () => document.title = "playing";
       music.onpause = () => document.title = "paused";
       navigator.mediaSession.metadata = new MediaMetadata({title: "Quiet", artist: "Check"});
+      navigator.mediaSession.setActionHandler("previoustrack", () => document.title = "previous track");
       navigator.mediaSession.setActionHandler("nexttrack", () => document.title = "next track");
       navigator.mediaSession.setActionHandler("enterpictureinpicture", async () => {
         const floating = await documentPictureInPicture.requestWindow({width: 320, height: 180});
@@ -208,12 +210,17 @@ EOF
   done
   fail "$2"
 }
+# pip_driven: whether the driver finds a Picture in Picture window, which it does through X11
+# alone: drive.mm has no pip, and under Wayland no client sees another's windows.
+pip_driven() {
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+}
 # kept_keys: waits for the browser window to have the keyboard once the call has floated as its
 # tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
-# keyboard as it maps, and the core gives it back (#1961).
+# keyboard as it maps, and the core gives it back (#1961), in a line with Chromium's prefix.
 kept_keys() {
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    expect '^browser: mini player gave the keyboard back$' \
+    expect 'browser: mini player gave the keyboard back$' \
       "the call floating as its tab hid didn't give the browser window the keyboard back"
   fi
   for _ in $(seq 100); do
@@ -341,8 +348,8 @@ kept_keys
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
 # scroll, pinch and double-click: a drag on its top bar, off the buttons at its ends, moves it, and
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
-# manager does both, with the display's pointer. Linux alone: drive.mm doesn't find it yet.
-if [ "$(uname)" = Linux ]; then
+# manager does both, with the display's pointer. X11 alone, as pip_driven says.
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
@@ -366,7 +373,8 @@ if [ "$(uname)" = Linux ]; then
   # browser window them back for the tab switch below.
   send click $page_point
 else
-  echo "skip: moving and sizing the floating call on $(uname): drive.mm has no pip."
+  echo "skip: moving and sizing the floating call on $(uname)${WAYLAND_DISPLAY:+ Wayland}:" \
+    "the driver finds no Picture in Picture window there."
 fi
 shown "$f"
 expect "^browser: title $f landed\$" "the call allowed to float didn't come back with its tab"
@@ -392,12 +400,14 @@ shown_again "$a"
 # Music in the call's tab, then another tab shown: the tab playing out of sight has a player.
 send key m
 expect "^browser: title $a playing\$" "m in the page didn't play its silence"
-expect "^browser: page $a media 1 playing 1 next 1 pip 1 Quiet\$" "the page's music had no controls"
+expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 1 Quiet\$" \
+  "the page's music had no controls"
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
 # player_at <height> <failure> [<step>]: waits for the front card drawn <height> tall, 33 at rest
-# and 66 open, since the last command or <step>, and reads where it is into mx, my, mw and mh.
+# and 66 open, 99 with its volume drawer, since the last command or <step>, and reads where it is
+# into mx, my, mw and mh.
 player_at() {
   expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2" "${3:-}"
   read -r mx my mw mh <<EOF
@@ -413,24 +423,66 @@ open_stack() {
 player_at 33 "the player wasn't drawn 33 tall at rest"
 expect '^browser: media stack rest$' "the stack didn't rest"
 ../tools/window-screenshot.sh "$pid" "$out/media-player.png" || fail "no window to capture"
-# At rest its controls are thirds of the card: the favicon, pause and the next track.
+# At rest its controls are fifths of the card: the favicon, the previous track, pause, the next
+# track and the volume.
 send click $((mx + mw / 2)) $((my + mh / 2))
 expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
-expect "^browser: page $a media 1 playing 0 next 1 pip 1 Quiet\$" "the player didn't show it paused"
+expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 1 Quiet\$" \
+  "the player didn't show it paused"
 # The pointer resting there opens it: the title row's buttons from the right, 4.5 in, 24 wide and
 # 2 apart: ×, then Picture in Picture, as Arc's Back to PiP, there while the page can float and
 # doesn't.
 expect '^browser: media stack open$' "the stack didn't open under the pointer"
 player_at '6[56]' "the open stack's front card wasn't 65.5 tall"
 ../tools/window-screenshot.sh "$pid" "$out/media-player-open.png" || fail "no window to capture"
+# control_x <n>: the middle of the controls' <n>th fifth, from 0; control_y their row's, 33 tall at
+# the card's foot.
+control_x() { echo $((mx + mw * (2 * $1 + 1) / 10)); }
+control_y=$((my + mh - 17))
+send click "$(control_x 1)" $control_y
+expect '^browser: command media-previous via player$' "the player's previous didn't take the click"
+expect "^browser: title $a previous track\$" "the player's previous didn't skip back"
+# Adjust Tab Volume opens the drawer, which grows the card 33 up from its foot, with a slider whose
+# track the log has. A press a quarter along it sets the tab's volume there, which the core reports
+# back, and applies to the page's media as it plays again: a paused page's ducking is the audio
+# focus manager's to undo.
+send click "$(control_x 4)" $control_y
+expect '^browser: command media-volume via player$' "the player's volume didn't take the click"
+expect "^browser: media volume drawer $a open\$" "the volume drawer didn't open"
+player_at '9[89]' "the volume drawer didn't grow the card to 98.5"
+read -r vx vy vw vh <<EOF
+$(grep "^browser: media volume $a at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+[ -n "$vh" ] || fail "the volume drawer's slider wasn't drawn"
+send click $((vx + vw / 4)) $((vy + vh / 2))
+expect '^browser: command media-volume 0\.2[3-7] via player$' "the slider didn't take the press"
+volume=$(grep '^browser: command media-volume 0' "$log" | tail -1 | cut -d' ' -f4)
+expect "^browser: page $a volume $volume\$" "the tab's volume didn't come back from the core"
+send click "$(control_x 2)" $control_y
+resumed=$step
+expect "^browser: title $a playing\$" "the player's play didn't play the page again"
+# The core's line has Chromium's prefix.
+expect "browser: tab $a media at volume $volume\$" \
+  "the core didn't turn the page's media to $volume"
+../tools/window-screenshot.sh "$pid" "$out/media-player-volume.png" || fail "no window to capture"
+send click "$(control_x 2)" $control_y
+expect "^browser: title $a paused\$" "the player's pause didn't pause the page again"
+# Once as it plays, or again as the audio focus manager settles who ducks, never back and forth.
+applied=$(sed -n "/^browser: drive $resumed: /,\$p" "$log" |
+  grep -c "browser: tab $a media at volume ")
+[ "$applied" -le 10 ] || fail "the core turned the page's media down $applied times as it played"
+send click "$(control_x 4)" $control_y
+expect '^browser: media volume drawer closed$' \
+  "a second click on the volume didn't close its drawer"
+player_at '6[56]' "the card didn't shrink to 65.5 as its drawer closed"
 button_x() { echo $((mx + mw - 5 - 12 - $1 * 26)); }
 title_y=$((my + 19))
 send click "$(button_x 1)" $title_y
 expect '^browser: command media-picture-in-picture via player$' \
   "the player's Picture in Picture didn't take the click"
 expect "^browser: title $a floating\$" "the player's Picture in Picture didn't float the page"
-expect "^browser: page $a media 1 playing 0 next 1 pip 0 Quiet\$" \
+expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 0 Quiet\$" \
   "the player kept Picture in Picture while the page floated"
 # On the Mac the floating window takes the keyboard, and GPUI then reads the pointer from AppKit,
 # whose real one the driver's events never move: off the stack, which closes as it's left. On
@@ -580,8 +632,8 @@ PLACED
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it. Linux alone: drive.mm doesn't find the Mini Player yet.
-if [ "$(uname)" = Linux ]; then
+# tab and lands it. X11 alone, as pip_driven says.
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
@@ -616,8 +668,10 @@ if [ "$(uname)" = Linux ]; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): drive.mm has no pip."
-  send click $page_point
+  echo "skip: moving, sizing and double-clicking the Mini Player on" \
+    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
+  # Clear of the page's middle, where sway floats the Mini Player wherever the core asks for it.
+  send click 300 200
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
 fi
@@ -652,7 +706,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if [ "$(uname)" = Linux ]; then
+if pip_driven; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
@@ -727,4 +781,4 @@ placed_where_left ||
 exec 3>&-
 quit
 
-echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."
+echo "ok: a tab in a call marks its row with the camera, then the screen while it shares a tab, the tab it shares shows the screen too, another tab's Share This Tab Instead moves the share there, and the marks go when the call ends; a call floats while its tab is hidden, unless its Site Controls or Settings turn that off, and its window moves by its top bar and sizes from its corner; music playing out of sight has a player that pauses it, skips back, sets its volume from a drawer, floats it in Picture in Picture, shows its tab and goes on ×, and a private window's music has one there alone; the Cast card opens from View and the page menu and closes on ×; a video's menu floats it in Picture in Picture, 10 in from the top right of the screen, where a scroll or a drag moves it, Ctrl with a scroll sizes it and a double-click shows its tab, the next shows where the last was left, after a relaunch too, and coming back to its tab's window from another window, or from another app with a menu open, puts it back in the tab."

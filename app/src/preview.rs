@@ -25,7 +25,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, WindowButton,
+    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Volume,
+    WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -900,12 +901,22 @@ impl Browser for Fake {
     // The made-up pages share nothing.
     fn share_instead(&self, _: u64, _: &mut App) {}
 
+    fn set_volume(&self, tab: u64, volume: f32, cx: &mut App) {
+        self.later(cx, move |shell, cx| {
+            let page = Page {
+                volume: Volume(volume),
+                ..shell.page(tab)
+            };
+            shell.set_page(tab, page, cx);
+        });
+    }
+
     fn media(&self, tab: u64, action: MediaAction, cx: &mut App) {
         self.later(cx, move |shell, cx| {
             let media_playing = match action {
                 MediaAction::Play => true,
                 MediaAction::Pause => false,
-                MediaAction::Next => shell.page(tab).media_playing,
+                MediaAction::Previous | MediaAction::Next => shell.page(tab).media_playing,
                 MediaAction::PictureInPicture => shell.page(tab).media_playing,
             };
             // A made-up page floats nothing, but its player's button goes as a real one's would.
