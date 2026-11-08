@@ -530,19 +530,6 @@ send window 1
 send menu "Cast…"
 expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
 expect "^browser: cast $b at " "the Cast card wasn't drawn"
-if [ "$(uname)" = Darwin ]; then
-  clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
-    fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-  # A Mac that has answered before isn't asked again, and the helper finds no alert.
-  "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
-  for _ in $(seq 50); do
-    send state
-    [ "$active" = 1 ] && break
-    sleep 0.1
-  done
-  [ "$active" = 1 ] || fail "ilo wasn't the active app after macOS's local network question: \
-$(cat "$out/alert.txt")"
-fi
 read -r kx ky kw kh <<EOF
 $(grep "^browser: cast $b at " "$log" | tail -1 | cut -d' ' -f5-)
 EOF
@@ -557,6 +544,25 @@ send choose "Cast…"
 expect "^browser: cast $b .* devices [0-9]*\$" "the page menu's Cast… didn't open the Cast dialog"
 send menu "Cast…"
 expect "^browser: cast $b closed\$" "View › Cast… again didn't close the Cast dialog"
+if [ "$(uname)" = Darwin ]; then
+  # A Mac that has answered before isn't asked again, and the app keeps its activation.
+  for _ in $(seq 30); do
+    send state
+    [ "$active" = 1 ] || break
+    sleep 0.1
+  done
+  if [ "$active" = 0 ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
+      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
+    "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$active" = 1 ] || fail "ilo wasn't the active app after the Cast card: $(cat "$out/alert.txt")"
+  fi
+fi
 
 # A video's page menu has Chrome's Picture in Picture, which floats the video; "x" in the page
 # brings it back. The video plays a canvas's colours, with no sound.
