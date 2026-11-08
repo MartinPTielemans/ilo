@@ -40,7 +40,7 @@ impl Shell {
     pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
         let (now, moved) = (Instant::now(), crate::motion::start(cx));
         let after = self.layout();
-        let slides: Vec<_> = after
+        let mut slides: Vec<_> = after
             .iter()
             .filter_map(|(&slot, &top)| {
                 let from = before.get(&slot)? + self.slide(slot) - top;
@@ -62,10 +62,27 @@ impl Shell {
             if !whole {
                 self.scroll_to_row(tabs[0]);
             }
+            // A tab shown in a closed folder slides down from under its folder's row as it fades
+            // in, as Arc's does (#1405).
+            if let Curve::Peek = curve {
+                let space = self.shown_space();
+                for &tab in &tabs {
+                    let folder = space.and_then(|space| space.outer_closed(tab));
+                    let under = folder.and_then(|folder| after.get(&Slot::Tab(folder)));
+                    if let (Some(&under), Some(&top)) = (under, after.get(&Slot::Tab(tab))) {
+                        slides.push((Slot::Tab(tab), (under - top, moved, curve)));
+                    }
+                }
+            }
             self.opened = Some(Opened {
                 tabs,
                 whole,
                 start: now,
+                // The rows the other changes bring fade in on the row spring, as they did.
+                curve: match curve {
+                    Curve::Peek => Curve::Peek,
+                    _ => Curve::Slide,
+                },
             });
         }
         for (&slot, &top) in &before {
