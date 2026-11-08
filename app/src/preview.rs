@@ -2962,6 +2962,7 @@ fn preview_site() -> Site {
         logins: Vec::new(),
         devices: Vec::new(),
         ad_blocking: Some(true),
+        ad_blocked: "12".into(),
         developer_mode: Some(false),
     }
 }

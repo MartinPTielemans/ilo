@@ -207,6 +207,9 @@ pub struct Site {
     /// there: a page that isn't http(s), one Safari's engine shows, a private window, or with
     /// blocking off in Settings.
     pub ad_blocking: Option<bool>,
+    /// How many requests it blocked on the page, such as "12" or ">1k", empty while it blocked
+    /// none or isn't on there.
+    pub ad_blocked: SharedString,
     /// Whether the site's tabs show in Developer Mode, none where that isn't the user's to change:
     /// a page that isn't http(s), or a private window.
     pub developer_mode: Option<bool>,
@@ -897,8 +900,11 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 /// The site for the log: Chrome's words for the connection, then each row and its value, in their
 /// order, which check.sh clicks by.
 fn describe(site: &Site) -> String {
-    let ad_blocking = (site.ad_blocking.iter())
-        .map(|&on| format!("Ad blocking {}", if on { "On" } else { "Off" }));
+    let ad_blocking = (site.ad_blocking.iter()).map(|&on| match on {
+        true if site.ad_blocked.is_empty() => "Ad blocking On".to_string(),
+        true => format!("Ad blocking On ({} blocked)", site.ad_blocked),
+        false => "Ad blocking Off".to_string(),
+    });
     let developer_mode = (site.developer_mode.iter())
         .map(|&on| format!("{DEVELOPER_MODE_NAME} {}", if on { "On" } else { "Off" }));
     let permissions: Vec<String> = ad_blocking
@@ -2105,9 +2111,13 @@ impl Render for SiteControls {
             }
             // Before the permissions, as the row a page that doesn't work needs.
             if let Some(on) = site.ad_blocking {
-                let state = if on { "On" } else { "Off for this site" };
+                let state: SharedString = match on {
+                    true if site.ad_blocked.is_empty() => "On".into(),
+                    true => format!("On, {} blocked", site.ad_blocked).into(),
+                    false => "Off for this site".into(),
+                };
                 const NAME: &str = "Block ads and trackers";
-                let state = Some(state.into());
+                let state = Some(state);
                 let id = "site-ad-blocking".into();
                 let row = Self::row(&palette, id, y, AD_BLOCKING, on, NAME.into(), state);
                 let row = row.when(a11y, |row| switch_named(row, NAME, on));

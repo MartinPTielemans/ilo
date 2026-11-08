@@ -2,6 +2,7 @@
 #define BROWSER_CORE_SESSION_H_
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -194,6 +195,12 @@ struct Settings {
   bool unload_idle_tabs = true;
   // Whether the browser blocks ads and trackers, in every profile.
   bool ad_blocking = true;
+  // The ad blocker's filter lists the user turned on or off, by key, each else as it starts
+  // (ad_block.h).
+  std::map<std::string, bool> ad_block_lists;
+  // The user's own filters, one a line, or nullopt until they first set them, which leaves the ad
+  // blocker's as they are.
+  std::optional<std::string> ad_block_filters;
   // Whether the browser sends its crash reports (crash_reports.h).
   bool send_crash_reports = false;
   // Whether WebRTC goes only through TURN relays in every profile, proxy or not (webrtc.h).
