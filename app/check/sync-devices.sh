@@ -168,22 +168,23 @@ b_line=$(grep -o "$synced_line-1\$" "$b_log" | tail -1)
 b_tab=$(echo "$b_line" | cut -d' ' -f4)
 b_space=$(echo "$b_line" | cut -d' ' -f7)
 
-had=$(grep -c "browser: synced today $b_tab .* ${site}login.html?today-2\$" "$b_log" || true)
+navigated="browser: synced today $b_tab in space $b_space at [0-9]* unloaded ${site}login.html?today-2\$"
+had=$(grep -c "$navigated" "$b_log" || true)
 go_from_bar "${site#http://}login.html?today-2"
 changed=$(now_ms)
 expect "^browser: loaded $a_tab ${site}login.html?today-2\$" "A's Today tab didn't go to its next page"
-b_gets "browser: synced today $b_tab in space $b_space at [0-9]* unloaded ${site}login.html?today-2\$" \
-  "$had" "$changed" "A's navigation didn't take B's tab, unloaded, to the same page"
+b_gets "$navigated" "$had" "$changed" "A's navigation didn't take B's tab, unloaded, to the same page"
 
 # Moved to the Space B shows, it shows there, still without its page. Today's rows start at row 0,
 # as "from A" has no pinned tabs.
 post rightclick $(row 0)
 expect "^browser: menu shown .*Move to › from B" "A's Today tab's menu didn't offer to move it to \"from B\""
-had=$(grep -c "browser: synced today $b_tab in space " "$b_log" || true)
+# Any Space but the one it was in.
+moved="browser: synced today $b_tab in space [0-9]* at 0 unloaded ${site}login.html?today-2\$"
+had=$(grep -c "$moved" "$b_log" || true)
 send choose "from B"
 changed=$(now_ms)
-b_gets "browser: synced today $b_tab in space [0-9]* at 0 unloaded ${site}login.html?today-2\$" \
-  "$had" "$changed" "A's move to \"from B\" didn't move B's tab"
+b_gets "$moved" "$had" "$changed" "A's move to \"from B\" didn't move B's tab"
 grep "browser: synced today $b_tab in space " "$b_log" | tail -1 | grep -q " in space $b_space " &&
   fail "B's tab stayed in Space $b_space when A moved it"
 for _ in $(seq 50); do
@@ -195,10 +196,8 @@ grep '^browser: today' "$b_log" | tail -1 | tr ' ' '\n' | grep -qx "$b_tab" ||
 device b
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-today.png" || fail "no window to capture"
 
-# Archived on A, it goes to B's archive.
+# Archived on A, it goes to B's archive. A's window went with the tab it moved, to "from B".
 device a
-send key 3 ctrl
-expect '^browser: space [0-9]* in ' "⌃3 didn't show A's third Space, \"from B\""
 for _ in $(seq 50); do
   [ "$(today)" = "$a_tab" ] && break
   sleep 0.1

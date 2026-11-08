@@ -49,6 +49,8 @@
 #include "components/sync/protocol/unique_position.pb.h"
 #include "components/sync/service/data_type_controller.h"
 #include "ui/base/page_transition_types.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace browser_core::sync_spaces {
 namespace {
@@ -120,14 +122,22 @@ Space* UntouchedDefault() {
   return GivesWay(first) ? space : nullptr;
 }
 
+// Whether a Today tab at |url| syncs its page: not one that can't open on another computer, or that
+// holds the page itself, such as a data: URL.
+bool Syncs(const GURL& url) {
+  return url.is_valid() && !url.SchemeIs(url::kDataScheme) && !url.SchemeIsBlob() &&
+         !url.SchemeIs(url::kJavaScriptScheme) && !url.SchemeIsFileSystem() &&
+         !url.SchemeIs(url::kAboutScheme);
+}
+
 // When |row|, a Today tab, was last shown here, in seconds: now while a window shows it.
 int64_t SeenHere(bc_id row, const Tab& tab) {
   return (Window::Showing(row) ? base::Time::Now() : tab.last_seen()).ToTimeT();
 }
 
 // Every Space, pinned tab, folder and Today tab as sync knows them now, by id. A Today tab's last
-// showing is |known|'s unless it's an hour on from it, and one that has no page to name, as a tab
-// yet to start loading, is as |known| has it, if at all.
+// showing is |known|'s unless it's an hour on from it, and one with no page that syncs, as a tab
+// yet to start loading or one on a data: URL, is as |known| has it, if at all.
 std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known) {
   std::map<std::string, Entity> all;
   for (Space* space : Space::All()) {
@@ -180,7 +190,7 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       const std::string key = Key(node->id);
       auto was = known.find(key);
       const GURL url = tab->Url();
-      if (!url.is_valid()) {
+      if (!Syncs(url)) {
         if (was != known.end()) {
           all[key] = was->second;
         }
@@ -699,7 +709,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     const base::Time seen =
         entity.has_seen() ? base::Time::FromTimeT(entity.seen()) : base::Time::Now();
     if (!row) {
-      if (!url.is_valid()) {
+      if (!Syncs(url)) {
         return;
       }
       SavedTab saved;
@@ -725,7 +735,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         space->Move(row, /*pinned=*/false, 0, at, [](bc_id) { return GURL(); });
       }
       Tab* tab = Tab::Get(row);
-      if (tab && url.is_valid() && url != tab->Url() && !Window::Showing(row)) {
+      if (tab && Syncs(url) && url != tab->Url() && !Window::Showing(row)) {
         // Its page here goes, keeping its history, which goes on to where the other device went.
         if (tab->web_contents()) {
           tab->Unload();
