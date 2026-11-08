@@ -3928,6 +3928,31 @@ impl Shell {
         .size_full()
     }
 
+    /// The pointer moving or pressing in the reveal's window, which shows the row under it again,
+    /// as `hover_listener` does in the browser window's, which draws no sidebar while it's hidden.
+    fn reveal_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = shell.clone();
+                window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+                let pressed = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        pressed.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
     /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
     /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
@@ -4229,7 +4254,11 @@ impl Render for Shell {
         self.step_held_nav(window);
         self.step_space_slides(window);
         self.step_form_going(cx);
-        self.step_scroll_edge(window, cx);
+        // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
+        // and the two of different sizes measuring it in turn each asked the other for a frame.
+        if !self.sidebar_hidden || self.sidebar_motion.is_some() {
+            self.step_scroll_edge(window, cx);
+        }
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_empty(window, cx);
@@ -4948,6 +4977,7 @@ impl Shell {
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
+            .child(self.reveal_listener(cx))
             .into_any_element();
         self.breath.arm(cx);
         panel
