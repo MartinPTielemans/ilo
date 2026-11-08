@@ -54,6 +54,7 @@ env:
     favorites cards extensions adblock adblock-lists private little capture passwords preview
     access dialogs crash import quit onboarding passkeys appearance about sync sync-account
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    media
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |

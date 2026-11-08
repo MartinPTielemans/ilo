@@ -632,6 +632,7 @@ source_set("browser_core") {
       "//components/dbus",
       "//dbus",
       "//third_party/wayland:wayland_client",
+      "//third_party/wayland-protocols:xdg_activation",
       "//ui/aura",
       "//ui/base/ime",
       "//ui/compositor",

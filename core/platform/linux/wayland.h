@@ -35,6 +35,13 @@ void AfterStateConfigured(views::Widget* widget, base::OnceClosure done);
 // |widget|'s wl_surface, and its content's size in DIPs. Null off Wayland.
 void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size);
 
+// Asks the compositor to give |widget|'s window the keyboard back from the window of this client's
+// that has it, with an activation token from the keyboard's focus. Chromium's Activate takes its
+// token from the latest input Chromium heard, and after a click names the window under the
+// pointer, which the compositor can turn down, as sway did after a click in the app's menu
+// (#2060). Whether it asked; never off Wayland.
+bool TakeKeyboardBack(views::Widget* widget);
+
 // Gives |widget|'s surface |region|, in pixels at |scale|, at once, which Chromium's
 // SetInputRegion leaves for its next frame: a region with no rects is the whole surface, one empty
 // rect none of it. Nothing off Wayland.
