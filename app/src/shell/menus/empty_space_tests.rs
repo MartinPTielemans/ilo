@@ -224,6 +224,14 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
         "New Tab left the first Space"
     );
     cx.simulate_event(fingers(TouchPhase::Cancelled, 0.));
+    // Moves this close together are a flick, so the pages settle on Space 2. That slide ends here,
+    // as a slow runner could have it end by ⌃2's first frame, which would then start none (#2087).
+    shell.update(cx, |shell, cx| {
+        if let Some(settle) = &mut shell.settle {
+            settle.start -= Duration::from_secs(1);
+        }
+        cx.notify();
+    });
     cx.run_until_parked();
 
     // ⌃2: Space 2's page slides in from the right over Space 1's.
@@ -231,7 +239,10 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     shell.update(cx, |shell, cx| shell.set_space(2, cx));
     cx.run_until_parked();
     assert!(
-        shell.read_with(cx, |shell, _| shell.settle.is_some()),
+        shell.read_with(cx, |shell, _| shell
+            .settle
+            .as_ref()
+            .is_some_and(|settle| settle.beside == Some(1))),
         "the Space didn't slide"
     );
     let first = under_rows(&shell, cx, 20.);

@@ -311,14 +311,16 @@ done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
 # An action waits for its element to take input and for its page to settle (#1436). The Load
-# button is enabled a while after the page shows, as a form's once its data is in, and its click
-# fetches /slow, which takes a second, then says what came: the click's answer has it, with no wait
-# step. Stall's fetch never comes, so its click answers after 5 s, saying the page was still busy.
+# button is enabled 4 s after the page shows, as a form's once its data is in: after open_tab's
+# answer, which waits for the page to settle and took 2.5 s on Windows' runner (#2079), and well
+# within the 5 s the click waits for it. Its click fetches /slow, which takes a second, then says
+# what came: the click's answer has it, with no wait step. Stall's fetch never comes, so its click
+# answers after 5 s, saying the page was still busy.
 printf '%s' '<script src="painted.js"></script>
 <h1>Settle</h1>
 <p><button id=load disabled>Load</button> <button id=stall>Stall</button> <span id=state></span></p>
 <script>
-painted(() => setTimeout(() => { load.disabled = false; document.title = "settle enabled"; }, 2500));
+painted(() => setTimeout(() => { load.disabled = false; document.title = "settle enabled"; }, 4000));
 load.onclick = () => fetch("slow").then(answer => answer.text()).then(text => {
   state.textContent = "Came " + text;
 });
