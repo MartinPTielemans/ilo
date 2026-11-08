@@ -19,6 +19,8 @@
 # the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
 # tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
 # runs only when named, and skips elsewhere, where the windows run checks it.
+# Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
+# so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -82,7 +84,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate"
-named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag"
+named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
