@@ -1222,6 +1222,11 @@ impl Browser for Fake {
         }
     }
 
+    // English, for PREVIEW_TRANSLATE's pages to offer translating into.
+    fn translation_target(&self) -> Option<SharedString> {
+        std::env::var_os("PREVIEW_TRANSLATE").map(|_| "en".into())
+    }
+
     fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
 
     fn shortcuts(&self, _: &mut App) {}
