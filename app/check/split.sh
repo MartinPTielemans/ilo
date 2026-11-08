@@ -502,11 +502,14 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo Separate 
 expect '^browser: splits $' "⇧⌘Z didn't end the split again"
 expect "^browser: panes $b\$" "⇧⌘Z didn't show the separated page alone"
 # ⌥↩ in the command bar opens its URL in a pane beside the page shown, and ⌘W closes the focused
-# pane, leaving the card to the page beside it.
+# pane, leaving the card to the page beside it. The command bar binds ⌥↩ as Alt+↩ on Windows, which
+# the driver presses as winalt: its alt is the Mac's ⌥, Ctrl+Alt there.
+beside=alt
+! windows || beside=winalt
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type example.net
-send key return alt
+send key return $beside
 expect "^browser: splits $b+[0-9][0-9]*\$" \
   "⌥↩ didn't open example.net beside the page: \"$(splits)\""
 d=$(splits | cut -d+ -f2)
