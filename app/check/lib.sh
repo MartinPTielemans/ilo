@@ -600,6 +600,24 @@ switch() {
 row() {
   echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
 }
+# The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
+# from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+cpu() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
+      -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+      n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
+}
 # Switch times in milliseconds, one a line, as "median <m> ms, max <x> ms, <n> switches".
 summary() {
   sort -n | awk '{ v[NR] = $1 } END { if (NR) printf "median %.1f ms, max %.1f ms, %d switches", v[int((NR + 1) / 2)], v[NR], NR }'
