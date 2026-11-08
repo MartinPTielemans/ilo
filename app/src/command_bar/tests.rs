@@ -40,6 +40,8 @@ struct Recorder {
     /// times the bar read it.
     settings: RefCell<Option<Rc<Vec<settings_search::Entry>>>>,
     settings_read: std::cell::Cell<usize>,
+    /// The tabs open on the account's other computers.
+    others: Vec<OtherTab>,
 }
 
 impl Recorder {
@@ -171,6 +173,10 @@ impl Host for Recorder {
 
     fn over_private(&self) -> bool {
         self.private
+    }
+
+    fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
+        Rc::new(self.others.clone())
     }
 
     fn settings_index(&self, _: &App) -> Option<Rc<Vec<settings_search::Entry>>> {
@@ -3343,4 +3349,127 @@ fn the_ask_hint_names_the_agent_it_asks() {
     assert_eq!(named(&[("codex", None), ("claude", None)]), "Ask Codex");
     assert_eq!(named(&[]), "Ask an agent");
     assert_eq!(ask_words(None), "Ask an agent");
+}
+
+/// A tab open on another of the account's computers.
+fn other(url: &str, title: &str, computer: &str) -> OtherTab {
+    OtherTab {
+        url: url.to_string().into(),
+        title: title.to_string().into(),
+        computer: computer.to_string().into(),
+    }
+}
+
+const RISOTTO: &str = "https://www.seriouseats.com/risotto";
+const LINUX: &str = "ilo on Linux (ThinkPad X1)";
+
+impl Bar {
+    /// The bar, opened for a new tab in a Space with `tabs`, the account's other computers having
+    /// `others` open.
+    fn with_others(
+        cx: &mut TestAppContext,
+        tabs: Vec<shell::BarTab>,
+        others: Vec<OtherTab>,
+    ) -> Self {
+        let host = Recorder {
+            others,
+            ..Recorder::default()
+        };
+        Bar::open(cx, tabs, host)
+    }
+
+    /// The computer each row names at its end, empty for none.
+    fn computers(&mut self) -> Vec<String> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.rows
+                    .iter()
+                    .map(|row| row.computer.to_string())
+                    .collect()
+            })
+            .unwrap()
+    }
+}
+
+/// A word of the title or the site's name that what's typed starts lists the page open on another
+/// computer after the search row, naming the computer, and ↩ opens it here (#1234).
+#[gpui::test]
+fn a_tab_open_on_another_computer_is_listed_by_name_and_opens_here(cx: &mut TestAppContext) {
+    let others = vec![other(RISOTTO, "Mushroom Risotto", LINUX)];
+    let mut bar = Bar::with_others(cx, Vec::new(), others.clone());
+    bar.type_text("risotto");
+    bar.suggest(
+        "risotto",
+        vec![searching("risotto"), page("https://risotto.test/")],
+    );
+    assert_eq!(
+        bar.rows(),
+        [
+            (search("risotto"), 0),
+            (RISOTTO.to_string(), 0),
+            ("https://risotto.test/".to_string(), 0),
+        ]
+    );
+    assert_eq!(bar.computers(), ["", LINUX, ""]);
+    bar.keys("down enter");
+    assert_eq!(bar.calls(), [format!("open {RISOTTO}"), "hide".into()]);
+
+    // By its site's name too.
+    let mut bar = Bar::with_others(cx, Vec::new(), others);
+    bar.type_text("serious");
+    bar.suggest("serious", vec![searching("serious")]);
+    assert_eq!(bar.computers(), ["", LINUX]);
+}
+
+/// Another computer's tab takes the place of the core's row from history for its page, and never
+/// the first row, where ↩ goes. A page a tab here has open lists only that tab's row, and so does
+/// one open on two computers, the one seen last. At most two are listed.
+#[gpui::test]
+fn another_computers_tabs_list_each_page_once_and_never_first(cx: &mut TestAppContext) {
+    let others = vec![
+        other(RISOTTO, "Mushroom Risotto", LINUX),
+        other("https://a.test/risotto", "Risotto A", "ilo on Mac"),
+        other(RISOTTO, "Mushroom Risotto", "ilo on Windows"),
+        other("https://b.test/risotto", "Risotto B", "ilo on Mac"),
+        other("https://c.test/risotto", "Risotto C", "ilo on Mac"),
+    ];
+    let mut bar = Bar::with_others(cx, Vec::new(), others.clone());
+    bar.type_text("risotto");
+    bar.suggest("risotto", vec![searching("risotto"), page(RISOTTO)]);
+    assert_eq!(
+        bar.rows(),
+        [
+            (search("risotto"), 0),
+            (RISOTTO.to_string(), 0),
+            ("https://a.test/risotto".to_string(), 0),
+        ]
+    );
+    assert_eq!(bar.computers(), ["", LINUX, "ilo on Mac"]);
+
+    // The first row's page stays the core's.
+    let mut bar = Bar::with_others(cx, Vec::new(), others.clone());
+    bar.type_text("risotto");
+    bar.suggest("risotto", vec![page(RISOTTO), searching("risotto")]);
+    assert_eq!(bar.rows()[0], (RISOTTO.to_string(), 0));
+    assert_eq!(bar.computers(), ["", "ilo on Mac", "ilo on Mac", ""]);
+
+    // An open tab here at the page rises; the other computer's row for it goes.
+    let tabs = vec![titled(4, "Mushroom Risotto", RISOTTO)];
+    let mut bar = Bar::with_others(cx, tabs, others);
+    bar.type_text("risotto");
+    bar.suggest("risotto", vec![searching("risotto")]);
+    assert_eq!(bar.rows()[0], (RISOTTO.to_string(), 4));
+    assert!(!bar.rows().iter().skip(1).any(|(url, _)| url == RISOTTO));
+}
+
+/// One letter, or what reads as an address, lists none, as it raises no open tab.
+#[gpui::test]
+fn another_computers_tabs_wait_for_two_letters_of_a_name(cx: &mut TestAppContext) {
+    for typed in ["r", "risotto.", "seriouseats.com/"] {
+        let others = vec![other(RISOTTO, "Mushroom Risotto", LINUX)];
+        let mut bar = Bar::with_others(cx, Vec::new(), others);
+        bar.type_text(typed);
+        bar.suggest(typed, vec![searching(typed)]);
+        assert_eq!(bar.rows(), [(search(typed), 0)], "{typed}");
+    }
 }

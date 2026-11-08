@@ -45,6 +45,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/space.h"
 #include "browser_core/sync_guard.h"
+#include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_pairing.h"
 #include "browser_core/sync_relay.h"
 #include "browser_core/sync_words.h"
@@ -1384,6 +1385,7 @@ class Account : public syncer::SyncServiceObserver,
     sync_observation_.Observe(service);
     service->AddProtocolEventObserver(this);
     LogState(service);
+    WatchOtherTabs(StartProfile());
   }
 
   // What sync's service is doing, each time that changes, so a check sees that a profile signed

@@ -103,6 +103,20 @@ source_set("sync_keys") {
   ]
 }
 
+# The tabs open on the account's other computers as the app hears of them, apart so
+# browser_core_unittests tests the list alone.
+source_set("other_tabs") {
+  sources = [
+    "other_tabs.cc",
+    "other_tabs.h",
+  ]
+  deps = [
+    "//base",
+    "//components/sessions",
+    "//url",
+  ]
+}
+
 # What the account's sync lets go to its server, on sync's own sequences, apart so
 # browser_core_unittests tests it alone.
 source_set("sync_guard") {
@@ -322,6 +336,8 @@ source_set("browser_core") {
     "suggest.h",
     "sync.cc",
     "sync.h",
+    "sync_other_tabs.cc",
+    "sync_other_tabs.h",
     "sync_relay.cc",
     "sync_relay.h",
     "sync_spaces.cc",
@@ -343,6 +359,7 @@ source_set("browser_core") {
     ":archive_rule",
     ":drm_request",
     ":mini_player_place",
+    ":other_tabs",
     ":search_default",
     ":agent_download_hold",
     ":sidebar_backups",
@@ -471,6 +488,7 @@ source_set("browser_core") {
     "//components/sync/protocol",
     ":sync_spaces_proto",
     "//components/sync_device_info",
+    "//components/sync_sessions",
     "//components/tabs:public",
     "//components/update_client",
     "//components/url_formatter",
@@ -613,6 +631,7 @@ test("browser_core_unittests") {
     "archive_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "mini_player_place_unittest.cc",
+    "other_tabs_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
@@ -630,6 +649,7 @@ test("browser_core_unittests") {
     ":archive_rule",
     ":agent_download_hold",
     ":mini_player_place",
+    ":other_tabs",
     ":search_default",
     ":sidebar_backups",
     ":site_searches",
@@ -642,6 +662,7 @@ test("browser_core_unittests") {
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//components/search_engines",
+    "//components/sessions",
     "//components/download/public/common:test_support",
     "//components/search_engines:test_support",
     "//components/sync",
