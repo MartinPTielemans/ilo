@@ -371,6 +371,8 @@ case "${BROWSER_HEADLESS:-xvfb}" in
 esac
 expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
   "Portrait Mode didn't show its toast"
+# The card's buttons left the keyboard with the UI; the page takes it back.
+send click 600 400
 
 # A drag takes the rectangle dragged, and its menu comes as a click's box's does. A click outside
 # capture mode, on the sidebar, leaves it, and so does a resize of the window.
