@@ -972,7 +972,8 @@ settings_drew About
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 settings_drew "Tabs & Sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -992,7 +993,8 @@ toggle ui shown "⌘S with the edge off"
 send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew "Tabs & Sidebar"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
