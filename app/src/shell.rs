@@ -3977,8 +3977,15 @@ impl Focusable for Shell {
     }
 }
 
+/// [DEBUG-rv] Milliseconds since the first call, for the reveal's frame probe.
+pub fn debug_rv_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        eprintln!("[DEBUG-rv] shell render {:.1}", debug_rv_ms());
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.lone_header = cx
