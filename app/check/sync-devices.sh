@@ -7,15 +7,16 @@
 # B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists A's
 # tab, naming A, and opens it (#1234). A saves a login, which B lists, then removes, and A hears
 # it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
-# asking, as the account has other devices, and the server forgets them. Linux's alone so far:
-# the Mac's and Windows' clipboards and two copies of the app at once there are unrun.
+# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and on
+# Windows, where each device's window takes the foreground from the others' as the run drives it
+# (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
   return 0
 fi
-if [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
-  echo "skip: sync-devices. It runs under Xvfb on Linux so far, where xdotool and xclip reach it."
+if ! windows && { [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; }; then
+  echo "skip: sync-devices. It runs under Xvfb on Linux and on Windows so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
@@ -37,16 +38,32 @@ await_spaces() {
 # Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does.
 new_space() {
   had=$(spaces)
-  send window 1
+  forward
   send menu New Space…
   expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space on $on"
   await_spaces $((had + 1)) "New Space didn't make a Space on $on"
   send type "$1"
   send key return
 }
-# What the X server's clipboard holds, as target $1 (text if none).
+# What the clipboard holds, the X server's or Windows': its text, or with formats the formats it
+# holds.
 clipboard() {
-  timeout 5 xclip -selection clipboard -o ${1:+-t "$1"} 2>/dev/null || true
+  if windows; then
+    python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true
+  else
+    timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true
+  fi
+}
+# The format that marks what clipboard managers are to skip (#641).
+hint=x-kde-passwordManagerHint
+! windows || hint=ExcludeClipboardContentFromMonitorProcessing
+# The device's first browser window in front with the keyboard, as a click on it gives it. On
+# Windows the driver's window activates a window within its own copy alone, so the copy's window
+# takes the foreground from the others' too.
+forward() {
+  send window 1
+  ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
+    fail "$on's window couldn't take the foreground"
 }
 others=
 
@@ -77,8 +94,8 @@ for _ in $(seq 30); do
   sleep 0.1
 done
 [ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
-clipboard TARGETS | grep -qx 'x-kde-passwordManagerHint' ||
-  fail "the copied words aren't marked for clipboard managers to skip: $(clipboard TARGETS | tr '\n' ' ')"
+clipboard formats | grep -qx "$hint" ||
+  fail "the copied words aren't marked for clipboard managers to skip: $(clipboard formats | tr '\n' ' ')"
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
@@ -86,6 +103,7 @@ await 'browser: sync service active$' || fail "A's sync didn't become active"
 new_space "from A"
 
 start b "$PWD/$out/sync-devices-b" 6
+! windows || forward
 open_sign_in
 sign_in
 await '^browser: account NeedsSecret None$' || fail "B, signed in, didn't need the account's secret"
@@ -94,7 +112,7 @@ await '^browser: account Pairing None$' || fail "B didn't ask the account's devi
 # A takes the request once one of its windows is active, as it would be in front of the user.
 # A may have been the active app already, so these are read from all A has logged.
 device a
-send window 1
+forward
 await '^browser: pairing asked$' || fail "A didn't take B's request with its window active"
 await '^browser: dialog shown Add the device that asked at ' || fail "A didn't ask whether to add B"
 await '^browser: dialog confirm at ' || fail "A's question didn't say where Add is"
@@ -114,6 +132,7 @@ device a
 await_spaces 3 "A doesn't have the Space B made"
 
 start c "$PWD/$out/sync-devices-c" 7
+! windows || forward
 open_sign_in
 sign_in
 await '^browser: account NeedsSecret None$' || fail "C, signed in, didn't need the account's secret"
@@ -139,7 +158,7 @@ send agentopen claude-code "${site}login.html?agents-own"
 expect '^browser: agent claude-code opened [1-9][0-9]*$' "A's agent didn't open a tab in its Space"
 agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
 await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's agent's tab didn't load"
-send window 1
+forward
 go_from_bar "${site#http://}login.html?users-own"
 expect '^browser: title [0-9]* login$' "A's own tab didn't load"
 store_b="$out/sync-devices-b/Default/Sync Data/LevelDB"
@@ -156,11 +175,11 @@ grep -rqa 'login.html?agents-own' "$store_b" &&
 device b
 await "^browser: other computers' tabs [1-9]" ||
   fail "B's core never told the app of A's open tab, which B's sync store has"
-send window 1
+forward
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
 send type login
-expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on ilo on Linux" \
+expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on $label" \
   "B's command bar didn't list A's tab for \"login\""
 grep "^browser: command bar lists other computers' tabs: " "$log" | grep -q 'agents-own' &&
   fail "B's command bar listed a tab of A's agent's Space"
@@ -179,7 +198,7 @@ expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab d
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
 device a
-send window 1
+forward
 go_from_bar "${site#http://}login.html"
 expect '^browser: title [0-9]* login$' "A's login page didn't load"
 tab=$(sed -n 's/^browser: title \([0-9]*\) login$/\1/p' "$log" | tail -1)
@@ -252,7 +271,7 @@ done
 for d in c b; do
   device $d
   exec 3>&-
-  kill -INT "$pid"
+  quit_app
   wait "$pid" || fail "$d exited with status $?"
 done
 exec 6>&- 7>&-
