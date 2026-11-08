@@ -147,8 +147,11 @@ share_from_url_toast() {
   send move $share
   first_move=$step
   send move $share
-  expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $what" \
-    "$first_move"
+  # A toast that came in place of one the pointer was on is hovered already, which it doesn't log
+  # again (#2076).
+  [ "$(last 'toast hovered')" = true ] ||
+    expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $what" \
+      "$first_move"
   [ -z "$then" ] || $then
   send click $share
   expect '^browser: toast button share$' "a click on Share at $share on ⇧⌘C's toast, $what, didn't take"
