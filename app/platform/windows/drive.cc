@@ -13,8 +13,8 @@
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
 // menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
 // takeback and age, pip, as Linux's finds Chromium's Picture in Picture window but with hit
-// tests in place of drags, and Windows' own maximize, which the Mac's has no command for, dpi <percent>,
-// which tells the browser window it moved to a display of that scale as Windows does
+// tests in place of drags, and Windows' own maximize, which the Mac's has no command for,
+// dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
 // (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
 // state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
 // on screen over the app's browser windows; stack, which lists every app's windows over the driven

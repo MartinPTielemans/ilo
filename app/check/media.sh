@@ -527,40 +527,36 @@ send window 1
 # network, and macOS asks whether it may, over the app and with its activation. The user answers
 # once; a check VM or a hosted runner is asked each time it's new, so the run answers it, through
 # check/alert.mm, and the app has its activation back.
-if true; then
-  send menu "Cast…"
-  expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
-  if [ "$(uname)" = Darwin ]; then
-    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
-      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-    # A Mac that has answered before isn't asked again, and the helper finds no alert.
-    "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
-    for _ in $(seq 50); do
-      send state
-      [ "$active" = 1 ] && break
-      sleep 0.1
-    done
-    [ "$active" = 1 ] || fail "ilo wasn't the active app after macOS's local network question: \
+send menu "Cast…"
+expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
+expect "^browser: cast $b at " "the Cast card wasn't drawn"
+if [ "$(uname)" = Darwin ]; then
+  clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
+    fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
+  # A Mac that has answered before isn't asked again, and the helper finds no alert.
+  "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && break
+    sleep 0.1
+  done
+  [ "$active" = 1 ] || fail "ilo wasn't the active app after macOS's local network question: \
 $(cat "$out/alert.txt")"
-  fi
-  expect "^browser: cast $b at " "the Cast card wasn't drawn"
-  read -r kx ky kw kh <<EOF
+fi
+read -r kx ky kw kh <<EOF
 $(grep "^browser: cast $b at " "$log" | tail -1 | cut -d' ' -f5-)
 EOF
-  ../tools/window-screenshot.sh "$pid" "$out/media-cast.png" || fail "no window to capture"
-  # Its ×, 7 inside its top right corner and 22 square.
-  send click $((kx + kw - 18)) $((ky + 18))
-  expect '^browser: command cast-close via card$' "the Cast card's × didn't take the click"
-  expect "^browser: cast $b closed\$" "× didn't close the Cast dialog"
-  post rightclick $page_point
-  expect '^browser: menu shown .*Cast…' "the page's menu had no Cast…"
-  send choose "Cast…"
-  expect "^browser: cast $b .* devices [0-9]*\$" "the page menu's Cast… didn't open the Cast dialog"
-  send menu "Cast…"
-  expect "^browser: cast $b closed\$" "View › Cast… again didn't close the Cast dialog"
-else
-  echo "skip: the Cast card on $(uname). Chrome looking for devices would ask for the network."
-fi
+../tools/window-screenshot.sh "$pid" "$out/media-cast.png" || fail "no window to capture"
+# Its ×, 7 inside its top right corner and 22 square.
+send click $((kx + kw - 18)) $((ky + 18))
+expect '^browser: command cast-close via card$' "the Cast card's × didn't take the click"
+expect "^browser: cast $b closed\$" "× didn't close the Cast dialog"
+post rightclick $page_point
+expect '^browser: menu shown .*Cast…' "the page's menu had no Cast…"
+send choose "Cast…"
+expect "^browser: cast $b .* devices [0-9]*\$" "the page menu's Cast… didn't open the Cast dialog"
+send menu "Cast…"
+expect "^browser: cast $b closed\$" "View › Cast… again didn't close the Cast dialog"
 
 # A video's page menu has Chrome's Picture in Picture, which floats the video; "x" in the page
 # brings it back. The video plays a canvas's colours, with no sound.
