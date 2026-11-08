@@ -42,16 +42,24 @@ screens=(
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) ;;
-  *) systems=(wayland x11) ;;
+  *)
+    systems=(wayland x11)
+    cargo build -q --release --manifest-path "$here/../app/check/drag/Cargo.toml" \
+      --target-dir "$here/../app/target"
+    drag=$here/../app/target/release/drag
+    ;;
 esac
 # Captures the screen, with the preview's settings in the environment, and with a point, again
-# with sway's pointer there, at the window's own point, as the window fills the output. A warp
-# alone sends the window no motion, so it moves on by a pixel, which hovers what's under it.
+# with the pointer there, at the window's own point, as the window fills the output. A headless
+# sway seat has no pointer, so check/drag lends it one, which lives until the capture's taken; it
+# moves twice, as the window may take the seat's pointer only once the first move has given it one.
 capture() { # <system> <output.png> <ready> [<point>]
   local then=()
   [ -z "${4:-}" ] || then=(--then "set -e; at=\$(grep -m1 '$4' \"\$LOG\" | awk '{ print \$(NF - 1), \$NF }')
-    swaymsg seat seat0 cursor set \$at > /dev/null; swaymsg seat seat0 cursor move 1 0 > /dev/null
-    sleep 1.5; grim -c '$2'")
+    set -- \$at
+    { sleep 0.5; echo \"move \$1 \$2\"; sleep 0.5; echo \"move \$((\$1 + 1)) \$2\"; sleep 3; } |
+      '$drag' 1280x800 > /dev/null &
+    sleep 2; grim -c '$2'; wait")
   case $1 in
     windows) timeout 90 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/window-capture.ps1" \
       "$2" "$3" "$preview" -Moving 400 ;;

@@ -1,6 +1,6 @@
 //! Another app's drag under Wayland, for check/drops.sh: a small window of its own, which the drag
 //! starts from, and a virtual pointer, which a headless sway seat has no other of.
-//! Usage: drag <width>x<height> <type> <data> [<type> <data>...]
+//! Usage: drag <width>x<height> [<type> <data>...]
 //! The size is the output's, in logical pixels, which the pointer moves on. The drag carries each
 //! type with its data, text/x-moz-url's in UTF-16 as browsers' drags carry a link. Each line on stdin is a step: `move <x> <y>` puts the pointer there, `press`
 //! presses its left button, which over the window starts the drag, and `release` lets it go. What
@@ -8,6 +8,8 @@
 //! comes into it, `drag: started`, `drag: target <type>` or `drag: target none` as the surface under
 //! the drag takes it or not, `drag: sent <type>`, and how it ends: `drag: finished` or
 //! `drag: cancelled`.
+//! Given only the size it's a pointer alone, with no window and no drag, which tools/parity.sh
+//! hovers with: `move` and `press` and `release` go where the pointer is.
 
 use std::{
     io::{BufRead as _, Write as _},
@@ -50,8 +52,8 @@ fn main() {
         let (width, height) = size.split_once('x')?;
         Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
     });
-    let (Some((width, height)), true) = (extent, args.len() >= 3 && args.len() % 2 == 1) else {
-        eprintln!("usage: drag <width>x<height> <type> <data> [<type> <data>...]");
+    let (Some((width, height)), true) = (extent, args.len() % 2 == 1) else {
+        eprintln!("usage: drag <width>x<height> [<type> <data>...]");
         std::process::exit(2);
     };
     let data: Vec<(String, Vec<u8>)> = (args[1..].chunks(2))
@@ -77,10 +79,12 @@ fn main() {
         (globals.bind(&qh, 1..=2, ())).expect("no virtual pointers");
 
     let surface = compositor.create_surface(&qh, ());
-    let toplevel = wm.get_xdg_surface(&surface, &qh, ()).get_toplevel(&qh, ());
-    toplevel.set_app_id("ilo-drag".into());
-    toplevel.set_title("drag".into());
-    surface.commit();
+    if !data.is_empty() {
+        let toplevel = wm.get_xdg_surface(&surface, &qh, ()).get_toplevel(&qh, ());
+        toplevel.set_app_id("ilo-drag".into());
+        toplevel.set_title("drag".into());
+        surface.commit();
+    }
 
     // One opaque square, in a file that's gone once mapped.
     let path = std::env::temp_dir().join(format!("ilo-drag-{}", std::process::id()));
@@ -99,6 +103,7 @@ fn main() {
     let pool = shm.create_pool(file.as_fd(), pixels.len() as i32, &qh, ());
     let buffer = pool.create_buffer(0, SIZE, SIZE, SIZE * 4, wl_shm::Format::Argb8888, &qh, ());
 
+    let data_is_empty = data.is_empty();
     let source = manager.create_data_source(&qh, ());
     for (kind, _) in &data {
         source.offer(kind.clone());
@@ -110,7 +115,8 @@ fn main() {
         device: manager.get_data_device(&seat, &qh, ()),
         source,
         data,
-        shown: false,
+        // A pointer alone has no window to wait for.
+        shown: data_is_empty,
         pointer: None,
         over: false,
     };
