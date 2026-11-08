@@ -273,6 +273,7 @@ pub fn tally(found: &Found, source: &Source) -> Tally {
         for node in nodes {
             match node {
                 Node::Tab(_) => tally.0 += 1,
+                Node::Split(split) => tally.0 += split.tabs.len(),
                 Node::Folder { children, .. } => {
                     tally.1 += 1;
                     count(children, tally);
@@ -341,7 +342,7 @@ pub fn folders(source: &Source, now: SystemTime) -> Result<Vec<String>, ReadErro
     let mut names: Vec<String> = Vec::new();
     for node in found.spaces.iter().flat_map(|space| &space.pinned) {
         let name = match node {
-            Node::Tab(_) => bar,
+            Node::Tab(_) | Node::Split(_) => bar,
             Node::Folder { name, .. } => name,
         };
         if !names.iter().any(|each| each == name) {
@@ -361,7 +362,7 @@ pub fn leave_out(found: &mut Found, left_out: &[String], family: Family) {
     let bar = out(bar_name(family));
     for space in &mut found.spaces {
         space.pinned.retain(|node| match node {
-            Node::Tab(_) => !bar,
+            Node::Tab(_) | Node::Split(_) => !bar,
             Node::Folder { name, .. } => !out(name),
         });
     }

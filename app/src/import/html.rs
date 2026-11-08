@@ -83,7 +83,7 @@ pub fn bookmarks(html: &str) -> Result<Vec<Node>, String> {
     let mut folders: Vec<(String, Vec<Node>)> = (folders.into_iter())
         .filter_map(|node| match node {
             Node::Folder { name, children } => Some((name, children)),
-            Node::Tab(_) => None,
+            Node::Tab(_) | Node::Split(_) => None,
         })
         .collect();
     let bar = match bar {
