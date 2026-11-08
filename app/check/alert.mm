@@ -1,11 +1,11 @@
-// macOS's own question in a check VM or a hosted Mac, as "Allow “ilo” to find devices on local
+// macOS's own question in a check VM or a hosted Mac, as "Allow … to find devices on local
 // networks?", which UserNotificationCenter shows over the app and which takes its activation: it
 // finds the alert whose text has TEXT among UserNotificationCenter's windows, through the
 // accessibility API, and presses its button named BUTTON. It waits up to 15 s for it and says
-// "pressed <the alert's text>". Without one it says which app is in front and exits 1. It reads
-// UserNotificationCenter's windows alone, never another app's. The run's process needs
-// Accessibility, which check-mac.yml grants. Usage: alert TEXT BUTTON Built with clang++
-// -fobjc-arc -framework Cocoa.
+// "pressed BUTTON on TEXT", never the rest of the alert, which names the process that asked.
+// Without one it says which app is in front and exits 1. It reads UserNotificationCenter's windows
+// alone, never another app's. The run's process needs Accessibility, which check-mac.yml grants.
+// Usage: alert TEXT BUTTON. Built with clang++ -fobjc-arc -framework Cocoa.
 #import <Cocoa/Cocoa.h>
 
 #include <initializer_list>
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
           }
           AXUIElementRef button = Button((__bridge AXUIElementRef)window, title, 0);
           if (button && AXUIElementPerformAction(button, kAXPressAction) == kAXErrorSuccess) {
-            printf("pressed %s\n", said.UTF8String);
+            printf("pressed %s on \"%s\"\n", title.UTF8String, text.UTF8String);
             return 0;
           }
         }

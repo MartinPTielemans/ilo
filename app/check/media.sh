@@ -524,9 +524,9 @@ send window 1
 
 # The Cast card, from View › Cast… and from the page menu, with whatever devices the network has,
 # none clicked. Chrome looking for them is the first time on the Mac that the app reaches the local
-# network, and macOS asks whether it may, over the app and with its activation. The user answers
-# once; a check VM or a hosted runner is asked each time it's new, so the run answers it, through
-# check/alert.mm, and the app has its activation back.
+# network, and macOS asks whether it may, seconds later, over the app and with its activation. The
+# user answers once; a check VM or a hosted runner is asked each time it's new, so the run answers
+# it after the card, through check/alert.mm, and the app has its activation back.
 send menu "Cast…"
 expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
 expect "^browser: cast $b at " "the Cast card wasn't drawn"
@@ -560,7 +560,8 @@ if [ "$(uname)" = Darwin ]; then
       [ "$active" = 1 ] && break
       sleep 0.1
     done
-    [ "$active" = 1 ] || fail "ilo wasn't the active app after the Cast card: $(cat "$out/alert.txt")"
+    [ "$active" = 1 ] ||
+      fail "ilo wasn't the active app after the Cast card: $(cat "$out/alert.txt")"
   fi
 fi
 
