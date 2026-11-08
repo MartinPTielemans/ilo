@@ -190,4 +190,6 @@ if worse:
     sys.exit(1)
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
+# uBlock Origin's, for adblock-native's to compare with in a check of its own.
+[ "$engine" != ublock ] || cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
 echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }with the window captured 8 s after each site loaded in $dir"
