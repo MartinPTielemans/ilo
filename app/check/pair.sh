@@ -26,7 +26,7 @@ send type a1b2
 ../tools/window-screenshot.sh "$pid" "$out/pair-pin.png" || fail "no window to capture"
 send key return
 expect '^browser: command pair via card$' "↩ in the PIN field didn't pair"
-expect "^browser: tab $pair_tab paired a1b2\$" "the page's pairing didn't get the PIN as typed"
+expect "browser: tab $pair_tab paired a1b2\$" "the page's pairing didn't get the PIN as typed"
 expect "^browser: pair $pair_tab ended\$" "pairing didn't take the card away"
 
 send pair "$pair_tab" passkey
@@ -40,7 +40,7 @@ $(pair_at)
 EOF
 send click $((pair_x + pair_w - 18)) $((pair_y + 18))
 expect '^browser: command pair-close via card$' "the passkey card's × didn't take the click"
-expect "^browser: tab $pair_tab pairing cancelled\$" "× didn't cancel the page's pairing"
+expect "browser: tab $pair_tab pairing cancelled\$" "× didn't cancel the page's pairing"
 expect "^browser: pair $pair_tab ended\$" "× didn't take the card away"
 
 send pair "$pair_tab" confirm
@@ -52,7 +52,7 @@ $(pair_at)
 EOF
 send click $((pair_x + 32)) $((pair_y + pair_h - 13 - 14))
 expect '^browser: command pair via card$' "the question card's Pair didn't take the click"
-expect "^browser: tab $pair_tab paired\$" "Pair didn't agree to the page's pairing"
+expect "browser: tab $pair_tab paired\$" "Pair didn't agree to the page's pairing"
 expect "^browser: pair $pair_tab ended\$" "Pair didn't take the card away"
 quit
 echo "ok: a Bluetooth device's PIN prompt shows in the card, whose field takes the keyboard and"
