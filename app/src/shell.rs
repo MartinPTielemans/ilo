@@ -262,6 +262,9 @@ const TURN_TITLE_FADE: f32 = 0.5;
 // critically damped, neither overshooting, as Arc's (docs/ux-spec.md › Motion: Folder open and
 // Folder close).
 const FOLD_OPEN: f32 = 0.2;
+/// A tab shown in a closed folder slides in under it over 0.15 s, as Arc 1.171's does (outside
+/// measurement, #1405); its curve, the folder's opening ease-out, is ours.
+const PEEK_IN: f32 = 0.15;
 const FOLD_CLOSE_OMEGA: f32 = 25.;
 // The edge under the favorites fades in once the list scrolls past its top and out back there, and
 // the one at its foot while rows are hidden under it, as long as Arc's take, on Dia's Scroll edge
@@ -882,12 +885,14 @@ struct Opened {
     /// Whether whole rows fade in, else only a new tab's plate.
     whole: bool,
     start: Instant,
+    /// The row spring's, or a tab shown in a closed folder's slide in (Curve::Peek).
+    curve: Curve,
 }
 
 impl Opened {
     /// How far they've faded in, or None once they have.
     fn done(&self) -> Option<f32> {
-        row_spring(self.start.elapsed().as_secs_f32())
+        self.curve.at(self.start.elapsed().as_secs_f32())
     }
 }
 
@@ -915,6 +920,8 @@ enum Curve {
     Room,
     /// Making room as a folder opens, or closing it up as it closes (Folder open, Folder close).
     Fold { open: bool },
+    /// A tab shown in a closed folder sliding in under it, and the rows making room (#1405).
+    Peek,
 }
 
 impl Curve {
@@ -927,6 +934,7 @@ impl Curve {
                 (t < FOLD_OPEN).then(|| cubic_bezier(0., 0., 0.58, 1., t / FOLD_OPEN))
             }
             Curve::Fold { open: false } => critically_damped(t, FOLD_CLOSE_OMEGA),
+            Curve::Peek => (t < PEEK_IN).then(|| cubic_bezier(0., 0., 0.58, 1., t / PEEK_IN)),
         }
     }
 }
@@ -3216,7 +3224,7 @@ impl Shell {
         space.keep_peek(tab);
         space.shown = tab;
         if space.slots(head) != before {
-            self.move_rows(before, Curve::Slide, cx);
+            self.move_rows(before, Curve::Peek, cx);
         }
     }
 
@@ -5730,6 +5738,13 @@ mod tests {
             );
         }
         assert_eq!(along(Curve::Fold { open: true }, 200.), 1.);
+        // A tab shown in a closed folder is in at 0.15 s, Arc 1.171's (#1405), never past.
+        let peek: Vec<f32> = (0..=200).map(|ms| along(Curve::Peek, ms as f32)).collect();
+        assert!(
+            peek.windows(2)
+                .all(|pair| pair[0] <= pair[1] && pair[1] <= 1.)
+        );
+        assert!(peek[149] < 1. && peek[150] == 1.);
         assert!(1. - along(Curve::Fold { open: false }, 280.) < 0.01);
         assert!(1. - along(Curve::Room, 280.) < 0.01);
     }
