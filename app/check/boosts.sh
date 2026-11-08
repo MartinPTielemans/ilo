@@ -41,7 +41,9 @@ tab=$(grep '^browser: title [0-9]* ad block' "$log" | tail -1 | cut -d' ' -f3)
 
 # A save in the user's editor shows at once, with no reload.
 printf '%s\n' 'body { background: rgb(0, 128, 0) !important; }' > "$file"
-expect "^browser: title $tab ad block rgb(0, 128, 0)\$" "a save of the Boost's file didn't show on the page"
+# Await, as expect reads only what follows a driver's command, and none is sent yet.
+await "^browser: title $tab ad block rgb(0, 128, 0)\$" ||
+  fail "a save of the Boost's file didn't show on the page"
 ../tools/window-screenshot.sh "$pid" "$out/boosted.png" || fail "no window to capture"
 
 send click $page_point
