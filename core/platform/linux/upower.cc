@@ -1,6 +1,7 @@
 #include <cmath>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -8,7 +9,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/platform/battery.h"
@@ -39,8 +39,8 @@ constexpr uint32_t kPendingDischarge = 6;
 // What UPower last said, which the provider reports. None until it has said, or without UPower or
 // a battery, so Battery Saver never turns on.
 std::optional<BatteryState>& Last() {
-  static base::NoDestructor<std::optional<BatteryState>> last;
-  return *last;
+  static std::optional<BatteryState> last;
+  return last;
 }
 
 // Samples as UPower says the display device changed, on its PropertiesChanged signal: nothing
@@ -142,17 +142,19 @@ class UPowerSource : public base::SamplingEventSource {
       read->charge_unit = base::BatteryLevelProvider::BatteryLevelUnit::kRelative;
       read->capture_time = base::TimeTicks::Now();
     }
-    std::optional<BatteryState>& last = Last();
-    const bool same = last.has_value() == read.has_value() &&
-                      (!read || (last->current_capacity / 100 == read->current_capacity / 100 &&
-                                 last->is_external_power_connected ==
-                                     read->is_external_power_connected));
-    last = read;
-    if (!same) {
+    // Told when what Battery Saver reads changes: the whole percent, or the power.
+    const std::optional<std::pair<int, bool>> told =
+        read ? std::optional<std::pair<int, bool>>(
+                   {static_cast<int>(std::lround(percentage)), read->is_external_power_connected})
+             : std::nullopt;
+    Last() = read;
+    if (!logged_ || told != told_) {
+      logged_ = true;
+      told_ = told;
       // check.sh reads this line.
-      if (read) {
-        LOG(ERROR) << "browser: UPower says " << read->current_capacity / 100 << "% "
-                   << (read->is_external_power_connected ? "plugged in" : "on battery");
+      if (told) {
+        LOG(ERROR) << "browser: UPower says " << told->first << "% "
+                   << (told->second ? "plugged in" : "on battery");
       } else {
         LOG(ERROR) << "browser: UPower says no battery";
       }
@@ -163,6 +165,9 @@ class UPowerSource : public base::SamplingEventSource {
   }
 
   SamplingEventCallback sample_;
+  // What the log last said, none for no battery.
+  bool logged_ = false;
+  std::optional<std::pair<int, bool>> told_;
   // The bus owns it.
   raw_ptr<dbus::ObjectProxy> device_ = nullptr;
   base::WeakPtrFactory<UPowerSource> weak_{this};
