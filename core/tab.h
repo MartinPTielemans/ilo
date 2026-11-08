@@ -168,6 +168,8 @@ class Tab : public content::WebContentsObserver,
 
   // Mutes or unmutes the tab, as Chrome's speaker button does.
   void SetMuted(bool muted);
+  // Sets the tab's volume, as bc_tab_set_volume.
+  void SetVolume(double volume);
   // While another page shares a tab, has it share this tab's page instead, as Chrome's infobar's
   // Share this tab instead does.
   void ShareInstead();
@@ -309,6 +311,11 @@ class Tab : public content::WebContentsObserver,
 
   // media_session::mojom::MediaSessionObserver, for the media the sidebar's player shows:
   void MediaSessionInfoChanged(media_session::mojom::MediaSessionInfoPtr info) override;
+  // Scales the page's media to volume_ through its media session's ducking, which Chromium applies
+  // to each player the session has and each it gains: content has no volume of its own for a
+  // page. A session drops its ducking as its last player goes, so each change asks again; |again|
+  // takes a new volume while it ducks, as a multiplier changes only as ducking starts.
+  void ApplyVolume(bool again);
   void MediaSessionMetadataChanged(
       const std::optional<media_session::MediaMetadata>& metadata) override;
   void MediaSessionActionsChanged(
@@ -361,6 +368,8 @@ class Tab : public content::WebContentsObserver,
   bool unloading_ = false;
   std::string name_;
   std::string icon_;
+  // bc_tab_set_volume's, from 0 to 1.
+  double volume_ = 1;
   base::Time last_seen_ = base::Time::Now();
   std::optional<SkColor> page_color_;
   bool state_report_posted_ = false;

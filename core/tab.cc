@@ -13,6 +13,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -1163,6 +1164,7 @@ void Tab::ReportState() {
       .away_from_pinned_url = pinned_url.is_valid() && PageUrl(contents) != pinned_url,
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
+      .volume = volume_,
       .icon = icon_.c_str(),
       .trouble = Trouble(),
       .net_error = Trouble() == BC_PAGE_NETWORK_ERROR ? net_error_ : 0,
@@ -1177,6 +1179,10 @@ void Tab::ReportState() {
                                            media_session::mojom::MediaPlaybackState::kPlaying,
       .media_title = media_title.c_str(),
       .media_artist = media_artist.c_str(),
+      .media_previous =
+          controllable &&
+          std::ranges::contains(session->GetMediaSessionActionsSync(),
+                                media_session::mojom::MediaSessionAction::kPreviousTrack),
       .media_next = controllable &&
                     std::ranges::contains(session->GetMediaSessionActionsSync(),
                                           media_session::mojom::MediaSessionAction::kNextTrack),
@@ -1612,6 +1618,9 @@ void Tab::Media(int action) {
     case BC_MEDIA_NEXT:
       session->NextTrack();
       break;
+    case BC_MEDIA_PREVIOUS:
+      session->PreviousTrack();
+      break;
     case BC_MEDIA_PICTURE_IN_PICTURE:
       // The page's own handler if it has one, else its one video, as Chrome's media controls do.
       session->EnterPictureInPicture();
@@ -1627,7 +1636,43 @@ void Tab::MediaStartedPlaying(const MediaPlayerInfo&, const content::MediaPlayer
 }
 
 void Tab::MediaSessionInfoChanged(media_session::mojom::MediaSessionInfoPtr) {
+  ApplyVolume(/*again=*/false);
   ReportStateSoon();
+}
+
+void Tab::SetVolume(double volume) {
+  volume_ = std::clamp(volume, 0.0, 1.0);
+  ApplyVolume(/*again=*/true);
+  ReportStateSoon();
+}
+
+void Tab::ApplyVolume(bool again) {
+  content::MediaSession* session =
+      web_contents() ? content::MediaSession::GetIfExists(web_contents()) : nullptr;
+  if (!session) {
+    return;
+  }
+  using State = media_session::mojom::MediaSessionInfo::SessionState;
+  // As it is now, not as a notice of it still on its way says.
+  const State state = session->GetMediaSessionInfoSync()->state;
+  if (volume_ >= 1) {
+    if (state == State::kDucking) {
+      session->StopDucking();
+    }
+    return;
+  }
+  session->SetDuckingVolumeMultiplier(volume_);
+  // With no player, ducking would stay on a session that has nothing to scale until the next.
+  if (state == State::kInactive || (state == State::kDucking && !again)) {
+    return;
+  }
+  if (state == State::kDucking) {
+    session->StopDucking();
+  }
+  session->StartDucking();
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: tab " << id_ << " media at volume "
+             << base::StringPrintf("%.2f", volume_);
 }
 
 void Tab::MediaSessionMetadataChanged(const std::optional<media_session::MediaMetadata>&) {
