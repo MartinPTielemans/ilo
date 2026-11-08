@@ -3,7 +3,8 @@
 # says each row's median of its samples, with their range, beside its target. Those targets are an
 # M5 Pro's, and a hosted runner is a slower machine shared with other jobs, so they only report.
 # The gate's rows that compare with Chrome are measured against Chrome on the same runner, and of
-# those, memory, which moves under 1 % from run to run, fails the run more than 10 % over Chrome's.
+# those, memory at 10 and 20 tabs, which moves under 5 % from run to run, fails the run more than
+# 10 % over Chrome's.
 #
 # Its page is Ardia's: 60 boxes, 120 paragraphs and a clock each second, served from the check's
 # own site, which puts in its title when it first painted ("<id> fcp <ms>") and, each time it's
@@ -431,9 +432,11 @@ else
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
     perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
     chrome_quit
-    # ilo against Chrome on this machine, for each of the gate's rows. Memory moves under 1 % from
-    # run to run, so ilo more than 10 % over Chrome's fails the run. Idle moves 2 to 5 times from one
-    # 10 s window to the next on a hosted runner, so it only reports.
+    # ilo against Chrome on this machine, for each of the gate's rows. Memory at 10 and 20 tabs moves
+    # under 5 % from run to run, so ilo more than 10 % over Chrome's fails the run. At 1 tab, 30 s
+    # after launch, uBlock Origin is still taking in its lists, and ilo's moved by 70 % from one run
+    # to the next, and idle moves 2 to 5 times from one 10 s window to the next on a hosted runner,
+    # so those only report.
     python3 -I - "$perf_dir" << 'PY' | tee "$perf_dir/gate.txt"
 import json, os, statistics, sys
 
@@ -445,7 +448,7 @@ def idle(name, column):
     with open(os.path.join(d, f"{name}.txt")) as f:
         return statistics.median(float(line.split()[column]) for line in f)
 for label, ilo, chrome, unit, fails in [
-    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", True),
+    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False),
     ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True),
     ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True),
     ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False),
@@ -464,5 +467,6 @@ missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
 [ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456)"
 echo "ok: perf measured $(wc -l < "$perf_dir/rows.tsv" | tr -d ' ') rows against #456's targets," \
-  "and ilo's memory within 10 % of Chrome's here; each time from a key includes the shell's clock ($perf_clock), $clock ms. Rows:" \
+  "and ilo's memory at 10 and 20 tabs within 10 % of Chrome's here; each time from a key" \
+  "includes the shell's clock ($perf_clock), $clock ms. Rows:" \
   "$perf_dir/rows.tsv, usage snapshots: $perf_dir/"
