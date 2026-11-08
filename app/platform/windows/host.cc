@@ -3901,6 +3901,8 @@ void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
   Show(g_toast, ui_view, left, top, width, height, false);
+  // It shows at once, without a fade, as the Mac's does.
+  LogShown(g_toast, "toast");
 }
 
 void host_hide_toast(void) {
