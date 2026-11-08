@@ -2463,6 +2463,13 @@ fn main() {
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
                     }
+                    // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
+                    // so the URL field offers to translate them.
+                    if let Ok(language) = std::env::var("PREVIEW_TRANSLATE") {
+                        for tab in 0..=TABS.len() as u64 {
+                            shell.set_page_language(tab, &language, cx);
+                        }
+                    }
                     if let Some(tasks) = &tasks {
                         let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
                         let none = Folders::default();

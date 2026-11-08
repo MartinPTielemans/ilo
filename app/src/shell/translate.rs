@@ -22,9 +22,10 @@ use gpui::{
 };
 
 use super::{
-    KEY_CONTEXT, SECONDARY, Shell, TITLE,
+    KEY_CONTEXT, NAV_HOVERED, NAV_RADIUS, SECONDARY, Shell, TITLE,
     access::Accessible,
     commands::Command,
+    header::TipSide,
     permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
 };
 use crate::tokens::shell::header::{KEY_GAP, KEY_GLYPH, KEY_REACH};
@@ -236,13 +237,18 @@ impl Shell {
             _ => "Translate",
         };
         let drawn = self.translate_mark_drawn.clone();
+        let mark = div()
+            .id("translate")
+            .flex_none()
+            .ml(px(KEY_GAP - KEY_REACH))
+            .p(px(KEY_REACH))
+            .when(self.a11y, |button| button.button_named(words));
+        // It lights under the pointer and names itself as the field's other buttons do, so it
+        // reads as one (#2112).
         Some(
-            div()
-                .id("translate")
-                .flex_none()
-                .ml(px(KEY_GAP - KEY_REACH))
-                .p(px(KEY_REACH))
-                .when(self.a11y, |button| button.button_named(words))
+            self.with_tooltip(mark, Command::TranslatePage, TipSide::Under, cx)
+                .rounded(px(NAV_RADIUS))
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|shell, _, _, cx| {
