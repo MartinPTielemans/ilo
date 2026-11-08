@@ -6,8 +6,9 @@
 # Settings turns it off for the sites they don't allow; its window moves by its top bar and sizes
 # from its corner. A tab playing music out of sight has a player at the sidebar's foot, whose
 # buttons pause it, skip back and float it in Picture in Picture, whose volume drawer's slider sets
-# the tab's volume, whose click shows the tab, and whose × puts it away. A private window's music has a player in that window alone. View › Cast… and the page
-# menu's Cast… open the tab's Cast card, and × closes it. A video's page menu floats it in Picture
+# the tab's volume, whose click shows the tab, and whose × puts it away. A private window's music
+# has a player in that window alone. View › Cast… and the page menu's Cast… open the tab's Cast
+# card, and × closes it. A video's page menu floats it in Picture
 # in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
 # moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
@@ -372,7 +373,8 @@ if pip_driven; then
   # browser window them back for the tab switch below.
   send click $page_point
 else
-  echo "skip: moving and sizing the floating call on $(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
+  echo "skip: moving and sizing the floating call on $(uname)${WAYLAND_DISPLAY:+ Wayland}:" \
+    "the driver finds no Picture in Picture window there."
 fi
 shown "$f"
 expect "^browser: title $f landed\$" "the call allowed to float didn't come back with its tab"
@@ -398,12 +400,14 @@ shown_again "$a"
 # Music in the call's tab, then another tab shown: the tab playing out of sight has a player.
 send key m
 expect "^browser: title $a playing\$" "m in the page didn't play its silence"
-expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 1 Quiet\$" "the page's music had no controls"
+expect "^browser: page $a media 1 playing 1 previous 1 next 1 pip 1 Quiet\$" \
+  "the page's music had no controls"
 none_since "^browser: media players [0-9]" || fail "the tab shown had a player"
 shown "$b"
 expect "^browser: media players $a\$" "the tab playing out of sight had no player"
 # player_at <height> <failure> [<step>]: waits for the front card drawn <height> tall, 33 at rest
-# and 66 open, 99 with its volume drawer, since the last command or <step>, and reads where it is into mx, my, mw and mh.
+# and 66 open, 99 with its volume drawer, since the last command or <step>, and reads where it is
+# into mx, my, mw and mh.
 player_at() {
   expect "^browser: media player $a at [0-9-]* [0-9-]* [0-9]* $1\$" "$2" "${3:-}"
   read -r mx my mw mh <<EOF
@@ -424,7 +428,8 @@ expect '^browser: media stack rest$' "the stack didn't rest"
 send click $((mx + mw / 2)) $((my + mh / 2))
 expect '^browser: command media-pause via player$' "the player's pause didn't take the click"
 expect "^browser: title $a paused\$" "the player's pause didn't pause the page"
-expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 1 Quiet\$" "the player didn't show it paused"
+expect "^browser: page $a media 1 playing 0 previous 1 next 1 pip 1 Quiet\$" \
+  "the player didn't show it paused"
 # The pointer resting there opens it: the title row's buttons from the right, 4.5 in, 24 wide and
 # 2 apart: ×, then Picture in Picture, as Arc's Back to PiP, there while the page can float and
 # doesn't.
@@ -439,8 +444,9 @@ send click "$(control_x 1)" $control_y
 expect '^browser: command media-previous via player$' "the player's previous didn't take the click"
 expect "^browser: title $a previous track\$" "the player's previous didn't skip back"
 # Adjust Tab Volume opens the drawer, which grows the card 33 up from its foot, with a slider whose
-# track the log has. A press a quarter along it sets the tab's volume there, which the core applies
-# to the page's media and reports back.
+# track the log has. A press a quarter along it sets the tab's volume there, which the core reports
+# back, and applies to the page's media as it plays again: a paused page's ducking is the audio
+# focus manager's to undo.
 send click "$(control_x 4)" $control_y
 expect '^browser: command media-volume via player$' "the player's volume didn't take the click"
 expect "^browser: media volume drawer $a open\$" "the volume drawer didn't open"
@@ -452,12 +458,23 @@ EOF
 send click $((vx + vw / 4)) $((vy + vh / 2))
 expect '^browser: command media-volume 0\.2[3-7] via player$' "the slider didn't take the press"
 volume=$(grep '^browser: command media-volume 0' "$log" | tail -1 | cut -d' ' -f4)
-# The core's line has Chromium's prefix.
-expect "browser: tab $a media at volume $volume\$" "the core didn't turn the page's media to $volume"
 expect "^browser: page $a volume $volume\$" "the tab's volume didn't come back from the core"
+send click "$(control_x 2)" $control_y
+resumed=$step
+expect "^browser: title $a playing\$" "the player's play didn't play the page again"
+# The core's line has Chromium's prefix.
+expect "browser: tab $a media at volume $volume\$" \
+  "the core didn't turn the page's media to $volume"
 ../tools/window-screenshot.sh "$pid" "$out/media-player-volume.png" || fail "no window to capture"
+send click "$(control_x 2)" $control_y
+expect "^browser: title $a paused\$" "the player's pause didn't pause the page again"
+# Once as it plays, or again as the audio focus manager settles who ducks, never back and forth.
+applied=$(sed -n "/^browser: drive $resumed: /,\$p" "$log" |
+  grep -c "browser: tab $a media at volume ")
+[ "$applied" -le 3 ] || fail "the core turned the page's media down $applied times as it played"
 send click "$(control_x 4)" $control_y
-expect '^browser: media volume drawer closed$' "a second click on the volume didn't close its drawer"
+expect '^browser: media volume drawer closed$' \
+  "a second click on the volume didn't close its drawer"
 player_at '6[56]' "the card didn't shrink to 65.5 as its drawer closed"
 button_x() { echo $((mx + mw - 5 - 12 - $1 * 26)); }
 title_y=$((my + 19))
@@ -651,7 +668,8 @@ if pip_driven; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
+  echo "skip: moving, sizing and double-clicking the Mini Player on" \
+    "$(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
   send click $page_point
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"

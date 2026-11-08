@@ -1656,20 +1656,25 @@ void Tab::ApplyVolume(bool again) {
   // As it is now, not as a notice of it still on its way says.
   const State state = session->GetMediaSessionInfoSync()->state;
   if (volume_ >= 1) {
-    if (state == State::kDucking) {
-      session->StopDucking();
+    if (ducked_) {
+      ducked_ = false;
+      // Chromium's own (media::kDefaultDuckingVolumeMultiplier), for when another page ducks it.
+      session->SetDuckingVolumeMultiplier(0.2);
+      if (state == State::kDucking) {
+        session->StopDucking();
+      }
     }
     return;
   }
   session->SetDuckingVolumeMultiplier(volume_);
-  // With no player, ducking would stay on a session that has nothing to scale until the next.
-  if (state == State::kInactive || (state == State::kDucking && !again)) {
+  if (state != State::kActive && !(state == State::kDucking && again)) {
     return;
   }
   if (state == State::kDucking) {
     session->StopDucking();
   }
   session->StartDucking();
+  ducked_ = true;
   // check.sh reads this line.
   LOG(ERROR) << "browser: tab " << id_ << " media at volume "
              << base::StringPrintf("%.2f", volume_);

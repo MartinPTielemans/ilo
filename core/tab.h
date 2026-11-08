@@ -313,8 +313,11 @@ class Tab : public content::WebContentsObserver,
   void MediaSessionInfoChanged(media_session::mojom::MediaSessionInfoPtr info) override;
   // Scales the page's media to volume_ through its media session's ducking, which Chromium applies
   // to each player the session has and each it gains: content has no volume of its own for a
-  // page. A session drops its ducking as its last player goes, so each change asks again; |again|
-  // takes a new volume while it ducks, as a multiplier changes only as ducking starts.
+  // page. Only while the session plays: the audio focus manager undoes a paused session's ducking
+  // as its state leaves suspended, and the two would go back and forth for good. A session drops
+  // its ducking as its last player goes, or as the focus manager settles who ducks, so each change
+  // asks again; |again| takes a new volume while it ducks, as a multiplier changes only as ducking
+  // starts.
   void ApplyVolume(bool again);
   void MediaSessionMetadataChanged(
       const std::optional<media_session::MediaMetadata>& metadata) override;
@@ -370,6 +373,8 @@ class Tab : public content::WebContentsObserver,
   std::string icon_;
   // bc_tab_set_volume's, from 0 to 1.
   double volume_ = 1;
+  // Whether ApplyVolume ducked the session, so a volume back at 1 undoes only its own ducking.
+  bool ducked_ = false;
   base::Time last_seen_ = base::Time::Now();
   std::optional<SkColor> page_color_;
   bool state_report_posted_ = false;
