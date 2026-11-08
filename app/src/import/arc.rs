@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use super::found::{Found, FromProfile, LinkRule, Node, Space, Tab, opens_here};
+use super::found::{Found, FromProfile, LinkRule, Node, SPLIT_TABS, Space, Split, Tab, opens_here};
 use crate::link_rules::Condition;
 use crate::theme::{Appearance, MAX_COLORS, Place, Texture, Theme, place_of};
 
@@ -173,7 +173,7 @@ impl Reader<'_> {
         }
     }
 
-    /// The children of `id`, tabs and folders, with each split view's tabs in its place.
+    /// The children of `id`: tabs, folders and split views.
     fn nodes(&self, id: &str, seen: &mut HashSet<String>) -> Vec<Node> {
         // A file that names a folder inside itself would otherwise never end.
         if !seen.insert(id.into()) {
@@ -207,11 +207,46 @@ impl Reader<'_> {
                     name: name.into(),
                     children: self.nodes(child, seen),
                 });
-            } else if data.get("splitView").is_some() {
-                nodes.extend(self.nodes(child, seen));
+            } else if let Some(view) = data.get("splitView") {
+                nodes.extend(self.split(item, view, self.nodes(child, seen)));
             }
         }
         nodes
+    }
+
+    /// A split view of `item`, Arc's `view`, holding `children`: with its name, its icon if it's an
+    /// emoji, as a split's is here, and stacked if Arc's is vertical, as Convert to Vertical Split
+    /// View stacks it. Only its tabs whose pages open here count: one alone is a tab, and past the
+    /// third, which is all a split holds here, they come after it as tabs.
+    fn split(&self, item: &Value, view: &Value, children: Vec<Node>) -> Vec<Node> {
+        let mut tabs: Vec<Tab> = (children.into_iter())
+            .filter_map(|node| match node {
+                Node::Tab(tab) => Some(tab),
+                _ => None,
+            })
+            .collect();
+        if tabs.len() < 2 {
+            return tabs.into_iter().map(Node::Tab).collect();
+        }
+        let after = tabs.split_off(tabs.len().min(SPLIT_TABS));
+        let name = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let icon = (item.pointer("/customInfo/iconType"))
+            .map(icon)
+            .filter(|icon| !icon.starts_with("glyph:"))
+            .unwrap_or_default();
+        let stacked = view.get("layoutOrientation").and_then(Value::as_str) == Some("vertical");
+        let split = Node::Split(Split {
+            tabs,
+            name: name.trim().into(),
+            icon,
+            stacked,
+        });
+        std::iter::once(split)
+            .chain(after.into_iter().map(Node::Tab))
+            .collect()
     }
 
     /// The tabs under `id`, folders and split views flattened, as favorites have no folders.
@@ -221,6 +256,7 @@ impl Reader<'_> {
                 match node {
                     Node::Tab(tab) => tabs.push(tab),
                     Node::Folder { children, .. } => flatten(children, tabs),
+                    Node::Split(split) => tabs.extend(split.tabs),
                 }
             }
         }

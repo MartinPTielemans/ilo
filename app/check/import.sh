@@ -495,11 +495,14 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 if [ -n "$arc" ]; then
   send key s cmd
   expect '^browser: sidebar shown$' "⌘S didn't bring the sidebar back after the import"
-  # The Personal Space shows its pinned tabs: HN, then Reading with a, b and c and Deep with d.
+  # The Personal Space shows its pinned tabs: HN, then Reading with a, b and c split side by side,
+  # as Arc's split view has them, and Deep with d.
   send key 2 ctrl
   expect "^browser: space $personal in " "⌃2 didn't show Arc's Personal Space"
   expect '^browser: pinned [0-9]*\( [0-9]*\)\{6\}$' \
     "Personal's pinned tabs and folders aren't the 7 rows Arc's are: $(pinned)"
+  expect '^browser: splits [0-9][0-9]*+[0-9][0-9]*$' \
+    "Arc's split view of b and c didn't come in as one: $(grep '^browser: splits' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
 # The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes

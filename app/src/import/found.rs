@@ -37,7 +37,23 @@ pub struct Tab {
 pub enum Node {
     Tab(Tab),
     Folder { name: String, children: Vec<Node> },
+    Split(Split),
 }
+
+/// A split view: its tabs, two or three, left to right, and the name, icon and orientation the
+/// user gave it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Split {
+    pub tabs: Vec<Tab>,
+    /// Empty for none, as for an icon, which is an emoji.
+    pub name: String,
+    pub icon: String,
+    /// Its pages top to bottom rather than side by side.
+    pub stacked: bool,
+}
+
+/// The most tabs a split view holds, as the core keeps it (bc_tab_split_with).
+pub const SPLIT_TABS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Space {
