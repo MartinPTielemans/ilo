@@ -727,6 +727,48 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send click $page_point
 send key f cmd
 expect '^browser: title [0-9]* page saw cmd-f$' "the page didn't get ⌘F first with Prefer Websites"
+# #1784's workaround, once: with Prefer ilo on Open Command Bar, Ctrl+L reaches ilo before the
+# page that answers it 700 ms late, so Japanese typed right after it composes in the bar.
+if windows && [ -n "$japanese" ]; then
+  send menu Settings…
+  expect '^browser: settings shown Shortcuts$' "Settings… didn't show Shortcuts for #1784"
+  send clickkey $(drawn "search")
+  send key a cmd
+  send type command bar
+  expect '^browser: settings search "command bar" finds ' "the search didn't find Open Command Bar"
+  at=$(drawn "shortcut edit-url") || fail "Open Command Bar's keys weren't drawn"
+  post rightclickkey $at
+  expect "^browser: menu shown $(cased "Prefer Websites (checked), Prefer $app_name")\$" \
+    "a right-click on Open Command Bar's keys didn't offer Prefer $app_name"
+  send choose "$(cased "Prefer $app_name")"
+  expect '^browser: shortcut edit-url prefers ilo$' "Prefer $app_name didn't take for Open Command Bar"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send click $page_point
+  send $ime
+  typed_after l nihongo
+  expect "^browser: command bar drew \"$preedit\"\$" \
+    "#1784 with Prefer $app_name: a composition typed right after Ctrl+L didn't go to the command bar: $(drew 'command bar'); the page: $(grep '^browser: title [0-9]* value' "$log" | tail -1)"
+  send state
+  [ "$marked" = "$preedit_marked" ] ||
+    fail "#1784 with Prefer $app_name: the command bar didn't take all of the composition: marked $marked"
+  echo "ok: #1784 with Prefer $app_name on Open Command Bar: $preedit typed right after Ctrl+L composed in the bar"
+  send key escape
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  send ime off
+  # Prefer Websites again, so the rest of the run has the defaults.
+  send menu Settings…
+  expect '^browser: settings shown Shortcuts$' "Settings… didn't show Shortcuts again for #1784"
+  at=$(drawn "shortcut edit-url") || fail "Open Command Bar's keys weren't drawn again"
+  post rightclickkey $at
+  expect "^browser: menu shown $(cased "Prefer Websites, Prefer $app_name (checked)")\$" \
+    "a right-click on Open Command Bar's keys didn't show Prefer $app_name checked"
+  send choose "$(cased "Prefer Websites")"
+  expect '^browser: shortcut edit-url prefers websites$' "Prefer Websites didn't take for Open Command Bar"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+fi
 
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
