@@ -1,5 +1,6 @@
 #include "browser_core/sync_other_tabs.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -99,15 +100,21 @@ class Watch : public syncer::DeviceInfoTracker::Observer, public ProfileObserver
         service ? service->GetOpenTabsUIDelegate() : nullptr;
     std::vector<raw_ptr<const sync_sessions::SyncedSession, VectorExperimental>> sessions;
     if (open_tabs && open_tabs->GetAllForeignSessions(&sessions)) {
-      const syncer::DeviceInfoTracker* devices = devices_observation_.GetSource();
+      // Every device's record: GetDeviceInfo takes only one with a Chrome version, which
+      // TrimSyncCommit keeps on its device.
+      std::vector<const syncer::DeviceInfo*> devices;
+      if (const syncer::DeviceInfoTracker* tracker = devices_observation_.GetSource()) {
+        devices = tracker->GetAllDeviceInfo();
+      }
       for (const sync_sessions::SyncedSession* session : sessions) {
         OtherComputer computer{.name = session->GetSessionName(),
                                .seen = session->GetModifiedTime()};
         // A session's tag is its device's cache GUID, which names the device's own record.
-        if (const syncer::DeviceInfo* device =
-                devices ? devices->GetDeviceInfo(session->GetSessionTag()) : nullptr) {
-          computer.name = device->client_name();
-          computer.os = OsName(device->os_type());
+        auto device =
+            std::ranges::find(devices, session->GetSessionTag(), &syncer::DeviceInfo::guid);
+        if (device != devices.end()) {
+          computer.name = (*device)->client_name();
+          computer.os = OsName((*device)->os_type());
         }
         open_tabs->GetForeignSessionTabs(session->GetSessionTag(), &computer.tabs);
         computers.push_back(std::move(computer));
