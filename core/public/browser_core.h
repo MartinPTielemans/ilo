@@ -84,6 +84,8 @@ typedef struct bc_tab_state {
   bool audible;
   // The tab's sound is muted, by bc_tab_set_muted or an extension.
   bool muted;
+  // The tab's volume, from 0 to 1, as bc_tab_set_volume left it: 1 until it's set.
+  double volume;
   // The emoji bc_tab_set_icon gave the tab to show in place of its page's favicon, UTF-8, or empty.
   const char* icon;
   // What's wrong with the page: a BC_PAGE_ value. The UI and agents read the same one.
@@ -104,12 +106,13 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a next track, and whether it can float in Picture in Picture
-  // while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, and whether it can float in
+  // Picture in Picture while nothing of the page floats.
   bool media;
   bool media_playing;
   const char* media_title;
   const char* media_artist;
+  bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
@@ -2873,6 +2876,13 @@ BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
 // doesn't. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_muted(bc_id tab, bool muted);
 
+// Sets the tab's volume, from 0 to 1, as Arc's Adjust Tab Volume: the sound of the page's audio and
+// video elements, those its media session plays, is scaled by it, under the page's own volume and
+// the tab's mute. Web Audio, calls and Safari's engine's pages play as they would. It stays with
+// the tab whatever page it's at; a quit, a duplicate and ⇧⌘T don't keep it. Then
+// tab_state_changed. Agents have no tool for it: an agent's tab is muted, and plays in the page.
+BC_EXPORT void bc_tab_set_volume(bc_id tab, double volume);
+
 // While a page shares a tab and the tab's state has share_instead, has the page share this tab's
 // page in its place, as Chrome's Share this tab instead does. The user's: agents get none, as it
 // would show a page to whoever the call reaches. Then tab_state_changed, for both tabs.
@@ -2883,10 +2893,11 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 #define BC_MEDIA_PAUSE 1
 #define BC_MEDIA_NEXT 2
 #define BC_MEDIA_PICTURE_IN_PICTURE 3
+#define BC_MEDIA_PREVIOUS 4
 
-// Plays, pauses, skips or floats the page's media in Picture in Picture, one of BC_MEDIA_, while
-// its state has media, and media_picture_in_picture for the last. Then tab_state_changed. The
-// user's: agents act in the page instead.
+// Plays, pauses, skips on or back or floats the page's media in Picture in Picture, one of
+// BC_MEDIA_, while its state has media, and media_picture_in_picture or media_previous for those.
+// Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one
