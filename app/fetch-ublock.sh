@@ -84,9 +84,9 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
     $'            vAPI.net.setSuspendableListener(onBeforeRequest);\n            chrome.runtime.onRestartRequired.addListener(( ) => { });'
   # It compressed each value over 64 KiB it cached, its lists and its filters' selfie, by encoding
   # the whole string to bytes, compressing them and turning them back into a string, which took its
-  # process to 937 MB of commit on Windows with the lists ilo ships and ran it out of memory on
-  # machines with little (#2069). Uncompressed it peaked at 379 MB, and its cache is half the size,
-  # as the compressed bytes were stored as text. It reads a value cached compressed as before.
+  # process to 857 MB of commit on Windows with the lists ilo ships and ran it out of memory on
+  # machines with little (#2069). Uncompressed it peaked at 555 MB. It reads a value cached
+  # compressed as before.
   edit js/background.js '    cacheStorageCompression: true,' '    cacheStorageCompression: false,'
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
