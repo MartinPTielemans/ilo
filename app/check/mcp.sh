@@ -625,7 +625,9 @@ painted(() => document.title = "fields");
   # other site's, a frame the page adds after it has loaded and one it fills by posting a form into
   # it, as SharePoint posts Word's editor into its frame, are in the outline and the text too, in
   # the page's order, and an empty helper frame is in neither. A click two frames deep lands
-  # (#1444).
+  # (#1444). The posted frame's editor, built as Word for the web's document body is, an editable
+  # region of paragraphs and text runs, is a field: the outline names it and neither the outline
+  # nor the text has what it holds, as with any field's value.
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
   printf '%s' '<p>Cross text</p>
@@ -640,8 +642,10 @@ painted(() => document.title = "fields");
     > "$out/site/deep.html"
   printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' \
     > "$out/site/late.html"
-  printf '%s' '<p>Posted text</p><script>top.postMessage("posted", "*")</script>' \
-    > "$out/site/posted.html"
+  printf '%s' '<p>Posted text</p>
+<div contenteditable role=textbox aria-multiline=true aria-label="Document"><p class=Paragraph>
+<span class=TextRun><span class=NormalTextRun>Editor text</span></span></p></div>
+<script>top.postMessage("posted", "*")</script>' > "$out/site/posted.html"
   : > "$out/site/empty.html"
   printf '%s' "<title>loading</title><p>Top text</p><iframe src=inner.html></iframe>
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
@@ -704,13 +708,15 @@ addEventListener('message', (event) => {
   printf '%s\n' "$later" > "$out/mcp-frames-later.txt"
   case "$later" in
     *"Helper frame"*) fail "the outline had the empty helper frame: $later" ;;
-    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
+    *"Editor text"*) fail "the outline had what the posted frame's editor holds: $later" ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*'textbox "Document"'*"Late text"*) ;;
     *) fail "the frames page was outlined later as: $later" ;;
   esac
   read=$(call read_page "{\"tab\":$frames_tab}")
   printf '%s\n' "$read" > "$out/mcp-frames-text.txt"
   case "$read" in
     *"Extension text"*) fail "reading the frames page gave the extension's frame's text: $read" ;;
+    *"Editor text"*) fail "reading the frames page gave what the posted frame's editor holds: $read" ;;
     *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
   esac
