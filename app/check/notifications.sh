@@ -115,23 +115,27 @@ PY
     id=$(grep "^notify [0-9]* ilo check $1\$" "$notes" | tail -1 | cut -d' ' -f2)
     [ -n "$id" ] || fail "the page's notification didn't reach the desktop's server: $(cat "$notes")"
   }
+  # On the Mac, Allow on the banners macOS shows as the app starts, asking whether the app may
+  # notify, and Chromium's alert service in it, each in one of its own, as the user answering them
+  # does: a notification posted before is delivered to no banner. The banner's log is in $notes.
+  allow() {
+    [ "$notify" = mac ] || return 0
+    for _ in 1 2; do
+      "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
+    done
+    grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
+      fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+  }
   # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
-  # presses macOS's banner, which the first time asks whether the app may notify. Allow there lets
-  # the page's notification show, as the user answering it does. The banner's log is in $notes.
+  # presses macOS's banner.
   click() {
     if [ "$notify" = linux ]; then
       echo "click $id" >&6
       return
     fi
-    # The app asks, and Chromium's alert service in it, each in a banner of its own.
-    if [ "$1" = 1 ]; then
-      for _ in 1 2 3; do
-        "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
-      done
-    fi
     "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
       mac_notifications_said
-      fail "macOS showed no banner for the page's notification $1: $(cat "$notes")"
+      fail "macOS showed no banner for the page's notification $1: $(grep '^banner' "$notes" | tail -2)"
     }
   }
   # What macOS made of the app's notifications, for the run's artifact: its notification processes,
@@ -167,6 +171,7 @@ PY
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   home=$(space)
   tab=$(today | cut -d' ' -f1)
+  allow
   send click $page_point
   if [ "$active" != 1 ]; then
     exec 3>&- 6>&-

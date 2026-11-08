@@ -185,7 +185,12 @@ int main(int argc, const char* argv[]) {
     printf("banner: none with \"%s\"%s%s. Notification Center shows:\n", text.UTF8String,
            button ? ", button " : "", button ? button.UTF8String : "");
     if (center) {
-      Print(center, 0);
+      // Its banners' window alone: the others are its widgets, and the menu bar the system's.
+      for (id window : Children(center)) {
+        if ([Text((__bridge AXUIElementRef)window) isEqualToString:@"Notification Center"]) {
+          Print((__bridge AXUIElementRef)window, 0);
+        }
+      }
     } else {
       printf("banner: Notification Center isn't running\n");
     }
