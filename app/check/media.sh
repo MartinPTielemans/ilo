@@ -524,7 +524,8 @@ v.onplaying = () => document.title = "playing";
 v.onpause = () => document.title = "paused";
 v.onenterpictureinpicture = () => document.title = "floating";
 v.onleavepictureinpicture = () => document.title = "landed";
-onkeydown = e => e.key == "m" && v.play();
+// A handler returning false would keep every other key from the browser, ⌘5 among them.
+onkeydown = e => { if (e.key == "m") v.play(); };
 </script>' > "$out/site/card.html"
 send key t cmd
 expect '^browser: command bar shown$' "the command bar didn't open for the card's video"
