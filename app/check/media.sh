@@ -215,20 +215,22 @@ EOF
 pip_driven() {
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]
 }
-# kept_keys: waits for the browser window to have the keyboard once the call has floated as its
-# tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
-# keyboard as it maps, and the core gives it back (#1961), in a line with Chromium's prefix.
+# kept_keys [what]: waits for the browser window to have the keyboard once <what> has floated, the
+# call as its tab hid if none, as it keeps it on the Mac and X11. Wayland's compositor gives the
+# floating window the keyboard as it maps, and the core gives it back (#1961, #2060), in a line
+# with Chromium's prefix.
 kept_keys() {
+  floated_what=${1:-the call floating as its tab hid}
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
     expect 'browser: mini player gave the keyboard back$' \
-      "the call floating as its tab hid didn't give the browser window the keyboard back"
+      "$floated_what didn't give the browser window the keyboard back"
   fi
   for _ in $(seq 100); do
     send state
     [ "$key" = BrowserCoreNSWindow ] && return 0
     sleep 0.1
   done
-  fail "the call floating as its tab hid kept the keyboard in $key"
+  fail "$floated_what kept the keyboard in $key"
 }
 # A call floats once its tab is hidden, as Arc's does: Chrome's automatic Picture in Picture for a
 # page using the camera that asks for it with its media session, on https or a file alone. So a
@@ -629,6 +631,12 @@ $(placed)
 PLACED
 [ "$((fx + fw))" = "$((wx + ww - 10))" ] && [ "$fy" = "$((wy + 10))" ] ||
   fail "the first Mini Player was at $fx $fy $fw $fh, not 10 in from the top right of $wx $wy $ww $wh"
+# Chromium shows a video's Mini Player inactive, so the browser window keeps the keyboard. Under
+# Wayland the core gives it back as the Mini Player maps (#2060). Linux alone: no run has shown the
+# Mac's yet.
+if [ "$(uname)" = Linux ]; then
+  kept_keys "the video floating from its menu"
+fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
@@ -709,6 +717,10 @@ none_since 'browser: mini player back in its tab$' ||
 if pip_driven; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
+fi
+# The same window shows again, and under Wayland takes the keyboard again as it maps.
+if [ "$(uname)" = Linux ]; then
+  kept_keys "the video floating from its menu a second time"
 fi
 # Another window and back to its tab's: the Mini Player goes back in the tab, as Arc's does.
 send key n cmd
