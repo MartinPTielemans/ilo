@@ -27,6 +27,7 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
 #include "browser_core/crash_reports.h"
 #include "browser_core/downloads.h"
@@ -494,6 +495,7 @@ void Install(const bc_host& host) {
   content::SetPageLinkDragHandler(&Tab::LinkDragged);
   g_browser_core_permission_prompt = &PermissionQuestion::Create;
   g_browser_core_device_chooser = &DeviceChooser::Show;
+  g_browser_core_bluetooth_pair = &BluetoothPair::Show;
   g_browser_core_extension_install_dialog = &InstallQuestion::Ask;
   g_browser_core_populate_frame_binders = &PopulateFrameBinders;
   g_browser_core_password_prompt = &PasswordOffer::Prompt;

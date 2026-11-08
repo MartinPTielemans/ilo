@@ -954,6 +954,14 @@ impl Browser for Fake {
 
     fn device_settings(&self, _: u64, _: &mut App) {}
 
+    fn pair(&self, tab: u64, _: Option<SharedString>, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_pair(tab, None, cx));
+    }
+
+    fn cancel_pair(&self, tab: u64, cx: &mut App) {
+        self.later(cx, move |shell, cx| shell.set_pair(tab, None, cx));
+    }
+
     // Casting starting closes the dialog, as the core's does.
     fn cast_to(&self, tab: u64, _: SharedString, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_cast(tab, None, cx));
@@ -2336,6 +2344,17 @@ fn main() {
                     // first tab's page ask for a device, so its chooser shows.
                     if let Ok(chooser) = std::env::var("PREVIEW_CHOOSER") {
                         shell.set_chooser(1, preview_chooser(&chooser), cx);
+                    }
+                    // PREVIEW_PAIR=pin, confirm or passkey has a Bluetooth device the first tab's
+                    // page pairs with ask, so its card shows.
+                    if let Ok(pair) = std::env::var("PREVIEW_PAIR") {
+                        let kind = match pair.as_str() {
+                            "pin" => shell::PairKind::Pin,
+                            "passkey" => shell::PairKind::Passkey("123456".into()),
+                            _ => shell::PairKind::Confirm,
+                        };
+                        let device = "Polar H10 7E37D222".into();
+                        shell.set_pair(1, Some(shell::Pair { device, kind }), cx);
                     }
                     // The second in a folder, and the last two in a split view.
                     let pinned = vec![1, folder, 2];

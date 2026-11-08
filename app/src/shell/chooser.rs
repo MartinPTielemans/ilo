@@ -198,10 +198,10 @@ impl Shell {
             .filter(|_| self.question().is_none())
     }
 
-    /// Whether the tab shown's page asks the user something, a permission or a device, whose card
-    /// has the place under the URL field and keeps a revealed sidebar out.
+    /// Whether the tab shown's page asks the user something, a permission, a device or a device's
+    /// pairing, whose card has the place under the URL field and keeps a revealed sidebar out.
     pub(super) fn page_asks(&self) -> bool {
-        self.question().is_some() || self.chooser().is_some()
+        self.question().is_some() || self.chooser().is_some() || self.pairing().is_some()
     }
 
     fn choose(&mut self, tab: u64, id: SharedString, cx: &mut Context<Self>) {

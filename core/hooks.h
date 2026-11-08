@@ -14,6 +14,7 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
+#include "content/public/browser/bluetooth_delegate.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "extensions/browser/extension_install_prompt_client.h"
@@ -142,6 +143,17 @@ extern std::unique_ptr<permissions::PermissionPrompt> (*g_browser_core_permissio
 extern base::OnceClosure (*g_browser_core_device_chooser)(
     content::RenderFrameHost* owner,
     std::unique_ptr<permissions::ChooserController> controller);
+
+// chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc: asks for the PIN of a
+// Bluetooth device a page pairs with, or whether to pair, on Linux and Windows, in place of
+// Chrome's tab-modal dialogs, which the core's windows don't host. |callback| must run, as
+// Chrome's dialogs run it; |pin| is the passkey the device shows, for kConfirmPinMatch.
+extern void (*g_browser_core_bluetooth_pair)(
+    content::RenderFrameHost* frame,
+    const std::u16string& device_identifier,
+    content::BluetoothDelegate::PairPromptCallback callback,
+    content::BluetoothDelegate::PairingKind pairing_kind,
+    const std::optional<std::u16string>& pin);
 
 // chrome/browser/ui/views/extensions/extension_install_dialog_view.cc: asks the user to confirm an
 // extension's install, re-enable or new permissions, in place of Chrome's dialog. |done_callback|

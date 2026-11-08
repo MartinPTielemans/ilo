@@ -328,6 +328,16 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_device_settings(tab) };
     }
 
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        let pin = pin.map(|pin| CString::new(pin.as_ref()).unwrap_or_default());
+        let pin = pin.as_ref().map_or(std::ptr::null(), |pin| pin.as_ptr());
+        unsafe { bc::bc_tab_pair(tab, pin) };
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_cancel_pair(tab) };
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         unsafe { bc::bc_window_clear(self.window) }
     }
