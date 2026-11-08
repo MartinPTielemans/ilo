@@ -214,6 +214,16 @@
 //                                         "browser: idle tabs checked" once it's done
 //   battery <percent> plugged|unplugged   the battery reads that from now, with
 //                                         --battery-for-testing (core/battery_saver.h)
+//   pip                                   finds a video's Picture in Picture window, the Mini
+//                                         Player, and logs "browser: pip at <x> <y> <width>
+//                                         <height>" in place's terms as it is and each time it
+//                                         moves or resizes, then "browser: pip gone", or
+//                                         "browser: pip none" without one
+//   pip press, pip dragto, pip release <x> <y>
+//                                         as press, dragto and release, in the Mini Player, at
+//                                         points from its top-left corner as it was at the press
+//   pip drag <x> <y> <dx> <dy> <ms>       presses there, moves by (dx, dy) in <ms> at 60 moves a
+//                                         second, as a hand does, and lets go a sixtieth after
 //   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
 //                                         PIN, whether to pair, or whether its passkey matches, as
 //                                         bc_tab_pair_for_testing
@@ -233,6 +243,7 @@
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <map>
@@ -330,6 +341,38 @@ bool HostMakeOverlayKey(const char* name);
 
 namespace {
 
+// The Mini Player pip last found, while it's there.
+__weak NSWindow* g_pip;
+// Its top-left corner on screen, AppKit's way up, at pip's press, while the press holds it.
+NSPoint g_pip_held_at;
+bool g_pip_held = false;
+
+// +[NSEvent mouseLocation], which Chromium's move loop moves a window by, and AppKit's own: while
+// pip holds the Mini Player, the driver's pointer, as the loop would follow a hand's.
+NSPoint (*g_mouse_location)(id, SEL);
+NSPoint MouseLocation(id self, SEL selector) {
+  return g_pip_held ? g_driven_pointer : g_mouse_location(self, selector);
+}
+
+// A video's Picture in Picture window: Chrome's own, floating over the others, as no other window
+// of the app's floats but its children, such as a prompt's bubble.
+NSWindow* MiniPlayer() {
+  for (NSWindow* window in NSApp.windows) {
+    if (window.visible && !window.parentWindow && window.level >= NSFloatingWindowLevel &&
+        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
+      return window;
+    }
+  }
+  return nil;
+}
+
+void LogPip(NSWindow* window) {
+  const NSRect frame = window.frame;
+  fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
+          NSHeight(NSScreen.screens.firstObject.frame) - NSMaxY(frame), NSWidth(frame),
+          NSHeight(frame));
+}
+
 // A character typed with ⇧, such as + or ?, has its key's code on a US keyboard.
 const std::map<std::string, unsigned short> kKeyCodes = {
     {"a", 0},  {"s", 1},  {"d", 2},  {"f", 3},  {"h", 4},  {"g", 5},       {"z", 6},
@@ -367,6 +410,8 @@ const std::map<std::string, std::string> kCharacters = {
 
 // Marks the end of a command's events. AppKit handles events in the order they were posted.
 constexpr short kDoneSubtype = 0x5350;
+// Posted after pip's release, so the press holds the Mini Player till AppKit has the release.
+constexpr short kPipLetGoSubtype = 0x5351;
 
 // The window the backdrop command puts behind the browser window.
 NSWindow* g_backdrop;
@@ -555,6 +600,14 @@ void PostMouse(NSWindow* window,
     CFRelease(numbered);
   }
   [NSApp postEvent:event atStart:NO];
+}
+
+// A mouse event at (x, y) from the Mini Player's top-left corner as it was at the press, which it
+// may have moved from since.
+void PostPip(NSWindow* window, NSEventType type, double x, double y) {
+  const NSPoint in = [window convertPointFromScreen:NSMakePoint(g_pip_held_at.x + x,
+                                                                g_pip_held_at.y - y)];
+  PostMouse(window, type, in.x, NSHeight(window.frame) - in.y, 1);
 }
 
 // Hands |move| to the owner of every tracking area in |view| and under it that asks for moves and
@@ -1371,6 +1424,81 @@ bool Run(const std::string& line, void (^done)(void)) {
   std::istringstream words(line);
   std::string action;
   words >> action;
+  if (action == "pip") {
+    NSWindow* pip = g_pip_held ? g_pip : MiniPlayer();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+      done();
+      return true;
+    }
+    g_pip = pip;
+    std::string step;
+    if (!(words >> step)) {
+      LogPip(pip);
+      done();
+      return true;
+    }
+    double x, y;
+    if (!(words >> x >> y)) {
+      return false;
+    }
+    if (step == "press" || step == "drag") {
+      g_pip_held_at = NSMakePoint(NSMinX(pip.frame), NSMaxY(pip.frame));
+      g_pip_held = true;
+      PostPip(pip, NSEventTypeLeftMouseDown, x, y);
+    }
+    if (step == "press" || step == "dragto" || step == "release") {
+      if (!g_pip_held) {
+        return false;
+      }
+      if (step != "press") {
+        PostPip(pip, step == "dragto" ? NSEventTypeLeftMouseDragged : NSEventTypeLeftMouseUp, x,
+                y);
+      }
+      // Held till AppKit has dequeued the release, so the drags before it follow the driver's
+      // pointer.
+      if (step == "release") {
+        [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                            location:NSZeroPoint
+                                       modifierFlags:0
+                                           timestamp:0
+                                        windowNumber:0
+                                             context:nil
+                                             subtype:kPipLetGoSubtype
+                                               data1:0
+                                               data2:0]
+                 atStart:NO];
+      }
+      done();
+      return true;
+    }
+    double dx, dy;
+    int ms;
+    if (step != "drag" || !(words >> dx >> dy >> ms) || ms < 0) {
+      g_pip_held = false;
+      return false;
+    }
+    // Off the main thread, so each move comes a sixtieth after the last, as the move loop runs
+    // its own.
+    const int steps = std::max(1, ms * 60 / 1000);
+    std::thread([=] {
+      for (int at = 1; at <= steps + 1; at++) {
+        usleep(1000000 / 60);
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, ^{
+          if (at <= steps) {
+            PostPip(pip, NSEventTypeLeftMouseDragged, x + dx * at / steps, y + dy * at / steps);
+            return;
+          }
+          if (!Run("pip release " + std::to_string(x + dx) + " " + std::to_string(y + dy),
+                   done)) {
+            done();
+          }
+        });
+        CFRunLoopWakeUp(CFRunLoopGetMain());
+      }
+    }).detach();
+    return true;
+  }
   if (action == "window") {
     size_t number;
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {
@@ -2367,6 +2495,42 @@ void drive_start(void) {
     return nil;
   };
   [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined handler:report_done];
+  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskApplicationDefined
+                                        handler:^NSEvent*(NSEvent* event) {
+                                          if (event.subtype != kPipLetGoSubtype) {
+                                            return event;
+                                          }
+                                          g_pip_held = false;
+                                          return nil;
+                                        }];
+  g_mouse_location = (NSPoint(*)(id, SEL))method_setImplementation(
+      class_getClassMethod(NSEvent.class, @selector(mouseLocation)), (IMP)MouseLocation);
+  // Where the Mini Player pip found goes, and when it goes away, as Chrome hides it or closes it.
+  for (NSNotificationName name : {NSWindowDidMoveNotification, NSWindowDidResizeNotification}) {
+    [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                    object:nil
+                                                     queue:nil
+                                                usingBlock:^(NSNotification* notification) {
+                                                  if (g_pip && notification.object == g_pip) {
+                                                    LogPip(g_pip);
+                                                  }
+                                                }];
+  }
+  for (NSNotificationName name :
+       {NSWindowWillCloseNotification, NSWindowDidChangeOcclusionStateNotification}) {
+    bool closing = [name isEqualToString:NSWindowWillCloseNotification];
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (g_pip && notification.object == g_pip && (closing || !g_pip.visible)) {
+                    g_pip = nil;
+                    g_pip_held = false;
+                    fprintf(stderr, "browser: pip gone\n");
+                  }
+                }];
+  }
   method_setImplementation(class_getInstanceMethod(NSApplication.class,
                                                    @selector(orderFrontCharacterPalette:)),
                            (IMP)OrderFrontCharacterPalette);

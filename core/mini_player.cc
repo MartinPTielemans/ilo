@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/mini_player_place.h"
@@ -21,11 +26,14 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/compositor_animation_observer.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -95,6 +103,161 @@ KeyboardWatch& Watching() {
   return *watch;
 }
 
+// How far back from a release its speed is taken, as the Space pages' swipe takes it
+// (app/src/shell.rs).
+constexpr base::TimeDelta kReleaseHistory = base::Milliseconds(100);
+
+// Where a Mini Player was each time its move loop moved it, for the speed it's let go at.
+class MoveWatch : public views::WidgetObserver {
+ public:
+  explicit MoveWatch(views::Widget* widget) {
+    Moved(widget->GetWindowBoundsInScreen().origin());
+    observation_.Observe(widget);
+  }
+
+  // Its speed in points a second as it's let go at |released|, over the last kReleaseHistory, so a
+  // pause before the release slows it.
+  gfx::Vector2dF Velocity(base::TimeTicks released) const {
+    const Move* from = &moves_.front();
+    for (const Move& move : moves_) {
+      if (move.when <= released - kReleaseHistory) {
+        from = &move;
+      }
+    }
+    const double seconds = (released - from->when).InSecondsF();
+    if (seconds <= 0) {
+      return gfx::Vector2dF();
+    }
+    const gfx::Vector2d moved = moves_.back().at - from->at;
+    return gfx::Vector2dF(moved.x() / seconds, moved.y() / seconds);
+  }
+
+  // Its last move, if it came within kReleaseHistory of the release.
+  gfx::Vector2dF LastMove(base::TimeTicks released) const {
+    if (moves_.size() < 2 || moves_.back().when < released - kReleaseHistory) {
+      return gfx::Vector2dF();
+    }
+    const gfx::Vector2d moved = moves_.back().at - moves_[moves_.size() - 2].at;
+    return gfx::Vector2dF(moved.x(), moved.y());
+  }
+
+  // views::WidgetObserver:
+  void OnWidgetBoundsChanged(views::Widget* widget, const gfx::Rect& bounds) override {
+    Moved(bounds.origin());
+  }
+  void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
+
+ private:
+  struct Move {
+    base::TimeTicks when;
+    gfx::Point at;
+  };
+
+  void Moved(const gfx::Point& at) {
+    if (moves_.empty() || moves_.back().at != at) {
+      moves_.push_back({base::TimeTicks::Now(), at});
+    }
+  }
+
+  std::vector<Move> moves_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+// Settles a Mini Player let go onto its rest, on the spring its release starts, moving it a frame
+// at a time as the window's compositor draws, and no longer.
+class Settle : public ui::CompositorAnimationObserver, public views::WidgetObserver {
+ public:
+  void Start(views::Widget* widget, const gfx::Rect& rest, const gfx::Vector2dF& velocity) {
+    Stop();
+    const gfx::Rect from = widget->GetWindowBoundsInScreen();
+    ui::Compositor* compositor = widget->GetCompositor();
+    // Under Reduce Motion it goes there at once, as Dia skips its throw.
+    if (!compositor || gfx::Animation::PrefersReducedMotion()) {
+      widget->SetBounds(rest);
+      return;
+    }
+    widget_ = widget;
+    compositor_ = compositor;
+    rest_ = rest;
+    offset_ = gfx::Vector2dF(from.x() - rest.x(), from.y() - rest.y());
+    velocity_ = velocity;
+    seconds_ = MiniPlayerSettleSeconds(offset_, velocity_);
+    start_.reset();
+    observation_.Observe(widget);
+    compositor->AddAnimationObserver(this);
+  }
+
+  void Stop() {
+    if (compositor_) {
+      compositor_->RemoveAnimationObserver(this);
+    }
+    compositor_ = nullptr;
+    widget_ = nullptr;
+    observation_.Reset();
+  }
+
+  // Where |widget| is going, while it settles.
+  std::optional<gfx::Rect> Rest(const views::Widget* widget) const {
+    return widget_ && widget_ == widget ? std::optional<gfx::Rect>(rest_) : std::nullopt;
+  }
+
+  // ui::CompositorAnimationObserver:
+  void OnAnimationStep(base::TimeTicks now) override {
+    if (!start_) {
+      start_ = now;
+    }
+    const double seconds = (now - *start_).InSecondsF();
+    gfx::Rect at = rest_;
+    views::Widget* widget = widget_;
+    if (seconds >= seconds_) {
+      Stop();
+    } else {
+      at.Offset(gfx::ToRoundedVector2d(MiniPlayerSpring(offset_, velocity_, seconds)));
+    }
+    widget->SetBounds(at);
+  }
+  void OnCompositingShuttingDown(ui::Compositor* compositor) override { Stop(); }
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override { Stop(); }
+
+ private:
+  raw_ptr<views::Widget> widget_ = nullptr;
+  raw_ptr<ui::Compositor> compositor_ = nullptr;
+  gfx::Rect rest_;
+  gfx::Vector2dF offset_;
+  gfx::Vector2dF velocity_;
+  double seconds_ = 0;
+  std::optional<base::TimeTicks> start_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+Settle& Settling() {
+  static base::NoDestructor<Settle> settle;
+  return *settle;
+}
+
+// |window| let go at |released| after its move loop, which |watch| watched: thrown or caught by a
+// side, it settles at its rest, on the screen it's mostly on. The Mac's and Windows' alone: Linux's
+// window manager or compositor moves it, and lets it go without the core hearing.
+[[maybe_unused]] void LetGo(views::Widget* window, const MoveWatch& watch,
+                            base::TimeTicks released) {
+  const gfx::Rect bounds = window->GetWindowBoundsInScreen();
+  const gfx::Vector2dF velocity = watch.Velocity(released);
+  const std::optional<gfx::Rect> rest =
+      MiniPlayerRest(bounds, velocity, watch.LastMove(released),
+                     display::Screen::Get()->GetDisplayMatching(bounds).work_area());
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player let go at " << bounds.x() << " " << bounds.y()
+             << " moving at " << std::lround(velocity.x()) << " " << std::lround(velocity.y())
+             << (rest ? ", settling at " + base::NumberToString(rest->x()) + " " +
+                            base::NumberToString(rest->y())
+                      : std::string(", staying"));
+  if (rest && *rest != bounds) {
+    Settling().Start(window, *rest, velocity);
+  }
+}
+
 // Where the last Mini Player was left, for the next, across launches as Arc's LastPiPPosition:
 // app-wide, in local state, so every profile's and a private window's share it.
 constexpr char kLeftPref[] = "browser_core.mini_player_left";
@@ -128,6 +291,8 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
     placed.AdjustToFit(work_area);
     return placed;
   }
+  // A new one isn't the last one's settle.
+  Settling().Stop();
   ++g_shows;
   const std::optional<gfx::Rect> left = LastLeft();
   // A kept place's screen, or the nearest, if the screens changed since.
@@ -146,7 +311,9 @@ void Left(VideoOverlayWindowViews* window) {
   if (!window->IsVisible()) {
     return;
   }
-  const gfx::Rect left = window->GetWindowBoundsInScreen();
+  // Where it was going, if it was settling, which stops with it.
+  const gfx::Rect left = Settling().Rest(window).value_or(window->GetWindowBoundsInScreen());
+  Settling().Stop();
   g_browser_process->local_state()->SetDict(kLeftPref, base::DictValue()
                                                            .Set("x", left.x())
                                                            .Set("y", left.y())
@@ -197,6 +364,17 @@ void Scrolled(VideoOverlayWindowViews* window, const gfx::Vector2dF& offset, int
 }
 
 bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
+  // The user's own moves and sizes take it from a settle.
+  switch (event->type()) {
+    case ui::EventType::kMousewheel:
+    case ui::EventType::kScroll:
+    case ui::EventType::kGesturePinchUpdate:
+    case ui::EventType::kMousePressed:
+      Settling().Stop();
+      break;
+    default:
+      break;
+  }
   switch (event->type()) {
     case ui::EventType::kMousewheel:
       Scrolled(window, gfx::Vector2dF(event->AsMouseWheelEvent()->offset()), event->flags());
@@ -249,8 +427,14 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
 #else
       // As Chrome's caption would, but the window sees the press first. It may be gone after.
       if (window->IsMoveLoopSupported()) {
+        const base::WeakPtr<views::Widget> moved = window->GetWeakPtr();
+        MoveWatch watch(window);
         window->RunMoveLoop(press.OffsetFromOrigin(), views::Widget::MoveLoopSource::kMouse,
                             views::Widget::MoveLoopEscapeBehavior::kDontHide);
+        // The loop returns as the button comes up.
+        if (moved) {
+          LetGo(moved.get(), watch, base::TimeTicks::Now());
+        }
       }
 #endif
       return true;

@@ -785,6 +785,7 @@ source_set("browser_core") {
     "//ui/events:dom_keycode_converter",
     "//ui/events:events_base",
     "//ui/gfx",
+    "//ui/gfx/animation",
     "//ui/gfx/codec",
     "//ui/gfx/geometry",
     "//ui/menus",
@@ -838,7 +839,6 @@ source_set("browser_core") {
       "//cc/paint",
       "//skia",
       "//ui/aura",
-      "//ui/compositor",
       "//ui/gfx",
     ]
   }
@@ -883,7 +883,6 @@ source_set("browser_core") {
       "//third_party/wayland-protocols:xdg_activation",
       "//ui/aura",
       "//ui/base/ime",
-      "//ui/compositor",
       "//ui/events",
       "//ui/events/keycodes:xkb",
       "//ui/events/ozone/layout",
