@@ -5,10 +5,18 @@
 #ifndef BROWSER_CORE_SYNC_SPACES_H_
 #define BROWSER_CORE_SYNC_SPACES_H_
 
+#include <memory>
+
+class Profile;
+
+namespace syncer {
+class DataTypeController;
+}
+
 namespace browser_core::sync_spaces {
 
-// Sets the hook that gives sync ILO_SPACE's controller, before any profile is made.
-void Install();
+// ILO_SPACE's controller for |profile|'s sync.
+std::unique_ptr<syncer::DataTypeController> Controller(Profile* profile);
 
 // Something the session keeps changed (SessionChanged), perhaps a Space, a pinned tab or a folder.
 void Changed();

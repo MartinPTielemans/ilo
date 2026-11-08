@@ -250,6 +250,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Whether the app is moving the page frame on its own. The pages shown stretch the frame they
   // last drew to fill their views as the frame resizes them, until they draw at the new size.
   void SetPageMoving(bool moving);
+  // Draws the pages shown at |scale| of their size about the page frame's centre, for the app's
+  // motion (bc_window_set_page_scale).
+  void SetPageScale(double scale);
   // Shows |tab| at the page frame, and its Space if the window shows another. In a split view, it
   // shows the split with |tab| focused. A page another window shows moves here (Adopt).
   void Select(bc_id tab);

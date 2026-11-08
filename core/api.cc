@@ -1314,6 +1314,12 @@ void bc_window_page_moving(bc_id window_id, bool moving) {
   }
 }
 
+void bc_window_set_page_scale(bc_id window_id, double scale) {
+  if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
+    window->SetPageScale(scale);
+  }
+}
+
 void bc_window_select(bc_id window_id, bc_id tab) {
   browser_core::HandoverClicked();
   if (browser_core::Window* window = browser_core::Window::FromId(window_id)) {
@@ -2524,6 +2530,10 @@ void bc_sync_read_activity(bc_sync_activity* activity) {
   if (activity) {
     browser_core::sync::ReadActivity(activity);
   }
+}
+
+void bc_sync_choose(int what, bool on) {
+  browser_core::sync::Choose(what, on);
 }
 
 void bc_sync_delete_account(void) {

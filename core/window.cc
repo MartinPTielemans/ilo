@@ -1,6 +1,7 @@
 #include "browser_core/window.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 #include <numeric>
@@ -243,10 +244,12 @@ void KeepClosed(bc_id id) {
   // A Blank Window's goes in the archive, so nothing closed is lost, but not in the closed tabs
   // ⇧⌘T reopens, whose Space went with its window.
   if (space->blank()) {
-    Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), /*little=*/false);
+    Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
+            /*little=*/false);
     return;
   }
-  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->little());
+  Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
+          space->little());
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
@@ -1846,6 +1849,10 @@ void Window::SetPageMoving(bool moving) {
   }
 }
 
+void Window::SetPageScale(double scale) {
+  platform::ScalePages(widget_.get(), std::isnan(scale) ? 1.0 : std::clamp(scale, 0.5, 1.0));
+}
+
 void Window::Select(bc_id tab) {
   const Tab* selecting = Tab::Get(tab);
   // A window with a Space of its own shows its tabs alone, and a regular one never shows them:
@@ -2384,7 +2391,10 @@ bc_id Window::RestoreArchived(bc_id id) {
     page.set_original_request_url(archived->url);
     page.set_title(base::UTF8ToUTF16(archived->title));
   }
-  const bc_id tab = Reopen(space_, 0, saved);
+  // Back in the Space it closed in, as Arc's, while that's still one of the user's, which Select
+  // then shows. Else in the one shown.
+  const Space* closed_in = Space::WithNode(archived->space);
+  const bc_id tab = Reopen(closed_in ? closed_in->id() : space_, 0, saved);
   Select(tab);
   return tab;
 }

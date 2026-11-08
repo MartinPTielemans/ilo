@@ -45,8 +45,8 @@ env:
     tabs window find agents spaces crash profiles private blank quit mcp appearance access history
     load preview import adblock adblock-lists passkeys onboarding links relaunch split
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
-    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
-    devices notifications calls battery idle handback webrtc tab-drag count
+    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
+    sync-extensions little devices notifications calls battery idle handback webrtc tab-drag count
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -231,11 +231,11 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
-      # The sync-account and sync-devices runs sign in to an ilo-server of their own, on SQLite
-      # with a throwaway account, never the hosted one: built from the server's repo at the commit
-      # ilo's sync was last checked against, in the leg that has them.
+      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
+      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
+      # at the commit ilo's sync was last checked against, in the leg that has them.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server

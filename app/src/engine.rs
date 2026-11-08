@@ -1156,6 +1156,10 @@ impl Browser for Engine {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
     }
 
+    fn set_page_scale(&self, scale: f32, _: &mut App) {
+        unsafe { bc::bc_window_set_page_scale(self.window, f64::from(scale)) };
+    }
+
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, _: &mut App) {
         let (left, right, top) = (f64::from(left), f64::from(right), f64::from(top));
         unsafe { platform::host_set_pane_corner(self.ui_view, left, right, top) };

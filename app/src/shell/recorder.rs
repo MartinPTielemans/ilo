@@ -174,6 +174,8 @@ pub(super) struct Recorder {
     /// What moved the pages, in order: "layout" for the page's frame, "shares" for a split's, and
     /// "moving" and "still" for what the shell told the core about the motion.
     pub(super) page_events: RefCell<Vec<&'static str>>,
+    /// Each scale the pages were given to draw at.
+    pub(super) page_scales: RefCell<Vec<f32>>,
     /// Where each tooltip it was asked for hangs from, in order.
     pub(super) anchors: RefCell<Vec<crate::tooltip::Anchor>>,
     /// The last hover card the shell asked for, for a test to press its buttons.
@@ -1207,6 +1209,10 @@ impl Browser for Recorder {
             .push(if moving { "moving" } else { "still" });
     }
 
+    fn set_page_scale(&self, scale: f32, _: &mut App) {
+        self.page_scales.borrow_mut().push(scale);
+    }
+
     fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
@@ -1748,6 +1754,12 @@ impl crate::account::Host for Account {
 
     fn remove_device(&self, id: &str) {
         self.calls.borrow_mut().push(format!("remove {id}"));
+    }
+
+    fn choose(&self, what: crate::account::Choice, on: bool) {
+        self.calls
+            .borrow_mut()
+            .push(format!("choose {what:?} {on}"));
     }
 
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {

@@ -19,8 +19,11 @@ namespace browser_core {
 // closes into the archive with its tab, but for one whose page plays sound. The same timer waits
 // for the one due first.
 //
+// Downloads that have ended leave the Library's list after their profile's time too, counted from
+// when they ended, keeping their files, as Arc's downloads archive like its tabs (#696).
+//
 // Looks again for that tab, from a task of its own, as the Spaces, the tabs windows show, a Little
-// ilo window that stops being active or the time chosen change.
+// ilo window that stops being active, the downloads or the time chosen change.
 void ScheduleAutoArchive();
 
 // Registers the pref that keeps each profile's time. Before the first profile is made.

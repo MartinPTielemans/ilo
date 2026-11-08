@@ -42,6 +42,11 @@ const TARGET_DASH_UNDER: (f32, f32) = (7., 2.);
 use crate::tokens::shell::split_targets::TARGET_DASHES;
 use crate::tokens::shell::split_targets::TARGET_EDGE;
 use crate::tokens::shell::split_targets::TARGET_TEXT;
+/// Arc 1.170 draws the window's content at about 0.92 of its size while a tab or a link is over the
+/// page, about its centre, and back after. How long it takes isn't measured: ours, the targets'
+/// slide and grow, on their ease-out.
+const CONTENT_SCALE: f32 = 0.92;
+const CONTENT_SCALE_TIME: f32 = TARGET_SLIDE + TARGET_GROW;
 /// Dia's targets came once the pointer was 26 pt into the page from its top strip. Ours: the same
 /// past the card's left edge, until Arc's is measured.
 const TARGET_TRIGGER: f32 = 26.;
@@ -56,6 +61,48 @@ use crate::tokens::shell::split_targets::PICTURE_LIGHTS;
 use crate::tokens::shell::split_targets::PICTURE_RADIUS;
 use crate::tokens::shell::split_targets::PICTURE_TOP;
 use crate::tokens::text;
+
+/// The pages' scale on its way to `to`, from `from` at `since`.
+#[derive(Clone, Copy)]
+pub(super) struct ContentScale {
+    from: f32,
+    to: f32,
+    since: Instant,
+}
+
+impl Default for ContentScale {
+    fn default() -> Self {
+        Self {
+            from: 1.,
+            to: 1.,
+            since: Instant::now(),
+        }
+    }
+}
+
+impl ContentScale {
+    pub(super) fn now(&self) -> f32 {
+        let progress = self.since.elapsed().as_secs_f32() / CONTENT_SCALE_TIME;
+        if progress >= 1. {
+            self.to
+        } else {
+            self.from + (self.to - self.from) * ease_out(progress)
+        }
+    }
+}
+
+/// `bounds` drawn at `scale` of their size about `centre`.
+pub(super) fn scaled_about(
+    bounds: Bounds<Pixels>,
+    centre: Point<Pixels>,
+    scale: f32,
+) -> Bounds<Pixels> {
+    let at = |edge: Pixels, mid: Pixels| mid + (edge - mid) * scale;
+    Bounds::new(
+        point(at(bounds.left(), centre.x), at(bounds.top(), centre.y)),
+        size(bounds.size.width * scale, bounds.size.height * scale),
+    )
+}
 
 /// Where a target is on the card, and so where the tab joins the page.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -271,6 +318,8 @@ impl Shell {
         if back.is_some() {
             self.select(with, cx);
         }
+        // Where the pages are drawn now, smaller once the tab is over them.
+        let card = self.scaled_card();
         let Some(drag) = &mut self.drag else {
             return false;
         };
@@ -281,6 +330,49 @@ impl Shell {
         over.point(card, position, crate::motion::start(cx));
         cx.notify();
         true
+    }
+
+    /// Draws the pages smaller while a tab or a link is over them, and at their size again once it
+    /// isn't, a step each frame, telling the core each step. Under Reduce Motion they keep their
+    /// size.
+    pub(super) fn step_content_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scale_content(cx) {
+            window.request_animation_frame();
+        }
+    }
+
+    /// The step of `step_content_scale`: returns whether the pages are still on their way.
+    fn scale_content(&mut self, cx: &mut Context<Self>) -> bool {
+        let over = (self.drag.as_ref()).is_some_and(|drag| drag.over_page.is_some())
+            || self.link_over.is_some();
+        let to = if over {
+            crate::motion::scale(CONTENT_SCALE, cx)
+        } else {
+            1.
+        };
+        if to != self.content_scale.to {
+            self.content_scale = ContentScale {
+                from: self.content_scale.now(),
+                to,
+                since: crate::motion::start(cx),
+            };
+        }
+        let scale = self.content_scale.now();
+        if scale != self.content_scale_told {
+            self.content_scale_told = scale;
+            self.browser.set_page_scale(scale, cx);
+            if scale == to {
+                // check.sh waits for this line.
+                log!("browser: page scale {scale}");
+            }
+        }
+        scale != to
+    }
+
+    /// The card as the pages are drawn now: smaller under a tab or a link over them.
+    pub(super) fn scaled_card(&self) -> Bounds<Pixels> {
+        let card = self.page_frame(self.viewport).0;
+        scaled_about(card, card.center(), self.content_scale.now())
     }
 
     /// The targets a tab or a link can join `with` at: all four for a page alone, else the two
@@ -323,7 +415,7 @@ impl Shell {
             return false;
         };
         let position = page.origin + point;
-        let card = self.page_frame(self.viewport).0;
+        let card = self.scaled_card();
         let with = self.selected;
         if self
             .link_over
@@ -424,7 +516,7 @@ impl Shell {
         let Some((over, tab)) = dragged.or(link) else {
             return div().into_any_element();
         };
-        let card = self.page_frame(self.viewport).0;
+        let card = self.scaled_card();
         let palette = self.palette;
         let fill = self.window_fill().blend(palette.plate(TARGET_PLATE));
         let t = over.shown.1.elapsed().as_secs_f32();
@@ -770,7 +862,7 @@ fn picture(
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
 
     use gpui::{Bounds, Entity, Pixels, Point, TestAppContext, point, px, size};
 
@@ -990,6 +1082,38 @@ mod tests {
             ["select 11", "focus page"],
             "escape over the targets"
         );
+    }
+
+    /// A tab dragged over the page draws the pages at Arc's 0.92 of their size about the card's
+    /// centre, with the targets on the card drawn so, and back over the sidebar at their own size
+    /// again.
+    #[gpui::test]
+    fn a_tab_over_the_page_draws_the_pages_smaller(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        let settled = |cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| {
+                shell.scale_content(cx);
+                shell.content_scale.since -= Duration::from_secs(1);
+                assert!(!shell.scale_content(cx), "the pages are still on their way");
+                (
+                    *host.page_scales.borrow().last().unwrap(),
+                    shell.scaled_card(),
+                )
+            })
+        };
+        let y = press_to_drag(&shell, cx, 11, true);
+        let middle = card.center();
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        let (scale, drawn) = settled(cx);
+        assert_eq!(scale, 0.92);
+        assert_eq!(drawn.center(), card.center());
+        assert!((drawn.size.width - card.size.width * 0.92).abs() < px(0.01));
+        assert!((drawn.size.height - card.size.height * 0.92).abs() < px(0.01));
+
+        drag_to(&shell, cx, X, y);
+        let (scale, drawn) = settled(cx);
+        assert_eq!(scale, 1., "back over the sidebar");
+        assert_eq!(drawn, card);
     }
 
     /// The tab shown dragged over its own page splits with the one used before it (Dia), which

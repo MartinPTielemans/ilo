@@ -52,7 +52,7 @@ ours/chromium-core-split-switch.patch
 ours/chromium-sync-service.patch
 ours/chromium-sync-hooks.patch
 ours/chromium-sync-agent-tabs.patch
-ours/chromium-sync-spaces-type.patch
+ours/chromium-sync-ilo-types.patch
 ours/chromium-core-agent-no-autofill.patch
 ours/chromium-core-mini-player.patch
 ours/chromium-core-activate-tab.patch
@@ -73,3 +73,4 @@ ours/chromium-no-page-resource-monitor.patch
 ours/chromium-private-downloads-save.patch
 ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
+ours/chromium-session-cookies-window-close.patch
