@@ -255,8 +255,6 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
-  # And without Hide Space Header's choice, which spaces' makes and takes back.
-  rm -f "$profile_dir/Space Header"
   # And without the command bar's picks, which put a command picked first among equal matches
   # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
   # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).

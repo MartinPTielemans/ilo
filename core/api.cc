@@ -96,7 +96,6 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
@@ -1486,13 +1485,26 @@ void bc_set_haptics(bool haptics) {
   browser_core::SessionChanged();
 }
 
+int bc_appearance(void) {
+  return browser_core::UserSettings().appearance;
+}
+
 void bc_set_appearance(int appearance) {
-  // Chromium's own override of the system's scheme, which every page's color provider follows.
-  using Scheme = ui::NativeTheme::PreferredColorScheme;
-  ui::NativeTheme::SetPreferredColorSchemeOverride(
-      appearance == 1   ? std::optional(Scheme::kLight)
-      : appearance == 2 ? std::optional(Scheme::kDark)
-                        : std::nullopt);
+  if (appearance < 0 || appearance > 2 || appearance == browser_core::UserSettings().appearance) {
+    return;
+  }
+  browser_core::UserSettings().appearance = appearance;
+  browser_core::ApplyAppearance();
+  browser_core::SessionChanged();
+}
+
+bool bc_space_header(void) {
+  return browser_core::UserSettings().space_header;
+}
+
+void bc_set_space_header(bool shown) {
+  browser_core::UserSettings().space_header = shown;
+  browser_core::SessionChanged();
 }
 
 bool bc_link_previews(void) {

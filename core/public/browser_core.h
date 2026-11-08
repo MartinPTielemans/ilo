@@ -2209,10 +2209,16 @@ BC_EXPORT void bc_dismiss_archive_note(void);
 // Spaces.
 BC_EXPORT bool bc_haptics(void);
 BC_EXPORT void bc_set_haptics(bool haptics);
-// View › Appearance's choice, which pages' prefers-color-scheme follows: 0 the system's, 1 light,
-// 2 dark. The app gives it at launch and when it changes, except on the Mac, where pages follow
-// the app's NSAppearance instead.
+// View › Appearance's choice: 0 the system's, 1 light, 2 dark. The core keeps it with the Spaces,
+// and settings_synced says when it came from the account. Off the Mac, pages' prefers-color-scheme
+// follows it; on the Mac they follow the app's NSAppearance instead, which the app sets from it.
+BC_EXPORT int bc_appearance(void);
 BC_EXPORT void bc_set_appearance(int appearance);
+// Whether Show Space Header keeps a lone unnamed Space's name row, as the user chose: off by
+// default. The core keeps it with the Spaces, and settings_synced says when it came from the
+// account.
+BC_EXPORT bool bc_space_header(void);
+BC_EXPORT void bc_set_space_header(bool shown);
 // Whether the app asks before the user's Quit quits, as the user chose. The core keeps it with the
 // Spaces.
 BC_EXPORT bool bc_warn_before_quitting(void);
