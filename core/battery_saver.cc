@@ -16,6 +16,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
+#include "browser_core/platform/battery.h"
 #include "browser_core/tab.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/performance_manager/public/user_tuning/battery_saver_mode_manager.h"
@@ -148,13 +149,21 @@ class FrozenWatcher : public performance_manager::GraphOwned,
 
 }  // namespace
 
-void InstallBatteryForTesting() {
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(kBatteryForTesting)) {
+void InstallBatterySampler() {
+  platform::Battery battery;
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kBatteryForTesting)) {
+    battery = {std::make_unique<CheckSamplingSource>(), std::make_unique<CheckBatteryProvider>()};
+  } else {
+    battery = platform::OsBattery();
+  }
+  if (!battery.source) {
     return;
   }
+  // Chrome makes its own only if there's none "for testing" (ChromeBrowserMainExtraParts-
+  // PerformanceManager::PostCreateThreads), so this one takes its place with no engine patch.
   static base::NoDestructor<std::unique_ptr<base::BatteryStateSampler>> sampler(
-      base::BatteryStateSampler::CreateInstanceForTesting(
-          std::make_unique<CheckSamplingSource>(), std::make_unique<CheckBatteryProvider>()));
+      base::BatteryStateSampler::CreateInstanceForTesting(std::move(battery.source),
+                                                          std::move(battery.provider)));
 }
 
 void WatchBatterySaver() {

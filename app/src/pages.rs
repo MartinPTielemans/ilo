@@ -425,6 +425,37 @@ pub(crate) unsafe extern "C" fn tab_chooser(
     update_shells(|shell, cx| shell.set_chooser(tab, chooser.clone(), cx));
 }
 
+/// What a Bluetooth device a tab's page pairs with asks, or that it ended (a null device), for the
+/// window showing the tab.
+pub(crate) unsafe extern "C" fn tab_pair(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    device: *const c_char,
+    kind: i32,
+    passkey: *const c_char,
+) {
+    let string = |text: *const c_char| -> SharedString {
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+            .into()
+    };
+    let pair = (!device.is_null()).then(|| shell::Pair {
+        device: string(device),
+        kind: match kind as u32 {
+            bc::BC_PAIR_PIN => shell::PairKind::Pin,
+            bc::BC_PAIR_PASSKEY if !passkey.is_null() => shell::PairKind::Passkey(string(passkey)),
+            _ => shell::PairKind::Confirm,
+        },
+    });
+    // check.sh waits for these lines.
+    match &pair {
+        Some(pair) => log!("browser: pair {tab} {} {:?}", pair.device, pair.kind),
+        None => log!("browser: pair {tab} ended"),
+    }
+    update_shells(|shell, cx| shell.set_pair(tab, pair.clone(), cx));
+}
+
 /// The user right-clicked a page: its menu, as the core has Chrome build it, in ilo's menu over the
 /// window that shows it. With no window, the menu went with its page.
 pub(crate) unsafe extern "C" fn tab_page_menu(

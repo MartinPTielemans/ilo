@@ -412,6 +412,12 @@ typedef struct bc_autofill_entry {
 #define BC_SCAN_OFF 3
 #define BC_SCAN_DENIED 4
 
+// What a Bluetooth device a page pairs with asks of the user, as Chrome's prompts do: its PIN,
+// whether to pair, or whether the passkey it shows matches.
+#define BC_PAIR_PIN 0
+#define BC_PAIR_CONFIRM 1
+#define BC_PAIR_PASSKEY 2
+
 // A device a page's chooser lists, as Chrome's chooser would.
 typedef struct bc_chooser_device {
   // The core's, for bc_tab_choose_device: the same while the device stays, and again if it comes
@@ -933,6 +939,13 @@ typedef struct bc_host {
                       const bc_chooser_device* devices,
                       size_t count,
                       int scan);
+  // A Bluetooth device the tab's page pairs with asks the user, in place of Chrome's dialogs, on
+  // Linux and Windows (the Mac's own prompt asks there): |device| as Chrome names it, a BC_PAIR_
+  // |kind|, and for BC_PAIR_PASSKEY the |passkey| the device shows, else null. The core keeps it
+  // while another tab shows. Once it ends, with |device| null: answered, bc_tab_cancel_pair, the
+  // page gone or the tab closed. Never for a tab in an agent's Space, whose chooser ended as
+  // cancelled.
+  void (*tab_pair)(void* context, bc_id tab, const char* device, int kind, const char* passkey);
   // The box of the element at (|x|, |y|) bc_tab_element_at asked for, its border's in points from
   // the top-left of the page's view, or a box 0 wide if there's none or the page went.
   void (*tab_element_box)(void* context, bc_id tab, double x, double y, bc_rect box);
@@ -1123,6 +1136,16 @@ typedef struct bc_host {
   // The text bc_tab_read_text asked for as |request|, UTF-8, or null if the tab had no page loaded
   // or closed first.
   void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text);
+  // The language of |tab|'s page, a BCP 47 tag such as "es" or "pt-BR", as Chrome's language
+  // detection finds it: the language the page declares in its html lang or Content-Language, as
+  // there's no model on the device to read its words; "und" if it declares none. Empty as each
+  // page commits, before it's known, so a translation shown on the page before is gone. Once a
+  // page. The user's, for offering to translate it: agents hear none, as they read a page in its
+  // own language.
+  void (*tab_language)(void* context, bc_id tab, const char* language);
+  // The texts bc_tab_translate_read gathered as |request|: a JSON array of UTF-8 strings, in the
+  // page's order, or null if the tab had no page or its page changed first.
+  void (*tab_translate_texts)(void* context, bc_id tab, uint64_t request, const char* texts);
   // The answer to bc_agent_page's |request| for |tab|: with |error|, |text| says why it couldn't,
   // for the agent; else a screenshot's JPEG in base64, or for every other action the page's
   // accessibility tree as a JSON object: DevTools' Accessibility.getFullAXTree nodes in "nodes",
@@ -2613,6 +2636,26 @@ BC_EXPORT void bc_tab_picture(bc_id tab, uint64_t request, int width, int height
 // checked with bc_agent_may_act first.
 BC_EXPORT void bc_tab_read_text(bc_id tab, uint64_t request);
 
+// Gathers the text of the tab's page for the app to translate on the device: its title, then
+// each run of text in its main frame's document, in order, without its leading and trailing
+// spaces, which stay in the page. None in a script, a style, code, a field, an editable region or
+// an element the page marks translate="no" or class "notranslate", as Chrome's translate leaves
+// them, and none without a letter. At most 5,000 runs. Then tab_translate_texts with |request|,
+// from a task of its own. The browser's own script gathers them, in an isolated world the page
+// can't reach. The user's: agents get none, as they read a page as it is (bc_tab_read_text).
+BC_EXPORT void bc_tab_translate_read(bc_id tab, uint64_t request);
+
+// Shows |texts|, a JSON array of UTF-8 strings, in place of the texts bc_tab_translate_read
+// gathered as |request|, each where its own was, with its spaces. Does nothing if the page has
+// changed since, or |texts| isn't an array of as many strings. A run the page has changed since
+// keeps the page's, and text the page adds later comes as it is. The user's, as
+// bc_tab_translate_read.
+BC_EXPORT void bc_tab_translate_show(bc_id tab, uint64_t request, const char* texts);
+
+// Puts the page's own text back where bc_tab_translate_show put translations, as Use Original
+// does, but not in a run the page has changed since. The user's, as bc_tab_translate_read.
+BC_EXPORT void bc_tab_translate_revert(bc_id tab);
+
 // Ends what bc_tab_element_at and bc_tab_capture began: drops their questions and lets go of the
 // page's DevTools, so a page that isn't being captured pays nothing.
 BC_EXPORT void bc_tab_capture_end(bc_id tab);
@@ -2682,6 +2725,20 @@ BC_EXPORT void bc_tab_scan_devices(bc_id tab);
 // Opens the system's settings for the tab's Bluetooth chooser: where Bluetooth is turned on, for
 // BC_SCAN_OFF, on the Mac and Windows, or where the browser is let use it, for BC_SCAN_DENIED.
 BC_EXPORT void bc_tab_device_settings(bc_id tab);
+
+// Answers the tab's pairing prompt (tab_pair) as Chrome's OK does: with the |pin| typed for
+// BC_PAIR_PIN, which needs a digit, or null to pair for the others. Then tab_pair with a null
+// device. The user's: agents get none.
+BC_EXPORT void bc_tab_pair(bc_id tab, const char* pin);
+
+// Ends the tab's pairing prompt as Chrome's Cancel does: the device isn't paired, and the page's
+// connect fails. Then tab_pair with a null device.
+BC_EXPORT void bc_tab_cancel_pair(bc_id tab);
+
+// For check.sh, as a run has no Bluetooth device: the tab's page asks as if a device "Check device"
+// it pairs with asked with the BC_PAIR_ |kind|, with passkey "123456" for BC_PAIR_PASSKEY. The
+// answer is logged, "browser: tab <id> paired [pin]" or "browser: tab <id> pairing cancelled".
+BC_EXPORT void bc_tab_pair_for_testing(bc_id tab, int kind);
 
 // Takes the device at |index| of the tab's Site Controls' devices away from its site, as Chrome's
 // page info's delete button does, if bc_tab_site_controls is watching the tab. Then

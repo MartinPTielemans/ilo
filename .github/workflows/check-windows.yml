@@ -105,8 +105,8 @@ jobs:
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
-        private blank links capture spaces pinned profiles devices history appearance adblock-live find
-        mcp keys sync-account trouble window clear handback restore little
+        private blank links capture spaces pinned profiles devices pair history appearance adblock-live find
+        mcp keys sync-account trouble window clear handback restore little battery-os
     steps:
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false

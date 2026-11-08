@@ -175,7 +175,22 @@ pub struct Suggestion {
     /// A setting's row, which opens Settings at it: its section and its name, as Settings' search
     /// finds it.
     pub setting: Option<(Section, SharedString)>,
+    /// The account's other computer the page is open on, which the row names at its end, or
+    /// empty (#1234).
+    pub computer: SharedString,
 }
+
+/// A tab open on one of the account's other computers, as sync last brought it (#1234).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OtherTab {
+    pub url: SharedString,
+    pub title: SharedString,
+    /// The computer, as Settings › Sync names it.
+    pub computer: SharedString,
+}
+
+/// The most of them the bar lists for what's typed (ours).
+const OTHER_TABS_SHOWN: usize = 2;
 
 /// A row of ⌘T's ask (Agent task).
 #[derive(Clone, Debug, PartialEq)]
@@ -337,6 +352,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::SelectSpace(_) => "icons/layers.svg",
         Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
         Command::TurnOffBatterySaver => "icons/leaf.svg",
+        Command::TranslatePage | Command::UseOriginal => "icons/languages.svg",
         Command::ToggleMute | Command::MuteAll(false) => "icons/volume-2.svg",
         Command::MuteAll(true) => "icons/volume-x.svg",
         Command::ToggleFullScreen => "icons/maximize.svg",
@@ -515,6 +531,11 @@ pub trait Host {
     /// Shows `tip` hanging from a button at its anchor in the bar's window, over the bar, after the
     /// tooltip's delay, or ends the tooltip.
     fn tooltip(&self, tip: Option<(Tip, Anchor)>, cx: &mut App);
+    /// The tabs open on the account's other computers, most recently seen first, if the bar shows
+    /// over a window of the profile that syncs, and none over a private one. It only reads.
+    fn other_tabs(&self, _: &App) -> Rc<Vec<OtherTab>> {
+        Rc::default()
+    }
 }
 
 /// A search engine's site search, which the bar's searches stay in until the user leaves it, as in
@@ -1161,7 +1182,9 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                     if bar.settings_index.is_none() {
                         bar.settings_index = bar.host.settings_index(cx);
                     }
-                    let (open, risen) = bar.take_open_tabs(&text, &mut rows);
+                    let (open, mut risen) = bar.take_open_tabs(&text, &mut rows);
+                    let others = bar.host.other_tabs(cx);
+                    risen.extend(bar.take_other_tabs(&text, &others, &mut rows));
                     let mut rows = with_calculation(&text, bar.with_commands(&text, rows, cx));
                     // The other tabs go right after the core's first row, before its others.
                     let after = rows
@@ -1218,7 +1241,12 @@ fn names_space(name: &str, typed: &str) -> bool {
 }
 
 fn names_tab(tab: &shell::BarTab, typed: &str) -> bool {
-    let title = tab.title.to_lowercase();
+    names_page(&tab.title, &tab.url, typed)
+}
+
+/// Whether a word of `title`, or of the name of `url`'s site, starts with `typed`, lowercase.
+fn names_page(title: &str, url: &str, typed: &str) -> bool {
+    let title = title.to_lowercase();
     let word_start = |&(at, c): &(usize, char)| {
         c.is_alphanumeric()
             && !title[..at]
@@ -1229,7 +1257,7 @@ fn names_tab(tab: &shell::BarTab, typed: &str) -> bool {
     if (title.char_indices().filter(word_start)).any(|(at, _)| title[at..].starts_with(typed)) {
         return true;
     }
-    let Some(host) = site_host(&tab.url) else {
+    let Some(host) = site_host(url) else {
         return false;
     };
     let labels: Vec<&str> = host.split('.').collect();
@@ -2073,6 +2101,61 @@ impl CommandBar {
         (Some(open), risen)
     }
 
+    /// Takes out of `rows` the pages the core listed that are open on the account's other
+    /// computers and named by what's typed, and returns those computers' rows for them, to go
+    /// after the open tabs that rise (#1234). The same rule as an open tab's names them: a word of
+    /// the title or the site's name that two letters or more start, not while the typing reads as
+    /// an address. At most OTHER_TABS_SHOWN, most recently seen first, one per page, never the
+    /// first row, where ↩ goes, and never a page a tab here or the window shows, whose row is
+    /// better. A pick opens the page here, as any page's row does.
+    fn take_other_tabs(
+        &self,
+        text: &str,
+        others: &[OtherTab],
+        rows: &mut Vec<Suggestion>,
+    ) -> Vec<Suggestion> {
+        let typed = text.trim().to_lowercase();
+        if typed.contains(['.', ':', '/']) || typed.chars().count() < 2 {
+            return Vec::new();
+        }
+        let first = rows.first().map(|row| row.url.clone());
+        let mut taken: Vec<Suggestion> = Vec::new();
+        for other in others {
+            if taken.len() == OTHER_TABS_SHOWN {
+                break;
+            }
+            let here = |url: &SharedString| **url == *other.url;
+            if first.as_deref() == Some(&*other.url)
+                || self.tabs.iter().any(|tab| here(&tab.url))
+                || self.shown.iter().any(here)
+                || taken.iter().any(|row| row.url == *other.url)
+                || !names_page(&other.title, &other.url, &typed)
+            {
+                continue;
+            }
+            // In place of the core's own row for the page, a page's from history.
+            rows.retain(|row| row.named() || row.tab != 0 || row.url != *other.url);
+            taken.push(Suggestion {
+                url: other.url.to_string(),
+                text: other.title.clone(),
+                detail: site_host(&other.url).unwrap_or_default().into(),
+                computer: other.computer.clone(),
+                ..Suggestion::default()
+            });
+        }
+        if !taken.is_empty() {
+            // check.sh reads this line.
+            let listed: Vec<String> = (taken.iter())
+                .map(|row| format!("{} on {}", row.url, row.computer))
+                .collect();
+            log!(
+                "browser: command bar lists other computers' tabs: {}",
+                listed.join(", ")
+            );
+        }
+        taken
+    }
+
     /// The selected row's fill and its label, and the chip's in a site search: the site's own
     /// colour, made to read on the bar, where it has one, else the Space's accent.
     fn accent(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
@@ -2786,6 +2869,9 @@ impl CommandBar {
             };
             spoken = format!("{spoken}, {action}");
         }
+        if !row.computer.is_empty() {
+            spoken = format!("{spoken}, open on {}", row.computer);
+        }
         spoken
     }
 
@@ -2933,6 +3019,18 @@ impl CommandBar {
             })
             .when_some(row.shortcut.clone(), |line, shortcut| {
                 line.child(div().flex_1()).child(chip(shortcut))
+            })
+            // Another computer's tab ends with that computer's name, as an agent's row with its
+            // model.
+            .when(!row.computer.is_empty(), |line| {
+                let tint = if selected { label } else { dim };
+                line.child(div().flex_1()).child(
+                    div()
+                        .flex_none()
+                        .ml(px(HINT_GAP))
+                        .text_color(tint)
+                        .child(row.computer.clone()),
+                )
             })
             // An agent's row ends with its model, or when its limit resets if it's at it.
             .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {

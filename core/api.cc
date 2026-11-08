@@ -29,6 +29,7 @@
 #include "browser_core/autofill_menu.h"
 #include "browser_core/capture.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
@@ -50,6 +51,7 @@
 #include "browser_core/page_dialog.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
+#include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
 #include "browser_core/permission_question.h"
@@ -1989,6 +1991,34 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
   }
 }
 
+void bc_tab_translate_read(bc_id id, uint64_t request) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  auto* translate = contents && browser_core::Tab::Loaded(id)
+                        ? browser_core::PageTranslate::FromWebContents(contents)
+                        : nullptr;
+  if (translate) {
+    translate->Read(request);
+  } else {
+    browser_core::PageTranslate::ReportNoTexts(id, request);
+  }
+}
+
+void bc_tab_translate_show(bc_id id, uint64_t request, const char* texts) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  auto* translate = contents ? browser_core::PageTranslate::FromWebContents(contents) : nullptr;
+  if (translate && texts) {
+    translate->Show(request, texts);
+  }
+}
+
+void bc_tab_translate_revert(bc_id id) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (auto* translate =
+          contents ? browser_core::PageTranslate::FromWebContents(contents) : nullptr) {
+    translate->Revert();
+  }
+}
+
 void bc_tab_capture_end(bc_id id) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   if (browser_core::PageCapture* capture =
@@ -2049,6 +2079,18 @@ void bc_tab_scan_devices(bc_id id) {
 
 void bc_tab_device_settings(bc_id id) {
   browser_core::DeviceChooser::Settings(id);
+}
+
+void bc_tab_pair(bc_id id, const char* pin) {
+  browser_core::BluetoothPair::Pair(id, pin);
+}
+
+void bc_tab_cancel_pair(bc_id id) {
+  browser_core::BluetoothPair::Cancel(id);
+}
+
+void bc_tab_pair_for_testing(bc_id id, int kind) {
+  browser_core::BluetoothPair::ShowForTesting(id, kind);
 }
 
 void bc_tab_remove_site_device(bc_id id, size_t index) {

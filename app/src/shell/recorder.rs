@@ -553,6 +553,17 @@ impl Browser for Recorder {
         self.record(format!("device settings {tab}"));
     }
 
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        match pin {
+            Some(pin) => self.record(format!("pair {tab} {pin}")),
+            None => self.record(format!("pair {tab}")),
+        }
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        self.record(format!("cancel pair {tab}"));
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         let id = self.core.ticket();
         self.edit(format!("clear as {id}"));
@@ -854,6 +865,30 @@ impl Browser for Recorder {
 
     fn show_offer(&self, tab: u64) {
         self.record(format!("show offer {tab}"))
+    }
+
+    fn translation_target(&self) -> Option<SharedString> {
+        Some("en".into())
+    }
+
+    fn language_name(&self, language: &str) -> SharedString {
+        match language {
+            "es" => "Spanish".into(),
+            "en" => "English".into(),
+            other => SharedString::from(other.to_owned()),
+        }
+    }
+
+    fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
+        self.record(format!("translate {tab} {from} {to}"))
+    }
+
+    fn use_original(&self, tab: u64, _: &mut App) {
+        self.record(format!("use original {tab}"))
+    }
+
+    fn translation_settings(&self, _: &mut App) {
+        self.record("translation settings".into())
     }
 
     fn answer_page_dialog(&self, tab: u64, id: u64, reply: PageReply, _: &mut App) {

@@ -176,6 +176,10 @@ mod scripting_host;
 use quitting::*;
 mod battery_saver_host;
 use battery_saver_host::*;
+mod other_tabs_host;
+use other_tabs_host::*;
+mod translate_host;
+use translate_host::{tab_language, tab_translate_texts};
 
 use browser::bc;
 
@@ -942,6 +946,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_permission_asked: Some(tab_permission_asked),
         tab_cast: Some(tab_cast),
         tab_chooser: Some(tab_chooser),
+        tab_pair: Some(tab_pair),
         tab_site_controls: Some(tab_site_controls),
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),
@@ -986,6 +991,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         sync_devices_changed: Some(sync_devices_changed),
         settings_synced: Some(settings_synced),
         tab_text: Some(tab_text),
+        tab_language: Some(tab_language),
+        tab_translate_texts: Some(tab_translate_texts),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),
         agent_download: Some(agent_download),
@@ -999,6 +1006,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         addresses_added: Some(addresses_added),
         battery_saver_changed: Some(battery_saver_changed),
         tab_frozen: Some(tab_frozen),
+        other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
         ..Default::default()
     };

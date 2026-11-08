@@ -1,5 +1,5 @@
 # Chrome's Battery Saver as ilo shows it (#686), on the check's battery (--battery-for-testing,
-# core/battery_saver.h), which a run on mains, or on Linux, where Chromium reads no battery, needs.
+# core/battery_saver.h), which a run on mains needs.
 # At 50% on battery it stays off. Below 20% on battery it turns on: the toast says so with Turn Off,
 # and a leaf shows among the URL field's buttons, whose press says so again. Turn Off Battery Saver
 # for Now in the command bar turns it off until the computer's plugged in, and it stays off lower

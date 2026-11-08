@@ -22,6 +22,7 @@
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
 #include "browser_core/page_press.h"
+#include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
@@ -376,6 +377,8 @@ void Tab::Attach(content::WebContents* contents) {
   PagePresses::CreateForWebContents(contents, id_);
   // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
   AutofillMenu::Watch(contents);
+  // Its page's language, and the app's translation of it (#671).
+  PageTranslate::CreateForWebContents(contents, id_);
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();

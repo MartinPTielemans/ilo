@@ -108,6 +108,20 @@ source_set("sync_keys") {
   ]
 }
 
+# The tabs open on the account's other computers as the app hears of them, apart so
+# browser_core_unittests tests the list alone.
+source_set("other_tabs") {
+  sources = [
+    "other_tabs.cc",
+    "other_tabs.h",
+  ]
+  deps = [
+    "//base",
+    "//components/sessions",
+    "//url",
+  ]
+}
+
 # What the account's sync lets go to its server, on sync's own sequences, apart so
 # browser_core_unittests tests it alone.
 source_set("sync_guard") {
@@ -230,6 +244,8 @@ source_set("browser_core") {
     "autofill_offer.h",
     "battery_saver.cc",
     "battery_saver.h",
+    "bluetooth_pair.cc",
+    "bluetooth_pair.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",
@@ -290,6 +306,8 @@ source_set("browser_core") {
     "page_press.h",
     "page_text.cc",
     "page_text.h",
+    "page_translate.cc",
+    "page_translate.h",
     "password_offer.cc",
     "password_offer.h",
     "passwords.cc",
@@ -298,6 +316,7 @@ source_set("browser_core") {
     "page_dialog.h",
     "permission_question.cc",
     "permission_question.h",
+    "platform/battery.h",
     "platform/keyboard.h",
     "platform/keychain.h",
     "platform/native_hosts.h",
@@ -327,6 +346,8 @@ source_set("browser_core") {
     "suggest.h",
     "sync.cc",
     "sync.h",
+    "sync_other_tabs.cc",
+    "sync_other_tabs.h",
     "sync_relay.cc",
     "sync_relay.h",
     "sync_settings.cc",
@@ -350,6 +371,7 @@ source_set("browser_core") {
     ":archive_rule",
     ":drm_request",
     ":mini_player_place",
+    ":other_tabs",
     ":search_default",
     ":agent_download_hold",
     ":sidebar_backups",
@@ -465,6 +487,8 @@ source_set("browser_core") {
     "//components/pref_registry",
     "//components/prefs",
     "//components/proxy_config",
+    "//components/translate/core/browser",
+    "//components/translate/core/common",
     "//components/renderer_context_menu",
     "//components/search_engines",
     "//components/services/storage/public/mojom",
@@ -479,6 +503,7 @@ source_set("browser_core") {
     ":sync_settings_proto",
     ":sync_spaces_proto",
     "//components/sync_device_info",
+    "//components/sync_sessions",
     "//components/tabs:public",
     "//components/update_client",
     "//components/url_formatter",
@@ -550,6 +575,9 @@ source_set("browser_core") {
       sources += [ "platform/keyboard_none.cc" ]
     }
   }
+  if (!is_win && !is_linux) {
+    sources += [ "platform/battery_none.cc" ]
+  }
   if (is_win || is_linux) {
     sources += [
       "platform/app_library.h",
@@ -568,6 +596,7 @@ source_set("browser_core") {
     sources += [
       "platform/native_hosts_win.cc",
       "platform/win/app_library.cc",
+      "platform/win/battery.cc",
       "platform/win/keyboard.cc",
       "platform/win/playready.cc",
       "platform/win/window_views.cc",
@@ -577,6 +606,8 @@ source_set("browser_core") {
       "//components/cdm/common:buildflags",
       "//ui/base/ime",
     ]
+    # PowerSettingRegisterNotification, for platform/win/battery.cc.
+    libs = [ "powrprof.lib" ]
   } else {
     sources += [
       "platform/native_hosts_posix.cc",
@@ -589,12 +620,15 @@ source_set("browser_core") {
       "platform/linux/keyboard.cc",
       "platform/linux/ui_text_input.cc",
       "platform/linux/ui_text_input.h",
+      "platform/linux/upower.cc",
       "platform/linux/wayland.cc",
       "platform/linux/wayland.h",
       "platform/linux/window_views.cc",
     ]
     deps += [
       "//chrome/browser/ui/views:native_widget_factory",
+      "//components/dbus",
+      "//dbus",
       "//third_party/wayland:wayland_client",
       "//ui/aura",
       "//ui/base/ime",
@@ -621,6 +655,7 @@ test("browser_core_unittests") {
     "archive_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "mini_player_place_unittest.cc",
+    "other_tabs_unittest.cc",
     "search_default_unittest.cc",
     "sidebar_backups_unittest.cc",
     "site_searches_unittest.cc",
@@ -638,6 +673,7 @@ test("browser_core_unittests") {
     ":archive_rule",
     ":agent_download_hold",
     ":mini_player_place",
+    ":other_tabs",
     ":search_default",
     ":sidebar_backups",
     ":site_searches",
@@ -650,6 +686,7 @@ test("browser_core_unittests") {
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//components/search_engines",
+    "//components/sessions",
     "//components/download/public/common:test_support",
     "//components/search_engines:test_support",
     "//components/sync",
