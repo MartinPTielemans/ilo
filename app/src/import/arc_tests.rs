@@ -108,19 +108,58 @@ fn a_spaces_colours_come_with_it() {
     assert!(work.dark.is_some(), "Work's dark look");
 }
 
-/// What Arc keeps for itself stays there: each Space's Today tabs, Work's split view among them,
-/// the archived tabs and the window's sidebar.
+/// Each Space's Today tabs come with Open tabs, in Arc's order, Work's split view as its two tabs;
+/// the archived tabs and the window's sidebar stay in Arc.
 #[test]
-fn today_tabs_and_the_archive_stay_in_arc() {
+fn today_tabs_come_and_the_archive_stays_in_arc() {
     let arc = arc(&Roots::under(&home(), Os::Mac));
     let found = read::read(&arc, read::kinds(&arc), SystemTime::now()).unwrap();
-    assert!(found.spaces.iter().all(|space| space.today.is_empty()));
+    let today = |at: usize| -> Vec<&str> {
+        (found.spaces[at].today.iter())
+            .map(|tab| tab.url.as_str())
+            .collect()
+    };
+    let home = ["1", "2", "3"].map(|n| format!("https://example.com/today/{n}"));
+    assert_eq!(
+        today(0),
+        home.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        today(1),
+        ["https://example.com/docs", "https://example.com/tracker"]
+    );
+    assert_eq!(read::tally(&found, &arc).open_tabs, 5);
     let all = format!("{found:?}");
-    for kept in ["today/", "docs", "tracker", "old/"] {
-        assert!(
-            !all.contains(&format!("example.com/{kept}")),
-            "{kept} came in"
+    assert!(!all.contains("example.com/old/"), "an archived tab came in");
+}
+
+/// Open tabs switched off leaves the Today tabs in Arc; Spaces switched off with Open tabs on
+/// brings each Space that has Today tabs for them, without its pinned tabs or link rules.
+#[test]
+fn open_tabs_and_spaces_are_switched_apart() {
+    let arc = arc(&Roots::under(&home(), Os::Mac));
+    let now = SystemTime::now();
+    let all = read::read(&arc, read::kinds(&arc), now).unwrap();
+    for picked in [
+        &[Kind::Spaces, Kind::Favorites][..],
+        &[Kind::OpenTabs][..],
+        &[Kind::Spaces, Kind::OpenTabs][..],
+    ] {
+        let read = read::read(&arc, picked, now).unwrap();
+        assert_eq!(
+            read::keep(&all, &arc, picked),
+            Some(read.clone()),
+            "{picked:?}"
         );
+        let today = picked.contains(&Kind::OpenTabs);
+        let spaces = picked.contains(&Kind::Spaces);
+        assert_eq!(read.spaces.len(), 2, "{picked:?}");
+        assert!(
+            read.spaces
+                .iter()
+                .all(|space| space.today.is_empty() != today)
+        );
+        assert_eq!(read.spaces[0].pinned.is_empty(), !spaces, "{picked:?}");
     }
 }
 

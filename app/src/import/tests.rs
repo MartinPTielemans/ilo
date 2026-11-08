@@ -1222,6 +1222,7 @@ fn a_space_already_here_gets_only_what_it_lacks(cx: &mut TestAppContext) {
     let counts = Counts {
         spaces: 1,
         pinned: 4,
+        today: 1,
         link_rules: 3,
         ..Counts::default()
     };
@@ -1326,13 +1327,14 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         };
         assert_eq!(
             said.as_ref(),
-            "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+            "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 3 link rules came in from Arc."
         );
     });
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     view.update(cx, |view, cx| view.done(cx));
     cx.run_until_parked();
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 3 link rules came in from Arc.";
     assert_eq!(
         *events.borrow(),
         [
@@ -1394,7 +1396,7 @@ fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
     cx.update(|cx| browser.load(cx));
     assert_eq!(
         says(&view, cx),
-        "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 3 link rules came in from Arc."
     );
     assert_eq!(
         primary(&view, cx),
@@ -1611,7 +1613,7 @@ fn cancel_leaves_the_spaces_empty_and_import_again_fills_them(cx: &mut TestAppCo
     cx.run_until_parked();
     assert_eq!(
         says(&view, cx),
-        "6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "6 pinned tabs, 1 open tab, 3 favorites and 3 link rules came in from Arc."
     );
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     assert!(browser.last_import("Arc").is_some());
@@ -1721,7 +1723,8 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     assert_eq!(browser.state.borrow().loading.len(), asked + 1);
     assert_eq!(says(&view, cx), "Importing from Arc…");
     cx.update(|cx| browser.load(cx));
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 3 link rules came in from Arc.";
     assert_eq!(says(&view, cx), said);
     cx.executor().advance_clock(STALL);
     cx.run_until_parked();
@@ -2830,7 +2833,7 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| view.pick(0, cx));
     view.read_with(cx, |view, _| {
         let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
-        assert_eq!(counting, ["Counting…"; 5]);
+        assert_eq!(counting, ["Counting…"; 6]);
         assert_eq!(view.note(), None);
         assert_eq!(view.nothing(), None);
     });
@@ -2840,6 +2843,7 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
             view.choices(),
             [
                 (Kind::Spaces, "6 pinned tabs · 3 link rules".into()),
+                (Kind::OpenTabs, "1".into()),
                 (Kind::Favorites, "3".into()),
             ]
         );
