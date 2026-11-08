@@ -90,7 +90,7 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("blur", () => leave && (location = "https://example.com/"));
   // A w opens the page the fragment names in a tab.
   addEventListener("keydown", e => e.key == "w" && window.open(location.hash.slice(1)));
-  // A g opens gap.html, from the check's server, in a tab.
+  // A g opens gap.html from the check server in a tab.
   addEventListener("keydown", e => e.key == "g" && window.open(location.hash.slice(1).replace(/wait$/, "gap.html")));
   requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>
