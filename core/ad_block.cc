@@ -680,7 +680,7 @@ std::vector<AdBlockList> AdBlockLists() {
     lists.push_back({.key = list.key,
                      .group = list.group,
                      .title = list.title,
-                     .on = admin ? base::Contains(*admin, base::Value(list.key)) : UserOn(list)});
+                     .on = admin ? admin->contains(list.key) : UserOn(list)});
   }
   return lists;
 }
