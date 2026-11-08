@@ -3527,9 +3527,10 @@ void host_add_drop_targets(void* view) {
 void host_show_drop_targets(void* ui_view) {
   double width, height;
   ContentSize(Root(ui_view), &width, &height);
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Show(g_drop_targets, ui_view, 0, 0, width, height, false);
-  // As the Mac's and Linux's say, which split waits for.
-  if (g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
+  // As the Mac's and Linux's say as it comes on screen, which split waits for.
+  if (!shown && g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
     fprintf(stderr, "browser: drop targets shown\n");
   }
 }

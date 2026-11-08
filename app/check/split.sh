@@ -585,7 +585,9 @@ expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
 # Under the tab the pages draw at Arc's 0.92 of their size about the card's centre, so 12 in from
 # the card's left edge, low down, the window's colour shows, as above the card, where the page was.
-expect '^browser: page scale 0.92$' "the pages didn't draw smaller under the tab"
+# Under Reduce Motion, which the Windows runner has, they keep their size.
+still=$(last 'reduce motion')
+[ "$still" = on ] || expect '^browser: page scale 0.92$' "the pages didn't draw smaller under the tab"
 ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
 content=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
@@ -609,13 +611,14 @@ alike() {
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows; then
+elif ! windows && [ "$still" != on ]; then
   { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
     fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
 fi
 send dragto 100 300
 expect '^browser: drop targets gone$' "the targets stayed with the tab back over the sidebar"
-expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
+[ "$still" = on ] ||
+  expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
 expect '^browser: drop targets hidden$' "the targets' window stayed"
 expect "^browser: panes $c\$" "the tab pressed didn't show again with the targets gone"
 send dragto $target
