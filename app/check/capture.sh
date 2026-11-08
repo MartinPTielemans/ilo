@@ -75,6 +75,30 @@ light_box() {
 capture_mode page
 light_box "the pointer over the box didn't light it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-element.png" || fail "no window to capture"
+# The pointer over the page is ilo's camera, as on the Mac (#1279), where the display's own pointer
+# shows it. Linux's captures can draw the pointer; the Mac's never do.
+if [ "$(uname)" = Linux ]; then
+  send layout
+  content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
+  # The camera's dark body, left of its lens and below it, in fractions of the window.
+  body=$(echo "$(in_page 400 250) $content" |
+    awk '{ split($3, size, "x"); print ($1 - 7) / size[1], ($2 + 3) / size[2] }')
+  under=$(pixel "$out/capture-element.png" $body)
+  send warp $(in_page 400 250)
+  shown=
+  for _ in $(seq 20); do
+    POINTER=1 ../tools/window-screenshot.sh "$pid" "$out/capture-pointer.png" ||
+      fail "no window to capture"
+    seen=$(pixel "$out/capture-pointer.png" $body)
+    # Within 12 of the body's rgb(30, 41, 48) in each channel, and not the page's own colour.
+    [ "$seen" != "$under" ] && echo "$seen" | awk '{ exit !($1 >= 18 && $1 <= 42 && $2 >= 29 &&
+      $2 <= 53 && $3 >= 36 && $3 <= 60) }' && shown=1 && break
+  done
+  [ -n "$shown" ] ||
+    fail "the pointer over the page isn't the camera: $seen where the page is $under (capture-pointer.png)"
+  send warp
+fi
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-chosen.png" || fail "no window to capture"
