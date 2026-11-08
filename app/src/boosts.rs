@@ -403,6 +403,26 @@ pub fn watch(folder: PathBuf, changed: impl Fn() + Send + 'static) -> bool {
     started.is_ok()
 }
 
+/// `watch`, calling `changed` on the UI thread rather than the watcher's.
+pub fn watch_in(
+    folder: PathBuf,
+    cx: &mut gpui::App,
+    changed: impl Fn(&mut gpui::App) + 'static,
+) -> bool {
+    use futures::StreamExt;
+    let (told, mut changes) = futures::channel::mpsc::unbounded::<()>();
+    if !watch(folder, move || _ = told.unbounded_send(())) {
+        return false;
+    }
+    cx.spawn(async move |cx| {
+        while changes.next().await.is_some() {
+            cx.update(|cx| changed(cx));
+        }
+    })
+    .detach();
+    true
+}
+
 #[cfg(target_os = "linux")]
 fn watch_on_thread(folder: &Path, changed: impl Fn()) {
     use std::os::unix::ffi::OsStrExt;

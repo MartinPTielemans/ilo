@@ -4,8 +4,6 @@
 //! The user's alone: the agents' MCP server has no Boost tool, and the core's Boost calls are made
 //! only from here and the window's UI.
 
-use futures::{StreamExt, channel::mpsc};
-
 use browser::boosts;
 
 use super::*;
@@ -14,8 +12,6 @@ use super::*;
 const NO_BOOSTS: &str = "no-boosts";
 
 thread_local! {
-    /// Where the watchers' threads say a profile's folder changed, once the first is started.
-    static TOLD: RefCell<Option<mpsc::UnboundedSender<u64>>> = const { RefCell::new(None) };
     static READ_SWITCH: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -58,29 +54,9 @@ pub(crate) fn load(profile: u64, cx: &mut App) {
     // check.sh reads this line.
     log!("browser: boosts of profile {profile} read: {count}");
     show(changes);
-    let told = told(cx);
     if let Some(watched) = boosts::with(|boosts| boosts.folder(profile)) {
-        boosts::watch(watched, move || {
-            let _ = told.unbounded_send(profile);
-        });
+        boosts::watch_in(watched, cx, move |cx| folder_changed(profile, cx));
     }
-}
-
-/// The channel the watchers tell the UI thread on, made the first time.
-fn told(cx: &mut App) -> mpsc::UnboundedSender<u64> {
-    TOLD.with_borrow_mut(|told| {
-        told.get_or_insert_with(|| {
-            let (sender, mut changed) = mpsc::unbounded::<u64>();
-            cx.spawn(async move |cx| {
-                while let Some(profile) = changed.next().await {
-                    cx.update(|cx| folder_changed(profile, cx));
-                }
-            })
-            .detach();
-            sender
-        })
-        .clone()
-    })
 }
 
 /// A file in `profile`'s Boosts folder changed: what it changed shows, and the windows draw what

@@ -682,16 +682,8 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::ViewAgents,
         &["agent history", "past tasks"],
     ),
-    (
-        "New Boost",
-        Command::NewBoost,
-        &["zap", "css", "style"],
-    ),
-    (
-        "Edit Boost",
-        Command::EditBoost,
-        &["zap", "css", "style"],
-    ),
+    ("New Boost", Command::NewBoost, &["zap", "css", "style"]),
+    ("Edit Boost", Command::EditBoost, &["zap", "css", "style"]),
     (
         "View Boosts…",
         Command::ViewBoosts,
