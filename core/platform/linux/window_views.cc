@@ -21,6 +21,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
+#include "browser_core/mini_player.h"
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/platform/linux/ui_text_input.h"
 #include "browser_core/platform/linux/wayland.h"
@@ -179,17 +180,18 @@ bool HasKeyboard(views::Widget* widget) {
   return false;
 }
 
-// The Mini Player that Chrome floated by itself as its tab hid, a page's window or a video's, if
-// it's open and has the keyboard.
-views::Widget* AutoMiniPlayerWithKeyboard() {
+// The Mini Player the browser window takes the keyboard back from, if it's open and has it: a
+// video's, which Chromium shows inactive however it floated (#2060), or a page's window that Chrome
+// floated by itself as its tab hid. A page's window the user opened keeps it, as on the Mac.
+views::Widget* MiniPlayerToTakeKeyboardFrom() {
   auto* manager = PictureInPictureWindowManager::GetInstance();
-  content::WebContents* opener = manager->GetWebContents();
-  auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
-  if (!helper || !helper->IsInAutoPictureInPicture()) {
-    return nullptr;
-  }
   views::Widget* floating = nullptr;
   if (content::WebContents* child = manager->GetChildWebContents()) {
+    content::WebContents* opener = manager->GetWebContents();
+    auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
+    if (!helper || !helper->IsInAutoPictureInPicture()) {
+      return nullptr;
+    }
     floating = views::Widget::GetTopLevelWidgetForNativeView(child->GetNativeView());
   } else {
     for (aura::Window* window : views::DesktopWindowTreeHostPlatform::GetAllOpenWindows()) {
@@ -732,11 +734,11 @@ class WindowViews : public views::WidgetObserver,
   }
 
   // A window can't map under Wayland without the compositor giving it the keyboard, as sway and
-  // Hyprland do, so the Mini Player that floats as the user leaves its tab takes it from the
-  // browser window, where on the Mac and X11 it never has it (#1961). The window has it back with
-  // an xdg-activation token, which Chromium's Activate asks for, once: a click in the Mini Player
-  // later gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard
-  // after telling the window it lost it.
+  // Hyprland do, so a Mini Player takes it from the browser window as it shows, where on the Mac
+  // and X11 it never has it (#1961, #2060). The window has it back with an xdg-activation token,
+  // which Chromium's Activate asks for, once each time the Mini Player shows: a click in it later
+  // gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard after
+  // telling the window it lost it.
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
     if (!active && OnWayland()) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -747,11 +749,14 @@ class WindowViews : public views::WidgetObserver,
 
   void TakeKeyboardFromMiniPlayer() {
     static base::NoDestructor<base::WeakPtr<views::Widget>> taken_from;
-    views::Widget* floating = AutoMiniPlayerWithKeyboard();
-    if (!floating || floating == taken_from->get()) {
+    // Chrome shows a video's Mini Player again for the next float, the same window.
+    static int taken_at_show = 0;
+    views::Widget* floating = MiniPlayerToTakeKeyboardFrom();
+    if (!floating || (floating == taken_from->get() && taken_at_show == MiniPlayerShows())) {
       return;
     }
     *taken_from = floating->GetWeakPtr();
+    taken_at_show = MiniPlayerShows();
     // check.sh reads this line.
     LOG(ERROR) << "browser: mini player gave the keyboard back";
     widget_->Activate();
