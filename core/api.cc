@@ -1790,6 +1790,32 @@ void bc_window_keep_preview(bc_id window_id, bc_id id) {
   window->Select(id);
 }
 
+void bc_window_keep_archived_preview(bc_id window_id, bc_id id, bc_id archived) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (!window || !contents) {
+    return;
+  }
+  const auto& all = browser_core::Archived();
+  auto entry = std::ranges::find(all, archived, &browser_core::ArchivedTab::id);
+  // Back in the Space it closed in, as a restore goes, while that's one of the user's in the
+  // preview's profile, as a page can't change profiles. Select then shows it.
+  browser_core::Space* closed_in =
+      entry == all.end() || window->own_space() ? nullptr
+                                                : browser_core::Space::WithNode(entry->space);
+  if (closed_in && closed_in->profile() != browser_core::DirOf(contents)) {
+    closed_in = nullptr;
+  }
+  browser_core::Space* space =
+      closed_in ? closed_in : browser_core::Space::FromId(window->space());
+  if (!space || browser_core::Space::Holding(id) || browser_core::Favorites::Has(id)) {
+    return;
+  }
+  browser_core::TakeArchived(archived);
+  space->Add(id, /*opener=*/0, /*foreground=*/true);
+  window->Select(id);
+}
+
 void bc_tab_show(bc_id id, bc_rect frame) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
