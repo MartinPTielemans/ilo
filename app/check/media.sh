@@ -341,7 +341,7 @@ kept_keys
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
 # scroll, pinch and double-click: a drag on its top bar, off the buttons at its ends, moves it, and
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
-# manager does both, with the display's pointer. Linux alone: drive.mm doesn't find it yet.
+# manager does both, with the display's pointer. Not on the Mac: drive.mm doesn't find it yet.
 if [ "$(uname)" = Linux ]; then
   px=0 py=0 pw=0 ph=0
   send pip
@@ -365,6 +365,19 @@ if [ "$(uname)" = Linux ]; then
   # A press on the call's window gives it the keys, as Chrome's does, so a click gives the
   # browser window them back for the tab switch below.
   send click $page_point
+elif windows; then
+  # Windows moves and sizes a window itself, with the desktop's pointer, from what the window's
+  # hit test says is under it, so the driver, which never moves that pointer, asks the hit test.
+  px=0 py=0 pw=0 ph=0
+  send pip
+  mini_player_at 1 "the floating call had no window"
+  send pip hit $((pw / 2)) 17
+  expect '^browser: pip hit caption$' "the floating call's top bar wasn't one a press moves it by"
+  send pip hit $((pw - 3)) $((ph - 3))
+  expect '^browser: pip hit bottomright$' \
+    "the floating call's bottom right corner wasn't one a press sizes it from"
+  ../tools/window-screenshot.sh "$pid" "$out/media-call-floating.png" all ||
+    fail "no window to capture"
 else
   echo "skip: moving and sizing the floating call on $(uname): drive.mm has no pip."
 fi
