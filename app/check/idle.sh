@@ -9,7 +9,7 @@
 # (#1773). The trace can't tell the two 2-minute timers apart, so a second fails. With Battery Saver
 # on, through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the freezing
 # policy's, so the trace would have shown one. A profile of the run's own keeps the pref from the
-# runs after it. It says how much CPU the browser's processes took while the window sat idle.
+# runs after it. It says how much CPU the browser's processes take idle, in the minute after the trace.
 
 profile_dir="$PWD/$out/idle/profile"
 # The tasks of queries.cc's timers a trace has: those posted 60 s ahead, those but the process
@@ -52,7 +52,7 @@ cpu() {
   fi
 }
 # Runs the app idle for $2 seconds with the startup trace, and sets $wakes (the minute timer's),
-# $all (all but the process metrics') and $timers from its trace. $1 names it.
+# $all (all but the process metrics') and $timers from its trace, and $idle_cpu. $1 names it.
 idle_trace() {
   trace="$PWD/$out/idle/$1.json"
   log="$out/idle-$1.log"
@@ -62,23 +62,20 @@ idle_trace() {
     < /dev/null > "$log" 2>&1 &
   pid=$!
   await_load
-  # Chromium writes the trace once its time is up. The CPU it takes idle is read from its 30th
-  # second, once it has settled, to its last before the trace is written.
-  idle_from= idle_to=
-  for second in $(seq $(($2 + 75))); do
-    [ "$second" = 30 ] && idle_from="$(cpu) $(date +%s)"
-    [ "$second" = $(($2 - 10)) ] && idle_to="$(cpu) $(date +%s)"
+  # Chromium writes the trace once its time is up.
+  for _ in $(seq $(($2 + 75))); do
     python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' "$trace" 2> /dev/null && break
     kill -0 "$pid" 2> /dev/null || gone
     sleep 1
   done
-  idle_cpu=
-  if [ -n "$idle_from" ] && [ -n "$idle_to" ]; then
-    idle_cpu=$(echo "$idle_from $idle_to" | awk '{
-      printf "%.2f s of CPU in %d s (%.2f%% of one core), %d processes", $4 - $1, $6 - $3,
-        ($4 - $1) * 100 / ($6 - $3), $5 }')
-  fi
   [ -s "$trace" ] || fail "the $1 window wrote no trace"
+  # The CPU it takes idle, over the minute after, as the trace's recording takes CPU of its own.
+  idle_from="$(cpu) $(date +%s)"
+  sleep 60
+  kill -0 "$pid" 2> /dev/null || gone
+  idle_cpu=$(echo "$idle_from $(cpu) $(date +%s)" | awk '{
+    printf "%.2f s of CPU in %d s (%.2f%% of one core), %d processes", $4 - $1, $6 - $3,
+      ($4 - $1) * 100 / ($6 - $3), $5 }')
   quit
   counted=$(minute_wakes "$trace") || fail "the $1 window's trace didn't read as JSON"
   read -r wakes all timers << COUNTED
