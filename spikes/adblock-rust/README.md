@@ -5,8 +5,8 @@
 **Answer.** adblock-rust is that engine, and a matcher of ilo's own isn't needed. On the lists ilo's uBO turns on:
 
 - adblock-rust blocks the same requests as uBO, all but 25 of 242,945.
-- It compiles the lists 13 times faster, loads from its cache 27 times faster, and holds a fifth of the memory.
-- Its matching time per request is the same as uBO's, with a shorter tail.
+- On Linux, Windows and the Mac, it compiles the lists 13 to 17 times faster. It loads from its cache 15 to 32 times faster. Once loaded, it holds a fifth of uBO's memory or less, and its peak is about a tenth of uBO's.
+- Both engines take about 10 µs a request. uBO's median is a few µs lower, and adblock-rust's p99 is the same or lower.
 
 What it doesn't do is mostly what any engine inside ilo has to do in the browser itself: pop-ups, the element picker, list updates. Its gaps in filter syntax are a short list of options, which would go upstream to Brave (below).
 
@@ -28,22 +28,28 @@ What it doesn't measure:
 
 ## Results
 
-On Linux (x86-64, Ryzen desktop). Medians of three for compile and load. Memory is the process's resident set: "held" is what the engine adds once built, and "peak" is the process's most.
+From `run.sh` on a Linux desktop (x86-64, Ryzen), and on GitHub's `windows-latest` and `macos-latest` runners (Apple silicon), from the workflow on the proof branch `spike/adblock-rust-2`. In each cell, adblock-rust 0.13.5 comes first and uBO 1.75.0's engine in Node 24 second. Compile and load times are medians of three, each in a fresh process.
 
-| | adblock-rust 0.13.5 | uBO 1.75.0's engine in Node 24 |
-| --- | --- | --- |
-| Compile the nine lists | 217 ms | 2,851 ms |
-| Write its cache | 8 ms, 21 MB | 1,453 ms, 43 MB |
-| Load from its cache | 17 ms | 460 ms |
-| Memory held once compiled | 28 MB | 357 MB |
-| Memory held once loaded from its cache | 22 MB | 112 MB |
-| Peak while compiling | 93 MB | 790 MB |
-| Peak while loading | 45 MB | 419 MB |
-| Time a request, mean / p50 / p99 / max (all 242,945) | 7.5 / 6.2 / 26 / 197 µs | 6.5 / 4.2 / 33 / 8,549 µs |
-| Requests blocked, of 242,945 | 109,432 | 109,457 |
-| Of those, answered with a stand-in | 7,257 | 7,273 |
+Memory is the process's resident set, which is the working set on Windows. "Held" is what the engine adds once it's built. "Peak" is the most the process reached. On the Mac, Rust can only read the peak without Mach calls, so adblock-rust's "held" figure there is its peak.
 
-Windows and the Mac: see the table added below from the proof run.
+| | Linux | Windows | Mac |
+| --- | --- | --- | --- |
+| Compile the nine lists | 217 / 2,851 ms | 296 / 5,109 ms | 271 / 4,574 ms |
+| Write its cache | 8 / 1,453 ms | 6 / 1,900 ms | 4 / 2,397 ms |
+| Size of its cache | 21 / 43 MB | 21 / 43 MB | 21 / 43 MB |
+| Load from its cache | 17 / 460 ms | 15 / 478 ms | 39 / 572 ms |
+| Memory held once compiled | 28 / 357 MB | 23 / 317 MB | 126 / 1,313 MB |
+| Memory held once loaded from its cache | 22 / 112 MB | 21 / 267 MB | 44 / 292 MB |
+| Peak while compiling | 93 / 790 MB | 90 / 680 MB | 126 / 1,746 MB |
+| Peak while loading | 45 / 419 MB | 45 / 402 MB | 44 / 450 MB |
+| Time a request, mean (all 242,945) | 7.5 / 6.5 µs | 12.5 / 9.0 µs | 10.3 / 9.1 µs |
+| p50 | 6.2 / 4.2 µs | 9.4 / 5.5 µs | 7.3 / 4.8 µs |
+| p99 | 26 / 33 µs | 51 / 51 µs | 54 / 63 µs |
+| Slowest | 0.2 / 8.5 ms | 17.7 / 8.2 ms | 1.5 / 8.3 ms |
+| Requests blocked, of 242,945 | 109,432 / 109,457 | the same | the same |
+| Of those, answered with a stand-in | 7,257 / 7,273 | the same | the same |
+
+The answers are identical on all three. adblock-rust's slowest request on Windows, 17.7 ms, was a single request: its slowest in the sample pass was 0.16 ms. On the Mac, Node's resident set stayed above 1.4 GB after compiling, so the peak is the fairer comparison there.
 
 ### What each blocks
 
@@ -63,7 +69,7 @@ Of the lists' 263,927 filters, it takes 216,284 network filters, 32,681 cosmetic
 | 413 | HTML filtering, `##^` | No. uBO does it only on Firefox. Chromium gives an extension no response bodies. |
 | 70 | `$replace` | No, for the same reason. |
 | 31 | `$cname`, `$ipaddress` | No. Firefox only. |
-| 287 | `$doc` | Yes. It's uBO's short name for `$document`, which adblock-rust knows, so it's an alias to add. |
+| 280 | `$doc` | Yes. It's uBO's short name for `$document`, which adblock-rust knows, so it's an alias to add. |
 | 261 | `denyallow` | Yes. It's a small option to add. |
 | 50 | `$urlskip`, `$uritransform` | Yes. These rewrite a navigation and need the browser's help. |
 | 37 | `$match-case` | Yes, small. |
