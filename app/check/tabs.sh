@@ -797,11 +797,20 @@ await_bar_height
 send key tab
 expect '^browser: command bar site search duckduckgo.com by tab$' \
   "Tab on the row that hints DuckDuckGo didn't enter its site search"
-send type cats
-expect "$listed cats\" in [0-9.]* ms: https://duckduckgo.com/?q=cats" \
+send type example
+expect "$listed example\" in [0-9.]* ms: https://duckduckgo.com/?q=example" \
   "the site search didn't list DuckDuckGo's search first: $(suggestions | tr '\n' ' ')"
+# It lists only that search, as Arc's does, though the core also lists DuckDuckGo's searches from
+# history, such as ⇧⌘↩'s for example.com above: one row under the input, 78.5 + 50 tall.
+listed_rows=$(suggestions | wc -l | tr -d ' ')
+for _ in $(seq 50); do
+  [ "$(bar_height)" = 128.5 ] && break
+  sleep 0.1
+done
+[ "$(bar_height)" = 128.5 ] ||
+  fail "the site search is $(bar_height) tall, not one row's 128.5, for the core's $listed_rows rows"
 ../tools/window-screenshot.sh "$pid" "$out/site-search.png" || fail "no window to capture"
-for _ in 1 2 3 4 5; do send key backspace; done
+for _ in 1 2 3 4 5 6 7 8; do send key backspace; done
 expect '^browser: command bar leaves site search$' \
   "⌫ in the site search's empty field didn't leave it"
 expect '^browser: command bar drew "duckduckgo.com"$' \
@@ -1571,4 +1580,5 @@ echo "ok: new tabs open at the top and show, the command bar lists the Space's o
   "moves with its window and the window's menu closes, and the bar stays open over a page that" \
   "commits in another site's renderer and $committed: $out/command-bar-moved.png"
 echo "  Switch to a loaded tab, tab strip to frame shown (Chrome's measure; gate 16 ms): $chrome_ms."
+echo "  A site search for example: the core listed $listed_rows rows, the bar one."
 echo "  Switch, key to the core's report: $app_ms. Windows: $out/muted.png, $out/tabs.png, $out/bar-close.png, $out/suggestions.png, $out/completion.png, $out/search-tabs.png, $out/url-field-bar.png, $out/commands-only.png, $out/numbered.png, $out/listed.png, $out/popular.png, $out/site-hint.png, $out/site-search.png, $out/field-menu.png, $out/empty.png, $out/remove-suggestion.png, $out/remove-tooltip.png, $out/site-search-settings.png, $out/idle-unloaded.png, $out/back-held.png, $out/back-menu.png, $out/back-behind.png, $out/chosen.png, $out/chosen-menu.png"

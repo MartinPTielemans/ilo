@@ -540,7 +540,7 @@ impl LinkRulesView {
         // Each field is called by its rule's place, which moved.
         for (index, field) in self.fields.iter().enumerate() {
             field.update(cx, |field, cx| {
-                field.set_spoken(rule_name(index, "Text"), cx)
+                field.set_spoken(Some(rule_name(index, "Text").into()), cx)
             });
         }
         self.keep(cx);
