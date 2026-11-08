@@ -300,17 +300,32 @@ perf_session() {
     "$(perf_stats '%.1f' < "$perf_dir/switch-core") ms" "none of its own"
 
   : > "$perf_dir/newwindow"
-  for _ in 1 2 3; do
+  rounds="1 2 3"
+  [ "$(uname)" != Darwin ] || rounds="1 2 3 traced"
+  for round in $rounds; do
+    sampler=
+    if [ "$round" = traced ]; then
+      # The Mac's ⌘N takes ten times Linux's (#2141): a trace of every thread, a sample a
+      # millisecond, from just before the key to past the window's first frame. Sampling slows
+      # the browser, so this one's time isn't counted.
+      sample "$pid" 5 1 -mayDie -file "$PWD/$perf_dir/new-window.sample.txt" \
+        > "$perf_dir/sample.log" 2>&1 &
+      sampler=$!
+      # Its first line, that it's sampling, can wait in its output's buffer: 1–2 s is enough.
+      perf_until $(($(date +%s) + 2))
+    fi
     send key n cmd
     expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window drew no frame"
     sed -n "/^browser: drive $step: /,\$p" "$log" |
-      sed -n 's/^browser: new window first frame at \([0-9.]*\) ms$/\1/p' | head -1 >> "$perf_dir/newwindow"
+      sed -n 's/^browser: new window first frame at \([0-9.]*\) ms$/\1/p' | head -1 >> "$perf_dir/newwindow${sampler:+-traced}"
     opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
     expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
     send key escape
     expect '^browser: command bar hidden$' "escape didn't close ⌘N's command bar"
     send key w cmd shift
     expect "^browser: window closed $opened\$" "⇧⌘W didn't close ⌘N's window"
+    # A trace that couldn't be taken leaves the time measured, and says why.
+    [ -z "$sampler" ] || wait "$sampler" || echo "perf: no trace of ⌘N: $(cat "$perf_dir/sample.log")"
   done
   perf_row newwindow "New window, ⌘N to first frame" \
     "$(perf_stats '%.1f' < "$perf_dir/newwindow") ms" "Ardia 79.9 ms, Chrome 100 ms"
