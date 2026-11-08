@@ -128,7 +128,8 @@ PY
       fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
     asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
     while read -r each; do
-      [ "$each" = "“$app_name”" ] || fail "macOS asked whether $each may notify, not $app_name"
+      # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
+      [ "$each" = "“${app_name}”" ] || fail "macOS asked whether $each may notify, not $app_name"
     done <<< "$asked"
     echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
