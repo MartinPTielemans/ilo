@@ -239,7 +239,12 @@ for helper in "$framework"/Helpers/*" Helper ("*"Alerts).app"; do
   cp branding/Assets.car "branding/$name.icns" "$helper/Contents/Resources/"
   plutil -replace CFBundleIconFile -string "$name" "$helper_plist"
   plutil -replace CFBundleIconName -string "$name" "$helper_plist"
+  # Its signature seals its Info.plist, so it's signed again, ad hoc, keeping what the engine's
+  # signature gave it. tools/install.sh and tools/release.sh sign it with the app's identity.
+  codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "$helper"
 done
+# The framework's signature seals its helpers and resources, uBlock Origin's among them.
+codesign --force --sign - --preserve-metadata=entitlements,flags,runtime "$framework"
 # The prod build opens web links and files, so it can be the default browser: http, https and file
 # URLs, and the documents Chrome views, such as .html. Not what's Chromium's own, which the core
 # doesn't open: its chromium:// scheme, its extension and shortcut files and the types it exports

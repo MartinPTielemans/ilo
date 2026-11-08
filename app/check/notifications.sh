@@ -17,6 +17,11 @@ if [ "$(uname)" = Darwin ]; then
   if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
     echo "skip: notifications, which presses macOS's banners only in a check VM with System Integrity Protection off."
   else
+    # build.sh makes the alert helpers the app's and signs them again, as their Info.plist is
+    # sealed, then the framework that holds them (#2126).
+    codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
+      > "$out/notifications-codesign.txt" 2>&1 ||
+      fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
