@@ -41,7 +41,7 @@ screens=(
   "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
 )
 case $(uname -s) in
-  MINGW* | MSYS*) systems=(windows) ;;
+  MINGW* | MSYS*) systems=(windows) drag= ;;
   *)
     systems=(wayland x11)
     cargo build -q --release --manifest-path "$here/../app/check/drag/Cargo.toml" \
@@ -54,7 +54,8 @@ esac
 # sway seat has no pointer, so check/drag lends it one, which lives until the capture's taken; it
 # moves twice, as the window may take the seat's pointer only once the first move has given it one.
 capture() { # <system> <output.png> <ready> [<point>]
-  local then=()
+  local then=() point=()
+  [ -z "${4:-}" ] || point=(-Point "$4")
   [ -z "${4:-}" ] || then=(--then "set -e; at=\$(grep -m1 '$4' \"\$LOG\" | awk '{ print \$(NF - 1), \$NF }')
     set -- \$at
     { sleep 0.5; echo \"move \$1 \$2\"; sleep 0.5; echo \"move \$((\$1 + 1)) \$2\"; sleep 3; } |
@@ -62,7 +63,7 @@ capture() { # <system> <output.png> <ready> [<point>]
     sleep 2; grim -c '$2'; wait")
   case $1 in
     windows) timeout 90 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/window-capture.ps1" \
-      "$2" "$3" "$preview" -Moving 400 ;;
+      "$2" "$3" "$preview" -Moving 400 "${point[@]}" ;;
     x11) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" --x11 "$2" "$3" "$preview" ;;
     *) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" "$2" "$3" "$preview" ;;
   esac
