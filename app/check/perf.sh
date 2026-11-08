@@ -129,6 +129,22 @@ perf_memory() {
   perf_snap "memory-$1" kinds
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
+  case $1 in *10) perf_regions "$1" ;; esac
+}
+# What the browser process and the largest renderer hold at memory $1, by kind of memory, for
+# #2138: vmmap's regions on the Mac, smaps' mappings on Linux. Chrome's may need root on the Mac.
+perf_regions() {
+  for kind in browser renderer; do
+    p=$(python3 -I check/usage.py largest "$perf_dir/memory-$1.json" $kind)
+    [ -n "$p" ] || continue
+    file="$perf_dir/regions-$1-$kind.txt"
+    if [ "$(uname)" = Darwin ]; then
+      vmmap --summary "$p" > "$file" 2>&1 || sudo -n vmmap --summary "$p" > "$file" 2>&1 ||
+        echo "perf: no regions of $1's $kind: $(tail -1 "$file")"
+    elif [ "$(uname)" = Linux ]; then
+      python3 -I check/usage.py regions "$p" > "$file" 2>&1
+    fi
+  done
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {

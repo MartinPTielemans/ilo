@@ -8,6 +8,9 @@ every process of the browser.
   usage.py memory FILE       prints the memory summed, in MiB, and how many processes
   usage.py kinds FILE        prints the memory by kind of process, in MiB, the most first
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
+  usage.py largest FILE KIND prints the pid of the largest process of KIND in a snapshot
+  usage.py regions PID       prints a Linux process's private memory by mapping, in MiB, the most
+                             first, from /proc/PID/smaps
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
 
@@ -193,6 +196,24 @@ def main():
                 cpu += max(now[1] - was[1], 0)
                 wakeups += max(now[2] - was[2], 0)
             print(f"{cpu * 100 / secs:.3f} {wakeups / secs:.2f}")
+    elif command == "largest":
+        procs = read(sys.argv[2])["procs"].items()
+        sized = [(p[3], pid) for pid, p in procs if p[0] == sys.argv[3]]
+        if sized:
+            print(max(sized)[1])
+    elif command == "regions":
+        totals = {}
+        name = ""
+        with open(f"/proc/{sys.argv[2]}/smaps") as f:
+            for line in f:
+                fields = line.split()
+                if "-" in fields[0] and ":" not in fields[0]:
+                    # A mapping's first line: its range, perms, offset, device, inode, then name.
+                    name = " ".join(fields[5:]) or "[anon]"
+                elif fields[0] in ("Private_Clean:", "Private_Dirty:", "Swap:"):
+                    totals[name] = totals.get(name, 0) + int(fields[1]) / 1024
+        for name, mib in sorted(totals.items(), key=lambda t: -t[1])[:15]:
+            print(f"{mib:.1f} {name}")
     else:
         sys.exit(f"usage.py: no command {command}")
 
