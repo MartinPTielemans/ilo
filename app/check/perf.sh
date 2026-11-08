@@ -17,9 +17,13 @@
 #   tabs and settled at 20; 16 switches by ⌘1–⌘8, the key to the page shown; 3 new windows, ⌘N to
 #   their first frame; and memory back at 1 tab, 30 s after closing the others.
 #
+# - Then Google Chrome, where the runner has it, on the same page on the same machine: memory at 1,
+#   10 and 20 tabs and idle at 1 and 20, which the gate compares ilo with, and the run says how far
+#   ilo is from it on each.
+#
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
-# the browser, as check/usage.py says for each OS. The shell's clock is a process of its own, so
-# each time from a key includes one process start, which the run says.
+# the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
+# process of its own, so each time from a key includes one process start, which the run says.
 
 serve
 perf_dir="$out/perf"
@@ -70,13 +74,26 @@ document.addEventListener("visibilitychange", () => {
 HTML
 page="${site}perf.html"
 
-# Unix time in ms. BSD date has no %N, so the Mac's is Perl's.
-perf_now() {
-  if [ "$(uname)" = Darwin ]; then
-    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'
-  else
-    date +%s%3N
-  fi
+# Sets $stamp to Unix time in ms. Bash 5 has it in EPOCHREALTIME, which Git Bash's is, as a process
+# start there takes tens of ms; Linux's sh is dash, so date, and the Mac's bash 3.2 and BSD date have
+# neither, so Perl.
+if [ -n "${EPOCHREALTIME:-}" ]; then
+  perf_clock=bash
+elif [ "$(uname)" = Darwin ]; then
+  perf_clock=perl
+else
+  perf_clock=date
+fi
+perf_stamp() {
+  case $perf_clock in
+    bash)
+      stamp=$EPOCHREALTIME
+      stamp_us=${stamp#*[.,]}
+      stamp="${stamp%[.,]*}${stamp_us%???}"
+      ;;
+    perl) stamp=$(perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000') ;;
+    *) stamp=$(date +%s%3N) ;;
+  esac
 }
 # Sorts the numbers on standard input, one a line, and says their median, range and count, each
 # number as $1 formats it.
@@ -91,8 +108,11 @@ perf_row() {
   echo "perf: $2: $3; target $4"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
 }
+# Snapshots what the browser's processes use, or those of $snap_procs, as $1.
 perf_snap() {
-  python3 -I check/usage.py snap "$procs" "$perf_dir/$1.json" || fail "the browser's usage didn't read"
+  # shellcheck disable=SC2086 # kinds, or nothing
+  python3 -I check/usage.py snap "${snap_procs:-$procs}" "$perf_dir/$1.json" ${2:-} ||
+    fail "the browser's usage didn't read"
 }
 # Waits until $1, in Unix seconds, checking the app is still there.
 perf_until() {
@@ -101,10 +121,11 @@ perf_until() {
     sleep 1
   done
 }
-# The memory now, in $memory: "MiB processes".
+# The memory now, in $memory: "MiB processes", and by kind of process in $kinds.
 perf_memory() {
-  perf_snap "memory-$1"
+  perf_snap "memory-$1" kinds
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
+  kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
@@ -118,22 +139,29 @@ perf_idle() {
   python3 -I check/usage.py idle $files > "$perf_dir/$1.txt"
   cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
   wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
+  cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
 }
 # The Unix ms page $1 said it first painted, in the log since step $2 (all of it with none).
 perf_painted() {
-  sed -n "/^browser: drive ${2:-0}: /,\$p" "$log" | sed -n "s/^browser: title [0-9]* $1 fcp //p" | tail -1
+  if [ -n "${2:-}" ]; then
+    sed -n "/^browser: drive $2: /,\$p" "$log"
+  else
+    cat "$log"
+  fi | sed -n "s/^browser: title [0-9]* $1 fcp //p" | tail -1
 }
 
-# The clock's own cost, a process start, which each time from a key includes.
-clock_from=$(perf_now)
-clock_to=$(perf_now)
-clock=$((clock_to - clock_from))
+# The clock's own cost, which each time from a key includes: on Linux and the Mac a process start.
+perf_stamp
+clock=$stamp
+perf_stamp
+clock=$((stamp - clock))
 
 # Launches the app, on page $1 or with none to put back the last, and waits for page $2 to paint:
 # sets $painted to the ms from just before the launch, and $on_screen to the window's time.
 perf_launch() {
   log="$perf_dir/launch-$3.log"
-  launched=$(perf_now)
+  perf_stamp
+  launched=$stamp
   if [ -n "$1" ]; then
     BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
   else
@@ -183,14 +211,14 @@ send click $page_point
 perf_session() {
   perf_until $((started + 30))
   perf_memory 1
-  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes" \
+  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 298 MB, Chrome 370 MB (gate: ≤ Chrome)"
   perf_idle idle-1
-  perf_row idle-cpu-1 "Idle CPU, 1 tab" "$cpu %" "Ardia 0.16 %, Chrome 0.2 %"
+  perf_row idle-cpu-1 "Idle CPU, 1 tab" "$cpu" "Ardia 0.16 %, Chrome 0.2 %"
   perf_row idle-wakeups-1 "Idle wakeups, 1 tab" "$wakeups /s" "Ardia 5.27 /s, Chrome 6.77 /s"
   perf_until $((started + 120))
   perf_idle settled-1
-  perf_row settled-cpu-1 "Idle CPU, 1 tab, settled" "$cpu %" "Ardia 0.05 %"
+  perf_row settled-cpu-1 "Idle CPU, 1 tab, settled" "$cpu" "Ardia 0.05 %"
   perf_row settled-wakeups-1 "Idle wakeups, 1 tab, settled" "$wakeups /s" "Ardia 3.11 /s"
 
   # Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint.
@@ -198,7 +226,8 @@ perf_session() {
     send key t cmd
     expect '^browser: command bar shown$' "⌘T didn't open the command bar for $1"
     send type "$page?$1"
-    typed=$(perf_now)
+    perf_stamp
+  typed=$stamp
     send key return
     expect_late "^browser: title [0-9]* $1 fcp " "$1 didn't paint in its new tab"
     echo $(($(perf_painted "$1" "$step") - typed)) >> "$perf_dir/newtab"
@@ -210,31 +239,32 @@ perf_session() {
   done
   perf_until $((loaded + 10))
   perf_memory 10
-  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes" \
+  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 714 MB, Chrome 692 MB (gate: ≤ Chrome)"
   for n in 11 12 13 14 15 16 17 18 19 20; do
     perf_open "p$n"
   done
   perf_until $((loaded + 15))
   perf_memory 20
-  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes" \
+  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 1082 MB, Chrome 919 MB (gate: ≤ Chrome)"
   perf_row newtab "New tab, ↩ in ⌘T's bar to page painted" \
     "$(perf_stats '%.0f' < "$perf_dir/newtab") ms" "Ardia 54.9 ms, Chrome 54.3 ms (gate: ≤ Chrome)"
   perf_idle idle-20
-  perf_row idle-cpu-20 "Idle CPU, 20 tabs" "$cpu %" "Ardia 0.45 %, Chrome 0.62 % (gate: ≤ Chrome)"
+  perf_row idle-cpu-20 "Idle CPU, 20 tabs" "$cpu" "Ardia 0.45 %, Chrome 0.62 % (gate: ≤ Chrome)"
   perf_row idle-wakeups-20 "Idle wakeups, 20 tabs" "$wakeups /s" \
     "Ardia 13.56 /s, Chrome 30.86 /s (gate: ≤ Chrome)"
   perf_until $((loaded + 120))
   perf_idle settled-20
-  perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu %" "Ardia 0.31 %"
+  perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu" "Ardia 0.31 %"
   perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
 
   # ⌘1 is the newest Today tab, p20, which shows, so each key goes to another tab.
   : > "$perf_dir/switch"
   : > "$perf_dir/switch-core"
   for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
-    pressed=$(perf_now)
+    perf_stamp
+    pressed=$stamp
     send key "$k" cmd
     expect "^browser: selected [0-9]* in " "⌘$k didn't switch tabs"
     since=$(sed -n "/^browser: drive $step: /,\$p" "$log")
@@ -270,11 +300,13 @@ perf_session() {
   for _ in $(seq 19); do
     send key w cmd
     expect '^browser: today ' "⌘W didn't close a tab"
+    # The next tab shows a moment after, and a ⌘W before then would close none.
+    expect '^browser: selected [0-9]' "⌘W didn't show another tab"
   done
   [ "$(today | wc -w | tr -d ' ')" = 1 ] || fail "⌘W 19 times didn't leave 1 tab: $(today)"
   perf_until $(($(date +%s) + 30))
   perf_memory closed
-  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes" \
+  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 358 MB, Chrome 406 MB"
 }
 if [ "$active" = 1 ]; then
@@ -284,6 +316,122 @@ else
 fi
 exec 3>&-
 quit
+
+# Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
+# for the gate's rows that compare with it: memory at 1, 10 and 20 tabs and idle at 1 and 20, on the
+# same page, its tabs opened from the command line, as a link from another app opens them, a couple
+# of seconds apart. A profile of its own, launched once first, as ilo's was.
+if [ "$(uname)" = Darwin ]; then
+  chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  chrome_procs="/Applications/Google Chrome.app/Contents"
+elif windows; then
+  chrome="/c/Program Files/Google/Chrome/Application/chrome.exe"
+  chrome_procs="C:/Program Files/Google/Chrome/Application/chrome.exe"
+else
+  chrome=/opt/google/chrome/chrome
+  chrome_procs=/opt/google/chrome/chrome
+fi
+chrome_profile="$PWD/$perf_dir/chrome-profile"
+! windows || chrome_profile="$(cygpath -w "$chrome_profile")"
+# Opens page $1 in Chrome, which a running Chrome takes as a new tab.
+chrome_open() {
+  "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
+    --use-mock-keychain --password-store=basic "$page?$1" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+}
+# Quits Chrome as quit_app does the app, then ends what's left of it.
+chrome_quit() {
+  if windows; then
+    python3 -I check/app-windows.py close "$(cat "/proc/$pid/winpid")" || true
+  elif [ "$(uname)" = Darwin ]; then
+    osascript -e 'tell application id "com.google.Chrome" to quit' || true
+  else
+    kill -INT "$pid" 2> /dev/null || true
+  fi
+  for _ in $(seq 40); do
+    perf_snap chrome-left
+    python3 -I check/usage.py memory "$perf_dir/chrome-left.json" | grep -q ' 0$' && return 0
+    sleep 0.5
+  done
+  echo "Chrome didn't quit in 20 s, so it's ended"
+  python3 -I -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["procs"]))' \
+    "$perf_dir/chrome-left.json" | while read -r left; do
+    if windows; then taskkill //F //PID "$left" > /dev/null 2>&1; else kill -9 "$left" 2> /dev/null; fi
+  done || true
+}
+# Launches Chrome on page $1 and sets $pid, or says it didn't stay.
+chrome_launch() {
+  chrome_open "$1"
+  pid=$!
+  sleep 5
+  kill -0 "$pid" 2> /dev/null
+}
+if [ "$active" != 1 ]; then
+  :
+elif [ ! -x "$chrome" ]; then
+  echo "skip: perf's Chrome on this runner. It has none at $chrome."
+else
+  snap_procs=$chrome_procs
+  : > "$perf_dir/chrome.log"
+  if ! chrome_launch warm; then
+    echo "skip: perf's Chrome on this runner. It didn't stay open: $(tail -3 "$perf_dir/chrome.log")"
+  else
+    sleep 15
+    chrome_quit
+    chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
+    started=$(($(date +%s) - 5))
+    perf_until $((started + 30))
+    perf_memory chrome-1
+    perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
+      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+    perf_idle chrome-idle-1
+    perf_row chrome-idle-cpu-1 "Chrome here, idle CPU, 1 tab" "$cpu" "ilo's"
+    perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" "$wakeups /s" "ilo's"
+    for n in 2 3 4 5 6 7 8 9 10; do
+      chrome_open "c$n"
+      perf_until $(($(date +%s) + 2))
+    done
+    perf_until $(($(date +%s) + 10))
+    perf_memory chrome-10
+    perf_row chrome-memory-10 "Chrome here, memory, 10 tabs" \
+      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+    for n in 11 12 13 14 15 16 17 18 19 20; do
+      chrome_open "c$n"
+      perf_until $(($(date +%s) + 2))
+    done
+    perf_until $(($(date +%s) + 15))
+    perf_memory chrome-20
+    perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
+      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+    perf_idle chrome-idle-20
+    perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
+    perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
+    chrome_quit
+    # ilo against Chrome on this machine, for each of the gate's rows.
+    python3 -I - "$perf_dir" << 'PY' | tee -a "$perf_dir/gate.txt"
+import json, os, statistics, sys
+
+d = sys.argv[1]
+def memory(name):
+    with open(os.path.join(d, f"memory-{name}.json")) as f:
+        return sum(p[3] for p in json.load(f)["procs"].values()) / 1048576
+def idle(name, column):
+    with open(os.path.join(d, f"{name}.txt")) as f:
+        return statistics.median(float(line.split()[column]) for line in f)
+for label, ilo, chrome, unit in [
+    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB"),
+    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB"),
+    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB"),
+    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%"),
+    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%"),
+    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s"),
+    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s"),
+]:
+    by = f"{(ilo / chrome - 1) * 100:+.0f} %" if chrome else "Chrome none"
+    print(f"perf: gate, {label}: ilo {ilo:.2f} {unit}, Chrome here {chrome:.2f} {unit} ({by})")
+PY
+  fi
+  snap_procs=
+fi
 echo "ok: perf measured $(wc -l < "$perf_dir/rows.tsv" | tr -d ' ') rows against #456's targets," \
-  "failing on none; each time from a key includes the shell's clock, $clock ms. Rows:" \
+  "failing on none; each time from a key includes the shell's clock ($perf_clock), $clock ms. Rows:" \
   "$perf_dir/rows.tsv, usage snapshots: $perf_dir/"

@@ -2,8 +2,12 @@
 (docs/perf in its repo): CPU and wakeups as the change between two snapshots, memory summed over
 every process of the browser.
 
-  usage.py snap PROCS FILE   writes a snapshot of every process whose path has PROCS in it
+  usage.py snap PROCS FILE [kinds]
+                             writes a snapshot of every process whose path has PROCS in it, with
+                             each one's kind on Windows only when asked, as it's slow there
   usage.py memory FILE       prints the memory summed, in MiB, and how many processes
+  usage.py kinds FILE        prints the memory by kind of process, in MiB, the most first
+  usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
 
@@ -24,13 +28,16 @@ import time
 
 
 def kind_of(args):
-    for word in args.split():
+    words = args.split()
+    for word in words:
         if word.startswith("--type="):
-            return word[len("--type="):]
+            kind = word[len("--type="):]
+            # An extension's pages, such as uBlock Origin's, run in renderers of their own.
+            return "extension" if kind == "renderer" and "--extension-process" in words else kind
     return "browser"
 
 
-def mac(procs):
+def mac(procs, kinds):
     lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
 
     class Timebase(ctypes.Structure):
@@ -60,7 +67,7 @@ def mac(procs):
     return seen
 
 
-def linux(procs):
+def linux(procs, kinds):
     hz = os.sysconf("SC_CLK_TCK")
     seen = {}
     for pid in filter(str.isdigit, os.listdir("/proc")):
@@ -87,7 +94,7 @@ def linux(procs):
     return seen
 
 
-def windows(procs):
+def windows(procs, kinds):
     from ctypes import wintypes
 
     ntdll = ctypes.WinDLL("ntdll")
@@ -128,8 +135,21 @@ def windows(procs):
                                   int.from_bytes(entry[184:192], "little")]
             kernel32.CloseHandle(handle)
         if not next_offset:
-            return seen
+            break
         offset += next_offset
+    if kinds and seen:
+        # Windows keeps a process's command line in its own memory, so WMI reads it, which takes a
+        # second or two: only for memory, never in an idle window.
+        listed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | "
+             "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"],
+            capture_output=True, text=True)
+        for line in listed.stdout.splitlines():
+            pid, _, args = line.strip().partition(" ")
+            if pid in seen:
+                seen[pid][0] = kind_of(args)
+    return seen
 
 
 def read(path):
@@ -138,16 +158,31 @@ def read(path):
 
 
 def main():
+    # Windows' Python ends its lines with \r\n, which the shell's $(...) would keep the \r of.
+    sys.stdout.reconfigure(newline="\n")
     command = sys.argv[1]
     if command == "snap":
         procs, path = sys.argv[2], sys.argv[3]
         taker = {"darwin": mac, "win32": windows}.get(sys.platform, linux)
-        seen = taker(procs)
+        seen = taker(procs, sys.argv[4:] == ["kinds"])
         with open(path, "w") as f:
             json.dump({"time": time.time(), "procs": seen}, f)
     elif command == "memory":
         seen = read(sys.argv[2])["procs"]
         print(f"{sum(p[3] for p in seen.values()) / 1048576:.0f} {len(seen)}")
+    elif command == "kinds":
+        totals = {}
+        for kind, _, _, footprint in read(sys.argv[2])["procs"].values():
+            totals[kind] = totals.get(kind, 0) + footprint / 1048576
+        print(", ".join(f"{kind} {mib:.0f}" for kind, mib in sorted(totals.items(), key=lambda t: -t[1])))
+    elif command == "idle-kinds":
+        a, b = read(sys.argv[2]), read(sys.argv[3])
+        secs = b["time"] - a["time"]
+        totals = {}
+        for pid, now in b["procs"].items():
+            was = a["procs"].get(pid, [now[0], 0, 0, 0])
+            totals[now[0]] = totals.get(now[0], 0) + max(now[1] - was[1], 0) * 100 / secs
+        print(", ".join(f"{kind} {pct:.2f}" for kind, pct in sorted(totals.items(), key=lambda t: -t[1])))
     elif command == "idle":
         snaps = [read(path) for path in sys.argv[2:]]
         for a, b in zip(snaps, snaps[1:]):
