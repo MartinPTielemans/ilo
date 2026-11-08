@@ -1027,6 +1027,31 @@ impl Browser for Recorder {
         self.profile_folders.borrow().get(&profile).cloned()
     }
 
+    fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
+        for change in changes {
+            self.record(format!(
+                "boost {} {}: {}",
+                change.profile,
+                change.site,
+                change.css.trim_end()
+            ));
+        }
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        self.record(format!("zap {tab} {on}"))
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("edit {name}"))
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("show {name}"))
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         self.agent_history
             .borrow()

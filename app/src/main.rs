@@ -180,6 +180,8 @@ mod other_tabs_host;
 use other_tabs_host::*;
 mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
+mod boosts_host;
+use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
 
 use browser::bc;
 
@@ -246,6 +248,15 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     // ⌘. is the agent bar's Stop while it shows one, before the page could keep it.
     if update_tab_window(tab, |shell, cx| shell.run_agent_key(&keystroke, cx)).unwrap_or(false) {
         return (true, "agent bar");
+    }
+    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    if keystroke == "escape"
+        && update_tab_window(tab, |shell, cx| {
+            shell.zapping(tab) && shell.escape_boost(cx)
+        })
+        .unwrap_or(false)
+    {
+        return (true, "zap");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -959,6 +970,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
+        tab_boost_zapped: Some(tab_boost_zapped),
+        tab_boost_zap_ended: Some(tab_boost_zap_ended),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),

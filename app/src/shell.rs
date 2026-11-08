@@ -43,6 +43,7 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+mod boost;
 mod browser;
 mod card_strip;
 mod cast;
@@ -1668,6 +1669,13 @@ pub struct Shell {
     translate_card: Option<u64>,
     translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose Boost card is open, the tab whose page Zap is on, and where the card was drawn
+    /// last, which the log says when it changes (boost.rs).
+    boost_card: Option<u64>,
+    zapping: Option<u64>,
+    boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Library › Boosts' list, the window's profile's, read as it's shown.
+    boost_list: Vec<crate::boosts::Boost>,
     /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
     battery_saver: Option<i32>,
     /// Where its leaf was drawn last, which the log says when it changes.
@@ -2013,6 +2021,10 @@ impl Shell {
             translate_card: None,
             translate_card_drawn: Rc::default(),
             translate_mark_drawn: Rc::default(),
+            boost_card: None,
+            zapping: None,
+            boost_card_drawn: Rc::default(),
+            boost_list: Vec::new(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -4455,6 +4467,7 @@ impl Shell {
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
                     .children(self.translate_card(cx))
+                    .children(self.boost_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))

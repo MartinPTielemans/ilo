@@ -870,6 +870,11 @@ typedef struct bc_host {
   // The press taken ended, at |x|,|y|. Return false to hand it back: the page gets the press and
   // its release, as a click, such as ⇧⌘'s on a link.
   bool (*tab_press_released)(void* context, bc_id tab, double x, double y);
+  // Zap (bc_tab_boost_zap) took a left press on the tab's page: |selector| is a CSS selector for
+  // what was under it, for the app to add to the site's Boost, or null for the body or nothing.
+  void (*tab_boost_zapped)(void* context, bc_id tab, const char* selector);
+  // Zap ended on the tab without the app asking: the page changed, or it isn't http(s).
+  void (*tab_boost_zap_ended)(void* context, bc_id tab);
   // No field of the app's opens for the key the keys typed after it are held for (bc_hold_keys):
   // the page kept it, neither the page nor the app used it, or it got no answer in a second. A host
   // that holds them itself gives them to the page now.
@@ -2776,6 +2781,18 @@ BC_EXPORT void bc_ad_blocking_turn_on_site(bc_id profile, const char* site);
 // bc_tab_site_controls is watching one. The user's: agents get none, as
 // it's how the user sees their tabs.
 BC_EXPORT void bc_tab_set_developer_mode(bc_id tab, bool on);
+
+// Boosts (docs/ux-spec.md › Boosts). Gives |site|, a host without "www." such as
+// "news.ycombinator.com", |css| in |profile|, which its pages and frames there take as they
+// commit, and those open now at once, as a style sheet the page's scripts can't reach. Empty or
+// null |css| takes it away. A private window's pages take their profile's. The app keeps the
+// Boosts, as plain files, and hands each over at launch and as it changes. The user's: agents get
+// none, as a Boost changes what the user sees.
+BC_EXPORT void bc_profile_set_boost(bc_id profile, const char* site, const char* css);
+// Turns Zap on or off on the tab's page. While on, a left press on the page goes to Zap instead,
+// tab_boost_zapped says what was under it, and an outline follows the pointer over what a press
+// would take. A new page ends it, with tab_boost_zap_ended. The user's, as bc_profile_set_boost.
+BC_EXPORT void bc_tab_boost_zap(bc_id tab, bool on);
 
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.

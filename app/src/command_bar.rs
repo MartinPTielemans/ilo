@@ -397,6 +397,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ViewDownloads => "icons/arrow-down-to-line.svg",
         Command::ViewMedia => "icons/image.svg",
         Command::ViewAgents => "icons/square-mouse-pointer.svg",
+        Command::NewBoost | Command::EditBoost | Command::ViewBoosts => "icons/paintbrush.svg",
         Command::ViewHistory => "icons/rotate-ccw-clock.svg",
         Command::ClearBrowsingData => "icons/brush-cleaning.svg",
         Command::NewNote | Command::NewNoteSplit => "icons/file.svg",

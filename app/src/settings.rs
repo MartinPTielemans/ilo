@@ -2273,10 +2273,34 @@ impl Settings {
                 [head].into_iter().chain(services).collect()
             }
         };
+        let boosts_on = !crate::boosts_host::all_off();
+        let boosts = self.toggle(
+            "boosts",
+            "Boosts",
+            boosts_on,
+            crate::boosts_host::set_all_on,
+            accent,
+            cx,
+        );
+        // Off, the line is the receipt, as Little ilo's is.
+        let boosts_line = match boosts_on {
+            true => {
+                "Your CSS and Zap on the sites you boost. New Boost in the command bar makes one."
+            }
+            false => "Off: no site shows its Boost. They stay in each profile's Boosts folder.",
+        };
+        let boosts = feature(
+            look,
+            "icons/paintbrush.svg",
+            "Boosts",
+            Some(boosts_line.into()),
+            vec![boosts],
+        );
         let mut blocks = vec![
             Block::Rows(little),
             Block::Rows(vec![peek]),
             Block::Rows(vec![mini_player]),
+            Block::Rows(vec![boosts]),
             Block::Rows(note),
         ];
         if self.widevine.read(cx).shown() {
