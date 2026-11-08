@@ -19,6 +19,21 @@ if [ "$(uname)" = Darwin ]; then
   else
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
+    # The hosted runner's image turns Notification Center's agent off, which draws the banners:
+    # usernoted delivers them to it, finding none. It's started before the app posts any.
+    if ! pgrep -x NotificationCenter > /dev/null; then
+      agent=gui/$(id -u)/com.apple.notificationcenterui.agent
+      launchctl enable "$agent" || true
+      launchctl bootstrap "gui/$(id -u)" /System/Library/LaunchAgents/com.apple.notificationcenterui.plist 2> /dev/null ||
+        true
+      launchctl kickstart "$agent" 2> /dev/null || true
+      for _ in $(seq 100); do
+        pgrep -x NotificationCenter > /dev/null && break
+        sleep 0.1
+      done
+      pgrep -x NotificationCenter > /dev/null ||
+        fail "Notification Center's agent didn't start: $(launchctl print "$agent" 2>&1 | head -20)"
+    fi
     notify=mac
   fi
 elif [ "$(uname)" != Linux ]; then
@@ -108,8 +123,11 @@ PY
       echo "click $id" >&6
       return
     fi
+    # The app asks, and Chromium's alert service in it, each in a banner of its own.
     if [ "$1" = 1 ]; then
-      "$out/banner" "$app_name" Allow >> "$notes" 2>&1 || true
+      for _ in 1 2 3; do
+        "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
+      done
     fi
     "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
       mac_notifications_said
