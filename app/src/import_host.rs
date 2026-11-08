@@ -305,11 +305,13 @@ impl browser::import::Host for CoreImport {
                 )
             })
             .collect();
+        let rules = crate::link_rules_host::CoreLinkRules.rules();
         Existing {
             profiles,
             spaces,
             favorites,
-            link_rules: crate::link_rules_host::CoreLinkRules.rules().rules,
+            link_rules: rules.rules,
+            link_otherwise: rules.otherwise,
         }
     }
 
@@ -414,10 +416,13 @@ impl browser::import::Host for CoreImport {
         open_in(space, &tab.url);
     }
 
-    fn add_link_rules(&self, rules: &[Rule]) {
+    fn add_link_rules(&self, rules: &[Rule], otherwise: Option<u64>) {
         let host = crate::link_rules_host::CoreLinkRules;
         let mut all = host.rules();
         all.rules.extend_from_slice(rules);
+        if let Some(otherwise) = otherwise {
+            all.otherwise = otherwise;
+        }
         host.set_rules(&all);
     }
 

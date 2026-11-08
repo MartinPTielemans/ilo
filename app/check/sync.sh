@@ -10,7 +10,7 @@ rm -f "$saved" "$launch_frame" "$profile_dir/Account" "$netlog"
 asked=$(grep -c '"[A-Z]* /' "$out/site.log" || true)
 started=$(date +%s)
 BROWSER_URL='data:text/html,<title>sync</title>' "$browser" \
-  --sync-url="$site" --log-net-log="$netlog" < /dev/null > "$log" 2>&1 &
+  --sync-url="$site" --log-net-log="$(app_path "$PWD/$netlog")" < /dev/null > "$log" 2>&1 &
 pid=$!
 await_load
 await 'browser: sync service ' ||

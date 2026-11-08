@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "defaultDestination": { "littleArc": { "_0": { "mostRecent": {} } } },
+  "defaultDestination": { "space": { "_0": { "specific": { "_0": "S-PERSONAL" } } } },
   "rules": [
     {
       "id": "R-WORK",

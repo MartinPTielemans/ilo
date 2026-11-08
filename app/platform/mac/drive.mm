@@ -1421,24 +1421,6 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
-  // [DEBUG-rv] A move through the window server, as a hand's arrives, to (x, y) in the window.
-  if (action == "hidmove") {
-    double x, y;
-    if (!(words >> x >> y)) {
-      return false;
-    }
-    NSPoint at = [window convertPointToScreen:NSMakePoint(x, NSHeight(window.frame) - y)];
-    CGPoint global = CGPointMake(at.x, NSMaxY(NSScreen.screens[0].frame) - at.y);
-    CGEventRef event =
-        CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, global, kCGMouseButtonLeft);
-    CGEventPost(kCGHIDEventTap, event);
-    CFRelease(event);
-    fprintf(stderr, "[DEBUG-rv] hidmove %.0f %.0f to %.0f %.0f post access %d %.1f\n", x, y, global.x,
-            global.y, (int)CGPreflightPostEventAccess(),
-            NSProcessInfo.processInfo.systemUptime * 1000);
-    done();
-    return true;
-  }
   if (action == "move") {
     double x, y;
     if (!(words >> x >> y)) {

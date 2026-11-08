@@ -22,28 +22,6 @@ struct Reveal {
 
 impl Render for Reveal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        eprintln!(
-            "[DEBUG-rv] reveal render {:.1} visible {} active {}",
-            browser::shell::debug_rv_ms(),
-            window.is_visible(),
-            window.is_window_active()
-        );
-        gpui::div()
-            .size_full()
-            .on_mouse_move(|event, _, _| {
-                eprintln!(
-                    "[DEBUG-rv] reveal move {} {} {:.1}",
-                    f32::from(event.position.x),
-                    f32::from(event.position.y),
-                    browser::shell::debug_rv_ms()
-                );
-            })
-            .child(self.render_panel(window, cx))
-    }
-}
-
-impl Reveal {
-    fn render_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let panel = self
             .shell
             .update(cx, |shell, cx| shell.render_reveal(window, cx));
