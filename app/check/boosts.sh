@@ -66,9 +66,9 @@ EOF
 # Zap, the right of the card's two buttons.
 send click $((bx + bw * 3 / 4)) $((by + bh - 26))
 expect "^browser: zap $tab on\$" "the card's Zap didn't turn Zap on"
-expect "^browser: tab $tab zap on\$" "the core didn't start Zap on the page"
+expect "browser: tab $tab zap on\$" "the core didn't start Zap on the page"
 send click $page_point
-expect "^browser: tab $tab zapped #ad\$" "the core didn't name what Zap's click was on"
+expect "browser: tab $tab zapped #ad\$" "the core didn't name what Zap's click was on"
 expect "^browser: boost shown $host " "Zap's click didn't reach the core as CSS"
 expect "^browser: title $tab ad none rgb(0, 128, 0)\$" "what Zap's click was on stayed on the page"
 grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
@@ -76,7 +76,7 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 ../tools/window-screenshot.sh "$pid" "$out/zapped.png" || fail "no window to capture"
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
-expect "^browser: tab $tab zap off\$" "the core didn't end Zap on the page"
+expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
 
 # With its file gone, the page is its own again, as the core hears for a Boost turned off.
 rm -f "$file"
