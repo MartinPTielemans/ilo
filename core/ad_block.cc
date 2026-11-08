@@ -75,6 +75,11 @@ constexpr char kFilterListsSource[] = "";
 // browser wakes for them once a week, as a launch updates the lists past their expiry 37 s in.
 constexpr char kUpdatePeriodHours[] = "168";
 
+// Whether it compresses what it keeps in its cache: off, as compressing its filters' selfie encodes
+// the whole selfie at once, which took its process from about 330 MB to 840 MB with the lists it
+// ships and ran it out of memory on a Windows machine near its commit limit (#2069).
+constexpr char kCacheCompression[] = "false";
+
 // The patterns of the sites the user turned it off on, in its entry of the profile's extension
 // prefs.
 constexpr char kOffSitesPref[] = "browser_core_off_sites";
@@ -105,8 +110,11 @@ policy::PolicyBundle Settings() {
             policy::POLICY_SOURCE_ENTERPRISE_DEFAULT, std::move(value), nullptr);
   };
   set("advancedSettings",
-      base::Value(base::ListValue().Append(
-          base::ListValue().Append("autoUpdatePeriod").Append(kUpdatePeriodHours))));
+      base::Value(
+          base::ListValue()
+              .Append(base::ListValue().Append("autoUpdatePeriod").Append(kUpdatePeriodHours))
+              .Append(
+                  base::ListValue().Append("cacheStorageCompression").Append(kCacheCompression))));
   const base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
   const std::string lists = command_line.HasSwitch(kListsSwitch)
                                 ? command_line.GetSwitchValueASCII(kListsSwitch)
