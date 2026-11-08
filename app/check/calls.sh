@@ -124,10 +124,10 @@ held() {
 # Sends Memory.simulatePressureNotification at $1, as the system says memory is short, through
 # check/cdp.py, which logs "cdp: pressure <level>" once the browser has it.
 pressure() {
-  pressed=$(grep -c "^cdp: pressure $1\$" "$cdp_log" || true)
+  taken=$(grep -c "^cdp: pressure $1\$" "$cdp_log" || true)
   echo "pressure $1" >&5
   for _ in $(seq 100); do
-    [ "$(grep -c "^cdp: pressure $1\$" "$cdp_log" || true)" -gt "$pressed" ] && return 0
+    [ "$(grep -c "^cdp: pressure $1\$" "$cdp_log" || true)" -gt "$taken" ] && return 0
     kill -0 "$helper" 2>/dev/null || fail "cdp.py stopped: $(tail -3 "$cdp_log")"
     sleep 0.1
   done
