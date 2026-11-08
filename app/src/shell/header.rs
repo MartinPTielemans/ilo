@@ -16,8 +16,8 @@ use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
     NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
     NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
-    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
-    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    TILE_HOVERED, TOOLS_FADE, Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
+    URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -301,6 +301,12 @@ impl Shell {
             Command::ToggleSidebar => Some("Hide Sidebar"),
             Command::ViewLibrary => Some("View Library"),
             Command::ViewDownloads => Some("View Downloads"),
+            // A translated page's mark opens the card that takes it back, so it says what it shows.
+            Command::TranslatePage
+                if self.translations.get(&self.field_tab()) == Some(&Translation::Translated) =>
+            {
+                Some("Translated")
+            }
             _ => (BAR_COMMANDS.iter())
                 .find(|&&(_, each, _)| each == command)
                 .map(|&(name, ..)| name),
@@ -648,6 +654,9 @@ impl Shell {
                 .ml(px(KEY_GAP - KEY_REACH))
                 .p(px(KEY_REACH))
                 .when(self.a11y, |button| button.button_named("Passwords"))
+                // It lights under the pointer as the field's other buttons do (#2112).
+                .rounded(px(NAV_RADIUS))
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |shell, _, _, cx| {

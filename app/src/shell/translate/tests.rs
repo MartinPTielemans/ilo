@@ -130,7 +130,11 @@ fn the_card_asks_and_says_what_went_wrong(cx: &mut TestAppContext) {
     let translate = point(card.origin.x + card.size.width * 0.75, bottom - px(26.));
     cx.simulate_click(translate, Modifiers::none());
     cx.run_until_parked();
-    assert_eq!(host.take(), ["translate 10 es en"]);
+    // The mark's tooltip came and went with the pointer.
+    let asked: Vec<_> = (host.take().into_iter())
+        .filter(|call| !call.starts_with("tooltip"))
+        .collect();
+    assert_eq!(asked, ["translate 10 es en"]);
 
     shell.update(cx, |shell, cx| {
         shell.set_translation(10, Translation::Missing, cx)
@@ -149,4 +153,34 @@ fn the_card_asks_and_says_what_went_wrong(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let card = shell.read_with(cx, |shell, _| shell.translate_card_drawn.get());
     assert_eq!(card, None, "escape left the card open");
+}
+
+/// The mark names itself under the pointer, as the URL field's other buttons do, and says so once
+/// the page is translated, as its press then opens the card that takes it back (#2112).
+#[gpui::test]
+fn the_mark_names_itself_under_the_pointer(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.set_page_language(10, "es", cx));
+    cx.run_until_parked();
+    let mark = shell.read_with(cx, |shell, _| shell.translate_mark_drawn.get());
+    let mark = mark.expect("the URL field drew no mark for a page in Spanish");
+    let mut tips = |at, cx: &mut VisualTestContext| {
+        host.take();
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.run_until_parked();
+        host.take()
+            .into_iter()
+            .filter(|call| call.starts_with("tooltip"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tips(mark.center(), cx), ["tooltip Translate Page "]);
+    let away = point(mark.center().x, mark.center().y + px(200.));
+    assert_eq!(tips(away, cx), ["tooltip none"]);
+
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::TranslatePage, "ui", cx);
+        shell.set_translation(10, Translation::Translated, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(tips(mark.center(), cx), ["tooltip Translated "]);
 }
