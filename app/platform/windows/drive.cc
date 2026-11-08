@@ -11,39 +11,38 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
-// menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
-// age, and Windows' own maximize, which the Mac's has no command for, dpi <percent>, which tells
-// the browser window it moved to a display of that scale as Windows does (WM_DPICHANGED), keeping
-// its size in pixels, and placement, which logs the
-// window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
-// lists the windows on screen over the app's browser windows; stack, which lists every app's
-// windows over the driven one, front first; and reshow, which shows those of the UI's that are
-// hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
-// drive.mm's does.
-// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
-// with Alt, but Ctrl for ⌃Tab, and alt with both; flags' winalt holds Windows' own Alt, its key
-// down and up, for Alt pressed alone. A click's or a drag's are held as a Windows user
-// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
-// wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
-// scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
-// precision touchpad's, with their touch and lift. choose works on ilo's menu, ilo's dialog and the
-// alerts host_ask shows, as Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks
-// <path> in the dialog host_save_png shows, as drive.mm's does in the Mac's save panel, logging
-// "browser: save panel answered", or "browser: no save panel" if none shows. tabpicture writes the
-// picture a tab's drag shows for part of the window to a file and logs its size. dragover, dragdrop
-// and dragleave hand a drag from another app, a shell data object carrying what Explorer or a
-// browser would, straight to the drop target Windows would pick: the UI's, or over a page
-// Chromium's; one over an overlay, whose target is GPUI's, logs as unsupported. A drag the app
-// starts, a file's or a tab's, the driver carries the same way, from dragto to release, as Windows'
-// own waits for the real pointer (#1583). ime on types as drive.mm's scripted input method does, in
-// the UI's fields alone, as Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's
-// installed, the UI thread's input method, on in hiragana, and sends the keys typed until ime off
-// without a shortcut's modifiers through Windows' input queue, to the window in front, which must
-// be ilo's, so the IME composes them, in a page too: "nihongo" composes にほんご, space converts it
-// to 日本語. fullscreen puts the window full screen or takes it out through the core, as Linux's
-// driver does. The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing
-// the driver can stand in for yet: each logs "browser: drive: unsupported <command>" before
-// drive.mm's "can't do that", so a run fails at once.
+// menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
+// takeback and age, and Windows' own maximize, which the Mac's has no command for, dpi <percent>,
+// which tells the browser window it moved to a display of that scale as Windows does
+// (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
+// state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
+// on screen over the app's browser windows; stack, which lists every app's windows over the driven
+// one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
+// does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
+// Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
+// Alt, but Ctrl for ⌃Tab, and alt with both; flags' winalt holds Windows' own Alt, its key down and
+// up, for Alt pressed alone. A click's or a drag's are held as a Windows user holds them, cmd with
+// Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are wheel messages with
+// the pixels in their deltas, going the way drive.mm's go, which Chromium scrolls by. Its swipes
+// over GPUI's view are handed to GPUI as Direct Manipulation hands it a precision touchpad's, with
+// their touch and lift. choose works on ilo's menu, ilo's dialog and the alerts host_ask shows, as
+// Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks <path> in the dialog
+// host_save_png shows, as drive.mm's does in the Mac's save panel, logging "browser: save panel
+// answered", or "browser: no save panel" if none shows. tabpicture writes the picture a tab's drag
+// shows for part of the window to a file and logs its size. dragover, dragdrop and dragleave hand a
+// drag from another app, a shell data object carrying what Explorer or a browser would, straight to
+// the drop target Windows would pick: the UI's, or over a page Chromium's; one over an overlay,
+// whose target is GPUI's, logs as unsupported. A drag the app starts, a file's or a tab's, the
+// driver carries the same way, from dragto to release, as Windows' own waits for the real pointer
+// (#1583). ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
+// Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
+// input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
+// modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
+// composes them, in a page too: "nihongo" composes にほんご, space converts it to 日本語.
+// fullscreen puts the window full screen or takes it out through the core, as Linux's driver does.
+// The others, pageswipe, displays, hide, backdrop and openmenu, Windows has nothing the driver can
+// stand in for yet: each logs "browser: drive: unsupported <command>" before drive.mm's "can't do
+// that", so a run fails at once.
 //
 // It logs as drive.mm does: "browser: drive <n>: <command>" as command n arrives, and "browser:
 // drive <n> done, key <window>, focus <view>, active <0|1>, marked <none|start,length>" once
@@ -698,6 +697,14 @@ void LogLayout(HWND root) {
       snprintf(part, sizeof part, " radius %.0f", radius);
       line += part;
     }
+  }
+  // The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver
+  // lists its view: from the content's bottom-left corner, as the pages are.
+  bc_rect ring{};
+  if (bc_window_focus_ring(host_browser_window_id(g_driven), &ring)) {
+    snprintf(part, sizeof part, ", BrowserCoreFocusRing %.0f,%.0f %.0fx%.0f", ring.x,
+             height - (ring.y + ring.height), ring.width, ring.height);
+    line += part;
   }
   // Windows' own title bar has the window's buttons.
   line += "\nbrowser: layout buttons hidden hidden hidden";
@@ -1739,6 +1746,18 @@ bool Run(const std::string& line) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     return true;
   }
   if (action == "agentmayact") {
