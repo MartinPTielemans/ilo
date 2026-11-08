@@ -12,15 +12,15 @@ serve
 mkdir -p "$out/github/a" "$out/github/b"
 ready='requestAnimationFrame(() => setTimeout(() => document.title = document.title.replace("loading ", "")));'
 for name in a b; do
-  printf '<title>loading Pull requests · ilo</title><p style="font:24px system-ui">GitHub %s</p>
+  printf '<meta charset=utf-8><title>loading Pull requests · ilo</title><p style="font:24px system-ui">GitHub %s</p>
 <script>%s</script>' "$name" "$ready" > "$out/github/$name/index.html"
 done
 for name in one two; do
-  printf '<title>loading Ranking %s</title><p style="font:24px system-ui">Ranking %s</p>
+  printf '<meta charset=utf-8><title>loading Ranking %s</title><p style="font:24px system-ui">Ranking %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/ranking-$name.html"
 done
 for name in alpha beta gamma delta; do
-  printf '<title>loading Rise %s</title><p style="font:24px system-ui">Rise %s</p>
+  printf '<meta charset=utf-8><title>loading Rise %s</title><p style="font:24px system-ui">Rise %s</p>
 <script>%s</script>' "$name" "$name" "$ready" > "$out/site/rise-$name.html"
 done
 # Git Bash would pass the subject to Windows' openssl as a path under its own folder (#872).
