@@ -219,7 +219,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
   void PreCreateThreads() override {
     crash_reports::LeaveOutFolders();
     // Before Chrome's performance manager makes its battery sampler, as its threads are made.
-    InstallBatteryForTesting();
+    InstallBatterySampler();
 #if BUILDFLAG(IS_WIN)
     // A work account whose organisation requires a compliant device signs in only with Windows'
     // own Microsoft sign-in, which Chromium leaves off unless a policy turns it on (#1345). It's

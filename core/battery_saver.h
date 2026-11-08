@@ -3,10 +3,11 @@
 
 namespace browser_core {
 
-// Before the performance manager makes its own battery sampler: with --battery-for-testing, puts
-// in one whose battery the checks set (SetBatteryForTesting), so a run on mains, or on Linux,
-// where Chromium reads no battery, can be below 20% on battery.
-void InstallBatteryForTesting();
+// Before the performance manager makes its own battery sampler: puts in one that reads the battery
+// as the OS tells of its changes (platform/battery.h), where Chromium has none (Linux) or reads it
+// on a timer (Windows). With --battery-for-testing, one whose battery the checks set instead
+// (SetBatteryForTesting), so a run on mains can be below 20% on battery.
+void InstallBatterySampler();
 
 // Once the browser has started: tells the app as Chrome's Battery Saver (Energy Saver) turns on or
 // off, and each tab as its page is frozen or thawed (bc_host's battery_saver_changed, tab_frozen).
