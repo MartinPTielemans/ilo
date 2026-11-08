@@ -826,7 +826,7 @@ Arc 1.170.0's values where measured (cap, ax, rec), Dia's (P§6, D›Dragging ta
   - The look: a fill white 0.06 over the window's, a 0.5 pt edge of white 0.14, and dashes of white 0.25.
   - The picture of the window: radius 10 with a white 0.25 rim, traffic lights 6 pt, and the tab's favicon and title on a page under them. Dia's picture has the page's image.
   - The tab becomes the picture at once, not after a frame or two.
-  - On a drop, the split shows at once, focused on the tab dropped. Away from a target, the tab goes back to its row until there are windows to open.
+  - On a drop, the split shows at once, focused on the tab dropped. Away from a target, the tab opens at once in a window as big as this one, centred on the pointer, with no grow, and ⌘Z sends it back, as a tab let go off the window does. A private or Little ilo window's tab goes back to its row.
   - While the targets are up, the page under them is the one the tab would join. Where the press showed the tab in that page's place, the page shows again as they come, and the tab once they go without it let go on one: back over the sidebar or let go off them (#1467).
   - A split has one orientation, so a page alone can show any of the four targets, a split side by side the left or right one, and a stacked split the top or bottom one. Let go on the top or bottom one, a page alone stacks with the tab (Arc).
   - The top and bottom targets are the side ones turned, each as long as 0.28 of the card's width at rest, 0.45 grown and 0.51 under the tab, so they fit between the side targets, and their centre leans toward the pointer's y.

@@ -1846,6 +1846,14 @@ impl Browser for Engine {
         });
     }
 
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+        unsafe {
+            platform::host_window_frame(self.ui_view, &mut x, &mut y, &mut width, &mut height)
+        }
+        .then(|| gpui::point(x as f32 + at.x, y as f32 + at.y))
+    }
+
     fn tab_window(&self, tab: u64) -> u64 {
         unsafe { bc::bc_tab_window(tab) }
     }
