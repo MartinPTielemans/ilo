@@ -109,6 +109,11 @@ def windows(procs, kinds):
     kernel32 = ctypes.WinDLL("kernel32")
     kernel32.OpenProcess.restype = wintypes.HANDLE
     kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetThreadDescription.restype = ctypes.c_long
+    kernel32.GetThreadDescription.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_wchar_p)]
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
     def thread_name(tid):
         # Chromium and Rust name their threads with SetThreadDescription.
@@ -117,9 +122,9 @@ def windows(procs, kinds):
             return ""
         text = ctypes.c_wchar_p()
         name = ""
-        if kernel32.GetThreadDescription(handle, ctypes.byref(text)) == 0:
+        if kernel32.GetThreadDescription(handle, ctypes.byref(text)) >= 0 and text:
             name = text.value or ""
-            kernel32.LocalFree(text)
+            kernel32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
         kernel32.CloseHandle(handle)
         return name
 
@@ -152,11 +157,13 @@ def windows(procs, kinds):
                 user = int.from_bytes(entry[40:48], "little")
                 kernel = int.from_bytes(entry[48:56], "little")
                 switches = 0
-                for at in range(offset + 256, offset + 256 + 80 * count, 80):
-                    # ClientId's UniqueThread at 48, ContextSwitches at 64.
+                for index, at in enumerate(range(offset + 256, offset + 256 + 80 * count, 80)):
+                    # ClientId's UniqueThread at 48, ContextSwitches at 64. The list is in the
+                    # order the threads were made, so the first is the main thread.
                     tid = int.from_bytes(raw[at + 48:at + 56], "little")
                     count_here = int.from_bytes(raw[at + 64:at + 68], "little")
-                    threads[str(tid)] = [str(pid), thread_name(tid), count_here]
+                    name = thread_name(tid) or ("main" if index == 0 else f"unnamed #{index}")
+                    threads[str(tid)] = [str(pid), name, count_here]
                     switches += count_here
                 seen[str(pid)] = ["process", (user + kernel) / 1e7, switches,
                                   int.from_bytes(entry[184:192], "little")]
