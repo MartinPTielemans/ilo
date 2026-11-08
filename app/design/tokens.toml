@@ -43,6 +43,18 @@ swatch = 18.0
 swatch-gap = 6.0
 swatch-ring = 2.0
 
+[capture.markup]
+# Edit's marks on what's chosen (#673), ours, as Arc's markup wasn't recorded: a stroke this wide
+# with round ends, an arrow's head this long each side, and the colours offered, first chosen.
+width = 4.0
+head = 14.0
+colours = [0xff3b30, 0xff9500, 0xffcc00, 0x34c759, 0x0a84ff, 0x000000, 0xffffff]
+# Its bar under what's chosen, or over it where there's no room: buttons this big, this far apart,
+# its colours' dots this big, inside the menu's panel.
+gap = 4.0
+button = 28.0
+dot = 16.0
+
 [command-bar]
 # The panel's measures, in points, from Arc's capture (docs/ux-spec.md › Command bar).
 width = 765.0

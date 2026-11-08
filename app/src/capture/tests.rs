@@ -10,7 +10,7 @@ use super::*;
 const TAB: u64 = 7;
 
 #[derive(Default)]
-struct Recorder(RefCell<Vec<String>>);
+struct Recorder(RefCell<Vec<String>>, RefCell<Option<Vec<u8>>>);
 
 impl Recorder {
     fn record(&self, call: String) {
@@ -53,6 +53,7 @@ impl Host for Recorder {
     }
 
     fn copy(&self, png: &[u8]) {
+        self.1.replace(Some(png.to_vec()));
         self.record(format!("copy {}", png.len()));
     }
 
@@ -122,10 +123,45 @@ impl Mode {
     }
 
     fn captured(&mut self, request: u64) {
+        self.captured_as(request, png());
+    }
+
+    fn captured_as(&mut self, request: u64, png: Vec<u8>) {
         self.cx
             .cx
-            .update(|cx| captured(TAB, request, Some(png()), cx));
+            .update(|cx| captured(TAB, request, Some(png), cx));
         self.cx.run_until_parked();
+    }
+
+    /// The pointer to `at`, and a click there, as a mouse moves before it clicks.
+    fn click_at(&mut self, (x, y): (f32, f32)) {
+        let at = point(px(x), px(y));
+        self.cx.simulate_mouse_move(at, None, Modifiers::none());
+        self.click(x, y);
+    }
+
+    /// A drag with the button down, from `from` to `to`, as one move.
+    fn drag(&mut self, from: (f32, f32), to: (f32, f32)) {
+        let (none, left) = (Modifiers::none(), MouseButton::Left);
+        let (from, to) = (point(px(from.0), px(from.1)), point(px(to.0), px(to.1)));
+        self.cx.simulate_mouse_move(from, None, none);
+        self.cx.simulate_mouse_down(from, left, none);
+        self.cx.simulate_mouse_move(to, left, none);
+        self.cx.simulate_mouse_up(to, left, none);
+        self.cx.run_until_parked();
+    }
+
+    /// The marks on what's chosen, and whether Edit's bar shows.
+    fn marks(&mut self) -> (usize, bool) {
+        let window = self.window;
+        let marks = |capture: &mut Capture| {
+            let session = capture.session.as_ref().unwrap();
+            (session.marks.len(), session.editing.is_some())
+        };
+        self.cx
+            .cx
+            .update(|cx| window.update(cx, |capture, _, _| marks(capture)))
+            .unwrap()
     }
 
     /// ⇧⌘2, and the picture of the page the window shows with.
@@ -475,4 +511,104 @@ fn portrait_mode_copies_the_page_on_its_background(cx: &mut TestAppContext) {
         copied > png().len(),
         "the copy isn't the portrait: {calls:?}"
     );
+}
+
+/// The middle of Edit's bar's `part`, for what's chosen at `chosen` in an 800 by 600 page: under
+/// it, at its ring's left.
+fn part(chosen: Bounds<Pixels>, part: Part) -> (f32, f32) {
+    let index = Part::all().position(|each| each == part).unwrap() as f32;
+    let x = f32::from(chosen.left()) - RING + PADDING + index * (BUTTON + BAR_GAP) + BUTTON / 2.;
+    let y = f32::from(chosen.bottom()) + RING + MARGIN + PADDING + BUTTON / 2.;
+    (x, y)
+}
+
+/// A white picture of what's chosen, 200 by 80, as the core sends it at 1×.
+fn white() -> Vec<u8> {
+    let mut png = Vec::new();
+    RgbaImage::from_pixel(200, 80, image::Rgba([255; 4]))
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+/// Edit's marks are drawn where they were made, in the picture the menu's Copy then copies: a red
+/// pen's line, first chosen, from the box's left across it.
+#[gpui::test]
+fn edit_draws_on_the_picture_copy_takes(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let chosen = rect(50., 60., 200., 80.);
+    mode.hover(100., 100., chosen);
+    mode.click(100., 100.);
+    assert_eq!(mode.calls(), ["camera false"]);
+    let menu = point(50. - RING + MENU_LEFT, 60. - RING);
+    mode.click(menu.x + MENU_WIDTH / 2., menu.y + row(Action::Edit));
+    // No picture is asked for yet.
+    assert!(mode.calls().is_empty());
+    assert_eq!(mode.marks(), (0, true));
+    assert_eq!(mode.drawn(), Some(("markup", false)));
+    mode.drag((80., 100.), (180., 100.));
+    assert_eq!(mode.marks(), (1, true));
+    // Return keeps them and brings the menu back, whose Copy takes the picture with them.
+    mode.keys("enter");
+    assert_eq!(mode.marks(), (1, false));
+    assert_eq!(mode.drawn(), Some(("menu", false)));
+    mode.click(menu.x + MENU_WIDTH / 2., menu.y + row(Action::Copy));
+    assert_eq!(mode.calls(), [format!("capture {TAB} 2 50 60 200 80")]);
+    mode.captured_as(2, white());
+    let calls = mode.calls();
+    assert_eq!(calls[..2], ["hide".to_string(), format!("end {TAB}")]);
+    assert!(calls[2].starts_with("copy "), "{calls:?}");
+    let copied = mode.host.1.take().unwrap();
+    let copied = image::load_from_memory(&copied).unwrap().into_rgba8();
+    assert_eq!(copied.dimensions(), (200, 80));
+    let [r, g, b] = [16, 8, 0].map(|shift| (MARK_COLOURS[0] >> shift) as u8);
+    assert_eq!(
+        copied.get_pixel(80, 40).0,
+        [r, g, b, 255],
+        "no line across the box"
+    );
+    assert_eq!(
+        copied.get_pixel(80, 10).0,
+        [255; 4],
+        "the line is elsewhere"
+    );
+}
+
+/// Edit's bar picks a tool, ⌘Z takes the last mark back, a press away from what's chosen
+/// doesn't leave, and Escape takes back that Edit's marks and then leaves.
+#[gpui::test]
+fn edit_undoes_and_escape_goes_back(cx: &mut TestAppContext) {
+    let mut mode = Mode::shown(cx);
+    let chosen = rect(50., 60., 200., 80.);
+    mode.hover(100., 100., chosen);
+    mode.click(100., 100.);
+    mode.calls();
+    let menu = point(50. - RING + MENU_LEFT, 60. - RING);
+    mode.click(menu.x + MENU_WIDTH / 2., menu.y + row(Action::Edit));
+    mode.drag((60., 70.), (240., 130.));
+    let (x, y) = part(chosen, Part::Tool(Tool::Box));
+    mode.click(x, y);
+    // A click isn't a box.
+    mode.click_at((150., 100.));
+    assert_eq!(mode.marks(), (1, true));
+    mode.drag((60., 70.), (240., 130.));
+    assert_eq!(mode.marks(), (2, true));
+    mode.keys("cmd-z");
+    assert_eq!(mode.marks(), (1, true));
+    let (x, y) = part(chosen, Part::Done);
+    mode.click(x, y);
+    assert_eq!(mode.marks(), (1, false));
+
+    mode.click(menu.x + MENU_WIDTH / 2., menu.y + row(Action::Edit));
+    mode.drag((60., 70.), (240., 130.));
+    mode.click_at((700., 500.));
+    assert_eq!(mode.marks(), (2, true));
+    assert!(
+        mode.calls().is_empty(),
+        "a press away from what's chosen did something"
+    );
+    mode.keys("escape");
+    assert_eq!(mode.marks(), (1, false));
+    mode.keys("escape");
+    assert_eq!(mode.calls(), ["hide".to_string(), format!("end {TAB}")]);
 }

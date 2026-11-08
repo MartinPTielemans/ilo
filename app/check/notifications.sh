@@ -17,6 +17,11 @@ if [ "$(uname)" = Darwin ]; then
   if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
     echo "skip: notifications, which presses macOS's banners only in a check VM with System Integrity Protection off."
   else
+    # build.sh makes the alert helpers the app's and signs them again, as their Info.plist is
+    # sealed, then the framework that holds them (#2126).
+    codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
+      > "$out/notifications-codesign.txt" 2>&1 ||
+      fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
@@ -116,8 +121,9 @@ PY
     [ -n "$id" ] || fail "the page's notification didn't reach the desktop's server: $(cat "$notes")"
   }
   # On the Mac, Allow on the banners macOS shows as the app starts, asking whether the app may
-  # notify, and Chromium's alert service in it, each in one of its own, as the user answering them
-  # does: a notification posted before is delivered to no banner. The banner's log is in $notes.
+  # notify, and its alert helper, which posts alert-style ones, each in one of its own, as the user
+  # answering them does: a notification posted before is delivered to no banner. Each names the
+  # app, never Chromium (#2126). The banner's log is in $notes.
   allow() {
     [ "$notify" = mac ] || return 0
     for _ in 1 2; do
@@ -125,6 +131,12 @@ PY
     done
     grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
       fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+    asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
+    while read -r each; do
+      # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
+      [ "$each" = "“${app_name}”" ] || fail "macOS asked whether $each may notify, not $app_name"
+    done <<< "$asked"
+    echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
   # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
   # presses macOS's banner.

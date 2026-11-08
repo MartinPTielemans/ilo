@@ -76,6 +76,29 @@ light_box() {
 capture_mode page
 light_box "the pointer over the box didn't light it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-element.png" || fail "no window to capture"
+# The pointer over the page is ilo's camera, as on the Mac (#1279), where the display's own pointer
+# shows it. Linux's captures can draw the pointer; the Mac's never do.
+if [ "$(uname)" = Linux ]; then
+  send layout
+  content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+    sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
+  # The camera's dark body, left of its lens and below it, in fractions of the window.
+  body=$(echo "$(in_page 400 250) $content" |
+    awk '{ split($3, size, "x"); print ($1 - 7) / size[1], ($2 + 3) / size[2] }')
+  send warp $(in_page 400 250)
+  shown=
+  for _ in $(seq 20); do
+    POINTER=1 ../tools/window-screenshot.sh "$pid" "$out/capture-pointer.png" ||
+      fail "no window to capture"
+    seen=$(pixel "$out/capture-pointer.png" $body)
+    # Within 12 of the body's rgb(30, 41, 48) in each channel, where the lit box is teal. Headless
+    # sway draws its pointer into every capture, so there's no capture of the page without it.
+    echo "$seen" | awk '{ exit !($1 >= 18 && $1 <= 42 && $2 >= 29 && $2 <= 53 && $3 >= 36 &&
+      $3 <= 60) }' && shown=1 && break
+  done
+  [ -n "$shown" ] || fail "the pointer over the page isn't the camera: $seen (capture-pointer.png)"
+  send warp
+fi
 send click $(in_page 400 250)
 expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it"
 ../tools/window-screenshot.sh "$pid" "$out/capture-chosen.png" || fail "no window to capture"
@@ -133,6 +156,56 @@ if windows; then
   in_browser RenderWidgetHostViewCocoa "after the save dialog"
   saved_to=" The toast's Save saved it to $picture, from $out/capture-save-dialog.png."
 fi
+
+# Edit (#673): the menu's Edit shows its bar under the box in place of the menu. A drag on the box
+# draws the pen's red line, the bar's Arrow an arrow, which ⌘Z takes back, and Return brings the
+# menu back, whose Copy copies the picture with the line on it. Edit is the row after Save, or
+# after Messages on the Mac, each 24 down from Save to Library's 37 to 61.
+capture_mode page
+light_box "the pointer over the box didn't light it for Edit"
+send click $(in_page 400 250)
+expect '^browser: capture chose 300 200 200 100$' "a click on the box didn't take it for Edit"
+if [ "$(uname)" = Darwin ]; then edit_row=341; else edit_row=317; fi
+send click $(in_page 442 $edit_row)
+expect '^browser: capture run edit$' "the menu's Edit didn't run"
+# The bar is at the ring's left, 8 under it: 12 buttons of 28, 4 apart, in 4 of padding.
+expect '^browser: capture markup drawn [a-z]* at 296 312 388 36$' \
+  "Edit's bar didn't show under the box: $(grep '^browser: capture markup drawn' "$log" | tail -1)"
+send move $(in_page 320 250)
+send press $(in_page 320 250)
+send dragto $(in_page 360 265)
+send dragto $(in_page 400 270)
+send dragto $(in_page 480 250)
+send release $(in_page 480 250)
+expect '^browser: capture mark pen ff3b30$' "a drag on the box didn't draw the pen's line"
+# The bar's Arrow, its second button, 4 + 32 + 14 in and 4 + 14 down.
+send click $(in_page 346 330)
+expect '^browser: capture markup chose arrow$' "the bar's Arrow didn't choose it"
+send move $(in_page 320 215)
+send press $(in_page 320 215)
+send dragto $(in_page 400 250)
+send dragto $(in_page 470 285)
+send release $(in_page 470 285)
+expect '^browser: capture mark arrow ff3b30$' "a drag on the box didn't draw an arrow"
+../tools/window-screenshot.sh "$pid" "$out/capture-markup.png" || fail "no window to capture"
+send key z cmd
+expect '^browser: capture mark undone$' "⌘Z didn't take the arrow back"
+send key return
+expect '^browser: capture markup done, 1 marks$' "Return didn't keep Edit's line"
+expect '^browser: capture menu drawn ' "the menu didn't come back after Edit"
+send click $(in_page 442 269)
+expect '^browser: capture run copy$' "the menu's Copy didn't run after Edit"
+expect '^browser: capture marked 1$' "Copy didn't draw Edit's line on the picture"
+expect "$copied" "Copy didn't copy the marked PNG to the run's pasteboard"
+# The picture itself, to look at, where the run's clipboard is a headless session's that wl-paste
+# reads. The Mac's pasteboard is the run's own, and Xvfb's has no reader here.
+case "${BROWSER_HEADLESS:-xvfb}" in
+  xvfb) ;;
+  *) WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -t image/png > "$out/capture-marked.png" ||
+    fail "the clipboard had no PNG after Copy with Edit's line" ;;
+esac
+expect '^browser: capture left (copy)$' "capture mode didn't leave after Copy with Edit's line"
+expect '^browser: capture hidden$' "capture mode's window didn't hide after Copy with Edit's line"
 
 # ⇧⌘-drag on the page, as Arc's, starts capture mode dragging and takes the rectangle dragged at
 # once, with the menu at its corner. The page's window keeps the pointer, so the core hands capture

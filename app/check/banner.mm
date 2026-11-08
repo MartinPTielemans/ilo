@@ -1,8 +1,10 @@
 // A real notification banner on the Mac, for notifications.sh in a check VM (#685): it finds the
 // banner whose text has TEXT among Notification Center's windows, through the accessibility API,
 // and presses it as a click does, or the button named BUTTON in it, as on the banner macOS shows to
-// ask whether the app may notify. It waits up to 15 s for it and says "pressed <its text>"; without
-// one it prints what Notification Center shows, for the run's log, and exits 1. The run's process
+// ask whether the app may notify. It waits up to 15 s for it and says "pressed <its text>". A
+// banner shows for a few seconds and then waits in Notification Center's list, so after 2 s it
+// opens the list, as a click on the menu bar's clock does, and presses it there. Without one it
+// prints what Notification Center's banners show, for the run's log, and exits 1. The run's process
 // needs Accessibility, which check-mac.yml grants. Usage: banner TEXT [BUTTON] Built with clang++
 // -fobjc-arc -framework Cocoa.
 #import <Cocoa/Cocoa.h>
@@ -140,6 +142,31 @@ NSString* NamedAction(AXUIElementRef element,
   return nil;
 }
 
+// Opens Notification Center's list, as a click on the menu bar's clock does. Returns whether the
+// clock took the press.
+bool OpenList() {
+  bool pressed = false;
+  for (NSRunningApplication* app in NSWorkspace.sharedWorkspace.runningApplications) {
+    if (![app.bundleIdentifier isEqualToString:@"com.apple.controlcenter"]) {
+      continue;
+    }
+    AXUIElementRef control = AXUIElementCreateApplication(app.processIdentifier);
+    CFTypeRef bar = NULL;
+    if (AXUIElementCopyAttributeValue(control, CFSTR("AXExtrasMenuBar"), &bar) == kAXErrorSuccess &&
+        bar) {
+      for (id item in Children((AXUIElementRef)bar)) {
+        if ([Attribute((__bridge AXUIElementRef)item, kAXIdentifierAttribute)
+                isEqualToString:@"com.apple.menuextra.clock"]) {
+          pressed = AXUIElementPerformAction((__bridge AXUIElementRef)item, kAXPressAction) ==
+                    kAXErrorSuccess;
+        }
+      }
+      CFRelease(bar);
+    }
+    CFRelease(control);
+  }
+  return pressed;
+}
 }  // namespace
 
 int main(int argc, const char* argv[]) {
@@ -154,7 +181,13 @@ int main(int argc, const char* argv[]) {
       printf("banner: not trusted for accessibility\n");
     }
     AXUIElementRef center = NULL;
+    bool listed = false;
     for (int tries = 0; tries < 150; ++tries) {
+      if (tries == 20 && !button) {
+        listed = OpenList();
+        printf("banner: %s\n", listed ? "opened Notification Center's list"
+                                      : "no clock to open Notification Center's list");
+      }
       NSRunningApplication* found_app = nil;
       for (NSRunningApplication* app in NSWorkspace.sharedWorkspace.runningApplications) {
         if ([app.bundleIdentifier isEqualToString:@"com.apple.notificationcenterui"] ||
@@ -184,7 +217,10 @@ int main(int argc, const char* argv[]) {
     }
     printf("banner: none with \"%s\"%s%s. Notification Center shows:\n", text.UTF8String,
            button ? ", button " : "", button ? button.UTF8String : "");
-    if (center) {
+    if (listed) {
+      // Not the list, which holds its widgets too.
+      printf("banner: (its list isn't printed)\n");
+    } else if (center) {
       // Its banners' window alone: the others are its widgets, and the menu bar the system's.
       for (id window : Children(center)) {
         if ([Text((__bridge AXUIElementRef)window) isEqualToString:@"Notification Center"]) {

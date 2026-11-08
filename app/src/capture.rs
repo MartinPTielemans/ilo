@@ -9,10 +9,11 @@
 use std::{rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
-    App, Bounds, Context, Corners, Div, FocusHandle, FontWeight, Global, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, SharedString,
-    Stateful, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, canvas, div, point, prelude::*, px, rgba, size, svg,
+    App, Bounds, ContentMask, Context, Corners, CursorStyle, Div, FocusHandle, FontWeight, Global,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    RenderImage, SharedString, Stateful, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, actions, canvas, div, point, prelude::*,
+    px, rgba, size, svg,
 };
 use image::{Frame, RgbaImage};
 
@@ -20,7 +21,11 @@ use crate::elevation::Level;
 use crate::menu::Look;
 use crate::toast;
 
-actions!(capture, [Leave]);
+actions!(capture, [Leave, Undo, Done]);
+
+pub mod markup;
+
+use markup::{Mark, Tool};
 
 pub mod portrait;
 
@@ -35,6 +40,7 @@ use crate::tokens::capture::PILL_TEXT_SIZE;
 use crate::tokens::capture::PILL_WIDTH;
 use crate::tokens::capture::RING;
 use crate::tokens::capture::RING_RADIUS;
+use crate::tokens::capture::markup::{BUTTON, COLOURS as MARK_COLOURS, DOT, GAP as BAR_GAP};
 // The menu is ilo's (menu.rs), in its tokens, the narrowest it comes.
 use crate::tokens::menu::MIN_WIDTH as MENU_WIDTH;
 use crate::tokens::menu::{GAP, LINE, PADDING, RADIUS, ROW, ROW_RADIUS, ROW_X, TEXT};
@@ -47,8 +53,8 @@ const PROGRESS_TIME: Duration = Duration::from_secs(60);
 const COPIED: &str = "Screenshot Copied to Clipboard";
 const SAVED: &str = "Saved to Library";
 
-/// What the menu does with what's chosen, in Arc's order without Edit and New Easel, which aren't
-/// built: one is a variant here, a row in ROWS and an arm in `Capture::done`.
+/// What the menu does with what's chosen, in Arc's order without New Easel, which isn't built: one
+/// is a variant here, a row in ROWS and an arm in `Capture::done`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     /// The field at the menu's top: the system's share menu (interim: Arc's field lists people and
@@ -59,6 +65,8 @@ pub enum Action {
     Copy,
     Save,
     Messages,
+    /// Marks on what's chosen, before another row takes it (markup.rs).
+    Edit,
     /// Back to choosing.
     Retake,
 }
@@ -70,6 +78,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::Copy),
         Some(Action::Save),
         Some(Action::Messages),
+        Some(Action::Edit),
         None,
         Some(Action::Retake),
     ]
@@ -78,6 +87,7 @@ const ROWS: &[Option<Action>] = if cfg!(target_os = "macos") {
         Some(Action::SaveToLibrary),
         Some(Action::Copy),
         Some(Action::Save),
+        Some(Action::Edit),
         None,
         Some(Action::Retake),
     ]
@@ -94,6 +104,7 @@ impl Action {
             Action::Copy => "Copy",
             Action::Save => "Save…",
             Action::Messages => "Send via iMessage…",
+            Action::Edit => "Edit",
             Action::Retake => "Retake",
         }
     }
@@ -105,6 +116,7 @@ impl Action {
             Action::SaveToLibrary => "icons/library.svg",
             Action::Save => "icons/download.svg",
             Action::Messages => "icons/message-circle.svg",
+            Action::Edit => "icons/pencil.svg",
             Action::Retake => "icons/rotate-ccw.svg",
         }
     }
@@ -117,6 +129,7 @@ impl Action {
             Action::Copy => "copy",
             Action::Save => "save",
             Action::Messages => "messages",
+            Action::Edit => "edit",
             Action::Retake => "retake",
         }
     }
@@ -187,8 +200,64 @@ struct Session {
     library: bool,
     /// The browser window's menus' look, which the menu, the pill and the ring take.
     look: Look,
-    /// What the log last said was drawn: the pill or the menu, and whether in the light look.
+    /// What the log last said was drawn: the pill, the menu or Edit's bar, and whether in the
+    /// light look.
     drawn: Option<(&'static str, bool)>,
+    /// Edit's marks on what's chosen, which the picture of it gets.
+    marks: Vec<Mark>,
+    /// Edit, while its bar shows in place of the menu.
+    editing: Option<Editing>,
+}
+
+/// Edit's bar's choices, the marks as it opened, which Escape goes back to, and the mark the
+/// pointer is making.
+struct Editing {
+    tool: Tool,
+    colour: u32,
+    before: Vec<Mark>,
+    drawing: Option<Mark>,
+}
+
+/// Edit's bar: its tools, its colours, Undo and Done, each a square button in a row.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Part {
+    Tool(Tool),
+    Colour(u32),
+    Undo,
+    Done,
+}
+
+impl Part {
+    fn all() -> impl Iterator<Item = Part> {
+        (Tool::ALL.into_iter().map(Part::Tool))
+            .chain(MARK_COLOURS.into_iter().map(Part::Colour))
+            .chain([Part::Undo, Part::Done])
+    }
+
+    /// Its element's id, which check.sh's lines name.
+    fn name(self) -> SharedString {
+        match self {
+            Part::Tool(tool) => tool.name().into(),
+            Part::Colour(colour) => format!("{colour:06x}").into(),
+            Part::Undo => "undo".into(),
+            Part::Done => "done".into(),
+        }
+    }
+}
+
+/// Edit's bar's size: its parts in a row inside the menu's panel's padding.
+fn bar_size() -> (f32, f32) {
+    let parts = Part::all().count() as f32;
+    let width = PADDING + parts * BUTTON + (parts - 1.) * BAR_GAP + PADDING;
+    (width, PADDING + BUTTON + PADDING)
+}
+
+/// `at` moved inside `chosen`, where marks are drawn.
+fn inside(at: Point<Pixels>, chosen: Bounds<Pixels>) -> (f32, f32) {
+    (
+        f32::from(at.x.clamp(chosen.left(), chosen.right())),
+        f32::from(at.y.clamp(chosen.top(), chosen.bottom())),
+    )
 }
 
 impl Session {
@@ -208,6 +277,25 @@ impl Session {
         let y = f32::from(chosen.top()) - RING;
         let right = f32::from(page.size.width) - MENU_WIDTH - MARGIN;
         let bottom = f32::from(page.size.height) - self.menu_height() - MARGIN;
+        point(px(x.min(right).max(MARGIN)), px(y.min(bottom).max(MARGIN)))
+    }
+
+    /// Where Edit's bar goes: under what's chosen at its ring's left, or over it where there's no
+    /// room under it, inside the page.
+    fn bar_origin(&self, chosen: Bounds<Pixels>) -> Point<Pixels> {
+        let page = self.page();
+        let (width, height) = bar_size();
+        let (page_width, page_height) = (f32::from(page.size.width), f32::from(page.size.height));
+        let x = f32::from(chosen.left()) - RING;
+        let under = f32::from(chosen.bottom()) + RING + MARGIN;
+        let over = f32::from(chosen.top()) - RING - MARGIN - height;
+        let y = if under + height <= page_height - MARGIN || over < MARGIN {
+            under
+        } else {
+            over
+        };
+        let right = page_width - width - MARGIN;
+        let bottom = page_height - height - MARGIN;
         point(px(x.min(right).max(MARGIN)), px(y.min(bottom).max(MARGIN)))
     }
 
@@ -258,7 +346,11 @@ impl Global for CaptureWindow {}
 /// Opens capture mode's window, hidden, for `host` to show over the page, ahead of time as the
 /// command bar's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Capture>> {
-    cx.bind_keys([KeyBinding::new("escape", Leave, Some("Capture"))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", Leave, Some("Capture")),
+        KeyBinding::new("enter", Done, Some("Capture")),
+        crate::shell::view_binding("cmd-z", Box::new(Undo), "Capture", cx),
+    ]);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(0.), px(0.)),
@@ -356,6 +448,8 @@ fn start_now(
             library,
             look,
             drawn: None,
+            marks: Vec::new(),
+            editing: None,
         });
         // check.sh reads this line.
         log!("browser: capture started");
@@ -641,16 +735,47 @@ impl Capture {
                     size(px(MENU_WIDTH - 2. * PADDING), px(ROW)),
                 )
             });
+            let (chosen, marks) = (session.chosen, std::mem::take(&mut session.marks));
             self.leave(action.name(), window, cx);
-            match (action, field) {
-                (Action::SendTo, _) if !SHARES => self.done(Action::Copy, png, cx),
-                (Action::SendTo, Some(field)) => {
-                    if let Some(png) = png {
-                        self.host.share(&png, Share::Menu(field));
-                    }
+            match (png, chosen) {
+                (Some(png), Some(chosen)) if !marks.is_empty() => {
+                    // check.sh reads this line.
+                    log!("browser: capture marked {}", marks.len());
+                    // Away from the main thread, as the picture can be millions of pixels.
+                    let marked = cx.background_spawn(async move {
+                        let marked = markup::draw(&png, &marks, chosen);
+                        marked.or(Some(png))
+                    });
+                    cx.spawn(async move |capture, cx| {
+                        let png = marked.await;
+                        capture
+                            .update(cx, |capture, cx| capture.deliver(action, field, png, cx))
+                            .ok();
+                    })
+                    .detach();
                 }
-                _ => self.done(action, png, cx),
+                (png, _) => self.deliver(action, field, png, cx),
             }
+        }
+    }
+
+    /// Does `action` with the picture of what was chosen, once capture mode has left: Send To's
+    /// share menu at its `field`, else `done`.
+    fn deliver(
+        &mut self,
+        action: Action,
+        field: Option<Bounds<Pixels>>,
+        png: Option<Vec<u8>>,
+        cx: &mut Context<Self>,
+    ) {
+        match (action, field) {
+            (Action::SendTo, _) if !SHARES => self.done(Action::Copy, png, cx),
+            (Action::SendTo, Some(field)) => {
+                if let Some(png) = png {
+                    self.host.share(&png, Share::Menu(field));
+                }
+            }
+            _ => self.done(action, png, cx),
         }
     }
 
@@ -721,7 +846,7 @@ impl Capture {
             }
             Action::Save => self.host.save(&png),
             Action::Messages => self.host.share(&png, Share::Messages),
-            Action::SendTo | Action::Retake => {}
+            Action::SendTo | Action::Edit | Action::Retake => {}
         }
     }
 
@@ -745,6 +870,15 @@ impl Capture {
     }
 
     fn moved(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.as_mut()
+            && let (Some(chosen), Some(editing)) = (session.chosen, session.editing.as_mut())
+        {
+            if let Some(mark) = editing.drawing.as_mut() {
+                mark.to(inside(at, chosen));
+                cx.notify();
+            }
+            return;
+        }
         let Some(session) = self
             .session
             .as_mut()
@@ -776,6 +910,15 @@ impl Capture {
         let Some(session) = self.session.as_mut() else {
             return;
         };
+        // While Edit's bar shows, a press on what's chosen starts a mark, and one elsewhere does
+        // nothing, so a slip doesn't lose the marks.
+        if let (Some(chosen), Some(editing)) = (session.chosen, session.editing.as_mut()) {
+            if chosen.contains(&at) {
+                editing.drawing = Some(Mark::new(editing.tool, editing.colour, inside(at, chosen)));
+                cx.notify();
+            }
+            return;
+        }
         // A click away from the menu leaves, as a click outside any menu closes it (interim).
         if session.chosen.is_some() {
             return self.leave("click", window, cx);
@@ -784,6 +927,24 @@ impl Capture {
     }
 
     fn released(&mut self, cx: &mut Context<Self>) {
+        if let Some(editing) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.editing.as_mut())
+        {
+            if let Some(mark) = editing.drawing.take().filter(Mark::kept) {
+                // check.sh reads this line.
+                log!(
+                    "browser: capture mark {} {:06x}",
+                    mark.tool.name(),
+                    mark.colour
+                );
+                if let Some(session) = self.session.as_mut() {
+                    session.marks.push(mark);
+                }
+            }
+            return cx.notify();
+        }
         let Some(session) = self
             .session
             .as_mut()
@@ -813,7 +974,10 @@ impl Capture {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let Some(chosen) = session.chosen.filter(|_| session.pending.is_none()) else {
+        let Some(chosen) = session
+            .chosen
+            .filter(|_| session.pending.is_none() && session.editing.is_none())
+        else {
             return;
         };
         // check.sh reads this line.
@@ -821,7 +985,17 @@ impl Capture {
         if action == Action::Retake {
             session.chosen = None;
             session.hover = None;
+            session.marks.clear();
             self.host.camera(true);
+            return cx.notify();
+        }
+        if action == Action::Edit {
+            session.editing = Some(Editing {
+                tool: Tool::Pen,
+                colour: MARK_COLOURS[0],
+                before: session.marks.clone(),
+                drawing: None,
+            });
             return cx.notify();
         }
         let tab = session.tab;
@@ -831,6 +1005,142 @@ impl Capture {
             session.pending = Some((request, action));
         }
         self.host.capture(tab, request, false, Some(chosen));
+    }
+
+    /// Escape in Edit: its marks go, and the menu comes back.
+    fn cancel_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.as_mut()
+            && let Some(editing) = session.editing.take()
+        {
+            session.marks = editing.before;
+            // check.sh reads this line.
+            log!("browser: capture markup cancelled");
+            cx.notify();
+        }
+    }
+
+    /// Done, or Return, in Edit: its marks stay, and the menu comes back to take them.
+    fn finish_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.as_mut()
+            && session.editing.take().is_some()
+        {
+            // check.sh reads this line.
+            log!(
+                "browser: capture markup done, {} marks",
+                session.marks.len()
+            );
+            cx.notify();
+        }
+    }
+
+    /// ⌘Z, or Undo, in Edit: the last mark goes.
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.as_mut()
+            && session.editing.is_some()
+            && session.marks.pop().is_some()
+        {
+            // check.sh reads this line.
+            log!("browser: capture mark undone");
+            cx.notify();
+        }
+    }
+
+    fn pick(&mut self, part: Part, cx: &mut Context<Self>) {
+        let Some(editing) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.editing.as_mut())
+        else {
+            return;
+        };
+        match part {
+            Part::Tool(tool) => editing.tool = tool,
+            Part::Colour(colour) => editing.colour = colour,
+            Part::Undo => return self.undo(cx),
+            Part::Done => return self.finish_edit(cx),
+        }
+        // check.sh reads this line.
+        log!("browser: capture markup chose {}", part.name());
+        cx.notify();
+    }
+
+    /// Edit's bar, in the menu's panel: the tools, the colours, Undo and Done, the tool and the
+    /// colour chosen on the Space's accent.
+    fn bar(
+        &self,
+        origin: Point<Pixels>,
+        editing: &Editing,
+        undo: bool,
+        look: Look,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let palette = look.palette();
+        let highlight = look.highlight;
+        let (width, height) = bar_size();
+        let parts = Part::all().map(|part| {
+            let chosen = part == Part::Tool(editing.tool) || part == Part::Colour(editing.colour);
+            let name = part.name();
+            let button = div()
+                .id(SharedString::from(format!("markup-{name}")))
+                .group(name.clone())
+                .size(px(BUTTON))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(ROW_RADIUS))
+                .when(chosen, |button| button.bg(highlight.fill))
+                .when(!chosen, |button| {
+                    button.hover(|style| style.bg(rgba(palette.line)))
+                })
+                .on_click(cx.listener(move |capture, _, _, cx| capture.pick(part, cx)));
+            let glyph = |path: &'static str, off: bool| {
+                let colour = match (chosen, off) {
+                    (true, _) => highlight.label,
+                    (false, true) => rgba(palette.line),
+                    (false, false) => rgba(palette.secondary),
+                };
+                svg().path(path).size(px(GLYPH)).text_color(colour)
+            };
+            match part {
+                Part::Tool(tool) => button.child(glyph(tool.glyph(), false)),
+                Part::Colour(colour) => button.child(
+                    div()
+                        .size(px(DOT))
+                        .rounded_full()
+                        .bg(gpui::rgb(colour))
+                        .border_1()
+                        .border_color(rgba(palette.rim)),
+                ),
+                Part::Undo => button.child(glyph("icons/undo-2.svg", !undo)),
+                Part::Done => button.child(glyph("icons/check.svg", false)),
+            }
+        });
+        div()
+            .id("capture-markup")
+            .absolute()
+            .left(origin.x)
+            .top(origin.y)
+            .w(px(width))
+            .h(px(height))
+            .p(px(PADDING))
+            .flex()
+            .gap(px(BAR_GAP))
+            .rounded(px(RADIUS))
+            .bg(rgba(palette.fill))
+            .shadow(Level::Popover.shadow())
+            .occlude()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .rounded(px(RADIUS))
+                    .border_1()
+                    .border_color(rgba(palette.rim)),
+            )
+            .children(parts)
     }
 
     fn menu(
@@ -944,9 +1254,15 @@ impl Capture {
             .id("capture")
             .key_context("Capture")
             .track_focus(&self.focus)
-            .on_action(
-                cx.listener(|capture, _: &Leave, window, cx| capture.leave("escape", window, cx)),
-            )
+            .on_action(cx.listener(|capture, _: &Leave, window, cx| {
+                let editing = (capture.session.as_ref()).is_some_and(|s| s.editing.is_some());
+                match editing {
+                    true => capture.cancel_edit(cx),
+                    false => capture.leave("escape", window, cx),
+                }
+            }))
+            .on_action(cx.listener(|capture, _: &Done, _, cx| capture.finish_edit(cx)))
+            .on_action(cx.listener(|capture, _: &Undo, _, cx| capture.undo(cx)))
             .size_full()
             .font_family(crate::face::UI);
         if let Some(session) = self
@@ -954,17 +1270,27 @@ impl Capture {
             .as_mut()
             .filter(|session| session.snapshot.is_some())
         {
-            let what = if session.chosen.is_some() {
-                "menu"
-            } else {
-                "pill"
+            let what = match (session.chosen, &session.editing) {
+                (Some(_), Some(_)) => "markup",
+                (Some(_), None) => "menu",
+                (None, _) => "pill",
             };
             let drawn = (what, session.look.light);
             if session.drawn != Some(drawn) {
                 session.drawn = Some(drawn);
-                // check.sh waits for this line.
+                // check.sh waits for this line, and clicks Edit's bar's parts where it says.
                 let tone = if drawn.1 { "light" } else { "dark" };
-                log!("browser: capture {} drawn {tone}", drawn.0);
+                let at = (session.chosen.filter(|_| what == "markup")).map(|chosen| {
+                    let (width, height) = bar_size();
+                    let origin = session.bar_origin(chosen);
+                    let bar = Bounds::new(origin, size(px(width), px(height)));
+                    format!(" at {}", describe(bar))
+                });
+                log!(
+                    "browser: capture {} drawn {tone}{}",
+                    drawn.0,
+                    at.unwrap_or_default()
+                );
             }
         }
         let Some(session) = &self.session else {
@@ -977,6 +1303,8 @@ impl Capture {
         let lit = session.lit();
         let radius = px(session.radius);
         let (look, palette) = (session.look, session.look.palette());
+        let drawing = session.editing.as_ref().and_then(|e| e.drawing.as_ref());
+        let marks: Vec<Mark> = session.marks.iter().chain(drawing).cloned().collect();
         let picture = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -990,6 +1318,10 @@ impl Capture {
                     window
                         .paint_image(lit, bounds, square, colour.clone(), 0, false)
                         .ok();
+                    // Inside what's chosen, as the picture of it will have them.
+                    window.with_content_mask(Some(ContentMask { bounds: lit }), |window| {
+                        markup::paint(&marks, bounds.origin, window)
+                    });
                 }
             },
         )
@@ -1029,27 +1361,41 @@ impl Capture {
                     "Click or drag to capture a portion of this page",
                 ))
         });
-        let menu = session.chosen.map(|chosen| {
-            let origin = session.menu_origin(chosen);
-            self.menu(origin, session.rows().collect(), look, cx)
-        });
-        root.on_mouse_move(
-            cx.listener(|capture, event: &MouseMoveEvent, _, cx| capture.moved(event.position, cx)),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|capture, event: &MouseDownEvent, window, cx| {
-                capture.pressed(event.position, window, cx)
-            }),
-        )
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(|capture, _: &MouseUpEvent, _, cx| capture.released(cx)),
-        )
-        .child(picture)
-        .children(ring)
-        .children(pill)
-        .children(menu)
+        let menu = session
+            .chosen
+            .filter(|_| session.editing.is_none())
+            .map(|chosen| {
+                let origin = session.menu_origin(chosen);
+                self.menu(origin, session.rows().collect(), look, cx)
+            });
+        let bar = session
+            .chosen
+            .zip(session.editing.as_ref())
+            .map(|(chosen, editing)| {
+                let origin = session.bar_origin(chosen);
+                let undo = !session.marks.is_empty();
+                self.bar(origin, editing, undo, look, cx)
+            });
+        let editing = session.editing.is_some();
+        root.when(editing, |root| root.cursor(CursorStyle::Crosshair))
+            .on_mouse_move(cx.listener(|capture, event: &MouseMoveEvent, _, cx| {
+                capture.moved(event.position, cx)
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|capture, event: &MouseDownEvent, window, cx| {
+                    capture.pressed(event.position, window, cx)
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|capture, _: &MouseUpEvent, _, cx| capture.released(cx)),
+            )
+            .child(picture)
+            .children(ring)
+            .children(pill)
+            .children(menu)
+            .children(bar)
     }
 }
 

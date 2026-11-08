@@ -2344,6 +2344,30 @@ int TopEdge(HWND root) {
   return GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 }
 
+// Whether |at|, in |root|'s client area, is over a split view's handle, which the UI draws in the
+// window's margin over each of its pages, shell.split-controls' width (32) across and centred over
+// the page (design/tokens.toml: kept in step with it). The top edge leaves it to the UI, which
+// would otherwise have only the margin's last 2 points of it (#2114).
+bool OverSplitHandle(HWND root, POINT at) {
+  const double half = 16 * Scale(root);
+  int pages = 0;
+  bool over = false;
+  for (HWND child = GetWindow(root, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+    wchar_t name[18] = {};
+    if (!IsWindowVisible(child) || !GetClassNameW(child, name, std::size(name)) ||
+        wcsncmp(name, L"Chrome_WidgetWin_", 17) != 0) {
+      continue;
+    }
+    RECT page;
+    GetWindowRect(child, &page);
+    MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&page), 2);
+    ++pages;
+    // A stacked split's lower pages are centred under the top one, whose handle is there too.
+    over |= at.y < page.top && std::abs(at.x - (page.left + page.right) / 2.0) <= half;
+  }
+  return pages > 1 && over;
+}
+
 // What the frame has at |at|, on the screen, over the UI: the top edge, which resizes, or the UI's
 // maximize button, which Windows shows Snap layouts over. 0 where it's the UI's own.
 int FrameHit(HWND root, POINT at) {
@@ -2355,7 +2379,7 @@ int FrameHit(HWND root, POINT at) {
   RECT client{};
   GetClientRect(root, &client);
   const int edge = TopEdge(root);
-  if (!IsZoomed(root) && at.y >= 0 && at.y < edge) {
+  if (!IsZoomed(root) && at.y >= 0 && at.y < edge && !OverSplitHandle(root, at)) {
     return at.x < 2 * edge                   ? HTTOPLEFT
            : at.x >= client.right - 2 * edge ? HTTOPRIGHT
                                              : HTTOP;
@@ -3503,11 +3527,20 @@ void host_add_drop_targets(void* view) {
 void host_show_drop_targets(void* ui_view) {
   double width, height;
   ContentSize(Root(ui_view), &width, &height);
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Show(g_drop_targets, ui_view, 0, 0, width, height, false);
+  // As the Mac's and Linux's say as it comes on screen, which split waits for.
+  if (!shown && g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
+    fprintf(stderr, "browser: drop targets shown\n");
+  }
 }
 
 void host_hide_drop_targets(void) {
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Hide(g_drop_targets);
+  if (shown) {
+    fprintf(stderr, "browser: drop targets hidden\n");
+  }
 }
 
 void host_add_dialog(void* dialog_view) {
@@ -3906,6 +3939,8 @@ void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
   Show(g_toast, ui_view, left, top, width, height, false);
+  // It shows at once, without a fade, as the Mac's does.
+  LogShown(g_toast, "toast");
 }
 
 void host_hide_toast(void) {

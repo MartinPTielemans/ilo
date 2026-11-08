@@ -947,9 +947,53 @@ pub(crate) fn outline(
     corners: &[(f32, f32, f32)],
     inset: f32,
 ) {
+    let to = |at: Point<f32>| origin + point(px(at.x), px(at.y));
+    trace(corners, inset, |step| match step {
+        Step::Move(at) => path.move_to(to(at)),
+        Step::Line(at) => path.line_to(to(at)),
+        Step::Arc(radius, convex, at) => {
+            path.arc_to(point(px(radius), px(radius)), px(0.), false, convex, to(at))
+        }
+        Step::Close => path.close(),
+    });
+}
+
+/// The outline of the shape with `corners`, moved by `x` and `y`, as an SVG path's data, for a
+/// host that draws its shadow from a picture (platform/linux/shadows.rs).
+pub fn outline_svg(corners: &[(f32, f32, f32)], x: f32, y: f32) -> String {
+    let mut data = String::new();
+    trace(corners, 0., |step| {
+        data += &match step {
+            Step::Move(at) => format!("M{} {}", at.x + x, at.y + y),
+            Step::Line(at) => format!("L{} {}", at.x + x, at.y + y),
+            Step::Arc(radius, convex, at) => {
+                format!(
+                    "A{radius} {radius} 0 0 {} {} {}",
+                    u8::from(convex),
+                    at.x + x,
+                    at.y + y
+                )
+            }
+            Step::Close => "Z".into(),
+        }
+    });
+    data
+}
+
+/// A step along an outline: to a point, a line to one, an arc of a radius to one, clockwise if
+/// the corner bulges out, or back to the start.
+enum Step {
+    Move(Point<f32>),
+    Line(Point<f32>),
+    Arc(f32, bool, Point<f32>),
+    Close,
+}
+
+/// The steps round the shape with `corners` `inset` inside its edge, each corner rounded by its
+/// radius.
+fn trace(corners: &[(f32, f32, f32)], inset: f32, mut step: impl FnMut(Step)) {
     let corners = inset_corners(corners, inset);
     let count = corners.len();
-    let to = |at: Point<f32>| origin + point(px(at.x), px(at.y));
     for index in 0..count {
         let (here, radius, convex) = corners[index];
         let before = corners[(index + count - 1) % count].0;
@@ -968,22 +1012,16 @@ pub(crate) fn outline(
         let half = cos.clamp(-1., 1.).acos() / 2.;
         let along = if radius > 0. { radius / half.tan() } else { 0. };
         let (start, end) = (toward(before, along), toward(after, along));
-        if index == 0 {
-            path.move_to(to(start));
+        step(if index == 0 {
+            Step::Move(start)
         } else {
-            path.line_to(to(start));
-        }
+            Step::Line(start)
+        });
         if radius > 0. {
-            path.arc_to(
-                point(px(radius), px(radius)),
-                px(0.),
-                false,
-                convex,
-                to(end),
-            );
+            step(Step::Arc(radius, convex, end));
         }
     }
-    path.close();
+    step(Step::Close);
 }
 
 /// A popover's card through `corners` at `origin`: its fill, and the modal level's rim round it.
