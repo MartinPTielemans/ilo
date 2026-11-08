@@ -552,7 +552,8 @@ fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
 # isn't listed.
-saved_autofill() { grep '^browser: autofill ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
+# Settings says "autofill <profile>: …"; the core's "autofill <tab> no field" isn't its count.
+saved_autofill() { grep '^browser: autofill [0-9]*: ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
 send key , cmd
 expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab again"
 settings_drew Passwords
