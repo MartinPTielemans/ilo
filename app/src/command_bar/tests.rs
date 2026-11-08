@@ -1148,6 +1148,52 @@ fn a_space_after_the_hinted_keyword_is_only_a_space(cx: &mut TestAppContext) {
     );
 }
 
+/// A site search lists only the search for what's typed, as Arc's does, though the core lists the
+/// site's searches from history and its pages too. Its field says "Search…", as the chip names the
+/// site, and VoiceOver hears it as "Search <site>" (#1397).
+#[gpui::test]
+fn a_site_search_lists_only_the_search_for_whats_typed(cx: &mut TestAppContext) {
+    use gpui::accesskit::Role;
+    let mut bar = Bar::new(cx);
+    bar.cx.simulate_a11y_activation();
+    bar.type_text("duck.test");
+    bar.suggest("duck.test", vec![hinting("duck.test")]);
+    bar.keys("tab");
+    bar.type_text("cats");
+    let searched = |text: &str| Suggestion {
+        text: text.to_string().into(),
+        removable: text != "cats",
+        ..page(&format!("https://duck.test/?q={text}"))
+    };
+    bar.suggest(
+        "duck.test cats",
+        vec![
+            searched("cats"),
+            searched("cats videos"),
+            page("https://duck.test/cats"),
+        ],
+    );
+    assert_eq!(bar.rows(), [("https://duck.test/?q=cats".to_string(), 0)]);
+    let label = |bar: &mut Bar| {
+        let tree = bar.cx.a11y_tree().expect("GPUI built a tree");
+        let field = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == Role::TextInput);
+        field.and_then(|(_, node)| node.label().map(str::to_owned))
+    };
+    assert_eq!(label(&mut bar).as_deref(), Some("Search Duck"));
+    let placeholder = bar
+        .window
+        .read_with(&bar.cx.cx, |bar, cx| {
+            bar.input.read(cx).placeholder().clone()
+        })
+        .unwrap();
+    assert_eq!(placeholder, "Search…");
+    bar.keys("escape");
+    assert_eq!(label(&mut bar).as_deref(), Some("Search or Enter URL"));
+}
+
 /// Leaving a site search puts back what was typed before Tab, as Arc's ⌫ and ⇧Tab do, not the
 /// keyword it completed to: "duck" with a hint for duck.test comes back "duck", before what's typed
 /// since. Esc puts the bar back as it opened, the Space's tabs or the URL ⌘L edits, selected, and

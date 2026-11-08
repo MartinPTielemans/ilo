@@ -353,9 +353,10 @@ impl TextInput {
         self
     }
 
-    /// As `spoken`, once it's made, as a list's field does when its row moves.
-    pub fn set_spoken(&mut self, name: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.spoken = Some(name.into());
+    /// As `spoken`, once it's made, as a list's field does when its row moves; None goes back to
+    /// its placeholder.
+    pub fn set_spoken(&mut self, name: Option<SharedString>, cx: &mut Context<Self>) {
+        self.spoken = name;
         cx.notify();
     }
 
@@ -1080,6 +1081,11 @@ impl TextInput {
     pub fn set_placeholder(&mut self, placeholder: SharedString, cx: &mut Context<Self>) {
         self.placeholder = placeholder;
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn placeholder(&self) -> &SharedString {
+        &self.placeholder
     }
 
     /// Shows `text`, with what follows its first `typed` bytes selected and the caret before it,

@@ -106,6 +106,8 @@ const SPACES_PLACEHOLDER: &str = "Search Spaces…";
 /// What its input says, and its chip, while it lists only commands (ours).
 const COMMANDS_PLACEHOLDER: &str = "Search Commands…";
 const COMMANDS_CHIP: &str = "Commands";
+/// What its input says in a site search, whose chip names the site, as Arc's pill does (#1397).
+const SITE_PLACEHOLDER: &str = "Search…";
 
 /// What a history row's remove button is called, to an assistive app and in its tooltip: it takes
 /// the page or search out of the profile's history, not only out of the list.
@@ -1173,9 +1175,17 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                 bar.asked_at.elapsed().as_secs_f64() * 1000.,
                 urls.join(", ")
             );
-            // A site search lists only its searches, and nothing typed lists the Space's tabs.
-            let mut rows = match bar.site {
-                Some(_) => rows,
+            // A site search lists only the search for what's typed, as Arc's does, and nothing
+            // typed lists the Space's tabs. The core's first search is it, by its relevance.
+            let mut rows = match &bar.site {
+                Some(site) => rows
+                    .into_iter()
+                    .find(|row| {
+                        bar.host.search_url(Some(&site.keyword), &row.text).as_ref()
+                            == Some(&row.url)
+                    })
+                    .into_iter()
+                    .collect(),
                 None if text.is_empty() => bar.tab_rows(),
                 None => {
                     let mut rows = rows;
@@ -1619,9 +1629,12 @@ impl CommandBar {
     ) {
         // check.sh reads this line.
         log!("browser: command bar site search {keyword} by tab");
-        let placeholder = format!("Search {name}").into();
-        self.input
-            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+        // VoiceOver hears the site in the field's name, as the chip shows it.
+        let spoken = format!("Search {name}").into();
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder(SITE_PLACEHOLDER.into(), cx);
+            input.set_spoken(Some(spoken), cx);
+        });
         let color = SITE_COLORS
             .iter()
             .find(|(site, _)| *site == keyword)
@@ -1687,7 +1700,8 @@ impl CommandBar {
     fn site_left(&mut self, cx: &mut Context<Self>) -> Option<Site> {
         let site = self.site.take()?;
         self.input.update(cx, |input, cx| {
-            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx)
+            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx);
+            input.set_spoken(None, cx);
         });
         Some(site)
     }
