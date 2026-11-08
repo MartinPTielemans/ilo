@@ -2165,9 +2165,16 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
         })
     };
     let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let drawn = crate::window_opening::drawn_before_shown();
+    if drawn {
+        // check.sh reads this line, the new window's time from the key to its first frame, which
+        // came on screen with it.
+        let ms = asked.elapsed().as_secs_f64() * 1000.;
+        log!("browser: new window first frame at {ms:.1} ms");
+    }
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
-            shell.open_bar_when_shown(asked, full_screen);
+            shell.open_bar_when_shown(asked, full_screen, drawn);
             cx.notify();
         });
     }
