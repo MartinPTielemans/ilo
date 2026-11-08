@@ -50,6 +50,7 @@
 #include "browser_core/page_dialog.h"
 #include "browser_core/page_menu.h"
 #include "browser_core/page_text.h"
+#include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/passwords.h"
 #include "browser_core/permission_question.h"
@@ -1980,6 +1981,34 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
                          }
                        },
                        id, request));
+  }
+}
+
+void bc_tab_translate_read(bc_id id, uint64_t request) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  auto* translate = contents && browser_core::Tab::Loaded(id)
+                        ? browser_core::PageTranslate::FromWebContents(contents)
+                        : nullptr;
+  if (translate) {
+    translate->Read(request);
+  } else {
+    browser_core::PageTranslate::ReportNoTexts(id, request);
+  }
+}
+
+void bc_tab_translate_show(bc_id id, uint64_t request, const char* texts) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  auto* translate = contents ? browser_core::PageTranslate::FromWebContents(contents) : nullptr;
+  if (translate && texts) {
+    translate->Show(request, texts);
+  }
+}
+
+void bc_tab_translate_revert(bc_id id) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (auto* translate =
+          contents ? browser_core::PageTranslate::FromWebContents(contents) : nullptr) {
+    translate->Revert();
   }
 }
 

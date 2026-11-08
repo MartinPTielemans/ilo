@@ -663,7 +663,8 @@ void Window::TrimPageMenu(BrowserWindowInterface* browser, ui::SimpleMenuModel& 
   }
   // Arc's menu is Chrome's without Lens, Reading Mode, Listen, QR Code, Send to Your Devices, Copy
   // Link Text and the items whose UI is Chrome's side panel or Gemini's (ux-spec.md › Page menu).
-  // Translate waits for the browser to have it. Cast… opens the app's card (CastDialog).
+  // Translate is the URL field's (#671): Chrome's needs Google's servers. Cast… opens the app's card
+  // (CastDialog).
   static constexpr int kTrimmed[] = {
       IDC_CONTENT_CONTEXT_SEARCHLENSFORIMAGE,
       IDC_CONTENT_CONTEXT_SEARCHLENSFORVIDEOFRAME,
