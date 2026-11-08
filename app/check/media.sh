@@ -209,6 +209,11 @@ EOF
   done
   fail "$2"
 }
+# pip_driven: whether the driver finds a Picture in Picture window, which it does through X11
+# alone: drive.mm has no pip, and under Wayland no client sees another's windows.
+pip_driven() {
+  [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]
+}
 # kept_keys: waits for the browser window to have the keyboard once the call has floated as its
 # tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
 # keyboard as it maps, and the core gives it back (#1961), in a line with Chromium's prefix.
@@ -342,8 +347,8 @@ kept_keys
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
 # scroll, pinch and double-click: a drag on its top bar, off the buttons at its ends, moves it, and
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
-# manager does both, with the display's pointer. Linux alone: drive.mm doesn't find it yet.
-if [ "$(uname)" = Linux ]; then
+# manager does both, with the display's pointer. X11 alone, as pip_driven says.
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at 1 "the floating call had no window"
@@ -367,7 +372,7 @@ if [ "$(uname)" = Linux ]; then
   # browser window them back for the tab switch below.
   send click $page_point
 else
-  echo "skip: moving and sizing the floating call on $(uname): drive.mm has no pip."
+  echo "skip: moving and sizing the floating call on $(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
 fi
 shown "$f"
 expect "^browser: title $f landed\$" "the call allowed to float didn't come back with its tab"
@@ -610,8 +615,8 @@ PLACED
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
-# tab and lands it. Linux alone: drive.mm doesn't find the Mini Player yet.
-if [ "$(uname)" = Linux ]; then
+# tab and lands it. X11 alone, as pip_driven says.
+if pip_driven; then
   px=0 py=0 pw=0 ph=0
   send pip
   mini_player_at "x + w == $((wx + ww - 10)) && y == $((wy + 10))" \
@@ -646,7 +651,7 @@ if [ "$(uname)" = Linux ]; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): drive.mm has no pip."
+  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname)${WAYLAND_DISPLAY:+ Wayland}: the driver finds no Picture in Picture window there."
   send click $page_point
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
@@ -682,7 +687,7 @@ placed_where_left ||
   fail "the second Mini Player was at $nx $ny, not $ex $ey, where the last was left at $lx $ly $lw $lh"
 none_since 'browser: mini player back in its tab$' ||
   fail "the Mini Player went back to its tab as the menu that floated it closed"
-if [ "$(uname)" = Linux ]; then
+if pip_driven; then
   send pip
   mini_player_at "$across && $down" "the second Mini Player didn't show where the last was left"
 fi
