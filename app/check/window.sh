@@ -385,8 +385,10 @@ send key g
 expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open gap.html"
 tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
 await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
+# Its layout was checked after the resize above: the Mac keeps the page it left at its old size
+# in the layout's list, which check_layout would read.
 send resize 1200 700
-check_layout "after widening the window over gap.html"
+expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
 ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
 set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
