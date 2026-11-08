@@ -754,6 +754,12 @@ impl Shell {
                     shell.slide_volume(tab, f32::from(event.position.x), cx);
                 }),
             )
+            // A release over the slider, which can come before the frame that listens in the whole
+            // window, as a click's does.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|shell, _, _, cx| shell.release_volume(cx)),
+            )
             .child(track)
     }
 
@@ -813,8 +819,8 @@ mod tests {
     use std::time::Duration;
 
     use gpui::{
-        AppContext, Bounds, Entity, Modifiers, MouseButton, Pixels, Point, TestAppContext,
-        VisualTestContext, point, px,
+        AppContext, Bounds, Entity, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
+        PlatformInput, Point, TestAppContext, VisualTestContext, point, px,
     };
 
     use crate::shell::{Folders, Page, Shell, recorder::Recorder};
@@ -1168,6 +1174,34 @@ mod tests {
         let track =
             (shell.read_with(cx, |shell, _| shell.media_stack.track.get())).expect("no slider");
         let at = |part: f32| point(track.left() + track.size.width * part, track.center().y);
+        // A click lets go of the slider, its release coming before the next frame, as the
+        // driver's does.
+        cx.update(|window, cx| {
+            let (position, modifiers) = (at(0.5), Modifiers::none());
+            let (button, click_count) = (MouseButton::Left, 1);
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button,
+                    position,
+                    modifiers,
+                    click_count,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button,
+                    position,
+                    modifiers,
+                    click_count,
+                }),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(host.take(), ["volume 2 0.50"]);
+        assert!(!shell.read_with(cx, |shell, _| shell.media_stack.sliding));
         let left = MouseButton::Left;
         cx.simulate_mouse_down(at(0.25), left, Modifiers::none());
         cx.run_until_parked();
