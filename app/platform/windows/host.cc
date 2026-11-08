@@ -2429,18 +2429,30 @@ HWND WindowBehind(HWND root) {
 }
 
 // Set while a Little ilo window gives way (LittleHiding), with the hook that holds ilo's windows
-// back meanwhile.
+// back meanwhile and the window giving way.
 HHOOK g_giving_way = nullptr;
+HWND g_giving_way_root = nullptr;
+// Counts the give-ways, so a fallback's timer leaves a later one be.
+int g_give_ways = 0;
 
-// Windows hides a closing window inside its DestroyWindow. Handing the foreground on there
-// activates the UI's holder, whose focus takes the activation back for the closing window, and
-// Windows then activates the app's next window as that one goes, in front of the other app's
-// (#2025). So none of ilo's windows activates until the close is over.
+// Handing the foreground on as a closing window hides activates the UI's holder, whose focus takes
+// the activation back for the closing window, and Windows activates the app's next window as that
+// one is destroyed, in front of the other app's (#2025). Chromium hides a closing window and
+// destroys it in a task of its own, which can come after a task posted as it hid, so none of ilo's
+// windows activates until the window is destroyed or shows again.
 LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HCBT_ACTIVATE) {
     return 1;
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+// Lets ilo's windows activate again once the window that gave way is gone or back.
+void StopGivingWay() {
+  if (g_giving_way) {
+    UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr));
+  }
+  g_giving_way_root = nullptr;
 }
 
 // A Little ilo window going with the keyboard leaves another app's window right behind it in front
@@ -2459,9 +2471,15 @@ void LittleHiding(HWND root) {
   }
   if (!g_giving_way) {
     g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
-    // Once the call hiding it, a close's DestroyWindow, is over.
-    Later([] { UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr)); });
   }
+  g_giving_way_root = root;
+  // Until the window is destroyed (FrameProc), or at the latest a second on, so a window that's
+  // hidden and kept never leaves ilo unable to activate.
+  After(1, [give_way = ++g_give_ways] {
+    if (give_way == g_give_ways) {
+      StopGivingWay();
+    }
+  });
   // The foreground's app may give the foreground away.
   SetForegroundWindow(behind);
   // check.sh reads this line, the title read without a message to that app, which could hang.
@@ -2476,6 +2494,9 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     case WM_WINDOWPOSCHANGING:
       if (reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_HIDEWINDOW) {
         LittleHiding(hwnd);
+      } else if ((reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_SHOWWINDOW) &&
+                 hwnd == g_giving_way_root) {
+        StopGivingWay();
       }
       break;
     case WM_NCCALCSIZE: {
@@ -2528,6 +2549,14 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       AppActivating(wparam, static_cast<DWORD>(lparam));
       break;
     case WM_NCDESTROY:
+      // Once DestroyWindow, which activates the app's next window, is over.
+      if (hwnd == g_giving_way_root) {
+        Later([hwnd] {
+          if (hwnd == g_giving_way_root) {
+            StopGivingWay();
+          }
+        });
+      }
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
