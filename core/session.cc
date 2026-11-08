@@ -329,8 +329,8 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       tab.pinned_url = space.PinnedUrl(id);
       if (tabs == &to.pinned) {
         tab.folder = folder_of(id);
-        tab.node = node_of(id);
       }
+      tab.node = node_of(id);
       if (tabs == &to.today) {
         tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
         if (today) {
@@ -473,8 +473,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (folders) {
         write_folder(*folders, tab.folder, dict);
-        WriteNode(tab.node, dict);
       }
+      // A pinned or Today tab's, which a favorite has none of.
+      WriteNode(tab.node, dict);
       if (!tab.profile.empty()) {
         dict.Set("profile", tab.profile);
       }
@@ -785,6 +786,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
         }
         if (tab && tabs == &to.pinned) {
           tab->folder = folder_of(*dict);
+        }
+        if (tab) {
           tab->node = ReadNode(*dict);
         }
         if (tab) {
@@ -1441,6 +1444,16 @@ Space* RestoreSpace(Window& window,
     if (bc_id tab = today_ids[j] = restore(saved_space.today[j], pinned + static_cast<int>(j))) {
       space->Add(tab, /*opener=*/0, /*foreground=*/false);
     }
+  }
+  // The Today tabs' nodes, which sync knows them by.
+  std::map<bc_id, Space::Node> today_nodes;
+  for (size_t j = 0; j < today_ids.size(); ++j) {
+    if (today_ids[j]) {
+      today_nodes[today_ids[j]] = saved_space.today[j].node;
+    }
+  }
+  if (!today_nodes.empty()) {
+    space->RestoreNodes(saved_space.node, today_nodes);
   }
   for (auto [tabs, ids] : {std::pair(&saved_space.pinned, &pinned_ids),
                            std::pair(&saved_space.today, &today_ids)}) {

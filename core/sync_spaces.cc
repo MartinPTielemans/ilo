@@ -11,6 +11,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,6 +23,7 @@
 #include "browser_core/session.h"
 #include "browser_core/space_default.h"
 #include "browser_core/space.h"
+#include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_spaces.pb.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -53,8 +55,13 @@ namespace {
 
 using Entity = sync_spaces_pb::SpaceEntity;
 
-// Long enough that a run of changes, such as a page's title settling as it loads, is one look.
+// Long enough that a run of changes, such as ten links opened at once or a redirect chain, is one
+// look and one commit, and short enough that the other devices have it within about 2 s.
 constexpr base::TimeDelta kSettle = base::Seconds(1);
+
+// How far on a Today tab's last showing must be from what the account has before it's sent: about
+// once an hour a tab, never on every switch, close enough for auto-archive's 6 hours or more.
+constexpr int64_t kSeenStep = 60 * 60;
 
 std::string Key(const base::Uuid& id) {
   return id.AsLowercaseString();
@@ -113,8 +120,15 @@ Space* UntouchedDefault() {
   return GivesWay(first) ? space : nullptr;
 }
 
-// Every Space, pinned tab and folder as sync knows them now, by id.
-std::map<std::string, Entity> Current() {
+// When |row|, a Today tab, was last shown here, in seconds: now while a window shows it.
+int64_t SeenHere(bc_id row, const Tab& tab) {
+  return (Window::Showing(row) ? base::Time::Now() : tab.last_seen()).ToTimeT();
+}
+
+// Every Space, pinned tab, folder and Today tab as sync knows them now, by id. A Today tab's last
+// showing is |known|'s unless it's an hour on from it, and one that has no page to name, as a tab
+// yet to start loading, is as |known| has it, if at all.
+std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known) {
   std::map<std::string, Entity> all;
   for (Space* space : Space::All()) {
     if (!Synced(space)) {
@@ -157,14 +171,57 @@ std::map<std::string, Entity> Current() {
         }
       }
     }
+    for (bc_id row : space->today()) {
+      const Space::Node* node = space->NodeOf(row);
+      Tab* tab = Tab::Get(row);
+      if (!node || !node->id.is_valid() || !tab) {
+        continue;
+      }
+      const std::string key = Key(node->id);
+      auto was = known.find(key);
+      const GURL url = tab->Url();
+      if (!url.is_valid()) {
+        if (was != known.end()) {
+          all[key] = was->second;
+        }
+        continue;
+      }
+      Entity& each = all[key];
+      each.set_id(key);
+      each.set_kind(Entity::TODAY);
+      each.set_space(space_key);
+      each.set_position(Bytes(node->position));
+      each.set_url(url.spec());
+      each.set_name(tab->name());
+      each.set_title(tab->Title());
+      each.set_icon(tab->icon());
+      const int64_t here = SeenHere(row, *tab);
+      const bool sent = was != known.end() && was->second.has_seen();
+      each.set_seen(sent && here < was->second.seen() + kSeenStep ? was->second.seen() : here);
+    }
   }
   return all;
 }
 
-// Where a Space, pinned tab or folder is on this device.
+// Whether |row| is one of |space|'s Today tabs.
+bool IsToday(const Space& space, bc_id row) {
+  return row && std::ranges::contains(space.today(), row);
+}
+
+// Whether |a| and |b| differ only in their title, which rides along with the next change rather
+// than being sent alone, as a page's title changes as it loads and after.
+bool OnlyTitle(const Entity& a, const Entity& b) {
+  Entity a_untitled = a;
+  Entity b_untitled = b;
+  a_untitled.clear_title();
+  b_untitled.clear_title();
+  return a_untitled.SerializeAsString() == b_untitled.SerializeAsString();
+}
+
+// Where a Space, pinned tab, folder or Today tab is on this device.
 struct Local {
   Space* space = nullptr;
-  // The pinned tab or folder, or 0 for the Space itself.
+  // The pinned tab, folder or Today tab, or 0 for the Space itself.
   bc_id row = 0;
 };
 
@@ -175,9 +232,11 @@ std::map<std::string, Local> Index() {
       continue;
     }
     index[Key(space->node().id)] = {space, 0};
-    for (bc_id row : space->pinned_rows()) {
-      if (const Space::Node* node = space->NodeOf(row)) {
-        index[Key(node->id)] = {space, row};
+    for (const std::vector<bc_id>* rows : {&space->pinned_rows(), &space->today()}) {
+      for (bc_id row : *rows) {
+        if (const Space::Node* node = space->NodeOf(row)) {
+          index[Key(node->id)] = {space, row};
+        }
       }
     }
   }
@@ -304,6 +363,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     timer_.Stop();
     known_.clear();
     waiting_.clear();
+    pages_.clear();
     restoring_ = false;
     if (!store_) {
       return;
@@ -383,7 +443,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     // another device just before the browser went, rather than deleting it from the account.
     if (restoring_) {
       restoring_ = false;
-      const std::map<std::string, Entity> current = Current();
+      const std::map<std::string, Entity> current = Current(known_);
       std::vector<Entity> missed;
       for (const auto& [key, entity] : known_) {
         if (!current.contains(key)) {
@@ -392,16 +452,36 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       }
       Apply(std::move(missed), {});
     }
-    const std::map<std::string, Entity> current = Current();
+    std::map<std::string, Entity> current = Current(known_);
     std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch = store_->CreateWriteBatch();
-    for (const auto& [key, entity] : current) {
+    std::map<std::string, std::string> pages;
+    size_t sent = 0;
+    size_t gone = 0;
+    size_t bytes = 0;
+    for (auto& [key, entity] : current) {
       auto it = known_.find(key);
+      if (entity.kind() == Entity::TODAY) {
+        // Its page is sent only once it navigated here. One another device's navigation reached
+        // while it was shown here keeps its page, unloaded nowhere, and isn't sent back.
+        const std::string here = entity.url();
+        auto was = pages_.find(key);
+        if (it != known_.end() && it->second.kind() == Entity::TODAY &&
+            (was == pages_.end() || was->second == here)) {
+          entity.set_url(it->second.url());
+        }
+        pages[key] = here;
+        if (it != known_.end() && OnlyTitle(it->second, entity)) {
+          continue;
+        }
+      }
       if (it != known_.end() && it->second.SerializeAsString() == entity.SerializeAsString()) {
         continue;
       }
       change_processor()->Put(key, DataOf(entity), batch->GetMetadataChangeList());
       batch->WriteData(key, entity.SerializeAsString());
       known_[key] = entity;
+      ++sent;
+      bytes += entity.ByteSizeLong();
     }
     for (auto it = known_.begin(); it != known_.end();) {
       // One waiting for its Space or folder to come isn't here yet, rather than gone.
@@ -413,9 +493,16 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
                                  batch->GetMetadataChangeList());
       batch->DeleteData(it->first);
       it = known_.erase(it);
+      ++gone;
     }
     store_->CommitWriteBatch(std::move(batch),
                              base::BindOnce(&Bridge::OnCommit, weak_factory_.GetWeakPtr()));
+    pages_ = std::move(pages);
+    if (sent || gone) {
+      // check.sh counts these lines, for what a busy session sends.
+      LOG(ERROR) << "browser: sync spaces sent " << sent << " deleted " << gone << " bytes "
+                 << bytes;
+    }
   }
 
   // Makes the sidebar match what came from the account: |put| new or changed, |deleted| gone.
@@ -471,6 +558,8 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         waiting_.insert(entity.id());
       }
     }
+    // A tab now in a Space here leaves the command bar's list of another computer's.
+    RefreshOtherTabs();
   }
 
   // Deletes |space|, which sync never had, once its Today tabs are in the first of the Spaces sync
@@ -497,6 +586,8 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       // What was in it is deleted, or moves, on its own.
       local.space->DeleteFolder(local.row);
     } else {
+      // check.sh waits for this line.
+      LOG(ERROR) << "browser: synced close " << local.row;
       Window::CloseTab(local.row);
     }
   }
@@ -519,13 +610,29 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     }
     Space* space = index.at(entity.space()).space;
     const bc_id folder = entity.parent().empty() ? 0 : index.at(entity.parent()).row;
-    // A row moved to another Space has a new id there, so one found in another Space was deleted
-    // and made again with its id, which only happens to an id the core made up itself.
+    // A Today tab moved to another Space keeps its id, so it moves here too, as it did there: into
+    // another profile's Space as a new tab of that profile's, which takes the id.
+    if (here != index.end() && here->second.space != space && entity.kind() == Entity::TODAY &&
+        IsToday(*here->second.space, here->second.row)) {
+      Window::MoveToSpace(here->second.row, space->id());
+      const std::map<std::string, Local> moved = Index();
+      if (auto now = moved.find(entity.id()); now != moved.end() && now->second.space == space) {
+        PutToday(entity, space, now->second.row);
+        return;
+      }
+    }
+    // A pinned tab or folder moved to another Space has a new id there, so one found in another
+    // Space was deleted and made again with its id, which only happens to an id the core made up
+    // itself.
     if (here != index.end() && here->second.space != space) {
       Remove(here->second);
       here = index.end();
     }
     bc_id row = here != index.end() ? here->second.row : 0;
+    if (entity.kind() == Entity::TODAY) {
+      PutToday(entity, space, row);
+      return;
+    }
     // Where its place puts it among the rows directly in its folder, without it.
     size_t at = 0;
     for (bc_id sibling : space->pinned_rows()) {
@@ -535,7 +642,6 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         ++at;
       }
     }
-    const auto no_url = [](bc_id) { return GURL(); };
     const GURL url(entity.url());
     if (!row && entity.kind() == Entity::FOLDER) {
       row = space->AddFolder(entity.name(), folder, at);
@@ -558,18 +664,83 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       }
       space->AddPinned(row, folder, at, url);
     } else {
+      const Space::Node* was = space->NodeOf(row);
+      // A Today tab pinned on another device is pinned here, at the URL it was pinned at there.
+      const bool today = IsToday(*space, row);
+      if (today || space->FolderOf(row) != folder || !was || !was->position.Equals(node.position)) {
+        space->Move(row, /*pinned=*/true, folder, at, [&](bc_id) { return url; });
+      }
       if (space->IsFolder(row)) {
         space->RenameFolder(row, entity.name());
         space->SetFolderIcon(row, entity.icon());
       } else if (url != space->PinnedUrl(row)) {
         space->SetPinnedUrl(row, url);
       }
+    }
+    space->RestoreNodes(space->node(), {{row, node}});
+  }
+
+  // Puts the Today tab |entity| in |space| at its place, as |row| if it's here already. A new one
+  // has no page until it's clicked, as one the session brings back, so sync never loads a page. One
+  // another device navigated goes there without its page too, unless a window here shows it, which
+  // keeps its page; and its last showing is the account's if that's later than here.
+  void PutToday(const Entity& entity, Space* space, bc_id row) {
+    const Space::Node node{base::Uuid::ParseLowercase(entity.id()), PositionOf(entity)};
+    const GURL url(entity.url());
+    const std::u16string title = base::UTF8ToUTF16(entity.title());
+    // Where its place puts it among the Today tabs, without it.
+    size_t at = 0;
+    for (bc_id sibling : space->today()) {
+      const Space::Node* each = space->NodeOf(sibling);
+      if (sibling != row && each && each->position.LessThan(node.position)) {
+        ++at;
+      }
+    }
+    const base::Time seen =
+        entity.has_seen() ? base::Time::FromTimeT(entity.seen()) : base::Time::Now();
+    if (!row) {
+      if (!url.is_valid()) {
+        return;
+      }
+      SavedTab saved;
+      sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
+      page.set_index(0);
+      page.set_virtual_url(url);
+      page.set_original_request_url(url);
+      page.set_title(title);
+      page.set_transition_type(ui::PAGE_TRANSITION_LINK);
+      page.set_timestamp(base::Time::Now());
+      saved.name = entity.name();
+      saved.icon = entity.icon();
+      saved.last_seen = seen;
+      row = Tab::Restore(ProfileFor(space->profile()), saved);
+      if (!row) {
+        return;
+      }
+      space->AddAt(row, at);
+    } else {
       const Space::Node* was = space->NodeOf(row);
-      if (space->FolderOf(row) != folder || !was || !was->position.Equals(node.position)) {
-        space->Move(row, /*pinned=*/true, folder, at, no_url);
+      if (!IsToday(*space, row) || !was || !was->position.Equals(node.position)) {
+        // A pinned tab unpinned on another device is unpinned here.
+        space->Move(row, /*pinned=*/false, 0, at, [](bc_id) { return GURL(); });
+      }
+      Tab* tab = Tab::Get(row);
+      if (tab && url.is_valid() && url != tab->Url() && !Window::Showing(row)) {
+        // Its page here goes, keeping its history, which goes on to where the other device went.
+        if (tab->web_contents()) {
+          tab->Unload();
+        }
+        tab->Repoint(url, title);
+      }
+      if (tab && seen > tab->last_seen()) {
+        tab->set_last_seen(seen);
       }
     }
     space->RestoreNodes(space->node(), {{row, node}});
+    // check.sh waits for this line.
+    const Tab* tab = Tab::Get(row);
+    LOG(ERROR) << "browser: synced today " << row << " in space " << space->id() << " at " << at
+               << (tab && tab->web_contents() ? " loaded " : " unloaded ") << url.spec();
   }
 
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
@@ -578,6 +749,9 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   std::map<std::string, Entity> known_;
   // Those that came before their Space.
   std::set<std::string> waiting_;
+  // Each Today tab's page here at the last look, by id, which tells a navigation here from one
+  // another device made.
+  std::map<std::string, std::string> pages_;
   // Until the first look after the store is read.
   bool restoring_ = true;
   base::OneShotTimer timer_;

@@ -1,7 +1,7 @@
 // What ILO_SPACE's specifics hold, in their one bytes field (engine/patches/ours/
-// chromium-sync-ilo-types.patch): one of the user's Spaces, or a pinned tab or folder in one, by
-// its node (space.h). Each is an entity of its own, so a rename, a move or a delete sends only what
-// changed. A Space's Today tabs stay on the device.
+// chromium-sync-ilo-types.patch): one of the user's Spaces, or a pinned tab, folder or Today tab in
+// one, by its node (space.h). Each is an entity of its own, so a rename, a move, a navigation or a
+// close sends only what changed.
 
 syntax = "proto2";
 
@@ -14,25 +14,32 @@ message SpaceEntity {
     SPACE = 0;
     PIN = 1;
     FOLDER = 2;
+    // A Today tab, which other devices show without its page until it's clicked. Arc kept these on
+    // the device; ilo syncs them (#2098).
+    TODAY = 3;
   }
 
   // Its node's id, a lowercase UUID, which is also its client tag.
   optional string id = 1;
   optional Kind kind = 2;
-  // A pinned tab's or folder's Space's id.
+  // A pinned tab's, folder's or Today tab's Space's id.
   optional string space = 3;
   // The id of the folder holding a pinned tab or folder, else empty.
   optional string parent = 4;
   // Its place among its siblings: a serialized sync_pb.UniquePosition.
   optional bytes position = 5;
-  // A Space's or folder's name, or the name the user gave a pinned tab.
+  // A Space's or folder's name, or the name the user gave a pinned or Today tab.
   optional string name = 6;
-  // A pinned tab's pinned URL, and its title, which it shows until its page loads.
+  // A pinned tab's pinned URL, or a Today tab's page, and its title, which it shows until its page
+  // loads.
   optional string url = 7;
   optional string title = 8;
   // A Space's colour, 0xRRGGBB, if it has one.
   optional uint32 color = 9;
-  // A Space's, folder's or pinned tab's emoji, and a Space's theme.
+  // A Space's, folder's or tab's emoji, and a Space's theme.
   optional string icon = 10;
   optional string theme = 11;
+  // When a device last showed a Today tab, in seconds since the Unix epoch, which auto-archive
+  // counts from on every device. Sent only once it's an hour on from what the account has.
+  optional int64 seen = 12;
 }

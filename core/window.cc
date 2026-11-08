@@ -1251,6 +1251,10 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   const bool pinned = from->IsPinned(tab);
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
+  // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
+  // closing it into their archives and opening it again there.
+  const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
+  const base::Uuid kept = node ? node->id : base::Uuid();
   // In its new Space before it leaves the old, so the UI never hears of it in neither and forgets
   // its title.
   if (pinned) {
@@ -1259,6 +1263,10 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
     to->AddAt(moved, 0);
   }
   from->Remove(tab);
+  if (kept.is_valid()) {
+    // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
+    to->RestoreNodes(to->node(), {{moved, Space::Node{kept, syncer::UniquePosition()}}});
+  }
   FollowMove(tab, moved, from->id(), space, next);
   // Out of its Space, it isn't kept for ReopenClosedTab or archived.
   if (moved != tab) {
