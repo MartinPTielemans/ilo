@@ -134,21 +134,28 @@ switch "2 cmd" "$c"
 # does; a driven run logs it and shows no sheet. The toast's window is at the page's top left, 228
 # and 10 into the window, and Share is the plate's last chip, 31 wide and 14 in from its right. The
 # window lets the pointer through until a move over its plate, so the first move has it take the
-# pointer and the toast hears the second, as window.sh's new tab's toast does.
+# pointer and the toast hears the second, as window.sh's new tab's toast does. The toast leaves
+# after 2 s, so the pointer goes on Share at once, which keeps it past its time, and $2, if any, runs
+# before the click, as the window's capture.
 share_from_url_toast() {
   [ "$(uname)" != Linux ] || return 0
+  local what=$1 then=${2:-} share first_move
   expect '^browser: toast plate [0-9]* [0-9]* [0-9]* [0-9]* in [0-9]* [0-9]*$' \
-    "⇧⌘C's toast, $1, didn't tell where its plate is"
-  set -- "$1" $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
-  local share="$((228 + $2 + $4 - 29)) $((10 + $3 + $5 / 2))" first_move
+    "⇧⌘C's toast, $what, didn't tell where its plate is"
+  set -- $(grep '^browser: toast plate' "$log" | tail -1 | sed 's/^browser: toast plate //; s/ in / /')
+  share="$((228 + $1 + $3 - 29)) $((10 + $2 + $4 / 2))"
   send move $share
   first_move=$step
   send move $share
-  expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $1" \
+  expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $what" \
     "$first_move"
+  [ -z "$then" ] || $then
   send click $share
-  expect '^browser: toast button share$' "a click on Share at $share on ⇧⌘C's toast, $1, didn't take"
-  expect '^browser: share https://example.org/$' "Share on ⇧⌘C's toast, $1, didn't share the page"
+  expect '^browser: toast button share$' "a click on Share at $share on ⇧⌘C's toast, $what, didn't take"
+  expect '^browser: share https://example.org/$' "Share on ⇧⌘C's toast, $what, didn't share the page"
+}
+url_toast_capture() {
+  ../tools/window-screenshot.sh "$pid" "$out/url-toast.png" || fail "no window to capture"
 }
 
 # ⇧⌘C and ⌥⇧⌘C copy the tab's URL and a Markdown link to it, from the page and the UI. A driven
@@ -161,8 +168,12 @@ clipboard_holds https://example.org/ ||
 # The toast says so, 8 inside the card's top right corner.
 expect "$url_toast" "⇧⌘C's toast didn't say it copied the URL, with Share where there's a share sheet"
 expect '^browser: toast settled$' "⇧⌘C's toast didn't settle"
-../tools/window-screenshot.sh "$pid" "$out/url-toast.png" || fail "no window to capture"
-share_from_url_toast "from the page"
+# Captured with the pointer on Share, or at once where there's none.
+if [ "$(uname)" = Linux ]; then
+  url_toast_capture
+else
+  share_from_url_toast "from the page" url_toast_capture
+fi
 send click $sidebar_point
 send key c cmd shift alt
 expect '^browser: command copy-markdown-link via ui$' "⌥⇧⌘C with the UI focused didn't run"
