@@ -1,6 +1,7 @@
 //! Arc's sidebar, read from its `StorableSidebar.json`: the Spaces with their names, icons,
-//! themes and profiles, each Space's pinned tabs and folders, and each profile's favorites; and
-//! its Air Traffic Control rules, from `StorableLinkRouting.json` beside it.
+//! themes and profiles, each Space's pinned tabs and folders and its Today tabs, and each
+//! profile's favorites; and its Air Traffic Control rules, from `StorableLinkRouting.json` beside
+//! it.
 //!
 //! The file is Swift's Codable encoding, as the public readers of it describe it (radian,
 //! notarc): a dictionary is a flat array of key, value, key, value; an enum is an object with one
@@ -165,11 +166,13 @@ impl Reader<'_> {
             theme: info
                 .and_then(|info| info.get("windowTheme"))
                 .and_then(theme),
-            pinned: pinned_container(space)
+            pinned: container(space, "pinned")
                 .map(|id| self.nodes(id, &mut HashSet::new()))
                 .unwrap_or_default(),
-            // Today tabs stay in Arc.
-            today: Vec::new(),
+            // A split view among them comes as its tabs, as the import adds Today tabs one by one.
+            today: container(space, "unpinned")
+                .map(|id| self.tabs(id))
+                .unwrap_or_default(),
         }
     }
 
@@ -249,7 +252,8 @@ impl Reader<'_> {
             .collect()
     }
 
-    /// The tabs under `id`, folders and split views flattened, as favorites have no folders.
+    /// The tabs under `id`, folders and split views flattened, as favorites have no folders and
+    /// Today tabs come one by one.
     fn tabs(&self, id: &str) -> Vec<Tab> {
         fn flatten(nodes: Vec<Node>, tabs: &mut Vec<Tab>) {
             for node in nodes {
@@ -285,16 +289,16 @@ impl Reader<'_> {
     }
 }
 
-/// The id of the item holding the Space's pinned tabs: after "pinned" in `containerIDs`, else
-/// after the object keyed "pinned" in `newContainerIDs`.
-fn pinned_container(space: &Value) -> Option<&str> {
+/// The id of the item holding the Space's `kind` of tabs, "pinned" or "unpinned" (its Today
+/// tabs): after `kind` in `containerIDs`, else after the object keyed `kind` in `newContainerIDs`.
+fn container<'a>(space: &'a Value, kind: &str) -> Option<&'a str> {
     let after = |key: &str, is: &dyn Fn(&Value) -> bool| {
         let ids = space.get(key)?.as_array()?;
         let at = ids.iter().position(is)?;
         ids.get(at + 1)?.as_str()
     };
-    after("containerIDs", &|each| each.as_str() == Some("pinned"))
-        .or_else(|| after("newContainerIDs", &|each| each.get("pinned").is_some()))
+    after("containerIDs", &|each| each.as_str() == Some(kind))
+        .or_else(|| after("newContainerIDs", &|each| each.get(kind).is_some()))
 }
 
 /// An emoji as it is; one of Arc's icons as the glyph of ours that draws the same thing, else none.
