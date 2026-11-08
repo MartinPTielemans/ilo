@@ -10,6 +10,9 @@ every process of the browser.
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
                              each snapshot to the next, as "cpu wakeups" a line
+  usage.py threads A B       prints the threads that switched most from snapshot A to B, a second,
+                             with their process and name (Linux and Windows), so a miss names its
+                             thread
 
 On the Mac it's proc_pid_rusage's: phys_footprint, user and system time, and package idle and
 interrupt wakeups, as Ardia's acperf.swift reads them. Linux has no wakeup count, so it's each
@@ -25,6 +28,9 @@ import os
 import subprocess
 import sys
 import time
+
+# Each thread's context switches at the snapshot, by thread id: [pid, name, switches].
+threads = {}
 
 
 def kind_of(args):
@@ -83,9 +89,11 @@ def linux(procs, kinds):
             switches = 0
             for task in os.listdir(f"/proc/{pid}/task"):
                 with open(f"/proc/{pid}/task/{task}/status") as f:
-                    for line in f:
-                        if "ctxt_switches:" in line:
-                            switches += int(line.split()[1])
+                    lines = dict(line.split(":", 1) for line in f if ":" in line)
+                count = sum(int(lines.get(key, "0")) for key in
+                            ("voluntary_ctxt_switches", "nonvoluntary_ctxt_switches"))
+                threads[task] = [pid, lines.get("Name", "").strip(), count]
+                switches += count
         except OSError:
             continue
         kb = sum(int(status.get(key, "0 kB").split()[0]) for key in ("RssAnon", "VmSwap"))
@@ -100,6 +108,21 @@ def windows(procs, kinds):
     ntdll = ctypes.WinDLL("ntdll")
     kernel32 = ctypes.WinDLL("kernel32")
     kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenThread.restype = wintypes.HANDLE
+
+    def thread_name(tid):
+        # Chromium and Rust name their threads with SetThreadDescription.
+        handle = kernel32.OpenThread(0x0800, False, tid)
+        if not handle:
+            return ""
+        text = ctypes.c_wchar_p()
+        name = ""
+        if kernel32.GetThreadDescription(handle, ctypes.byref(text)) == 0:
+            name = text.value or ""
+            kernel32.LocalFree(text)
+        kernel32.CloseHandle(handle)
+        return name
+
     size = 1 << 20
     while True:
         buffer = ctypes.create_string_buffer(size)
@@ -118,7 +141,7 @@ def windows(procs, kinds):
         # SYSTEM_PROCESS_INFORMATION on x64: 256 bytes, then a SYSTEM_THREAD_INFORMATION of 80
         # bytes a thread, whose ContextSwitches is at 64.
         entry = raw[offset:offset + 256]
-        next_offset, threads = int.from_bytes(entry[0:4], "little"), int.from_bytes(entry[4:8], "little")
+        next_offset, count = int.from_bytes(entry[0:4], "little"), int.from_bytes(entry[4:8], "little")
         pid = int.from_bytes(entry[80:88], "little")
         handle = kernel32.OpenProcess(0x1000, False, pid) if pid else None
         if handle:
@@ -128,9 +151,13 @@ def windows(procs, kinds):
                     name.value.replace("\\", "/").lower() == want:
                 user = int.from_bytes(entry[40:48], "little")
                 kernel = int.from_bytes(entry[48:56], "little")
-                switches = sum(
-                    int.from_bytes(raw[at + 64:at + 68], "little")
-                    for at in range(offset + 256, offset + 256 + 80 * threads, 80))
+                switches = 0
+                for at in range(offset + 256, offset + 256 + 80 * count, 80):
+                    # ClientId's UniqueThread at 48, ContextSwitches at 64.
+                    tid = int.from_bytes(raw[at + 48:at + 56], "little")
+                    count_here = int.from_bytes(raw[at + 64:at + 68], "little")
+                    threads[str(tid)] = [str(pid), thread_name(tid), count_here]
+                    switches += count_here
                 seen[str(pid)] = ["process", (user + kernel) / 1e7, switches,
                                   int.from_bytes(entry[184:192], "little")]
             kernel32.CloseHandle(handle)
@@ -166,7 +193,7 @@ def main():
         taker = {"darwin": mac, "win32": windows}.get(sys.platform, linux)
         seen = taker(procs, sys.argv[4:] == ["kinds"])
         with open(path, "w") as f:
-            json.dump({"time": time.time(), "procs": seen}, f)
+            json.dump({"time": time.time(), "procs": seen, "threads": threads}, f)
     elif command == "memory":
         seen = read(sys.argv[2])["procs"]
         print(f"{sum(p[3] for p in seen.values()) / 1048576:.0f} {len(seen)}")
@@ -193,6 +220,16 @@ def main():
                 cpu += max(now[1] - was[1], 0)
                 wakeups += max(now[2] - was[2], 0)
             print(f"{cpu * 100 / secs:.3f} {wakeups / secs:.2f}")
+    elif command == "threads":
+        a, b = read(sys.argv[2]), read(sys.argv[3])
+        secs = b["time"] - a["time"]
+        was = a.get("threads", {})
+        rates = []
+        for tid, (pid, name, now) in b.get("threads", {}).items():
+            rate = max(now - was.get(tid, [pid, name, 0])[2], 0) / secs
+            rates.append((rate, f"{rate:.1f}/s {b['procs'].get(pid, ['?'])[0]} {pid} {name or tid}"))
+        for _, line in sorted(rates, reverse=True)[:12]:
+            print(line)
     else:
         sys.exit(f"usage.py: no command {command}")
 

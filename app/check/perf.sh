@@ -143,6 +143,9 @@ perf_idle() {
   cpu=$(cut -d' ' -f1 < "$perf_dir/$1.txt" | perf_stats '%.2f')
   wakeups=$(cut -d' ' -f2 < "$perf_dir/$1.txt" | perf_stats '%.1f')
   cpu="$cpu % ($(python3 -I check/usage.py idle-kinds "$perf_dir/$1-0.json" "$perf_dir/$1-6.json") over the minute)"
+  # The threads that woke most over the minute, so a miss names its thread.
+  python3 -I check/usage.py threads "$perf_dir/$1-0.json" "$perf_dir/$1-6.json" > "$perf_dir/$1-threads.txt"
+  sed -n "1,5s/^/perf: $1 thread /p" "$perf_dir/$1-threads.txt"
 }
 # The Unix ms page $1 said it first painted, in the log since step $2 (all of it with none).
 perf_painted() {
