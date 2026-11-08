@@ -80,7 +80,8 @@ if ! [ "$(uname)" = Darwin ]; then
   loaded_ms=$(date +%s%3N)
   ublock_id=$(ublock_process) || fail "uBlock Origin had no process 10 s after it loaded"
   sample_ublock "$ublock_id" &
-  sampler=$!
+  # Not $sampler, which quit clears (lib.sh's exited).
+  ublock_sampler=$!
 fi
 await_load
 tab=$(today | cut -d' ' -f1)
@@ -119,7 +120,7 @@ go_from_bar doubleclick.net
 expect "^browser: loaded $tab chrome-extension://$ublock/document-blocked\.html" \
   "doubleclick.net opened, where uBlock Origin's page should have said it blocked it"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-live-page.png" || fail "no window to capture"
-if [ -n "${sampler:-}" ]; then
+if [ -n "${ublock_sampler:-}" ]; then
   # 53 s after its lists last changed it writes its filters' selfie into its cache, the largest
   # value it writes, which ran its process out of memory on Windows (#2069). It writes each value
   # to its IndexedDB, whose keys are UTF-16, and to its extension storage, and the peaks are read
@@ -143,8 +144,8 @@ if [ -n "${sampler:-}" ]; then
     awk '{ kb += $1 } END { print int(kb / 1024) }')
 fi
 quit
-if [ -n "${sampler:-}" ]; then
-  wait "$sampler"
+if [ -n "${ublock_sampler:-}" ]; then
+  wait "$ublock_sampler"
   # From the samples: the most before its lists blocked, the most after and when, and the last.
   sampled=$(awk -v t0="$loaded_ms" -v blocked="$blocked_ms" '
     $1 <= blocked && $NF > early { early = $NF }
