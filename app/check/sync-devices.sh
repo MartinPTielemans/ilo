@@ -206,7 +206,14 @@ expect "^browser: command bar lists other computers' tabs: ${site}login.html?use
   "B's command bar didn't list A's tab for \"login\""
 grep "^browser: command bar lists other computers' tabs: " "$log" | grep -q 'agents-own' &&
   fail "B's command bar listed a tab of A's agent's Space"
-send key down
+# Its row follows the core's first, after Passwords, which "login" finds above the search row.
+selected() { grep '^browser: command bar selected ' "$log" | tail -1; }
+for _ in 1 2 3; do
+  send key down
+  selected | grep -q "login.html?users-own\$" && break
+done
+selected | grep -q "login.html?users-own\$" ||
+  fail "↓ never selected A's tab in B's command bar: $(selected)"
 send key return
 expect '^browser: command bar hidden$' "↩ on A's tab didn't close B's command bar"
 expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab didn't open its page in B"
