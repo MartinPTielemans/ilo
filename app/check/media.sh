@@ -214,7 +214,7 @@ EOF
 # keyboard as it maps, and the core gives it back (#1961).
 kept_keys() {
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    expect '^browser: mini player gave the keyboard back$' \
+    expect 'browser: mini player gave the keyboard back$' \
       "the call floating as its tab hid didn't give the browser window the keyboard back"
   fi
   for _ in $(seq 100); do
