@@ -1,0 +1,26 @@
+# Runs spikes/adblock-rust on Windows and the Mac, for its numbers there. On this proof branch only.
+name: Spike adblock-rust
+on:
+  push:
+    branches: [spike/adblock-rust-2]
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - shell: bash
+        run: bash spikes/adblock-rust/run.sh "$RUNNER_TEMP/spike"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-${{ matrix.os }}
+          path: ${{ runner.temp }}/spike/out
