@@ -21,6 +21,8 @@ thread_local! {
     static NEXT_READ: Cell<u64> = const { Cell::new(1) };
     /// The user's language, asked of the system once, as the URL field asks each time it draws.
     static TARGET: OnceCell<Option<String>> = const { OnceCell::new() };
+    /// The languages the user reads, asked of the system once, as TARGET is.
+    static PREFERRED: OnceCell<Vec<String>> = const { OnceCell::new() };
 }
 
 struct Read {
@@ -62,6 +64,70 @@ fn system_target() -> Option<String> {
     None
 }
 
+/// Whether the user reads `language`, a language alone such as "es": one the system prefers, or
+/// the one pages are translated into. The stand-in's are BROWSER_TRANSLATE_READS's, or "en".
+pub(crate) fn reads(language: &str) -> bool {
+    PREFERRED.with(|preferred| {
+        let preferred = preferred.get_or_init(|| {
+            let listed = match stand_in() {
+                true => std::env::var("BROWSER_TRANSLATE_READS").unwrap_or_default(),
+                false => system_preferred(),
+            };
+            (listed.split(','))
+                .map(|code| code.trim().to_ascii_lowercase())
+                .filter(|code| !code.is_empty())
+                .chain(target())
+                .collect()
+        });
+        preferred.iter().any(|code| code == language)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn system_preferred() -> String {
+    let mut out = [0 as c_char; 512];
+    match unsafe { platform::host_preferred_languages(out.as_mut_ptr(), out.len()) } {
+        true => unsafe { CStr::from_ptr(out.as_ptr()) }
+            .to_string_lossy()
+            .into_owned(),
+        false => String::new(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_preferred() -> String {
+    String::new()
+}
+
+/// Where the languages always translated are kept, a language alone on each line, beside View ›
+/// Appearance's choice. They're the computer's, as its translator and its languages are, so every
+/// profile and its private windows translate them.
+fn always_path() -> String {
+    format!("{}/Always Translated", crate::profile_dir())
+}
+
+/// Reads the languages always translated (`shell::AlwaysTranslated`).
+pub(crate) fn read_always(cx: &mut App) {
+    let text = std::fs::read_to_string(always_path()).unwrap_or_default();
+    let languages = (text.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| SharedString::from(line.to_owned()))
+        .collect();
+    cx.set_global(shell::AlwaysTranslated(languages));
+}
+
+/// Keeps the languages always translated for the next launch.
+pub(crate) fn save_always(languages: &[SharedString]) {
+    let text: String = languages
+        .iter()
+        .map(|language| format!("{language}\n"))
+        .collect();
+    if let Err(error) = std::fs::write(always_path(), text) {
+        log!("couldn't save the languages always translated: {error}");
+    }
+}
+
 /// `language`'s name in the user's language, as the system has it.
 pub(crate) fn language_name(language: &str) -> String {
     #[cfg(target_os = "macos")]
@@ -92,6 +158,14 @@ pub(crate) fn language_name(language: &str) -> String {
 
 /// Translates `tab`'s page from `from` to `to`: the core gathers its words (tab_translate_texts).
 pub(crate) fn translate(tab: u64, from: &str, to: &str) {
+    // Every window hears a page's language, and each that always translates it asks: one read is
+    // enough.
+    let asked = READS.with_borrow(|reads| {
+        (reads.get(&tab)).is_some_and(|read| read.from == from && read.to == to)
+    });
+    if asked {
+        return;
+    }
     let request = NEXT_READ.replace(NEXT_READ.get() + 1);
     let read = Read {
         request,
