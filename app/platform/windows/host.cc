@@ -937,6 +937,8 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 void MenuForegroundChanged(HWND root, bool ours);
 // Has the link preview leave as another of the app's windows comes to the front (defined below).
 void LinkPreviewForegroundChanged(HWND front);
+// Ends a Little ilo window's giving way once another app's window is in front (defined below).
+void OtherAppInFront();
 
 // The watchers, which Windows tells of each window that comes to the front.
 void (*g_key_window_changed)(void*) = nullptr;
@@ -991,6 +993,8 @@ void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWO
   MenuForegroundChanged(GetAncestor(hwnd, GA_ROOT), ours);
   if (ours) {
     LinkPreviewForegroundChanged(hwnd);
+  } else if (hwnd) {
+    OtherAppInFront();
   }
   g_active = ours;
   if (ours && g_key_window_changed) {
@@ -2456,27 +2460,43 @@ HWND WindowBehind(HWND root) {
 // back meanwhile and the window giving way.
 HHOOK g_giving_way = nullptr;
 HWND g_giving_way_root = nullptr;
+// Whether the other app's window has come in front since.
+bool g_gave_way = false;
 // Counts the give-ways, so a fallback's timer leaves a later one be.
 int g_give_ways = 0;
 
 // Handing the foreground on as a closing window hides activates the UI's holder, whose focus takes
 // the activation back for the closing window, and Windows activates the app's next window as that
 // one is destroyed, in front of the other app's (#2025). Chromium hides a closing window and
-// destroys it in a task of its own, which can come after a task posted as it hid, so none of ilo's
-// windows activates until the window is destroyed or shows again.
+// destroys it in a task of its own, which can come after a task posted as it hid. The other app
+// takes the foreground only once its thread reads its messages, which can be after the window is
+// destroyed, and an activation of ilo's meanwhile still wins it (#2136). So none of ilo's windows
+// activates, but for the user's own click, until both the window is destroyed and the other app's
+// window is in front, or the window shows again.
 LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HCBT_ACTIVATE) {
+  if (code == HCBT_ACTIVATE && !reinterpret_cast<CBTACTIVATESTRUCT*>(lparam)->fMouse) {
     return 1;
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
-// Lets ilo's windows activate again once the window that gave way is gone or back.
+// Lets ilo's windows activate again once the window is gone and the other app in front, or the
+// window is back.
 void StopGivingWay() {
   if (g_giving_way) {
     UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr));
   }
   g_giving_way_root = nullptr;
+  g_gave_way = false;
+}
+
+// Once DestroyWindow, which activates the app's next window, is over.
+void StopGivingWayLater() {
+  Later([give_way = g_give_ways] {
+    if (give_way == g_give_ways) {
+      StopGivingWay();
+    }
+  });
 }
 
 // A Little ilo window going with the keyboard leaves another app's window right behind it in front
@@ -2497,22 +2517,41 @@ void LittleHiding(HWND root) {
     g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
   }
   g_giving_way_root = root;
-  // Until the window is destroyed (FrameProc), or at the latest 5 s on, so a window that's hidden
-  // and kept never leaves ilo unable to activate. On a loaded machine Chromium's task that destroys
-  // the window came more than a second after it hid, and the activation then went through (#2079).
+  g_gave_way = false;
+  // Until the window is destroyed (FrameProc) and the other app's is in front (OtherAppInFront), or
+  // at the latest 5 s on, so a window that's kept or an app that never reads its messages never
+  // leaves ilo unable to activate.
   After(5, [give_way = ++g_give_ways] {
     if (give_way == g_give_ways && g_giving_way) {
       StopGivingWay();
-      // A window that gave way and wasn't destroyed, which no close leaves, says so in the log.
+      // A window kept, which no close leaves, or an app that didn't take the foreground.
       fprintf(stderr, "browser: little window gave way for 5 s without going\n");
     }
   });
-  // The foreground's app may give the foreground away.
-  SetForegroundWindow(behind);
-  // check.sh reads this line, the title read without a message to that app, which could hang.
+  // check.sh reads these lines, the title read without a message to that app, which could hang.
   wchar_t title[128] = L"";
   InternalGetWindowText(behind, title, static_cast<int>(std::size(title)));
+  // The foreground's app may give the foreground away. Where Windows refuses, nothing waits for the
+  // other app, and the app's next window has the keyboard once the window is gone.
+  if (!SetForegroundWindow(behind)) {
+    g_gave_way = true;
+    fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    return;
+  }
   fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+}
+
+void OtherAppInFront() {
+  // An event from before the give-way can come during it, so it's the foreground now that counts.
+  DWORD process = 0;
+  HWND front = GetForegroundWindow();
+  if (g_giving_way && !g_gave_way && front && GetWindowThreadProcessId(front, &process) &&
+      process != GetCurrentProcessId()) {
+    g_gave_way = true;
+    if (!g_giving_way_root) {
+      StopGivingWayLater();
+    }
+  }
 }
 
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
@@ -2576,13 +2615,12 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       AppActivating(wparam, static_cast<DWORD>(lparam));
       break;
     case WM_NCDESTROY:
-      // Once DestroyWindow, which activates the app's next window, is over.
+      // The other app can come in front after this.
       if (hwnd == g_giving_way_root) {
-        Later([hwnd] {
-          if (hwnd == g_giving_way_root) {
-            StopGivingWay();
-          }
-        });
+        g_giving_way_root = nullptr;
+        if (g_gave_way) {
+          StopGivingWayLater();
+        }
       }
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
