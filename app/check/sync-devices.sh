@@ -3,12 +3,12 @@
 # holds marked for clipboard managers to skip (#641). B signs in and asks the account's devices
 # to add it, and A, once its window is active, asks the user, who adds it with a click: B syncs.
 # A Space A made reaches B, in place of B's own untouched first one, and one B makes reaches A. C
-# signs in and recovers with the words instead, with the account's Spaces. A's open tab reaches B's sync
-# store, and a tab of A's agent's Space never does (#1796). A saves a login, which
-# B lists, then removes, and A hears it go. 90 s after A's copy the
-# clipboard holds the words no longer. B and C sign out without asking, as the account has other
-# devices, and the server forgets them. Linux's alone so far: the Mac's and Windows' clipboards
-# and two copies of the app at once there are unrun.
+# signs in and recovers with the words instead, with the account's Spaces. A's open tab reaches
+# B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists A's
+# tab, naming A, and opens it (#1234). A saves a login, which B lists, then removes, and A hears
+# it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
+# asking, as the account has other devices, and the server forgets them. Linux's alone so far:
+# the Mac's and Windows' clipboards and two copies of the app at once there are unrun.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
@@ -151,6 +151,30 @@ done
 [ -n "$synced" ] || fail "A's open tab never reached B's sync store, so an agent's couldn't be told apart"
 grep -rqa 'login.html?agents-own' "$store_b" &&
   fail "a tab of A's agent's Space reached B's sync store, as another computer's open tab"
+# B's command bar finds A's tab by its title and names A as Settings does, and never the agent's
+# (#1234). ↩ opens it in B, a tab of B's own.
+device b
+await "^browser: other computers' tabs [1-9]" ||
+  fail "B's core never told the app of A's open tab, which B's sync store has"
+send window 1
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
+send type login
+expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on ilo on Linux" \
+  "B's command bar didn't list A's tab for \"login\""
+grep "^browser: command bar lists other computers' tabs: " "$log" | grep -q 'agents-own' &&
+  fail "B's command bar listed a tab of A's agent's Space"
+# Its row follows the core's first, after Passwords, which "login" finds above the search row.
+selected() { grep '^browser: command bar selected ' "$log" | tail -1; }
+for _ in 1 2 3; do
+  send key down
+  selected | grep -q "login.html?users-own\$" && break
+done
+selected | grep -q "login.html?users-own\$" ||
+  fail "↓ never selected A's tab in B's command bar: $(selected)"
+send key return
+expect '^browser: command bar hidden$' "↩ on A's tab didn't close B's command bar"
+expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab didn't open its page in B"
 
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
@@ -244,7 +268,7 @@ rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
 ilo_server=
 echo "ok: A added B, C recovered with the copied words, which the clipboard let go of after 90 s," \
-  "A's own open tab reached B and its agent's never did," \
+  "A's own open tab reached B, whose command bar listed and opened it, and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
   "and B and C signed out, on a local ilo-server as $email. A synced: $types." \
   "Logs: $out/sync-devices-*.log"

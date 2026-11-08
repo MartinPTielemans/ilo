@@ -176,6 +176,8 @@ mod scripting_host;
 use quitting::*;
 mod battery_saver_host;
 use battery_saver_host::*;
+mod other_tabs_host;
+use other_tabs_host::*;
 
 use browser::bc;
 
@@ -999,6 +1001,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         addresses_added: Some(addresses_added),
         battery_saver_changed: Some(battery_saver_changed),
         tab_frozen: Some(tab_frozen),
+        other_tabs_changed: Some(other_tabs_changed),
         app_new_window: Some(app_new_window),
         ..Default::default()
     };
