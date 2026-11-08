@@ -1864,6 +1864,13 @@ bool Run(const std::string& line, void (^done)(void)) {
       }
       [button performClick:nil];
     } else {
+      if (button) {
+        // Where the button's window is, for a capture of it alone.
+        NSRect frame = button.window.frame;
+        fprintf(stderr, "browser: status item window %ld level %ld at %.0f %.0f %.0f %.0f\n",
+                (long)button.window.windowNumber, (long)button.window.level, frame.origin.x,
+                frame.origin.y, frame.size.width, frame.size.height);
+      }
       fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
     }
     done();

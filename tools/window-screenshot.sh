@@ -373,7 +373,10 @@ let windows = content.windows.filter { $0.owningApplication?.processID == pid }
 let layer = menuBar ? Int(CGWindowLevelForKey(.statusWindow)) : 0
 guard let main = windows.filter({ $0.windowLayer == layer })
   .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-else { fail("process \(pid) has no \(menuBar ? "button in the menu bar" : "window on screen")") }
+else {
+  let listed = windows.map { "layer \($0.windowLayer) at \($0.frame)" }.joined(separator: ", ")
+  fail("process \(pid) has no \(menuBar ? "button in the menu bar" : "window on screen"): \(listed)")
+}
 guard let display = content.displays.first(where: { $0.frame.intersects(main.frame) })
 else { fail("no display shows the window") }
 
