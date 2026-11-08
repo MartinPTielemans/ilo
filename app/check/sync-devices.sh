@@ -326,8 +326,9 @@ expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab d
 device a
 send window 1
 go_from_bar "${site#http://}login.html"
-expect '^browser: title [0-9]* login$' "A's login page didn't load"
-tab=$(sed -n 's/^browser: title \([0-9]*\) login$/\1/p' "$log" | tail -1)
+expect "^browser: loaded [0-9]* ${site}login.html\$" "A's login page didn't load"
+# By the page it loaded: a Today tab sync brings, such as the one B opened, says its title too.
+tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}login.html\$|\1|p" "$log" | tail -1)
 send click 600 60
 [ "$active" = 1 ] || fail "A wasn't the active app, so its login page ignored the click"
 send key a cmd
