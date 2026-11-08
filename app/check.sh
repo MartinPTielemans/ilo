@@ -8,9 +8,11 @@
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
-# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists and
-# widevine, Linux's alone, downloads Google's Widevine module, so they need the network and run
-# only when named: ./check.sh store.
+# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
+# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
+# the same with the browser's own, and widevine,
+# Linux's alone, downloads Google's Widevine module, so they need the network and run only when
+# named: ./check.sh store.
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
 # which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
 # keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
@@ -80,7 +82,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate"
-named="store sync-extensions adblock-live widevine updates nightly update-checks keychain shots tab-drag"
+named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -167,7 +169,9 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
+# The translate run always translates Spanish, which a failed one left.
+rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
+  "$(dirname "$saved")/Always Translated"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its

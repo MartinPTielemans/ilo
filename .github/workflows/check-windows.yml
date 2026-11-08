@@ -104,7 +104,7 @@ jobs:
       BROWSER_LOG: ${{ inputs.log }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
-        load tabs dialogs crash about onboarding agents access passkeys passwords quit relaunch
+        load tabs dialogs crash about onboarding import agents access passkeys passwords quit relaunch
         private blank links capture spaces pinned profiles devices pair history appearance adblock-live find
         mcp keys sync-account trouble window clear handback restore little battery-os
     steps:
