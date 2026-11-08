@@ -1144,12 +1144,11 @@ impl Browser for Engine {
     }
 
     fn set_appearance(&self, appearance: Appearance, _: &mut App) {
-        settings::save_appearance(appearance);
         give_host_appearance(appearance);
     }
 
     fn keep_lone_header(&self, kept: bool, _: &mut App) {
-        settings::save_lone_header(kept);
+        unsafe { bc::bc_set_space_header(kept) };
     }
 
     fn page_moving(&self, moving: bool, _: &mut App) {
