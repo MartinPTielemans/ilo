@@ -27,7 +27,7 @@ def resolve(url, depth=0):
     return "\n".join(lines)
 
 
-assets = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assets = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 out = pathlib.Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
 for name, asset in assets.items():
@@ -36,5 +36,5 @@ for name, asset in assets.items():
     urls = asset.get("cdnURLs") or asset.get("contentURL")
     url = urls[0] if isinstance(urls, list) else urls
     text = resolve(url)
-    (out / f"{name}.txt").write_text(text)
+    (out / f"{name}.txt").write_text(text, encoding="utf-8")
     print(json.dumps({"list": name, "lines": len(text.splitlines()), "kb": len(text) // 1024}))
