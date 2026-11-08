@@ -1,8 +1,9 @@
 # Measures the browser against #456's targets, the way Ardia's bench measured Ardia, Chrome, Arc
 # and Helium (docs/perf/vs-browsers.md in Ardia's repo, its numbers of 2026-10-19 the targets), and
-# says each row's median of its samples, with their range, beside its target. It fails on none:
-# the targets are an M5 Pro's, and a hosted runner is a slower machine shared with other jobs, so
-# the numbers say where ilo stands and how they move from run to run, not whether it's beaten.
+# says each row's median of its samples, with their range, beside its target. Those targets are an
+# M5 Pro's, and a hosted runner is a slower machine shared with other jobs, so they only report.
+# The gate's rows that compare with Chrome are measured against Chrome on the same runner, and of
+# those, memory, which moves under 1 % from run to run, fails the run more than 10 % over Chrome's.
 #
 # Its page is Ardia's: 60 boxes, 120 paragraphs and a clock each second, served from the check's
 # own site, which puts in its title when it first painted ("<id> fcp <ms>") and, each time it's
@@ -16,7 +17,6 @@
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
 #   tabs and settled at 20; 16 switches by ⌘1–⌘8, the key to the page shown; 3 new windows, ⌘N to
 #   their first frame; and memory back at 1 tab, 30 s after closing the others.
-#
 # - Then Google Chrome, where the runner has it, on the same page on the same machine: memory at 1,
 #   10 and 20 tabs and idle at 1 and 20, which the gate compares ilo with, and the run says how far
 #   ilo is from it on each.
@@ -52,7 +52,9 @@ for (let i = 0; i < 120; i++) {
   text.append(p);
 }
 setInterval(() => clock.textContent = new Date().toLocaleTimeString(), 1000);
-const at = (t) => Math.round(performance.timeOrigin + t);
+// Unix ms as the shell's clock reads it: Date.now() is the system's clock now, where timeOrigin's is
+// the one the renderer took at its start, which a VM's clock drifts from, by 70 ms in 10 minutes.
+const at = (t) => Math.round(Date.now() - performance.now() + t);
 new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
     if (entry.name == "first-contentful-paint") {
@@ -67,7 +69,7 @@ document.addEventListener("visibilitychange", () => {
   }
   const n = ++shown;
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    document.title = `${id} shown ${n} ${at(performance.now())}`;
+    document.title = `${id} shown ${n} ${Date.now()}`;
   }));
 });
 </script>
@@ -168,14 +170,25 @@ perf_launch() {
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
-  await "^browser: title [0-9]* $2 fcp " || fail "launch $3's page $2 didn't paint"
-  painted=$(($(perf_painted "$2") - launched))
+  # A tab put back has its last title, an earlier launch's paint, until its page loads.
+  fcp=0
+  for _ in $(seq 300); do
+    fcp=$(sed -n "s/^browser: title [0-9]* $2 fcp //p" "$log" | sort -n | tail -1)
+    [ "${fcp:-0}" -le "$launched" ] || break
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 0.1
+  done
+  [ "${fcp:-0}" -gt "$launched" ] || fail "launch $3's page $2 didn't paint"
+  painted=$((fcp - launched))
   on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
+  # The core holds a launch's first page until uBlock Origin is ready (core/ad_block.cc).
+  held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
   quit
 }
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
+: > "$perf_dir/held"
 # The first launch makes the profile, which the others find, as a user's, so it isn't counted.
 perf_launch "$page?warm" warm warm
 for n in 1 2 3 4 5; do
@@ -183,11 +196,13 @@ for n in 1 2 3 4 5; do
   perf_launch "$page?link$n" "link$n" "link$n"
   echo "$painted" >> "$perf_dir/link"
   echo "$on_screen" >> "$perf_dir/on-screen"
+  echo "${held:-0}" >> "$perf_dir/held"
 done
 for n in 1 2 3 4 5; do
   perf_launch "" link5 "restore$n"
   echo "$painted" >> "$perf_dir/restore"
   echo "$on_screen" >> "$perf_dir/on-screen"
+  echo "${held:-0}" >> "$perf_dir/held"
 done
 perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
   "Ardia 413 ms, Chrome 484 ms"
@@ -195,6 +210,8 @@ perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_
   "Ardia 280 ms, Chrome 424 ms (gate: ≤ Chrome)"
 perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
+perf_row launch-held "Launch, the page held for uBlock Origin" \
+  "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
 step=0
@@ -341,7 +358,8 @@ chrome_open() {
 # Quits Chrome as quit_app does the app, then ends what's left of it.
 chrome_quit() {
   if windows; then
-    python3 -I check/app-windows.py close "$(cat "/proc/$pid/winpid")" || true
+    # Without /F, taskkill asks its windows to close, as their close button does.
+    taskkill //PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
   elif [ "$(uname)" = Darwin ]; then
     osascript -e 'tell application id "com.google.Chrome" to quit' || true
   else
@@ -357,6 +375,13 @@ chrome_quit() {
     "$perf_dir/chrome-left.json" | while read -r left; do
     if windows; then taskkill //F //PID "$left" > /dev/null 2>&1; else kill -9 "$left" 2> /dev/null; fi
   done || true
+  # A Chrome still there would take the next launch's page as a tab and let that launch end.
+  for _ in $(seq 20); do
+    perf_snap chrome-left
+    python3 -I check/usage.py memory "$perf_dir/chrome-left.json" | grep -q ' 0$' && return 0
+    sleep 0.5
+  done
+  fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
 # Launches Chrome on page $1 and sets $pid, or says it didn't stay.
 chrome_launch() {
@@ -406,8 +431,10 @@ else
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
     perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
     chrome_quit
-    # ilo against Chrome on this machine, for each of the gate's rows.
-    python3 -I - "$perf_dir" << 'PY' | tee -a "$perf_dir/gate.txt"
+    # ilo against Chrome on this machine, for each of the gate's rows. Memory moves under 1 % from
+    # run to run, so ilo more than 10 % over Chrome's fails the run. Idle moves 2 to 5 times from one
+    # 10 s window to the next on a hosted runner, so it only reports.
+    python3 -I - "$perf_dir" << 'PY' | tee "$perf_dir/gate.txt"
 import json, os, statistics, sys
 
 d = sys.argv[1]
@@ -417,21 +444,25 @@ def memory(name):
 def idle(name, column):
     with open(os.path.join(d, f"{name}.txt")) as f:
         return statistics.median(float(line.split()[column]) for line in f)
-for label, ilo, chrome, unit in [
-    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB"),
-    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB"),
-    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB"),
-    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%"),
-    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%"),
-    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s"),
-    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s"),
+for label, ilo, chrome, unit, fails in [
+    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", True),
+    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True),
+    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True),
+    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False),
+    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%", False),
+    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s", False),
+    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s", False),
 ]:
     by = f"{(ilo / chrome - 1) * 100:+.0f} %" if chrome else "Chrome none"
-    print(f"perf: gate, {label}: ilo {ilo:.2f} {unit}, Chrome here {chrome:.2f} {unit} ({by})")
+    missed = "missed" if fails and chrome and ilo > chrome * 1.1 else "fails over +10 %" if fails else "reports"
+    print(f"perf: gate, {label}: ilo {ilo:.2f} {unit}, Chrome here {chrome:.2f} {unit} ({by}), {missed}")
 PY
   fi
   snap_procs=
 fi
+missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
+  tr '\n' ';' | sed 's/;$//; s/;/; /g')
+[ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456)"
 echo "ok: perf measured $(wc -l < "$perf_dir/rows.tsv" | tr -d ' ') rows against #456's targets," \
-  "failing on none; each time from a key includes the shell's clock ($perf_clock), $clock ms. Rows:" \
+  "and ilo's memory within 10 % of Chrome's here; each time from a key includes the shell's clock ($perf_clock), $clock ms. Rows:" \
   "$perf_dir/rows.tsv, usage snapshots: $perf_dir/"
