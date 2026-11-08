@@ -382,10 +382,18 @@ await "^browser: passwords [0-9]*: $login\$" ||
   fail "B didn't get the login A saved: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-password.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-expect "^browser: dialog shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
+# Settings asks in Windows' task dialog, and on Linux, which has none, in its dialog, as passwords'
+# does.
+asks=dialog
+! windows || asks=alert
+expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove on B didn't ask first"
-expect '^browser: dialog settled$' "B's dialog asking to remove the login didn't settle"
-send key return
+if [ "$asks" = dialog ]; then
+  expect '^browser: dialog settled$' "B's dialog asking to remove the login didn't settle"
+  send key return
+else
+  send choose Remove
+fi
 expect "^browser: remove login [0-9]* $login\$" "return didn't remove the login on B"
 send clickkey $(drawn "toolbar Sync")
 expect '^browser: settings tab Sync$' "a click on Sync didn't show B's tab again"
