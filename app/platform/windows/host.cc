@@ -3719,6 +3719,11 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
+
 void host_copy_png(const uint8_t* png, size_t size) {
   static const UINT png_format = RegisterClipboardFormatW(L"PNG");
   if (!OpenClipboard(nullptr)) {

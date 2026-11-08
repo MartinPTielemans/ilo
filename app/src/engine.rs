@@ -1659,6 +1659,25 @@ impl Browser for Engine {
         );
     }
 
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: capture::portrait::Background,
+        cx: &mut App,
+    ) {
+        settings::save_portrait_background(background);
+        with_overlays(
+            move |cx| capture::portrait(tab, frame, radius, background, cx),
+            cx,
+        );
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
         // The page's whole view, which is the shape it has where it's live; the card fits it.
         unsafe { bc::bc_tab_picture(tab, request, 0, 0) };

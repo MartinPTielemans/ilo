@@ -7,8 +7,9 @@
 # in a line that wraps in its list, narrow and wide, light and dark. On Windows the toast's Save
 # saves it where the system's save dialog is told, and the page has the keyboard back after.
 # Escape and a second ⇧⌘2 leave capture mode and give the page the keyboard back. File › Capture
-# Full Page copies a picture of the whole long page, past its view. A drag takes the rectangle
-# dragged, and a click outside capture mode and a resize leave it.
+# Full Page copies a picture of the whole long page, past its view. Capture in Portrait Mode's card
+# picks White, and its Capture copies the page on it. A drag takes the rectangle dragged, and a
+# click outside capture mode and a resize leave it.
 
 # The line saying the PNG was copied to the run's own pasteboard, and the toast's buttons after it.
 # On Linux check.sh runs in a display of its own, whose clipboard is the run's, and there's no share
@@ -339,6 +340,38 @@ expect "$copied" \
 expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
   "Capture Full Page didn't show its toast"
 
+# Portrait Mode, from the command bar: its card under the URL field picks White, and Capture copies
+# the page's view on it, as wide again on each side as on the top and bottom.
+bar_command capture-portrait "Capture in Portrait Mode" "portrait mode"
+expect '^browser: portrait card [0-9]* at ' "Capture in Portrait Mode opened no card"
+expect '^browser: portrait swatch white [0-9]* at ' "Portrait Mode's card drew no White"
+../tools/window-screenshot.sh "$pid" "$out/capture-portrait-card.png" || fail "no window to capture"
+send click $(sed -n 's/^browser: portrait swatch white [0-9]* at //p' "$log" | tail -1 |
+  awk '{ printf "%.0f %.0f", $1 + $3 / 2, $2 + $4 / 2 }')
+expect '^browser: portrait chose white$' "White on Portrait Mode's card didn't choose it"
+# Capture is the right of the card's buttons, a row's height over its foot.
+send click $(sed -n 's/^browser: portrait card [0-9]* at //p' "$log" | tail -1 |
+  awk '{ printf "%.0f %.0f", $1 + $3 * 0.75, $2 + $4 - 26 }')
+expect '^browser: tab [0-9]* captured [0-9]*: [0-9]*x[0-9]*, [0-9]* bytes$' \
+  "Portrait Mode's Capture didn't get a picture of the page"
+expect '^browser: portrait white [0-9]*x[0-9]*$' "Portrait Mode didn't put the page on white"
+view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: tab [0-9]* captured ' |
+  sed 's/.*: \([0-9]*\)x\([0-9]*\),.*/\1 \2/')
+portrait=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: portrait white ' |
+  sed 's/^browser: portrait white \([0-9]*\)x\([0-9]*\)$/\1 \2/')
+echo "$view $portrait" | awk '{ exit !($3 > $1 && $3 - $1 == $4 - $2) }' ||
+  fail "Portrait Mode's picture is $portrait, not the page's $view with an even margin"
+expect "$copied" "Portrait Mode didn't copy the PNG to the run's pasteboard"
+# The picture itself, to look at, where the run's clipboard is a headless session's that wl-paste
+# reads. The Mac's pasteboard is the run's own, and Xvfb's has no reader here.
+case "${BROWSER_HEADLESS:-xvfb}" in
+  xvfb) ;;
+  *) WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -t image/png > "$out/capture-portrait.png" ||
+    fail "the clipboard had no PNG after Portrait Mode copied one" ;;
+esac
+expect "^browser: toast shown Screenshot Copied to Clipboard \\[$buttons\\]\$" \
+  "Portrait Mode didn't show its toast"
+
 # A drag takes the rectangle dragged, and its menu comes as a click's box's does. A click outside
 # capture mode, on the sidebar, leaves it, and so does a resize of the window.
 capture_mode page
@@ -378,11 +411,13 @@ none_since '^browser: capture started$' || fail "⇧⌘-click on a link started 
 
 exec 3>&-
 quit
-echo "ok: capture. The box's picture is $size, the full page's $full.$saved_to Media's empty line, in" \
+echo "ok: capture. The box's picture is $size, the full page's $full, Portrait Mode's" \
+  "$(echo "$portrait" | tr ' ' x) on white.$saved_to Media's empty line, in" \
   "lines: ${empty_lines%, }." \
   "Windows: $out/capture-element.png, $out/capture-chosen.png, $out/capture-library.png," \
   "$out/library-media.png, $out/media-menu.png, $out/media-empty-narrow-light.png," \
   "$out/media-empty-narrow-dark.png, $out/media-empty-wide-light.png," \
   "$out/media-empty-wide-dark.png, $out/capture-pill-light.png, $out/capture-menu-light.png," \
-  "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png, $out/capture-cmd-dragged.png." \
+  "$out/capture-pill-dark.png, $out/capture-menu-dark.png, $out/capture-dragged.png, $out/capture-cmd-dragged.png," \
+  "$out/capture-portrait-card.png." \
   "A drag took a rectangle, and a click outside and a resize left capture mode."

@@ -22,6 +22,8 @@ use crate::toast;
 
 actions!(capture, [Leave]);
 
+pub mod portrait;
+
 use crate::tokens::capture::DIM;
 use crate::tokens::capture::GLYPH;
 use crate::tokens::capture::MARGIN;
@@ -152,6 +154,8 @@ pub trait Host {
     /// Saves it in the Library's Media, away from the main thread.
     fn save_to_library(&self, png: &[u8]);
     fn share(&self, png: &[u8], share: Share);
+    /// The desktop's picture as a PNG, for Portrait Mode, where the system gives one.
+    fn desktop_picture(&self) -> Option<Vec<u8>>;
 }
 
 /// The picture of the page that capture mode draws: as it is, and grey around what's chosen.
@@ -231,7 +235,20 @@ pub struct Capture {
     session: Option<Session>,
     /// A full page capture on its way: its tab and request.
     full_page: Option<(u64, u64)>,
+    /// A Portrait Mode capture on its way.
+    portrait: Option<Portrait>,
     requests: u64,
+}
+
+/// A Portrait Mode capture on its way: its tab and request, what the page goes on, and the page's
+/// width in points and corners, for its picture's scale.
+struct Portrait {
+    tab: u64,
+    request: u64,
+    ground: Arc<portrait::Ground>,
+    background: portrait::Background,
+    width: f32,
+    radius: f32,
 }
 
 struct CaptureWindow(WindowHandle<Capture>);
@@ -268,6 +285,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<Capture>> {
             focus: cx.focus_handle(),
             session: None,
             full_page: None,
+            portrait: None,
             requests: 0,
         })
     });
@@ -409,6 +427,39 @@ pub fn full_page(tab: u64, cx: &mut App) {
     toast::show("Capture in Progress", None, PROGRESS_TIME, cx);
 }
 
+/// Captures `tab`'s page as it shows, at `frame` with corners of `radius`, in Portrait Mode on
+/// `background`, and copies it.
+pub fn portrait(
+    tab: u64,
+    frame: Bounds<Pixels>,
+    radius: f32,
+    background: portrait::Background,
+    cx: &mut App,
+) {
+    cx.defer(move |cx| {
+        update(cx, |capture, _, _| {
+            if capture.portrait.is_some() {
+                return;
+            }
+            let desktop = match background {
+                portrait::Background::Desktop => capture.host.desktop_picture(),
+                _ => None,
+            };
+            let ground = portrait::Ground::of(background, desktop.as_deref());
+            let request = capture.request();
+            capture.portrait = Some(Portrait {
+                tab,
+                request,
+                ground: Arc::new(ground),
+                background,
+                width: f32::from(frame.size.width),
+                radius,
+            });
+            capture.host.capture(tab, request, false, None);
+        });
+    });
+}
+
 /// The core's picture for `request`, a PNG, or none if the page couldn't give one.
 pub fn captured(tab: u64, request: u64, png: Option<Vec<u8>>, cx: &mut App) {
     update(cx, |capture, window, cx| {
@@ -527,6 +578,40 @@ impl Capture {
                 self.host.end(tab);
             }
             return self.done(Action::Copy, png, cx);
+        }
+        if let Some(asked) = self
+            .portrait
+            .take_if(|asked| (asked.tab, asked.request) == (tab, request))
+        {
+            if self
+                .session
+                .as_ref()
+                .is_none_or(|session| session.tab != tab)
+            {
+                self.host.end(tab);
+            }
+            let Some(png) = png else {
+                return self.done(Action::Copy, None, cx);
+            };
+            // Away from the main thread, as the page is millions of pixels.
+            let composed = cx.background_spawn(async move {
+                portrait::portrait_png(&png, &asked.ground, asked.width, asked.radius)
+                    .map(|(png, size)| (png, size, asked.background))
+            });
+            cx.spawn_in(window, async move |capture, cx| {
+                let composed = composed.await;
+                capture
+                    .update_in(cx, |capture, _, cx| {
+                        if let Some((_, (width, height), background)) = &composed {
+                            // check.sh reads this line.
+                            log!("browser: portrait {} {width}x{height}", background.name());
+                        }
+                        capture.done(Action::Copy, composed.map(|(png, ..)| png), cx)
+                    })
+                    .ok();
+            })
+            .detach();
+            return;
         }
         let Some(session) = self.session.as_mut().filter(|session| session.tab == tab) else {
             return;

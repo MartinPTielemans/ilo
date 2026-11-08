@@ -122,6 +122,8 @@ pub(super) struct Recorder {
     /// Whether Show Space Header last kept a lone unnamed Space's name row, or Hide Space Header
     /// hid it.
     pub(super) lone_header: Cell<Option<bool>>,
+    /// Portrait Mode can put a page on the desktop's picture, as the Mac's host can.
+    pub(super) desktop_picture: Cell<bool>,
     /// The share services it lists for any page.
     pub(super) share_services: RefCell<Vec<SharedString>>,
     /// The system has a share sheet of its own.
@@ -1559,6 +1561,26 @@ impl Browser for Recorder {
         self.record(format!(
             "capture {what} {tab} at {x} {y} {width} {height} {tone}{from}"
         ));
+    }
+
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        _: &mut App,
+    ) {
+        let (x, y) = (f32::from(frame.origin.x), f32::from(frame.origin.y));
+        let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
+        let background = background.name();
+        self.record(format!(
+            "capture portrait {tab} at {x} {y} {width} {height} {radius} on {background}"
+        ));
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        self.desktop_picture.get()
     }
 
     fn page_picture(&self, tab: u64, request: u64, cx: &mut App) {

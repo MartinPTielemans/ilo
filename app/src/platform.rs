@@ -372,6 +372,10 @@ unsafe extern "C" {
     // GPUI's on Linux (platform/linux/system.rs).
     #[cfg(not(target_os = "linux"))]
     pub fn host_copy_png(png: *const u8, size: usize);
+    pub fn host_desktop_picture(
+        context: *mut c_void,
+        png: extern "C" fn(context: *mut c_void, data: *const u8, size: usize),
+    ) -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_save_png(ui_view: *mut c_void, png: *const u8, size: usize);
     pub fn host_share_png(

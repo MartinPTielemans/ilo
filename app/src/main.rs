@@ -481,6 +481,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_shortcuts(cx);
         settings::read_appearance(cx);
         settings::read_lone_header(cx);
+        settings::read_portrait_background(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);

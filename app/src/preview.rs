@@ -1184,6 +1184,16 @@ impl Browser for Fake {
     ) {
     }
 
+    fn capture_portrait(
+        &self,
+        _: u64,
+        _: Bounds<Pixels>,
+        _: f32,
+        _: browser::capture::portrait::Background,
+        _: &mut App,
+    ) {
+    }
+
     fn page_picture(&self, _: u64, _: u64, _: &mut App) {}
 
     fn find_next(&self, _: u64, _: bool, _: &mut App) {}
