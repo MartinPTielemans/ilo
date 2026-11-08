@@ -22,6 +22,16 @@ public func hostTranslationTarget(_ out: UnsafeMutablePointer<CChar>, _ capacity
   return copy(code, out, capacity)
 }
 
+// The languages the user reads, those the system prefers, each a language alone, separated by
+// commas: a page in one of them isn't offered translation, as Arc's isn't in a preferred language.
+@_cdecl("host_preferred_languages")
+public func hostPreferredLanguages(_ out: UnsafeMutablePointer<CChar>, _ capacity: Int) -> Bool {
+  let codes = Locale.preferredLanguages.compactMap {
+    Locale.Language(identifier: $0).languageCode?.identifier
+  }
+  return !codes.isEmpty && copy(codes.joined(separator: ","), out, capacity)
+}
+
 // The language's name in the user's own, such as "Spanish" for "es".
 @_cdecl("host_language_name")
 public func hostLanguageName(

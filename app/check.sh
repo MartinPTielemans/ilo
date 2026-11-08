@@ -167,7 +167,9 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
+# The translate run always translates Spanish, which a failed one left.
+rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
+  "$(dirname "$saved")/Always Translated"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its
