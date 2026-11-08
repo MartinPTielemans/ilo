@@ -119,9 +119,10 @@ expect '^browser: settings shown ' "Settings… didn't show Settings"
 send clickkey $(drawn "toolbar Features")
 expect '^browser: settings tab Features$' "a click on Features didn't show its section"
 settings_drew Features
-remove=$(drawn "always translated es") || fail "Settings › Features didn't list Spanish"
+# At the section's foot, under the card's edge where the screen is short: in_sight scrolls it up.
+in_sight "always translated es" || fail "Settings › Features didn't list Spanish"
 ../tools/window-screenshot.sh "$pid" "$out/translate-settings.png" all || fail "no window to capture"
-send clickkey $remove
+send clickkey $at
 expect '^browser: always translate es off$' "Remove didn't take Spanish off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
