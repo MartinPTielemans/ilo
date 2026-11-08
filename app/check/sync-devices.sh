@@ -359,8 +359,11 @@ send key return
 expect "^browser: offer $tab save check@example.test " "A's login brought no offer to save it"
 expect "^browser: offer $tab takes input\$" "A's offer to save the login never took input"
 # The offer takes the keyboard with a click in its field, 56 in and 70 down, as passwords' does.
-offer_at=$(sed -n 's/^browser: offer at \([0-9]*\) \([0-9]*\) .*/\1 \2/p' "$log" | tail -1)
-[ -n "$offer_at" ] || fail "A's offer didn't say where it is"
+# Its card is the window's 320x180 child, which the driver lists on every platform.
+send layout
+offer_at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout child' |
+  grep ' 320x180$' | head -1 | sed 's/^browser: layout child \([0-9]*\),\([0-9]*\) .*/\1 \2/')
+[ -n "$offer_at" ] || fail "A's offer card isn't over its window"
 send click $((${offer_at% *} + 56)) $((${offer_at#* } + 70))
 send key return
 expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save A's login"
