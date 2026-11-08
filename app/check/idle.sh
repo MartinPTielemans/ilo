@@ -55,7 +55,9 @@ cpu() {
 # browser's own as "browser", a line each: "PID TICKS TYPE".
 cpu_each() {
   for p in $(pgrep -f -- "$procs"); do
-    kind=$(tr '\0' '\n' < "/proc/$p/cmdline" 2> /dev/null | sed -n 's/^--type=//p' | head -1)
+    # Chromium sets its helpers' titles, so their arguments may be one string.
+    kind=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -o -e '--type=[^ ]*' | head -1)
+    kind=${kind#--type=}
     sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null | awk -v p="$p" -v k="${kind:-browser}" '{ print p, $12 + $13, k }'
   done
 }
@@ -86,7 +88,7 @@ idle_trace() {
   idle_where=
   if [ -d /proc ] && ! windows; then
     idle_where=$(cpu_each | awk -v hz="$(getconf CLK_TCK)" 'NR == FNR { from[$1] = $2; next }
-      { took[$3] += $2 - from[$1] } END { for (k in took) printf "%.2f %s\n", took[k] / hz, k }' \
+      { took[$3] += $2 - from[$1] } END { for (k in took) if (took[k] > 0) printf "%.2f %s\n", took[k] / hz, k }' \
       "$out/idle/$1-cpu-from" - | sort -rn | awk '{ printf "%s%s %s s", (NR > 1 ? ", " : ""), $2, $1 }')
   fi
   idle_cpu=$(echo "$idle_from $(cpu) $(date +%s)" | awk '{
