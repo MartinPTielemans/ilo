@@ -1775,6 +1775,7 @@ impl Browser for Engine {
                 this.or_else(|| windows.iter().find(|w| w.regular()))
                     .cloned()
             });
+            crate::window_opening::time_new_window(asked);
             if from.is_some()
                 && let Some(opened) = open_window(from, None, cx)
             {

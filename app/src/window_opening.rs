@@ -149,6 +149,23 @@ pub(crate) fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id
     open_window(Some(from), private.map(Own::Private), cx)
 }
 
+thread_local! {
+    /// When ⌘N asked for the window being opened, for the perf run's steps of it (#2141).
+    static NEW_WINDOW_ASKED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+}
+
+/// The window opened next is ⌘N's, asked for at `asked`.
+pub(crate) fn time_new_window(asked: std::time::Instant) {
+    NEW_WINDOW_ASKED.set(Some(asked));
+}
+
+/// The step of ⌘N's window just done, and when since the key, for the perf run (#2141).
+fn new_window_step(step: &str) {
+    if let Some(asked) = NEW_WINDOW_ASKED.get() {
+        log!("browser: new window {step} at {:.1} ms", asked.elapsed().as_secs_f64() * 1000.);
+    }
+}
+
 /// Opens a browser window and the shell inside it under the page, and returns it. The first opens
 /// the overlays every window shares and the Spaces as the user left them. Another, from `from`,
 /// starts with its shell's state and shows its Space with no page, as ⌘N's window does. With
@@ -187,7 +204,9 @@ pub(crate) fn open_window_as(
     #[cfg(target_os = "linux")]
     let ui_view = gpui_linux::new_host_window().unwrap_or(0) as usize as *mut c_void;
     let after = from.as_ref().map(|from| from.ui_view);
+    new_window_step("asked the core");
     let id = open_browser_window(ui_view, after, own, saved, at)?;
+    new_window_step("made by the core");
     // A saved window maximized as it quit, at the frame it un-maximizes to, as the core kept it.
     // Before its UI opens, so that starts at the maximized size.
     if let Some(index) =
@@ -337,6 +356,7 @@ pub(crate) fn open_window_as(
         shell.update(cx, |shell, cx| shell.set_battery_saver(battery, cx));
         shell
     });
+    new_window_step("made by GPUI");
     let window = match window {
         Ok(window) => window,
         Err(error) => {
@@ -396,9 +416,12 @@ pub(crate) fn open_window_as(
         },
         _ => unsafe { platform::host_show_window(ui_view) },
     }
+    new_window_step("put on screen");
     log_frame(id, ui_view);
     if !first {
         finish_opening(id, ui_view, window, true, saved.is_none(), own, cx);
+        new_window_step("given its overlays");
+        NEW_WINDOW_ASKED.set(None);
         return Some(id);
     }
     // check.sh reads this line.

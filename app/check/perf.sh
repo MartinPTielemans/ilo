@@ -308,16 +308,19 @@ perf_session() {
       # The Mac's ⌘N takes ten times Linux's (#2141): a trace of every thread, a sample a
       # millisecond, from just before the key to past the window's first frame. Sampling slows
       # the browser, so this one's time isn't counted.
-      sample "$pid" 5 1 -mayDie -file "$PWD/$perf_dir/new-window.sample.txt" \
+      sample "$pid" 10 1 -mayDie -file "$PWD/$perf_dir/new-window.sample.txt" \
         > "$perf_dir/sample.log" 2>&1 &
       sampler=$!
-      # Its first line, that it's sampling, can wait in its output's buffer: 1–2 s is enough.
-      perf_until $(($(date +%s) + 2))
+      # It reads every image the browser has loaded before it starts, which took over 2 s here.
+      perf_until $(($(date +%s) + 4))
     fi
     send key n cmd
     expect_late '^browser: new window first frame at [0-9.]* ms$' "⌘N's window drew no frame"
     sed -n "/^browser: drive $step: /,\$p" "$log" |
       sed -n 's/^browser: new window first frame at \([0-9.]*\) ms$/\1/p' | head -1 >> "$perf_dir/newwindow${sampler:+-traced}"
+    # Each step of making the window, from the key, so the time says where it went.
+    sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n "s/^browser: new window \(.* at [0-9.]* ms\)$/perf: new window $round: \1/p"
     opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
     expect_late '^browser: command bar shown$' "⌘N's window didn't open the command bar"
     send key escape
