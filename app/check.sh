@@ -9,7 +9,8 @@
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
-# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, and widevine,
+# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
+# the same with the browser's own, and widevine,
 # Linux's alone, downloads Google's Widevine module, so they need the network and run only when
 # named: ./check.sh store.
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
@@ -81,7 +82,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate"
-named="store sync-extensions adblock-live adblock-parity widevine updates nightly update-checks keychain shots tab-drag"
+named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;

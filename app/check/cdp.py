@@ -34,7 +34,9 @@ takes a command a line on its standard input:
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
-                  blocker's, then logs "cdp: recording requests"
+                  blocker's, and "answered" with its id for a response from no server, network
+                  cache or service worker, as the browser's own ad blocker's stand-in is, then
+                  logs "cdp: recording requests"
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -174,6 +176,12 @@ def record(message):
                 "at": int(params["wallTime"] * 1000)}
     elif method == "Network.loadingFailed":
         line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
+    elif method == "Network.responseReceived":
+        response = params["response"]
+        kept = ("fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "fromEarlyHints")
+        if response.get("remoteIPAddress") or any(response.get(key) for key in kept):
+            return True
+        line = {"event": "answered", "id": params["requestId"]}
     else:
         return False
     recording.write(json.dumps(line) + "\n")

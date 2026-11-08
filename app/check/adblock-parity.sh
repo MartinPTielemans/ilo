@@ -1,17 +1,19 @@
 # The parity gate a native ad block engine has to pass before it takes uBlock Origin's place
-# (#2111), run with the engine the build has: uBlock Origin, until there's another. In a new
-# profile, once its lists block, each site in check/adblock-sites.txt opens in one tab. For each,
+# (#2111), run with uBlock Origin, or with the browser's own engine where engine is native, as
+# adblock-native's is. In a new profile, once its lists block, each site in check/adblock-sites.txt
+# opens in one tab. For each,
 # the run gives the time from Return in the command bar to the page's load, the requests it made,
 # and those blocked or answered with a stand-in, with their hosts, which DevTools records (check/
 # cdp.py), as it sees what an extension's webRequest blocks where the net log doesn't. It
 # captures the window 8 s after the load, to show the ads that got through. Off the Mac it gives the
-# most memory uBlock Origin's process took. With ADBLOCK_PARITY_BASELINE naming the sites.tsv an
-# earlier run left, it fails where this run is worse:
+# most memory the browser's process took, where the native engine runs, and uBlock Origin's. With
+# ADBLOCK_PARITY_BASELINE naming the sites.tsv an earlier run left, it fails where this run is worse:
 #   - a site that loaded there and doesn't here;
 #   - a host blocked on a site there that this run let through on that site.
 # A host neither run requested counts for neither, as the ads a site serves change from load to
 # load. It needs the network and the sites, so it runs only when named: ./check.sh adblock-parity.
 # It leaves adblock-parity/sites.tsv, a capture a site, and the requests recorded.
+engine=${engine:-ublock}
 
 serve
 # The probe's title says whether Google's ad script loaded, was blocked, or was blocked by uBlock
@@ -27,6 +29,7 @@ function loaded() {
 <script src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js" onload="loaded()"
   onerror="document.title = &quot;ad script blocked&quot;"></script>' > "$out/site/parity.html"
 dir="$out/adblock-parity"
+[ "$engine" = ublock ] || dir="$out/adblock-$engine"
 rm -rf "$dir"
 mkdir -p "$dir/profile"
 log="$out/adblock-parity.log"
@@ -36,7 +39,9 @@ starts="$dir/starts.txt"
 step=0
 ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
-start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html
+engine_switch=
+[ "$engine" = ublock ] || engine_switch=--ad-block-engine=$engine
+start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html $engine_switch
 await_load
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
@@ -95,14 +100,20 @@ while read -r url <&4; do
     fail "no window to capture"
 done 4< check/adblock-sites.txt
 [ -s "$starts" ] || fail "no site opened"
-if ! [ "$(uname)" = Darwin ]; then
-  ublock=$(pgrep -f "$procs.*--extension-process" | head -1)
+# The most memory a process took, in MB.
+peak() {
   if windows; then
-    peaks=$(ID=$ublock powershell.exe -NoProfile -NonInteractive -Command '$p = Get-Process -Id $env:ID;
-      "$([math]::Round($p.PeakWorkingSet64 / 1MB))"' | tr -d '\r')
+    ID=$1 powershell.exe -NoProfile -NonInteractive -Command '$p = Get-Process -Id $env:ID;
+      "$([math]::Round($p.PeakWorkingSet64 / 1MB))"' | tr -d '\r'
   else
-    peaks=$(awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$ublock/status")
+    awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$1/status"
   fi
+}
+memory=
+if ! [ "$(uname)" = Darwin ]; then
+  memory=". The browser's process held at most $(peak "$pid") MB"
+  ublock=$(pgrep -f "$procs.*--extension-process" | head -1)
+  [ -z "$ublock" ] || memory="$memory, uBlock Origin's at most $(peak "$ublock") MB"
 fi
 exec 3>&- 5>&-
 quit
@@ -129,6 +140,8 @@ for line in open(recorded, encoding="utf-8"):
         request["how"] = "stand-in"
     elif event["event"] == "failed" and request and "BLOCKED_BY_CLIENT" in event["error"]:
         request["how"] = "blocked"
+    elif event["event"] == "answered" and request and request["how"] == "allowed":
+        request["how"] = "stand-in"
 
 sites = []
 for line in open(starts, encoding="utf-8"):
@@ -176,7 +189,5 @@ if worse:
     print("worse than the baseline:\n  " + "\n  ".join(worse))
     sys.exit(1)
 PY
-memory=
-[ -z "${peaks:-}" ] || memory=". uBlock Origin's process held at most $peaks MB"
-echo "adblock-parity: $(cat "$result")$memory. Per site: $dir/sites.tsv"
-echo "ok: adblock-parity, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }with the window captured 8 s after each site loaded in $dir"
+echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
+echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }with the window captured 8 s after each site loaded in $dir"
