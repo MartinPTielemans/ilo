@@ -32,6 +32,7 @@ One file per area, so lanes working on different areas edit different files. A n
 - [DevTools](devtools.md)
 - [Developer Mode](developer-mode.md)
 - [Capture](capture.md)
+- [Boosts](boosts.md)
 - [Import](import.md)
 - [Updates](updates.md)
 - [Keyboard](keyboard.md)

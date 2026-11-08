@@ -43,6 +43,7 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+mod boost;
 mod browser;
 mod card_strip;
 mod cast;
@@ -1642,6 +1643,13 @@ pub struct Shell {
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// The tab whose Boost card is open, the tab whose page Zap is on, and where the card was drawn
+    /// last, which the log says when it changes (boost.rs).
+    boost_card: Option<u64>,
+    zapping: Option<u64>,
+    boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Library › Boosts' list, the window's profile's, read as it's shown.
+    boost_list: Vec<crate::boosts::Boost>,
     /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
     battery_saver: Option<i32>,
     /// Where its leaf was drawn last, which the log says when it changes.
@@ -1979,6 +1987,10 @@ impl Shell {
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            boost_card: None,
+            zapping: None,
+            boost_card_drawn: Rc::default(),
+            boost_list: Vec::new(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -4417,6 +4429,7 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.boost_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))

@@ -2876,6 +2876,8 @@ impl site_controls::Host for PreviewSiteControls {
     fn set_ad_blocking(&self, _: u64, _: bool) {}
     fn set_developer_mode(&self, _: u64, _: bool) {}
 
+    fn set_boost(&self, _: u64, _: bool) {}
+
     fn run(&self, _: site_controls::Run, _: u64, _: &mut App) {}
 
     fn menu(
@@ -2944,6 +2946,13 @@ fn preview_site() -> Site {
         devices: Vec::new(),
         ad_blocking: Some(true),
         developer_mode: Some(false),
+        // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
+        boostable: true,
+        boost: match std::env::var("PREVIEW_BOOST").as_deref() {
+            Ok("on") => Some(true),
+            Ok("off") => Some(false),
+            _ => None,
+        },
     }
 }
 

@@ -16,7 +16,7 @@ use crate::theme::Appearance;
 use crate::usage::{self, Usage};
 
 use super::{
-    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
     browser::WindowButton,
     clean_link,
     drag::dropped_urls,
@@ -207,6 +207,12 @@ pub enum Command {
     ViewMedia,
     /// Opens the Library on its agents' past tasks, or closes it there.
     ViewAgents,
+    /// Opens the card for a Boost of the site of the page shown, which has none yet (#695).
+    NewBoost,
+    /// Opens the card of the Boost of the site of the page shown.
+    EditBoost,
+    /// Opens the Library on the profile's Boosts, or closes it there.
+    ViewBoosts,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -675,6 +681,21 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "View Agents…",
         Command::ViewAgents,
         &["agent history", "past tasks"],
+    ),
+    (
+        "New Boost",
+        Command::NewBoost,
+        &["zap", "css", "style"],
+    ),
+    (
+        "Edit Boost",
+        Command::EditBoost,
+        &["zap", "css", "style"],
+    ),
+    (
+        "View Boosts…",
+        Command::ViewBoosts,
+        &["zap", "css", "style"],
     ),
     ("View History", Command::ViewHistory, &[]),
     (
@@ -1207,6 +1228,9 @@ impl Command {
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
             Command::ViewAgents => "view-agents",
+            Command::NewBoost => "new-boost",
+            Command::EditBoost => "edit-boost",
+            Command::ViewBoosts => "view-boosts",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1331,6 +1355,7 @@ pub fn bind_keys(cx: &mut App) {
     extensions::bind(cx);
     agent_bar::bind(cx);
     drm_note::bind(cx);
+    boost::bind(cx);
     sidebar_keys::bind(cx);
 }
 
@@ -1701,6 +1726,8 @@ impl Shell {
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
             Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
+            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -2155,6 +2182,9 @@ impl Shell {
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
             Command::TurnOffBatterySaver => self.battery_saver.is_some(),
+            Command::NewBoost | Command::EditBoost | Command::ViewBoosts => {
+                self.offers_boost(command)
+            }
             Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
             // As the menus' New Profile: only an empty Space changes profile.
             Command::ChangeProfile(None) => {
@@ -2404,6 +2434,10 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::ViewArchive
             | Command::ClearArchive
             | Command::ViewAgents
+            // It keeps nothing, so it makes no Boost, though it shows its profile's.
+            | Command::NewBoost
+            | Command::EditBoost
+            | Command::ViewBoosts
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData

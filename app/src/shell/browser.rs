@@ -360,6 +360,25 @@ pub trait Browser {
     }
     /// Keeps `text` as `profile`'s past tasks, as `agent_history` reads them.
     fn set_agent_history(&self, _profile: u64, _text: &str) {}
+    /// Reads `profile`'s Boosts (crate::boosts) from its folder and has the core show them, and
+    /// shows each change to the folder as it's saved. The app does this for every profile at
+    /// launch; here for the profile of a window that comes before it.
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        if let Some(folder) = self.profile_folder(profile) {
+            let changes = crate::boosts::with(|boosts| boosts.load(profile, folder));
+            self.show_boosts(changes, cx);
+        }
+    }
+    /// Has the core show each site's Boost CSS as it changed, in its profile's pages. The user's
+    /// alone: agents get no path to a Boost.
+    fn show_boosts(&self, _changes: Vec<crate::boosts::Change>, _cx: &mut App) {}
+    /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
+    /// which comes back in `Shell::boost_zapped`. The user's alone.
+    fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Opens the file at `path` in the user's text editor.
+    fn edit_file(&self, _path: &std::path::Path, _cx: &mut App) {}
+    /// Shows the file at `path` in the system's file manager.
+    fn show_file(&self, _path: &std::path::Path, _cx: &mut App) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;

@@ -42,6 +42,7 @@ pub(crate) unsafe extern "C" fn spaces_changed(_: *mut c_void) {
         .collect();
     little_sites_host::profiles_changed(&named);
     bar_picks_host::profiles_changed(&named);
+    boosts_host::profiles_changed(&named);
     update_shells(|shell, cx| {
         shell.set_profiles(profiles.clone(), cx);
         shell.set_spaces(spaces.clone(), cx);

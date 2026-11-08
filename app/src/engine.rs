@@ -951,6 +951,28 @@ impl Browser for Engine {
         bar_picks_host::folder(profile)
     }
 
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        boosts_host::load(profile, cx);
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, _: &mut App) {
+        boosts_host::show(changes);
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        // check.sh reads this line.
+        log!("browser: zap {tab} {}", if on { "on" } else { "off" });
+        unsafe { bc::bc_tab_boost_zap(tab, on) };
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::edit_file(path);
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::show_file(path);
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         bar_picks_host::sessions(profile)
     }
