@@ -510,9 +510,8 @@ expect "^browser: window closed $private\$" "⇧⌘W didn't close the private wi
 send window 1
 
 # The Cast card, from View › Cast… and from the page menu, with whatever devices the network has,
-# none clicked. Linux alone: the Mac asks for the local network on the screen as Chrome looks with
-# DIAL, and Windows' firewall may.
-if [ "$(uname)" = Linux ]; then
+# none clicked.
+if true; then
   send menu "Cast…"
   expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
   expect "^browser: cast $b at " "the Cast card wasn't drawn"
