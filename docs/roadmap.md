@@ -52,7 +52,7 @@ Per platform: the platform layer, packaging, updater, signing. Linux runs on X11
 
 ## Performance gate
 
-Measured on every release against Chrome, Helium and Ardia, following the method in Ardia's `docs/perf/vs-browsers.md`.
+Measured on every release against Chrome, Helium and Ardia, following the method in Ardia's `docs/perf/vs-browsers.md`. Between releases, `app/check.sh perf` takes the same measures on a check runner, with Chrome on the same machine. A runner is slower than a real Mac and shared with other jobs, so only memory at 10 and 20 tabs fails it, at 10 % over Chrome's (#456).
 
 | Metric | Target |
 |---|---|
