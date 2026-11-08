@@ -28,6 +28,12 @@
 
 serve
 perf_dir="$out/perf"
+engine_switch=
+# perf-native sets engine=native for the browser's own ad blocker (#2111), which holds no page.
+if [ -n "${engine:-}" ] && [ "$engine" != ublock ]; then
+  perf_dir="$out/perf-$engine"
+  engine_switch=--ad-block-engine=$engine
+fi
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
@@ -166,9 +172,9 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   else
-    BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
@@ -218,7 +224,7 @@ log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
-BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $engine_switch \
   < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
