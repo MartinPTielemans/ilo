@@ -596,6 +596,7 @@ source_set("browser_core") {
     deps += [
       "//chrome/browser/ui/views:native_widget_factory",
       "//third_party/wayland:wayland_client",
+      "//third_party/wayland-protocols:xdg_activation",
       "//ui/aura",
       "//ui/base/ime",
       "//ui/compositor",

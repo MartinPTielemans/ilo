@@ -736,9 +736,8 @@ class WindowViews : public views::WidgetObserver,
   // A window can't map under Wayland without the compositor giving it the keyboard, as sway and
   // Hyprland do, so a Mini Player takes it from the browser window as it shows, where on the Mac
   // and X11 it never has it (#1961, #2060). The window has it back with an xdg-activation token,
-  // which Chromium's Activate asks for, once each time the Mini Player shows: a click in it later
-  // gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard after
-  // telling the window it lost it.
+  // once each time the Mini Player shows: a click in it later gives it the keys. Posted, as the
+  // compositor tells the Mini Player it has the keyboard after telling the window it lost it.
   void OnWidgetActivationChanged(views::Widget*, bool active) override {
     if (!active && OnWayland()) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -759,7 +758,9 @@ class WindowViews : public views::WidgetObserver,
     taken_at_show = MiniPlayerShows();
     // check.sh reads this line.
     LOG(ERROR) << "browser: mini player gave the keyboard back";
-    widget_->Activate();
+    if (!TakeKeyboardBack(widget_)) {
+      widget_->Activate();
+    }
   }
 
   // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
