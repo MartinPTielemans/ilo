@@ -155,13 +155,18 @@ int main(int argc, const char* argv[]) {
     }
     AXUIElementRef center = NULL;
     for (int tries = 0; tries < 150; ++tries) {
-      NSArray* running = [NSRunningApplication
-          runningApplicationsWithBundleIdentifier:@"com.apple.notificationcenterui"];
-      if (running.count) {
+      NSRunningApplication* found_app = nil;
+      for (NSRunningApplication* app in NSWorkspace.sharedWorkspace.runningApplications) {
+        if ([app.bundleIdentifier isEqualToString:@"com.apple.notificationcenterui"] ||
+            [app.executableURL.lastPathComponent isEqualToString:@"NotificationCenter"]) {
+          found_app = app;
+        }
+      }
+      if (found_app) {
         if (center) {
           CFRelease(center);
         }
-        center = AXUIElementCreateApplication([running[0] processIdentifier]);
+        center = AXUIElementCreateApplication(found_app.processIdentifier);
         NSString* action = (__bridge NSString*)kAXPressAction;
         AXUIElementRef found = button ? FindButton(center, text, button, 0) : Find(center, text, 0);
         if (!found && button) {
@@ -181,6 +186,8 @@ int main(int argc, const char* argv[]) {
            button ? ", button " : "", button ? button.UTF8String : "");
     if (center) {
       Print(center, 0);
+    } else {
+      printf("banner: Notification Center isn't running\n");
     }
     return 1;
   }
