@@ -96,13 +96,18 @@ void LoadArchive(std::vector<ArchivedTab> archived) {
   }
 }
 
-void Archive(bc_id tab, const GURL& url, const std::string& title, bool little) {
+void Archive(bc_id tab,
+             const GURL& url,
+             const std::string& title,
+             const base::Uuid& space,
+             bool little) {
   Tabs().insert(Tabs().begin(), {.id = NewId(),
                                  .url = url,
                                  .title = title,
                                  .archived = base::Time::Now(),
                                  .tab = tab,
-                                 .little = little});
+                                 .little = little,
+                                 .space = space});
   Prune();
   Changed();
 }

@@ -91,6 +91,10 @@ impl Host for Recorder {
         self.record(format!("remove {id}"));
     }
 
+    fn choose(&self, what: Choice, on: bool) {
+        self.record(format!("choose {what:?} {on}"));
+    }
+
     fn copy_secret(&self, text: &str, kept: Duration, _: &mut App) {
         self.record(format!(
             "copy secret {} {}",
@@ -567,6 +571,28 @@ fn the_devices_and_remove(cx: &mut TestAppContext) {
     assert!(!tab.drawn("remove this"));
     tab.click("remove phone");
     assert_eq!(tab.host.take(), ["remove phone"]);
+}
+
+/// Signed in, each of what else can sync has its switch, which asks the core for the other way,
+/// and shows what the core last said: a choice it didn't take goes back.
+#[gpui::test]
+fn the_choices_switch_both_ways(cx: &mut TestAppContext) {
+    let on = State {
+        extensions: true,
+        ..state(Status::On)
+    };
+    let mut tab = shown(on.clone(), cx);
+    tab.host.take();
+    tab.click("switch settings");
+    tab.click("switch extensions");
+    assert_eq!(
+        tab.host.take(),
+        ["choose Settings true", "choose Extensions false"]
+    );
+    tab.set(on);
+    tab.host.take();
+    tab.click("switch settings");
+    assert_eq!(tab.host.take(), ["choose Settings true"]);
 }
 
 /// Show Recovery Words… asks first, as anyone who sees them can read what syncs.

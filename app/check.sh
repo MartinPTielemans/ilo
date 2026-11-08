@@ -7,9 +7,10 @@
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
 #   appearance about sync sync-account sync-devices switch-frames devices filled scripting
 #   notifications calls battery policies hosts idle handback webrtc count
-# The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
-# uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
-# need the network and run only when named: ./check.sh store.
+# The store run installs from Google's Web Store, as sync-extensions does on one device for the
+# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists and
+# widevine, Linux's alone, downloads Google's Widevine module, so they need the network and run
+# only when named: ./check.sh store.
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
 # which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
 # keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
@@ -79,7 +80,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count"
-named="store adblock-live widevine updates nightly update-checks keychain shots tab-drag"
+named="store sync-extensions adblock-live widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -89,7 +90,7 @@ done
 # A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
 # trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
 # file the check sources is parsed before any run starts.
-for file in lib site ilo-server ${*:-$runs}; do
+for file in lib site ilo-server webstore ${*:-$runs}; do
   why=$(sh -n "check/$file.sh" 2>&1) || {
     echo "FAIL: check/$file.sh doesn't parse: $why" >&2
     exit 1

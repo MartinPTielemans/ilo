@@ -40,6 +40,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
+#include "ui/base/ime/input_method.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
@@ -47,10 +48,13 @@
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
@@ -85,8 +89,8 @@
 // keyboard (bc_window_ui_takes_keyboard) and asks whose it is.
 // The app's overlays, such as the command bar, show over the pages: on Wayland as subsurfaces over
 // the window's, on X11 as X windows of their own over it, which GPUI places.
-// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard): the page or UI that had
-// it keeps its focus, and has it back as the overlay closes.
+// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard), and the page or UI that
+// had it has it back as the overlay closes. The page is told it lost it meanwhile, as on the Mac.
 
 namespace browser_core::platform {
 
@@ -213,7 +217,20 @@ struct Slot {
   bool bottom_corners_only = false;
   // Its corners' own, for a link preview's page, else the window's.
   std::optional<double> corner_radius;
+  // The scale a pane draws at, and the point in the window's content it's drawn smaller about
+  // (ScalePages).
+  float scale = 1;
+  gfx::PointF scaled_about;
 };
+
+// Where |slot| shows in the window's content, drawn at its scale.
+gfx::RectF ShownFrame(const Slot& slot) {
+  const gfx::Rect frame = slot.holder->bounds();
+  const gfx::PointF& about = slot.scaled_about;
+  const float s = slot.scale;
+  return gfx::RectF(about.x() + s * (frame.x() - about.x()),
+                    about.y() + s * (frame.y() - about.y()), s * frame.width(), s * frame.height());
+}
 
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
@@ -281,6 +298,7 @@ class WindowViews : public views::WidgetObserver,
   Slot& preview() { return preview_; }
   FocusRing& ring() { return ring_; }
   void set_corner_radius(double radius) { corner_radius_ = radius; }
+  void set_page_scale(float scale) { page_scale_ = scale; }
   bool held() const { return held_; }
   void set_held(bool held) { held_ = held; }
   void set_preview_color(SkColor4f color) { preview_color_ = color; }
@@ -403,6 +421,38 @@ class WindowViews : public views::WidgetObserver,
     LayOut(side_panel_, size);
     LayOut(preview_, size);
     ring_.Fit();
+    ScalePanes();
+  }
+
+  // Draws the panes, with their DevTools and ring, at page_scale_ of their size about the centre of
+  // their frames, by their holders' transforms, so they're never laid out again for it.
+  void ScalePanes() {
+    gfx::Rect frames;
+    for (const Slot& slot : panes_) {
+      if (slot.holder && slot.page) {
+        frames.Union(slot.holder->bounds());
+      }
+    }
+    const gfx::PointF about(frames.x() + frames.width() / 2.f, frames.y() + frames.height() / 2.f);
+    for (Slot& slot : panes_) {
+      if (!slot.holder) {
+        continue;
+      }
+      slot.scale = page_scale_;
+      slot.scaled_about = about;
+      // A layer's transform is about its own top-left.
+      const float in_x = about.x() - slot.holder->bounds().x();
+      const float in_y = about.y() - slot.holder->bounds().y();
+      gfx::Transform transform;
+      if (page_scale_ != 1) {
+        transform.Translate(in_x, in_y);
+        transform.Scale(page_scale_, page_scale_);
+        transform.Translate(-in_x, -in_y);
+      }
+      if (slot.holder->transform() != transform) {
+        slot.holder->SetTransform(transform);
+      }
+    }
   }
 
   void LayOut(Slot& slot, const gfx::Size& window_size) {
@@ -446,7 +496,7 @@ class WindowViews : public views::WidgetObserver,
     if (OnWayland()) {
       std::vector<gfx::Rect> region;
       for (const Slot* slot : shown) {
-        region.push_back(gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale));
+        region.push_back(gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)));
       }
       if (edge) {
         const int w = pixels.width();
@@ -495,11 +545,11 @@ class WindowViews : public views::WidgetObserver,
         .rectangles = {XRectangle(input)},
     });
     for (const Slot* slot : shown) {
-      const gfx::Rect frame = gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale);
+      const gfx::Rect frame = gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale));
       std::vector<x11::Rectangle> hole;
-      for (gfx::Rect row :
-           RoundShape(frame.size(), slot->corner_radius.value_or(corner_radius_) * scale,
-                      slot->bottom_corners_only)) {
+      for (gfx::Rect row : RoundShape(
+               frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
+               slot->bottom_corners_only)) {
         row.Offset(frame.OffsetFromOrigin());
         hole.push_back(XRectangle(row));
       }
@@ -520,6 +570,16 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
+    if (OnWayland()) {
+      // A page composing keeps its focus until the overlay's field takes the input method from it,
+      // as the field's caret comes a frame later. Text input v3 has no reset, so the input method
+      // still holds what the page composed, and only its client changing straight from the page
+      // to the field keeps it from coming to the field too (InputMethodAuraLinux::ResetContext).
+      lend_awaits_ui_text_input_ = takes && PageComposing();
+      if (!lend_awaits_ui_text_input_) {
+        PageLendsFocusToOverlay(takes);
+      }
+    }
     if (takes) {
       return;
     }
@@ -540,6 +600,47 @@ class WindowViews : public views::WidgetObserver,
 
   void WhenOverlayLetsGo(base::OnceClosure let_go) {
     overlay_let_go_.push_back(std::move(let_go));
+  }
+
+  // The UI's field's caret came or went: a page that waited for the overlay's field to take the
+  // input method lends its focus now that it has.
+  void UITextInputChanged() {
+    if (lend_awaits_ui_text_input_ && overlay_has_keyboard_ && ui_text_input_.attached()) {
+      lend_awaits_ui_text_input_ = false;
+      PageLendsFocusToOverlay(true);
+    }
+  }
+
+  // Whether the input method's client is a page with a composition open.
+  bool PageComposing() {
+    ui::InputMethod* ime = widget_->GetInputMethod();
+    ui::TextInputClient* client = ime ? ime->GetTextInputClient() : nullptr;
+    return client && client != &ui_text_input_ && client->HasCompositionText();
+  }
+
+  // On Wayland an overlay is a subsurface of the window, which keeps the compositor's keyboard, so
+  // a page with the focus would never be told it lost it, as a game that pauses on blur keeps going
+  // under the command bar (#1608). The page gives its focus to the window while the overlay has the
+  // keyboard, as the window no longer being key or having the input focus does on the Mac and X11,
+  // and has it back as the overlay lets go, unless a page or the UI took it meanwhile.
+  void PageLendsFocusToOverlay(bool takes) {
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    if (takes) {
+      overlay_lent_.RemoveAll();
+      if (focused && InSlot(focused)) {
+        overlay_lent_.Add(focused);
+        client->ResetFocusWithinActiveWindow(content());
+      }
+      return;
+    }
+    if (overlay_lent_.windows().empty()) {
+      return;
+    }
+    aura::Window* page = overlay_lent_.Pop();
+    if (client && !ui_has_keyboard_ && focused == content() && InSlot(page)) {
+      client->FocusWindow(page);
+    }
   }
 
   // The UI lets the keyboard go to the window, which KeyboardForPage counts as the page's, and on
@@ -1045,6 +1146,8 @@ class WindowViews : public views::WidgetObserver,
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
+  // What the panes are drawn at (ScalePages).
+  float page_scale_ = 1;
   // The pages stay where they are as the window resizes, until ShowPages (HoldPagesForResize).
   bool held_ = false;
   // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
@@ -1060,6 +1163,11 @@ class WindowViews : public views::WidgetObserver,
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
+  aura::WindowTracker overlay_lent_;
+  // On Wayland, whether a page composing as an overlay took the keyboard keeps its focus until the
+  // overlay's field takes the input method.
+  bool lend_awaits_ui_text_input_ = false;
   // The keys typed while the overlay with the keyboard didn't have the input focus yet.
   std::vector<x11::KeyEvent> early_keys_;
   // Whether the core took the input focus back down to the UI's window since the focus last left or
@@ -1237,6 +1345,33 @@ void ShowPages(views::Widget* widget,
   if (panes.empty()) {
     views->UITakesKeyboard();
   }
+}
+
+void ScalePages(views::Widget* widget, double scale) {
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return;
+  }
+  views->set_page_scale(static_cast<float>(scale));
+  views->ScalePanes();
+  views->ShowThrough();
+}
+
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point) {
+  aura::Window* root = page ? page->GetRootWindow() : nullptr;
+  if (!root) {
+    return point;
+  }
+  // Where it's drawn, through the holder's scale, less where the page is laid out.
+  gfx::PointF drawn = point;
+  aura::Window::ConvertPointToTarget(page, root, &drawn);
+  float x = 0;
+  float y = 0;
+  for (aura::Window* each = page; each && each != root; each = each->parent()) {
+    x += each->bounds().x();
+    y += each->bounds().y();
+  }
+  return gfx::PointF(drawn.x() - x, drawn.y() - y);
 }
 
 void HoldPagesForResize(views::Widget* widget) {
@@ -1498,6 +1633,7 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->ui_text_input().SetCaret(caret);
+    views->UITextInputChanged();
   }
 }
 

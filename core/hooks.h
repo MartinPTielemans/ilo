@@ -275,7 +275,7 @@ extern bool (*g_browser_core_sync_tab)(content::WebContents* contents);
 extern std::string (*g_browser_core_sync_password_tag)(const std::string& tag);
 
 // chrome/browser/sync/sync_service_factory.cc: the controllers of the core's own data types for
-// |profile|'s sync, such as ILO_SPACE's, after Chrome's.
+// |profile|'s sync, ILO_SPACE's and ILO_SETTING's, after Chrome's.
 extern std::vector<std::unique_ptr<syncer::DataTypeController>> (*g_browser_core_sync_controllers)(
     Profile* profile,
     syncer::SyncService* sync_service);

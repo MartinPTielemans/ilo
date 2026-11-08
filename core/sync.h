@@ -35,6 +35,7 @@ void AnswerPairing(const std::string& id, bool add);
 void ReadDevices();
 void RemoveDevice(const std::string& id);
 void ReadActivity(bc_sync_activity* activity);
+void Choose(int what, bool on);
 void DeleteAccount();
 
 }  // namespace browser_core::sync

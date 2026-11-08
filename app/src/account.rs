@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::dialog::{Question, Return, Tone};
-use crate::settings_rows::{Look, button, detailed_row, group, named_button};
+use crate::settings_rows::{Look, SLIDE, button, detailed_row, group, named_button, stop_switch};
 use crate::text_input::TextInput;
 use crate::tokens::menu::{DARK_DESTRUCTIVE, LIGHT_DESTRUCTIVE};
 use crate::tokens::settings::{
@@ -84,6 +84,17 @@ pub struct State {
     pub email: SharedString,
     /// While pairing, the code once a device has answered, else "".
     pub code: SharedString,
+    /// This device syncs ilo's settings that follow the account, and the extensions.
+    pub settings: bool,
+    pub extensions: bool,
+}
+
+/// What else a device can choose to sync, besides the Spaces, bookmarks and passwords it always
+/// does (BC_SYNC_SETTINGS and BC_SYNC_EXTENSIONS).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Choice {
+    Settings,
+    Extensions,
 }
 
 /// The account as the core last said it is, for a view of it that opens later, as Settings'
@@ -169,6 +180,8 @@ pub trait Host {
     fn request_pairing(&self);
     fn read_devices(&self);
     fn remove_device(&self, id: &str);
+    /// Syncs `what` on this device from now on, or stops.
+    fn choose(&self, what: Choice, on: bool);
     /// How sync is keeping up, asked as the view shows, never on a timer.
     fn activity(&self) -> Activity;
     /// Deletes the account, its synced data and its devices on the server, and signs out.
@@ -229,6 +242,8 @@ pub struct Account {
     step: bool,
     /// An assistive app reads the window, as its last draw found: its controls are named then.
     a11y: bool,
+    /// The switch last flipped, and when, as it slides.
+    switched: Option<(Choice, Instant)>,
 }
 
 impl EventEmitter<AccountEvent> for Account {}
@@ -384,6 +399,7 @@ impl Account {
             asked: false,
             drawn: Rc::default(),
             a11y: false,
+            switched: None,
             look: Look::settings(true),
             step: false,
         }
@@ -432,6 +448,14 @@ impl Account {
         }
         // check.sh waits for this line. The email stays out of the log.
         log!("browser: account {:?} {:?}", state.status, state.problem);
+        if (state.settings, state.extensions) != (self.state.settings, self.state.extensions) {
+            // check.sh waits for this line too.
+            log!(
+                "browser: account syncs settings {} extensions {}",
+                state.settings,
+                state.extensions
+            );
+        }
         let was = self.state.status;
         if state.status != Status::On {
             self.devices = None;
@@ -1159,10 +1183,26 @@ impl Account {
                 .child(div().flex_none().ml(px(END_GAP)).child(control))
         });
         let devices: Vec<gpui::Div> = devices.collect();
+        let chosen = [
+            detailed_row(
+                &self.look,
+                "Settings",
+                "Ad blocking, Peek, Little ilo and more. What's this computer's own stays here.",
+                Some(self.choice(Choice::Settings, cx)),
+            ),
+            detailed_row(
+                &self.look,
+                "Extensions",
+                "Those from the Chrome Web Store install on your other devices too.",
+                Some(self.choice(Choice::Extensions, cx)),
+            ),
+        ];
         div()
             .flex()
             .flex_col()
             .child(group(&self.look, [account]))
+            .child(header(&self.look, "Also sync", false))
+            .child(group(&self.look, chosen))
             .when(!devices.is_empty(), |section| {
                 section
                     .child(header(&self.look, "Devices", false))
@@ -1175,6 +1215,47 @@ impl Account {
                 |account, window, cx| account.show_recovery_words(window, cx),
             )))
             .child(self.delete_group(cx))
+    }
+
+    /// The switch that syncs `what` on this device, or stops.
+    fn choice(&self, what: Choice, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (name, on) = match what {
+            Choice::Settings => ("settings", self.state.settings),
+            Choice::Extensions => ("extensions", self.state.extensions),
+        };
+        let slid = match self.switched {
+            Some((switched, at)) if switched == what => {
+                (at.elapsed().as_secs_f32() / SLIDE).min(1.)
+            }
+            _ => 1.,
+        };
+        let spoken = match what {
+            Choice::Settings => "Sync Settings",
+            Choice::Extensions => "Sync Extensions",
+        };
+        stop_switch(
+            &self.look,
+            name,
+            spoken,
+            on,
+            slid,
+            self.look.accent,
+            self.a11y,
+        )
+        .on_click(cx.listener(move |account, _, _, cx| {
+            // check.sh waits for this line.
+            log!("browser: sync {name} {}", if on { "off" } else { "on" });
+            // It slides now; the core's word that it took the choice follows.
+            match what {
+                Choice::Settings => account.state.settings = !on,
+                Choice::Extensions => account.state.extensions = !on,
+            }
+            account.host.choose(what, !on);
+            account.switched = Some((what, crate::motion::start(cx)));
+            cx.notify();
+        }))
+        .child(self.place(format!("switch {name}")))
+        .into_any_element()
     }
 
     /// Delete Account, under the rest while signed in, with or without the secret: someone who
@@ -1379,6 +1460,12 @@ impl Render for Account {
         self.ask_what_shows();
         self.focus_field(window, cx);
         self.drawn.borrow_mut().clear();
+        if self
+            .switched
+            .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < SLIDE)
+        {
+            window.request_animation_frame();
+        }
         let content = match (&self.words, self.state.status) {
             (Some(words), _) => self.words(words, cx),
             (None, Status::SignedOut | Status::SigningIn) => self.signed_out(cx),

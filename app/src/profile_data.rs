@@ -159,12 +159,24 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
         default_server: state.default_server,
         email: core_text(state.email),
         code: core_text(state.code),
+        settings: state.settings,
+        extensions: state.extensions,
     };
     if CX.with_borrow(Option::is_none) {
         SYNC_STATE.set(Some(state));
         return;
     }
     update_app_later(move |cx| settings::sync_changed(state, cx));
+}
+
+/// Settings came from the account's other devices, and the core has them: what the app keeps of
+/// them follows, and Settings shows them. Before the app runs there's nothing to follow, as its
+/// windows read them as they open.
+pub(crate) unsafe extern "C" fn settings_synced(_: *mut c_void) {
+    update_app_later(|cx| {
+        little_windows_followed(cx);
+        settings::refresh(cx);
+    });
 }
 
 /// Another device asks to be added to the account: the dialog asks over the front window, or

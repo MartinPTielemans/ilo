@@ -38,6 +38,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
+#include "browser_core/sync_settings.h"
 #include "browser_core/sync_spaces.h"
 #include "browser_core/tab.h"
 #include "browser_core/webrtc.h"
@@ -571,6 +572,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
                        .Set("title", tab.title)
                        .Set("archived", tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull())
                        .Set("little", tab.little));
+    if (tab.space.is_valid()) {
+      archive.back().GetDict().Set("space", tab.space.AsLowercaseString());
+    }
   }
   root.Set("archive", std::move(archive));
   // A string, as JSON's numbers can't hold every id.
@@ -826,11 +830,13 @@ std::optional<Saved> Read(const base::FilePath& path) {
       const std::string* title = tab ? tab->FindString("title") : nullptr;
       std::optional<double> archived = tab ? tab->FindDouble("archived") : std::nullopt;
       if (url && title && archived && GURL(*url).is_valid()) {
+        const std::string* space = tab->FindString("space");
         saved.archive.push_back(
             {.url = GURL(*url),
              .title = *title,
              .archived = base::Time::FromMillisecondsSinceUnixEpoch(*archived),
-             .little = tab->FindBool("little").value_or(false)});
+             .little = tab->FindBool("little").value_or(false),
+             .space = space ? base::Uuid::ParseLowercase(*space) : base::Uuid()});
       }
     }
   }
@@ -1231,6 +1237,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     ApplyAutoPictureInPicture(/*changed=*/false);
     ApplyWebRtc();
     ArchiveDefaultRead();
+    sync_settings::Read();
     // The profiles the Spaces and favorites are in load before they come back.
     std::set<std::string> profiles;
     if (saved) {
@@ -1273,6 +1280,7 @@ void SessionChanged() {
     g_saver->Changed();
   }
   sync_spaces::Changed();
+  sync_settings::Changed();
 }
 
 void KeepSession() {
@@ -1426,7 +1434,7 @@ Space* RestoreSpace(Window& window,
       if (!saved_space.agent && saved_tab.current >= 0 &&
           static_cast<size_t>(saved_tab.current) < saved_tab.history.size()) {
         const sessions::SerializedNavigationEntry& entry = saved_tab.history[saved_tab.current];
-        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()));
+        Archive(/*tab=*/0, entry.virtual_url(), base::UTF16ToUTF8(entry.title()), space->node().id);
       }
       continue;
     }

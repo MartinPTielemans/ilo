@@ -682,7 +682,16 @@ typedef struct bc_sync_state {
   // With BC_SYNC_PAIRING, the match code once a device has answered: 6 digits, which that device
   // shows too. Else "".
   const char* code;
+  // With BC_SYNC_ON, what this device syncs besides the Spaces, bookmarks, passwords and open tabs,
+  // as bc_sync_choose chose: ilo's settings that follow the account (docs/ux-spec.md, Sync), and
+  // extensions from the Chrome Web Store with their settings. Else false.
+  bool settings;
+  bool extensions;
 } bc_sync_state;
+
+// What bc_sync_choose turns on or off.
+#define BC_SYNC_SETTINGS 0
+#define BC_SYNC_EXTENSIONS 1
 
 // Another device asks this one, through the server, to add it to the account, in
 // sync_pairing_asked.
@@ -1170,6 +1179,9 @@ typedef struct bc_host {
   // The account's devices, after bc_sync_read_devices, and again after bc_sync_remove_device:
   // |count| of them, this one first. The user's alone: agents hear none.
   void (*sync_devices_changed)(void* context, const bc_sync_device* devices, size_t count);
+  // Settings came from the account's other devices (BC_SYNC_SETTINGS) and the core has them now:
+  // read again what the app keeps of them, such as whether Little ilo is on.
+  void (*settings_synced)(void* context);
   // The backups of the profile's sidebar, newest first, once the core has listed them after
   // launch, and after each backup and restore (bc_window_restore_sidebar). Only the user's: an
   // agent's Space isn't backed up, and agents can't restore one.
@@ -1997,6 +2009,13 @@ BC_EXPORT void bc_window_set_page_color(bc_id window, uint32_t color);
 // before the motion's first bc_window_set_page_frame or bc_window_set_split_shares, and false after
 // its last. A page full screen keeps Chrome's way.
 BC_EXPORT void bc_window_page_moving(bc_id window, bool moving);
+
+// Draws the window's pages, their docked DevTools and a split view's ring at |scale| of their size,
+// about the centre of the page frame, without laying them out again: for the app's motion, as the
+// pages shrink back under a tab dragged over them, as Arc's do. 1, the default, is their own size.
+// Between 0.5 and 1. The rest of the frame shows the app's UI, and clicks there go to it. The side
+// panel's page keeps its size. On Windows it does nothing yet.
+BC_EXPORT void bc_window_set_page_scale(bc_id window, double scale);
 
 // Shows |tab| at the window's page frame, in place of the page shown before, and its Space if the
 // window shows another. It takes the keyboard if that page had it. A tab in a split view shows with
@@ -3110,6 +3129,12 @@ BC_EXPORT void bc_sync_remove_device(const char* id);
 // Reads how sync is keeping up with the server into |activity|, with BC_SYNC_ON, else zero. Read
 // as Settings shows it: nothing tells the app as it changes, which would wake it at each sync.
 BC_EXPORT void bc_sync_read_activity(bc_sync_activity* activity);
+
+// Turns syncing |what|, a BC_SYNC_ value of bc_sync_choose's, on or off for this device, with
+// BC_SYNC_ON; the others choose for themselves. Turned on, settings the account has replace this
+// device's and the rest go up, and the account's extensions install here. Turned off, what came
+// stays. Then sync_changed.
+BC_EXPORT void bc_sync_choose(int what, bool on);
 
 // Deletes the account on its server, while signed in, with everything the server keeps of it: the
 // account, its synced data, which the server only ever had encrypted, and its devices, which are
