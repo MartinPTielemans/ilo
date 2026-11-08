@@ -211,10 +211,10 @@ EOF
 }
 # kept_keys: waits for the browser window to have the keyboard once the call has floated as its
 # tab hid, as it keeps it on the Mac and X11. Wayland's compositor gives the call's window the
-# keyboard as it maps, and the core gives it back (#1961).
+# keyboard as it maps, and the core gives it back (#1961), in a line with Chromium's prefix.
 kept_keys() {
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    expect '^browser: mini player gave the keyboard back$' \
+    expect 'browser: mini player gave the keyboard back$' \
       "the call floating as its tab hid didn't give the browser window the keyboard back"
   fi
   for _ in $(seq 100); do
