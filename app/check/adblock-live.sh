@@ -2,8 +2,9 @@
 # ad network doesn't load, and an ad server's own page doesn't open: uBlock Origin shows its page
 # saying it blocked it instead. uBlock Origin fails the script's request, or answers it with a
 # stand-in of its own that loads, so the page's ads find nothing missing (its lists' filter for it
-# says redirect=googlesyndication_adsbygoogle.js). It needs the network and those servers, so it
-# runs only when named: ./check.sh adblock-live.
+# says redirect=googlesyndication_adsbygoogle.js). Off the Mac it reports the most memory uBlock
+# Origin's process held as it compiled its lists and wrote its selfie (#2069). It needs the network
+# and those servers, so it runs only when named: ./check.sh adblock-live.
 
 # The served page's title says whether Google's ad script loaded, was blocked, or was blocked by
 # uBlock Origin's stand-in, whose adsbygoogle.push does nothing, where Google's queues an ad.
@@ -67,5 +68,37 @@ go_from_bar doubleclick.net
 expect "^browser: loaded $tab chrome-extension://$ublock/document-blocked\.html" \
   "doubleclick.net opened, where uBlock Origin's page should have said it blocked it"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-live-page.png" || fail "no window to capture"
+# The most memory uBlock Origin's process has held, in MB, its working set's on Windows and its
+# resident set's on Linux. The Mac's ps has no peak.
+ublock_peak() {
+  for id in $(pgrep -f "$procs.*--extension-process"); do
+    if windows; then
+      ID=$id powershell.exe -NoProfile -NonInteractive -Command \
+        '[math]::Round((Get-Process -Id $env:ID).PeakWorkingSet64 / 1MB)' | tr -d '\r'
+    else
+      awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$id/status"
+    fi
+  done
+}
+# Its first launch compiles the lists it ships into its cache, and 53 s after its lists last
+# changed it writes its filters' selfie there too, the largest string it encodes, which ran its
+# process out of memory on Windows (#2069). Its peak is reported once the selfie is in its
+# IndexedDB, whose keys are UTF-16, or after 180 s without it.
+if [ "$(uname)" = Darwin ]; then
+  echo "adblock-live: no peak memory for uBlock Origin's process on the Mac, whose ps has none"
+else
+  idb="$profile_dir/Default/IndexedDB/chrome-extension_${ublock}_0.indexeddb.leveldb"
+  selfie="no selfie within 180 s"
+  for _ in $(seq 180); do
+    if cat "$idb"/*.log "$idb"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
+      grep -q 'selfie/staticNetFilteringEngine'; then
+      selfie="its selfie in its cache $(($(date +%s) - loaded)) s after it loaded"
+      break
+    fi
+    sleep 1
+  done
+  peak=$(ublock_peak | tr '\n' ' ')
+  echo "adblock-live: uBlock Origin's process peaked at ${peak:-an unknown }MB, $selfie; its cache is $(du -sk "$idb" 2> /dev/null | cut -f1) KB"
+fi
 quit
 echo "ok: with the lists uBlock Origin ships, Google's ad script doesn't load, and doubleclick.net shows uBlock Origin's page saying it blocked it. Windows: $out/adblock-live-script.png, $out/adblock-live-page.png"
