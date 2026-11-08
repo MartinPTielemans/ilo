@@ -2441,6 +2441,13 @@ BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corne
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);
 
+// As bc_window_keep_preview, for |tab| previewing the archived tab |archived|, which leaves the
+// archive: |tab| goes to the top of the Today tabs of the Space that tab closed in, which the window
+// shows with it, as bc_window_restore_archived's does, while that's one of the user's Spaces in
+// |tab|'s profile. Else to the Space the window shows. Then space_changed, archive_changed and
+// window_selected.
+BC_EXPORT void bc_window_keep_archived_preview(bc_id window, bc_id tab, bc_id archived);
+
 // Shows the tab's page at |frame| in its window, in place of the page the window showed. It keeps
 // its distance from the window's edges as the window resizes, and takes the keyboard if that page
 // had it. For a window that shows no Space; one that does uses bc_window_select.
