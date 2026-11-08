@@ -25,7 +25,7 @@ use browser::little_launch;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
-    PagePicture, Shell, SidePanel, Split, Trouble, WindowButton,
+    PagePicture, Shell, SidePanel, Split, Trouble, Volume, WindowButton,
 };
 use browser::text_input::{Copy, Cut, Paste, PasteAndMatchStyle, Redo, SelectAll, Undo};
 use browser::theme::Appearance;

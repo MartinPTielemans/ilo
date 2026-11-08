@@ -292,10 +292,15 @@ impl Browser for Engine {
         let action = match action {
             MediaAction::Play => bc::BC_MEDIA_PLAY,
             MediaAction::Pause => bc::BC_MEDIA_PAUSE,
+            MediaAction::Previous => bc::BC_MEDIA_PREVIOUS,
             MediaAction::Next => bc::BC_MEDIA_NEXT,
             MediaAction::PictureInPicture => bc::BC_MEDIA_PICTURE_IN_PICTURE,
         };
         unsafe { bc::bc_tab_media(tab, action as i32) };
+    }
+
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }
 
     fn cast(&self, tab: u64, _: &mut App) {

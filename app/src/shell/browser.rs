@@ -119,6 +119,8 @@ pub trait Browser {
     fn share_instead(&self, tab: u64, cx: &mut App);
     /// Plays, pauses or skips `tab`'s media.
     fn media(&self, tab: u64, action: MediaAction, cx: &mut App);
+    /// Sets `tab`'s volume, 0 to 1, which scales its page's media (bc_tab_set_volume).
+    fn set_volume(&self, tab: u64, volume: f32, cx: &mut App);
     /// Opens `tab`'s Cast dialog, which the core reports with `Shell::set_cast`.
     fn cast(&self, tab: u64, cx: &mut App);
     /// Closes the Cast dialog.
@@ -922,6 +924,8 @@ pub struct Page {
     /// The page is playing sound, muted or not, or was in the last 2 s.
     pub audible: bool,
     pub muted: bool,
+    /// The tab's volume, which scales its page's media.
+    pub volume: Volume,
     /// The emoji the user gave the tab to show in place of its page's favicon, or empty.
     pub icon: SharedString,
     pub trouble: Trouble,
@@ -937,12 +941,14 @@ pub struct Page {
     /// Another page shares a tab, and `share_instead` would have it share this one.
     pub share_instead: bool,
     /// The page has media the browser can play, pause and skip, as Chrome's media controls do:
-    /// whether it's playing, its title and artist, each empty without one, whether it has a next
-    /// track, and whether it can float in Picture in Picture while nothing of the page floats.
+    /// whether it's playing, its title and artist, each empty without one, whether it has a
+    /// previous and a next track, and whether it can float in Picture in Picture while nothing of
+    /// the page floats.
     pub media: bool,
     pub media_playing: bool,
     pub media_title: SharedString,
     pub media_artist: SharedString,
+    pub media_previous: bool,
     pub media_next: bool,
     pub media_picture_in_picture: bool,
     /// The tab shows its page in Developer Mode, for its site or as localhost.
@@ -954,8 +960,19 @@ pub struct Page {
 pub enum MediaAction {
     Play,
     Pause,
+    Previous,
     Next,
     PictureInPicture,
+}
+
+/// A tab's volume, from 0 to 1: whole until the user turns it down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume(pub f32);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Volume(1.)
+    }
 }
 
 /// What's wrong with a tab's page, as the core says (BC_PAGE_ in browser_core.h). Agents read the

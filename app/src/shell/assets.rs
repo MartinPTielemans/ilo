@@ -563,6 +563,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/shopping-basket.svg"),
     ),
     (
+        "icons/skip-back.svg",
+        include_bytes!("../../assets/icons/skip-back.svg"),
+    ),
+    (
         "icons/skip-forward.svg",
         include_bytes!("../../assets/icons/skip-forward.svg"),
     ),
@@ -679,12 +683,20 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/video.svg"),
     ),
     (
+        "icons/volume-1.svg",
+        include_bytes!("../../assets/icons/volume-1.svg"),
+    ),
+    (
         "icons/volume-2.svg",
         include_bytes!("../../assets/icons/volume-2.svg"),
     ),
     (
         "icons/volume-x.svg",
         include_bytes!("../../assets/icons/volume-x.svg"),
+    ),
+    (
+        "icons/volume.svg",
+        include_bytes!("../../assets/icons/volume.svg"),
     ),
     (
         "icons/window-close.svg",

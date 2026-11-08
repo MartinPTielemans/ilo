@@ -243,6 +243,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         away_from_pinned_url: state.away_from_pinned_url,
         audible: state.audible,
         muted: state.muted,
+        volume: Volume(state.volume as f32),
         icon: unsafe { CStr::from_ptr(state.icon) }
             .to_string_lossy()
             .into_owned()
@@ -269,6 +270,7 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
             .to_string_lossy()
             .into_owned()
             .into(),
+        media_previous: state.media_previous,
         media_next: state.media_next,
         media_picture_in_picture: state.media_picture_in_picture,
         developer_mode: state.developer_mode,
