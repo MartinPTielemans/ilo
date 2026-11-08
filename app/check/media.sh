@@ -545,17 +545,17 @@ card_at() {
 $(grep "^browser: media player $vc at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 }
-# card_video <failure> <capture>: waits for the core to show the video in the open card, and
-# captures it.
+# card_video <failure> <capture>: waits for the core to show the video in the stack just opened,
+# and captures it.
 card_video() {
-  send move $((mx + mw / 2)) $((my + mh - 16))
-  expect '^browser: media stack open$' "the stack didn't open over the video's card"
   expect "^browser: card video $vc at " "the open card didn't ask for its video"
   expect "browser: card video $vc in its card at " "$1"
   card_at "the open card wasn't drawn"
   ../tools/window-screenshot.sh "$pid" "$out/$2" || fail "no window to capture"
 }
 card_at "the video's player wasn't drawn"
+send move $((mx + mw / 2)) $((my + mh - 16))
+expect '^browser: media stack open$' "the stack didn't open over the video's card"
 card_video "the core didn't show the video in its open card" media-card-video.png
 expect "^browser: title $vc floating\$" "the page didn't see its video go into its card"
 send move $page_point
@@ -565,6 +565,7 @@ expect "^browser: title $vc landed\$" "the page didn't see its video leave its c
 card_at "the video's player wasn't drawn at rest"
 send click $((mx + mw / 2)) $((my + mh / 2))
 expect "^browser: title $vc paused\$" "the player's pause didn't pause the video"
+expect '^browser: media stack open$' "the stack didn't open under the pointer on the paused card"
 card_video "the core didn't show the paused video in its card" media-card-video-paused.png
 # Its title row is under the video, and × is its last button, as without one.
 send click $((mx + mw - 5 - 12)) $((my + mh - 47))
