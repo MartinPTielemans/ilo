@@ -2953,6 +2953,36 @@ mod tests {
         assert_eq!(host.take(), ["folder open 10 true"]);
     }
 
+    /// A tab shown two closed folders down slides in from under the outer folder's row over
+    /// 0.15 s, fading in as it comes, and the rows under it make room on the same curve, as Arc
+    /// 1.171's does (#1405).
+    #[gpui::test]
+    fn a_tab_shown_in_closed_folders_slides_in_under_them(cx: &mut TestAppContext) {
+        let (shell, cx, _host) =
+            window_with(cx, vec![10, 11, 3, 6, 7], vec![4], 4, work_and_plans());
+        let before = shell.read_with(cx, |shell, _| shell.layout());
+        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+        shell.read_with(cx, |shell, _| {
+            let after = shell.layout();
+            let (folder, tab) = (after[&Slot::Tab(10)], after[&Slot::Tab(3)]);
+            let (from, _, curve) = shell.slides[&Slot::Tab(3)];
+            assert_eq!(from, folder - tab, "it starts under the folder's row");
+            assert!(matches!(curve, crate::shell::Curve::Peek));
+            let (from, _, curve) = shell.slides[&Slot::Tab(7)];
+            assert_eq!(from, before[&Slot::Tab(7)] - after[&Slot::Tab(7)]);
+            assert!(
+                from < 0. && matches!(curve, crate::shell::Curve::Peek),
+                "7 makes room"
+            );
+            let opened = shell.opened.as_ref().expect("the row fades in");
+            assert!(
+                opened.tabs == [3]
+                    && opened.whole
+                    && matches!(opened.curve, crate::shell::Curve::Peek)
+            );
+        });
+    }
+
     /// While the tab shown is in a folder that keeps tabs shown before, a click opens it as ever,
     /// and lets go of the kept tabs, so it closes whole next time.
     #[gpui::test]
