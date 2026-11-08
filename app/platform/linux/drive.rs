@@ -15,7 +15,7 @@
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
-//! agentopen, agentrelease, agentdisconnect, takeback, age, battery and insert, and Windows' stack.
+//! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
 //! The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
 //! and alt with Alt, and ⌃Tab as Ctrl+Tab; a click's as Chrome reads them, cmd with Ctrl and alt
 //! with Alt. flags presses and lets go of those keys, the last key's among them, and the keys after
@@ -2745,6 +2745,18 @@ fn run_command(line: &str) -> Option<()> {
                 _ => return None,
             };
             unsafe { bc::bc_battery_for_testing(percent, plugged) };
+            Some(())
+        }
+        // pair <tab> pin|confirm|passkey: a Bluetooth device the tab's page pairs with asks.
+        "pair" => {
+            let tab: u64 = words.next()?.parse().ok()?;
+            let kind = match words.next()? {
+                "pin" => bc::BC_PAIR_PIN,
+                "confirm" => bc::BC_PAIR_CONFIRM,
+                "passkey" => bc::BC_PAIR_PASSKEY,
+                _ => return None,
+            };
+            unsafe { bc::bc_tab_pair_for_testing(tab, kind as i32) };
             Some(())
         }
         "pip" => mini_player_command(words),

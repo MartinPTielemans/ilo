@@ -97,6 +97,7 @@ mod onboarding;
 mod page_dialog;
 mod page_menu;
 mod page_motion;
+mod pair;
 mod panes;
 mod permission;
 #[cfg(test)]
@@ -127,6 +128,7 @@ mod task_area;
 mod themes;
 mod tile_theme;
 mod trace;
+mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
@@ -170,6 +172,7 @@ pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
+pub use pair::{Pair, PairKind};
 pub use panes::page_frame;
 use panes::pane_frames;
 pub use permission::{Answer, Question};
@@ -186,6 +189,7 @@ use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
+pub use translate::Translation;
 pub use trouble::{NOT_RESPONDING, RELOAD, WAIT};
 use undo::{Edit, What};
 
@@ -1585,6 +1589,11 @@ pub struct Shell {
     chooser_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tab whose chooser shows, and its moment on screen before a click grants.
     chooser_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What devices the tabs' pages pair with ask (pair.rs), kept as the choosers are.
+    pairs: HashMap<u64, pair::Pairing>,
+    pair_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The PIN field takes the keyboard once it's drawn.
+    pair_wants_keyboard: bool,
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1642,6 +1651,15 @@ pub struct Shell {
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// The language each tab's page declares, for those Chrome has found one for, and how the
+    /// translation of each one the user asked to translate goes (translate.rs).
+    page_languages: HashMap<u64, SharedString>,
+    translations: HashMap<u64, Translation>,
+    /// The tab whose translation card is open, and where the card and the URL field's mark were
+    /// drawn last, which the log says when it changes.
+    translate_card: Option<u64>,
+    translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
     battery_saver: Option<i32>,
     /// Where its leaf was drawn last, which the log says when it changes.
@@ -1947,6 +1965,9 @@ impl Shell {
             choosers: HashMap::new(),
             chooser_drawn: Rc::default(),
             chooser_settling: RefCell::default(),
+            pairs: HashMap::new(),
+            pair_drawn: Rc::default(),
+            pair_wants_keyboard: false,
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
@@ -1979,6 +2000,11 @@ impl Shell {
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            page_languages: HashMap::new(),
+            translations: HashMap::new(),
+            translate_card: None,
+            translate_card_drawn: Rc::default(),
+            translate_mark_drawn: Rc::default(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -2140,6 +2166,8 @@ impl Shell {
         shell.questions = from.questions.clone();
         shell.drm_notes = from.drm_notes.clone();
         shell.keys = from.keys.clone();
+        shell.page_languages = from.page_languages.clone();
+        shell.translations = from.translations.clone();
         shell.crash_cards = from
             .crash_cards
             .keys()
@@ -4019,6 +4047,7 @@ impl Render for Shell {
             window.focus(&form.name.focus_handle(cx), cx);
         }
         self.focus_talk(window, cx);
+        self.focus_pair(window, cx);
         // A new folder's field is drawn once the browser reports the folder, and blurs if focused
         // before.
         let drawn = self
@@ -4417,7 +4446,9 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.translate_card(cx))
                     .children(self.chooser_card(cx))
+                    .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))

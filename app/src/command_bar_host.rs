@@ -199,6 +199,14 @@ impl command_bar::Host for Bar {
         WINDOWS.with_borrow(|windows| windows.first().is_some_and(|window| window.private))
     }
 
+    fn other_tabs(&self, _: &App) -> Rc<Vec<command_bar::OtherTab>> {
+        // A private window's pages stay apart from the profile's, as its history does.
+        match self.over_private() {
+            true => Rc::default(),
+            false => other_tabs_over(front().0),
+        }
+    }
+
     fn asking(&self, shown: bool, cx: &mut App) {
         if shown {
             agents_core::update(|agents, cx| agents.task_ask_shown(cx));

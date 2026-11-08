@@ -328,6 +328,16 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_device_settings(tab) };
     }
 
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        let pin = pin.map(|pin| CString::new(pin.as_ref()).unwrap_or_default());
+        let pin = pin.as_ref().map_or(std::ptr::null(), |pin| pin.as_ptr());
+        unsafe { bc::bc_tab_pair(tab, pin) };
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_cancel_pair(tab) };
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         unsafe { bc::bc_window_clear(self.window) }
     }
@@ -713,6 +723,26 @@ impl Browser for Engine {
 
     fn show_offer(&self, tab: u64) {
         unsafe { bc::bc_tab_show_offer(tab) };
+    }
+
+    fn translation_target(&self) -> Option<SharedString> {
+        crate::translate_host::target().map(SharedString::from)
+    }
+
+    fn language_name(&self, language: &str) -> SharedString {
+        crate::translate_host::language_name(language).into()
+    }
+
+    fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
+        crate::translate_host::translate(tab, from, to);
+    }
+
+    fn use_original(&self, tab: u64, _: &mut App) {
+        crate::translate_host::use_original(tab);
+    }
+
+    fn translation_settings(&self, _: &mut App) {
+        crate::translate_host::open_settings();
     }
 
     fn stop(&self, tab: u64, _: &mut App) {

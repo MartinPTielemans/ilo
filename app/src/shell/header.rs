@@ -664,6 +664,8 @@ impl Shell {
                         .child(key_frame(self.button_frames.clone())),
                 )
         });
+        // A page in another language offers to translate it, after the key (translate.rs).
+        let translate = self.translate_mark(cx);
         let text_end = match tools {
             true if devtools.is_some() => end + 2. * TOOL_PITCH + URL_BUTTON_SIZE,
             true => end + TOOL_PITCH + URL_BUTTON_SIZE,
@@ -715,6 +717,7 @@ impl Shell {
             )
             .children(engine)
             .children(key)
+            .children(translate)
             .children(leaf)
             .children(devtools)
             .children(copy)

@@ -5,8 +5,8 @@
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
 #   split favorites cards extensions adblock adblock-lists windows private blank little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about sync sync-account sync-devices switch-frames devices filled scripting
-#   notifications calls battery policies hosts idle handback webrtc count
+#   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
+#   notifications calls battery battery-os policies hosts idle handback webrtc count translate
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists and
 # widevine, Linux's alone, downloads Google's Widevine module, so they need the network and run
@@ -77,9 +77,9 @@ fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting notifications calls battery policies hosts idle"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count"
+runs="$runs handback webrtc count translate"
 named="store sync-extensions adblock-live widevine updates nightly update-checks keychain shots tab-drag"
 for run in "$@"; do
   case " $runs $named " in

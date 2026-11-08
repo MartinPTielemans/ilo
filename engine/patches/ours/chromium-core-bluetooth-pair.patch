@@ -1,0 +1,45 @@
+Asks for a Bluetooth device's PIN, or whether to pair with it, in the app's card (#1701), in place
+of Chrome's credentials and pair-confirm dialogs: they're tab-modal dialogs, which the core's
+windows don't host. Only Linux and Windows pair on demand; the Mac's own prompt asks there. Without
+the core's hook, Chrome's dialogs show as before.
+
+--- a/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc
++++ b/chrome/browser/bluetooth/chrome_bluetooth_delegate_impl_client.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <memory>
+ 
++#include "browser_core/hooks.h"  // nogncheck
+ #include "build/build_config.h"
+ #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
+ #include "chrome/browser/chooser_controller/title_util.h"
+@@ -26,6 +27,15 @@
+ #include "components/permissions/bluetooth_scanning_prompt_desktop.h"
+ #include "components/strings/grit/components_strings.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
++
++// browser_core: asks for a Bluetooth device's PIN or pairing in the app's card
++// (//browser_core/hooks.h).
++void (*g_browser_core_bluetooth_pair)(
++    content::RenderFrameHost* frame,
++    const std::u16string& device_identifier,
++    content::BluetoothDelegate::PairPromptCallback callback,
++    content::BluetoothDelegate::PairingKind pairing_kind,
++    const std::optional<std::u16string>& pin) = nullptr;
+ 
+ ChromeBluetoothDelegateImplClient::ChromeBluetoothDelegateImplClient() =
+     default;
+@@ -83,6 +93,13 @@
+     content::BluetoothDelegate::PairingKind pairing_kind,
+     const std::optional<std::u16string>& pin) {
+ #if PAIR_BLUETOOTH_ON_DEMAND()
++  // browser_core: the core's windows host no tab-modal dialog, so the app asks
++  // in its card (//browser_core/hooks.h).
++  if (g_browser_core_bluetooth_pair) {
++    g_browser_core_bluetooth_pair(frame, device_identifier, std::move(callback),
++                                  pairing_kind, pin);
++    return;
++  }
+   switch (pairing_kind) {
+     case content::BluetoothDelegate::PairingKind::kProvidePin:
+       ShowBluetoothDeviceCredentialsDialog(

@@ -46,13 +46,14 @@ env:
     load preview import adblock adblock-lists passkeys onboarding links relaunch split
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
-    sync-extensions little devices notifications calls battery idle handback webrtc tab-drag count
+    sync-extensions little devices pair notifications calls battery battery-os idle handback
+    webrtc tab-drag count
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
     favorites cards extensions adblock adblock-lists private little capture passwords preview
     access dialogs crash import quit onboarding passkeys appearance about sync sync-account
-    devices hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |

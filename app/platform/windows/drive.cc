@@ -1797,6 +1797,20 @@ bool Run(const std::string& line) {
     bc_battery_for_testing(percent, power == "plugged");
     return true;
   }
+  if (action == "pair") {
+    bc_id tab;
+    std::string kind;
+    if (!(words >> tab >> kind)) {
+      return false;
+    }
+    const int pair = kind == "pin" ? BC_PAIR_PIN : kind == "confirm" ? BC_PAIR_CONFIRM
+                   : kind == "passkey" ? BC_PAIR_PASSKEY : -1;
+    if (pair < 0) {
+      return false;
+    }
+    bc_tab_pair_for_testing(tab, pair);
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;

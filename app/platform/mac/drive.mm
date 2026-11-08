@@ -179,6 +179,9 @@
 //                                         "browser: idle tabs checked" once it's done
 //   battery <percent> plugged|unplugged   the battery reads that from now, with
 //                                         --battery-for-testing (core/battery_saver.h)
+//   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
+//                                         PIN, whether to pair, or whether its passkey matches, as
+//                                         bc_tab_pair_for_testing
 //
 // Clicks, drags and moves go to the app's window on top at that point of the browser window
 // driven, such as the sidebar reveal over its edge, scrolls and layout to the browser window
@@ -1683,6 +1686,21 @@ bool Run(const std::string& line, void (^done)(void)) {
       return false;
     }
     bc_battery_for_testing(percent, power == "plugged");
+    done();
+    return true;
+  }
+  if (action == "pair") {
+    bc_id tab;
+    std::string kind;
+    if (!(words >> tab >> kind)) {
+      return false;
+    }
+    const int pair = kind == "pin" ? BC_PAIR_PIN : kind == "confirm" ? BC_PAIR_CONFIRM
+                   : kind == "passkey" ? BC_PAIR_PASSKEY : -1;
+    if (pair < 0) {
+      return false;
+    }
+    bc_tab_pair_for_testing(tab, pair);
     done();
     return true;
   }
