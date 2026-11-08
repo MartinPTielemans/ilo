@@ -2941,10 +2941,16 @@ void host_show_overlay(int index,
     }
     [overlay->window makeKeyAndOrderFront:nil];
     ReleaseKeys(overlay->window);
-    // check.sh reads these lines.
+    // check.sh reads these lines. The shadow's window holds the overlay's shape cut out of it, so
+    // off by any amount it shows what's under the overlay past its edge (#2075).
     fprintf(stderr, "browser: %s at %g %g %g %g\n", overlay->name,
             NSMinX(frame) - NSMinX(content), NSMaxY(content) - NSMaxY(frame), NSWidth(frame),
             NSHeight(frame));
+    const NSRect shadow = overlay->shadow.frame;
+    const NSRect around = NSInsetRect(overlay->window.frame, -overlay->reach(), -overlay->reach());
+    fprintf(stderr, "browser: %s shadow off by %g %g %g %g\n", overlay->name,
+            NSMinX(shadow) - NSMinX(around), NSMaxY(around) - NSMaxY(shadow),
+            NSWidth(shadow) - NSWidth(around), NSHeight(shadow) - NSHeight(around));
     fprintf(stderr, "browser: %s shown\n", overlay->name);
   });
 }
