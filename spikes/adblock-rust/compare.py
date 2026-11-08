@@ -8,10 +8,10 @@ from urllib.parse import urlsplit
 
 
 def verdicts(path):
-    return [line.split("\t") for line in open(path).read().splitlines()]
+    return [line.split("\t") for line in open(path, encoding="utf-8").read().splitlines()]
 
 
-requests = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+requests = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
 ubo, rust = verdicts(sys.argv[2]), verdicts(sys.argv[3])
 assert len(requests) == len(ubo) == len(rust), (len(requests), len(ubo), len(rust))
 
