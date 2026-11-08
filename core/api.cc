@@ -24,6 +24,7 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
 #include "browser_core/autofill_menu.h"
@@ -2086,6 +2087,18 @@ void bc_ad_blocking_turn_on_site(bc_id profile_id, const char* site) {
 void bc_tab_set_developer_mode(bc_id id, bool on) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     browser_core::developer_mode::Set(tab->profile(), tab->Url(), on);
+  }
+}
+
+void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
+  browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
+}
+
+void bc_tab_boost_zap(bc_id id, bool on) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (browser_core::Boosts* boosts =
+          contents ? browser_core::Boosts::FromWebContents(contents) : nullptr) {
+    boosts->Zap(on);
   }
 }
 

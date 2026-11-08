@@ -230,6 +230,8 @@ source_set("browser_core") {
     "autofill_offer.h",
     "battery_saver.cc",
     "battery_saver.h",
+    "boosts.cc",
+    "boosts.h",
     "browser_window_stand_in.cc",
     "browser_window_stand_in.h",
     "capture.cc",
