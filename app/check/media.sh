@@ -3,11 +3,13 @@
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab
 # Instead, which moves the share there. The marks go once the call ends. A call floats in Picture in
 # Picture while its tab is hidden, and comes back with it, unless its Site Controls block that, or
-# Settings turns it off for the sites they don't allow; its window moves by its top bar and sizes
-# from its corner. A tab playing music out of sight has a player at the sidebar's foot, whose
-# buttons pause it and float it in Picture in Picture, whose click shows the tab, and whose × puts
-# it away. A private window's music has a player in that window alone. View › Cast… and the page
-# menu's Cast… open the tab's Cast card, and × closes it. A video's page menu floats it in Picture
+# Settings turns it off for the sites they don't allow; on Linux its window moves by its top bar
+# and sizes from its corner, and on Windows its hit test says a press there would. A tab playing
+# music out of sight has a player at the sidebar's foot, whose buttons pause it and float it in
+# Picture in Picture, whose click shows the tab, and whose × puts it away. A private window's music
+# has a player in that window alone. View › Cast… and the page menu's Cast… open the tab's Cast
+# card, and × closes it; on the Mac the run answers macOS's question for the local network that
+# looking for devices brings. A video's page menu floats it in Picture
 # in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
 # moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
