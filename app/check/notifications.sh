@@ -111,8 +111,23 @@ PY
     if [ "$1" = 1 ]; then
       "$out/banner" "$app_name" Allow >> "$notes" 2>&1 || true
     fi
-    "$out/banner" "ilo check $1" >> "$notes" 2>&1 ||
+    "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
+      mac_notifications_said
       fail "macOS showed no banner for the page's notification $1: $(cat "$notes")"
+    }
+  }
+  # What macOS made of the app's notifications, for the run's artifact: its notification processes,
+  # what usernoted logged, and what it keeps of the app's leave to notify.
+  mac_notifications_said() {
+    {
+      echo "processes:"
+      pgrep -lf 'NotificationCenter|usernoted' || true
+      echo "usernoted:"
+      log show --last 3m --style compact --predicate \
+        'process == "usernoted" OR subsystem == "com.apple.UserNotifications"' 2>&1 | tail -80
+      echo "ncprefs:"
+      defaults read com.apple.ncprefs apps 2>&1 | grep -B3 -A8 "$app_id" || true
+    } > "$out/notifications-macos.txt"
   }
   # Waits for more lines matching $1 in the app's log than the $2 there were, for up to 10 s.
   more() {
