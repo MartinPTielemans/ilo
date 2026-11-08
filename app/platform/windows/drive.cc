@@ -20,8 +20,9 @@
 // one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
 // does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
 // Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
-// Alt, but Ctrl for ⌃Tab, and alt with both; flags' winalt holds Windows' own Alt, its key down and
-// up, for Alt pressed alone. A click's or a drag's are held as a Windows user holds them, cmd with
+// Alt, but Ctrl for ⌃Tab, and alt with both; a key's winalt holds Windows' own Alt, as the app's
+// own views bind ⌥ off the Mac, and flags' winalt holds it with its key down and up, for Alt
+// pressed alone. A click's or a drag's are held as a Windows user holds them, cmd with
 // Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are wheel messages with
 // the pixels in their deltas, going the way drive.mm's go, which Chromium scrolls by. Its swipes
 // over GPUI's view are handed to GPUI as Direct Manipulation hands it a precision touchpad's, with
@@ -489,10 +490,11 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   while (words >> word) {
     cmd = cmd || word == "cmd";
     ctrl = ctrl || word == "ctrl";
-    modifiers |= word == "cmd"     ? kCtrl
-                 : word == "shift" ? kShift
-                 : word == "alt"   ? kCtrl | kAlt
-                                   : 0;
+    modifiers |= word == "cmd"      ? kCtrl
+                 : word == "shift"  ? kShift
+                 : word == "alt"    ? kCtrl | kAlt
+                 : word == "winalt" ? kAlt
+                                    : 0;
   }
   if (ctrl) {
     modifiers |= key == "tab" && !cmd ? kCtrl : kAlt;
