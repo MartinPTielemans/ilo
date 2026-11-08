@@ -2473,11 +2473,14 @@ void LittleHiding(HWND root) {
     g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
   }
   g_giving_way_root = root;
-  // Until the window is destroyed (FrameProc), or at the latest a second on, so a window that's
-  // hidden and kept never leaves ilo unable to activate.
-  After(1, [give_way = ++g_give_ways] {
-    if (give_way == g_give_ways) {
+  // Until the window is destroyed (FrameProc), or at the latest 5 s on, so a window that's hidden
+  // and kept never leaves ilo unable to activate. On a loaded machine Chromium's task that destroys
+  // the window came more than a second after it hid, and the activation then went through (#2079).
+  After(5, [give_way = ++g_give_ways] {
+    if (give_way == g_give_ways && g_giving_way) {
       StopGivingWay();
+      // A window that gave way and wasn't destroyed, which no close leaves, says so in the log.
+      fprintf(stderr, "browser: little window gave way for 5 s without going\n");
     }
   });
   // The foreground's app may give the foreground away.
