@@ -1,8 +1,9 @@
-"""The passkeys, passwords and sync-account runs' DevTools client (check/passkeys.sh,
-check/passwords.sh, check/sync-account.sh), over the pipe --remote-debugging-pipe gives the
-browser: the browser reads from IN and writes to OUT, each message JSON ending in NUL. Or, with
---socket, over the WebSocket at URL that --remote-debugging-port has the browser listen on: on
-Windows the pipe is handles, which Git Bash can't give the browser.
+"""The calls, passkeys, passwords and sync-account runs' DevTools client (check/calls.sh,
+check/passkeys.sh, check/passwords.sh, check/sync-account.sh), over the pipe
+--remote-debugging-pipe gives the browser: the browser reads from IN and writes to OUT, each
+message JSON ending in NUL. Or, with --socket, over the WebSocket at URL that
+--remote-debugging-port has the browser listen on: on Windows the pipe is handles, which Git Bash
+can't give the browser.
 
 It attaches to the page whose address ends in PAGE, if one is named, logging "cdp: attached", then
 takes a command a line on its standard input:
@@ -27,6 +28,9 @@ takes a command a line on its standard input:
                   starting with PREFIX has TEXT in a text node or an attribute, shadow trees
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
+  pressure moderate|critical
+                  says memory is short to the browser process, as the system does, through
+                  DevTools' Memory domain on the page attached, then logs "cdp: pressure LEVEL"
   focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
                   last at an address starting with PREFIX, through its shadow trees, its label or
                   its text, or none for no such page or nothing focused: a WebUI dialog takes the
@@ -306,6 +310,9 @@ for line in sys.stdin:
         call("WebAuthn.setAutomaticPresenceSimulation",
              {"authenticatorId": authenticator, "enabled": words[1] == "1"}, session)
         log("presence " + words[1])
+    elif words[:1] == ["pressure"] and words[1:] in (["moderate"], ["critical"]) and session:
+        call("Memory.simulatePressureNotification", {"level": words[1]}, session)
+        log("pressure " + words[1])
     elif words[:1] == ["reveal"] and len(words) == 2:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:

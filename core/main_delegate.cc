@@ -79,6 +79,7 @@
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "components/performance_manager/public/features.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -617,9 +618,13 @@ std::optional<int> MainDelegate::BasicStartupComplete() {
     // as the profile starts, ilo having no startup preference for it to read (#1934).
     std::string disabled = command_line->GetSwitchValueASCII(switches::kDisableFeatures);
     disabled += disabled.empty() ? "" : ",";
+    // Chrome's urgent discarding, on the Mac and Windows, lets a page go under memory pressure by
+    // Chrome's checks alone, which keep neither a call that only listens, an agent's tab nor a page
+    // that asks before it's left. The core's own listener picks by its checks (idle_unload.cc).
     command_line->AppendSwitchASCII(
         switches::kDisableFeatures,
-        disabled + features::kClearSessionStorageDiskStateOnStartup.name);
+        disabled + features::kClearSessionStorageDiskStateOnStartup.name + "," +
+            performance_manager::features::kUrgentPageDiscarding.name);
     // Blink's eye in a password field, Chrome's on Windows: it shows only once the user types into
     // the empty field, and goes, masking it again, as the field loses focus or is filled in or set
     // by the page, so a saved password is never shown. The core blurs a tab's page each time the
