@@ -64,10 +64,12 @@ constexpr Switch kSwitches[] = {
     {"auto_picture_in_picture", &Settings::auto_picture_in_picture},
     {"ask_where_to_save", &Settings::ask_where_to_save},
     {"notification_prompts", &Settings::notification_prompts},
+    {"space_header", &Settings::space_header},
 };
-// And the numbers: seconds, and bc_hover_kinds' four bits.
+// And the numbers: seconds, bc_hover_kinds' four bits and bc_appearance's choice.
 constexpr char kLittleArchiveAfter[] = "little_archive_after";
 constexpr char kHoverKinds[] = "hover_kinds";
+constexpr char kAppearance[] = "appearance";
 
 // Whether the session has read the settings: before then, the device's are the defaults.
 bool g_read = false;
@@ -86,6 +88,7 @@ std::map<std::string, Entity> Current() {
   }
   add(kLittleArchiveAfter).set_number(settings.little_archive_after.InSecondsF());
   add(kHoverKinds).set_number(settings.hover_kinds);
+  add(kAppearance).set_number(settings.appearance);
   return all;
 }
 
@@ -103,6 +106,10 @@ void Set(const Entity& entity, Settings& settings) {
   if (entity.name() == kHoverKinds && entity.has_number() && number >= 0 && number <= 15 &&
       number == static_cast<int>(number)) {
     settings.hover_kinds = static_cast<int>(number);
+  }
+  if (entity.name() == kAppearance && entity.has_number() &&
+      (number == 0 || number == 1 || number == 2)) {
+    settings.appearance = static_cast<int>(number);
   }
 }
 
@@ -150,6 +157,9 @@ void Apply(const std::vector<Entity>& entities) {
   }
   if (changed(kLittleArchiveAfter)) {
     ScheduleAutoArchive();
+  }
+  if (changed(kAppearance)) {
+    ApplyAppearance();
   }
   SessionChanged();
   if (Host().settings_synced) {
