@@ -6,12 +6,20 @@
 //! as Arc's Back to PiP, and × to put it away until the page plays again. A click elsewhere on a
 //! card shows its tab. The title is cut with an ellipsis where Arc's scrolls, as a marquee would
 //! draw every frame. Previous and Arc's volume drawer wait for the core.
+//!
+//! Ours, as Arc's card has none (#2100): while the stack is open and still, the newest card whose
+//! page has a video shows it live above its title row. The core shows the page's own video there,
+//! by its compositor surface as Picture in Picture does, in a window over the band this view draws
+//! black, so nothing's copied and nothing runs while no card shows it. GPUI can't draw over that
+//! window, so the band holds only the video, and the video leaves while the stack moves.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Context, Div, MouseButton, Stateful, Task, Window, div, prelude::*, px, svg,
+    AnyElement, Bounds, Context, Div, MouseButton, Pixels, Stateful, Task, Window, black, canvas,
+    div, prelude::*, px, svg,
 };
 
 use super::{
@@ -21,7 +29,7 @@ use super::{
 use crate::tokens::shell::media::motion::{FOLD, OPEN, WAIT};
 use crate::tokens::shell::{
     MEDIA_BUTTON, MEDIA_CONTROL, MEDIA_GAP, MEDIA_GLYPH, MEDIA_OPEN, MEDIA_OPEN_GAP, MEDIA_PEEK,
-    MEDIA_PEEK_FADE, MEDIA_PEEK_INSET, MEDIA_REST, MEDIA_TITLE,
+    MEDIA_PEEK_FADE, MEDIA_PEEK_INSET, MEDIA_REST, MEDIA_TITLE, MEDIA_VIDEO_ASPECT,
 };
 
 /// The most cards in the stack: the newest and two peeking (Arc 1.171).
@@ -47,6 +55,10 @@ pub(super) struct MediaStack {
     leaving: Option<(u64, usize, Instant)>,
     /// The last state logged, for check.sh.
     logged: Option<bool>,
+    /// Where the open card's video band was drawn, fully open, and what the core was last asked
+    /// to show: the tab, and where.
+    video_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    video_shown: Option<(u64, Bounds<Pixels>)>,
 }
 
 impl Shell {
@@ -93,6 +105,16 @@ impl Shell {
             0 => 0.,
             n => MEDIA_REST + (n - 1) as f32 * MEDIA_PEEK + MEDIA_GAP,
         }
+    }
+
+    /// The tab whose card shows its video, open: the newest whose page has one. Only one, as the
+    /// core shows one video at a time, and none in the reveal, a window of its own over the page,
+    /// which a video in the browser window's couldn't show over.
+    fn media_video(&self) -> Option<u64> {
+        if self.sidebar_hidden {
+            return None;
+        }
+        (self.media_players().into_iter()).find(|tab| self.page(*tab).media_video)
     }
 
     /// Whether the stack is open, or opening.
@@ -185,6 +207,7 @@ impl Shell {
             let stack = &mut self.media_stack;
             (stack.hovered, stack.open, stack.turned) = (false, false, None);
             (stack.wait, stack.logged) = (None, None);
+            self.place_media_video(false, cx);
             return;
         }
         let stack = &mut self.media_stack;
@@ -200,11 +223,13 @@ impl Shell {
         if !folding {
             stack.leaving = None;
         }
+        let open = stack.open;
+        self.place_media_video(open && !moving && !folding, cx);
         if moving || folding {
             window.request_animation_frame();
             return;
         }
-        let open = stack.open;
+        let stack = &mut self.media_stack;
         if stack.logged != Some(open) {
             stack.logged = Some(open);
             // check.sh waits for this line before it clicks what the open stack shows.
@@ -213,6 +238,32 @@ impl Shell {
                 if open { "open" } else { "rest" }
             );
         }
+    }
+
+    /// Tells the core where the open card's video goes while the stack is `settled` open, and
+    /// that it's gone as the stack starts to close, the card goes or the band moves. The video is
+    /// a native view GPUI can't fade or draw over, so it shows only once the stack is still.
+    fn place_media_video(&mut self, settled: bool, cx: &mut Context<Self>) {
+        let drawn = self.media_stack.video_drawn.get();
+        let want = (settled.then(|| self.media_video()).flatten()).zip(drawn);
+        let shown = self.media_stack.video_shown;
+        if want == shown {
+            return;
+        }
+        if let Some((tab, _)) = shown.filter(|(tab, _)| want.is_none_or(|(to, _)| to != *tab)) {
+            // check.sh waits for this line.
+            log!("browser: card video {tab} none");
+            self.browser.show_video(tab, None, 0., cx);
+        }
+        if let Some((tab, at)) = want {
+            let (x, y) = (f32::from(at.origin.x), f32::from(at.origin.y));
+            let (w, h) = (f32::from(at.size.width), f32::from(at.size.height));
+            // check.sh waits for this line, and captures the band from it.
+            log!("browser: card video {tab} at {x} {y} {w} {h}");
+            self.browser
+                .show_video(tab, Some(at), TILE_RADIUS - MEDIA_OPEN_GAP, cx);
+        }
+        self.media_stack.video_shown = want;
     }
 
     /// The stack, over the footer and Restart to Update.
@@ -243,7 +294,11 @@ impl Shell {
             return None;
         }
         let width = self.width();
-        let height = MEDIA_REST + (MEDIA_OPEN - MEDIA_REST) * p;
+        let video = self.media_video();
+        if video.is_none() {
+            self.media_stack.video_drawn.set(None);
+        }
+        let band = media_video_band(width - 2. * PLATE_INSET);
         let mut placed = Vec::new();
         let (mut open_bottom, mut top) = (0f32, 0f32);
         for (k, &(tab, left)) in cards.iter().enumerate() {
@@ -252,7 +307,11 @@ impl Shell {
             let bottom = lerp(rest_k * MEDIA_PEEK, open_bottom);
             let inset = lerp(PLATE_INSET + rest_k * MEDIA_PEEK_INSET, PLATE_INSET);
             let alpha = lerp(1. - rest_k * MEDIA_PEEK_FADE, 1.) * left;
-            let h = height * left;
+            let open = match video == Some(tab) {
+                true => MEDIA_OPEN + MEDIA_OPEN_GAP + band,
+                false => MEDIA_OPEN,
+            };
+            let h = (MEDIA_REST + (open - MEDIA_REST) * p) * left;
             open_bottom += (h + MEDIA_OPEN_GAP) * left.max(0.);
             top = top.max(bottom + h);
             placed.push((k, tab, bottom, inset, alpha, h));
@@ -261,7 +320,8 @@ impl Shell {
         let cards: Vec<AnyElement> = (placed.into_iter().rev())
             .map(|(k, tab, bottom, inset, alpha, h)| {
                 let front = k == 0;
-                self.media_card(tab, front, p, cx)
+                let band = (video == Some(tab)).then_some(band);
+                self.media_card(tab, front, band, p, cx)
                     .absolute()
                     .left(px(inset))
                     .w(px(width - 2. * inset))
@@ -290,8 +350,16 @@ impl Shell {
         )
     }
 
-    /// `tab`'s card, the front one or one behind it, with the stack `p` open.
-    fn media_card(&self, tab: u64, front: bool, p: f32, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// `tab`'s card, the front one or one behind it, with the stack `p` open, and with its video
+    /// in a `band` this tall over the title row if it shows it.
+    fn media_card(
+        &self,
+        tab: u64,
+        front: bool,
+        band: Option<f32>,
+        p: f32,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let page = self.page(tab);
         let title = match page.media_title.is_empty() {
             true => self.title(tab),
@@ -317,6 +385,31 @@ impl Shell {
                 log!("browser: command media-dismiss via player");
                 shell.dismiss_media(tab, cx);
             }));
+        // The black the video's fitted in, which the core draws the video over once the stack is
+        // still and open, and which shows until the page's first frame comes.
+        let band = band.map(|height| {
+            let drawn = self.media_stack.video_drawn.clone();
+            let listener = canvas(
+                move |bounds, window, _| {
+                    let at = (p >= 1.).then_some(bounds);
+                    if drawn.replace(at) != at {
+                        // The shell tells the core where it's drawn at its next frame.
+                        window.on_next_frame(|window, _| window.refresh());
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .size_full();
+            div()
+                .flex_none()
+                .mt(px(MEDIA_OPEN_GAP))
+                .mx(px(MEDIA_OPEN_GAP))
+                .h(px(height))
+                .rounded(px(TILE_RADIUS - MEDIA_OPEN_GAP))
+                .bg(black())
+                .opacity(p)
+                .child(listener)
+        });
         let title_row = div()
             .flex_none()
             .h(px(MEDIA_OPEN - MEDIA_REST))
@@ -408,6 +501,7 @@ impl Shell {
             .flex_col()
             .justify_end()
             .children(listener)
+            .children(band)
             .child(title_row)
             .child(controls);
         match live {
@@ -479,6 +573,11 @@ impl Shell {
 }
 
 /// How the log names `action`.
+/// The height of the open card's video band, in a card `width` wide.
+fn media_video_band(width: f32) -> f32 {
+    (width - 2. * MEDIA_OPEN_GAP) / MEDIA_VIDEO_ASPECT
+}
+
 fn label(action: MediaAction) -> &'static str {
     match action {
         MediaAction::Play => "play",
@@ -499,6 +598,7 @@ mod tests {
     use crate::tokens::shell::media::motion::{OPEN, WAIT};
     use crate::tokens::shell::{
         MEDIA_BUTTON, MEDIA_GAP, MEDIA_OPEN, MEDIA_OPEN_GAP, MEDIA_PEEK, MEDIA_REST,
+        MEDIA_VIDEO_ASPECT, TILE_RADIUS,
     };
 
     fn space(shell: &mut Shell, tabs: Vec<u64>, cx: &mut gpui::Context<Shell>) {
@@ -531,6 +631,7 @@ mod tests {
             media: true,
             media_playing,
             media_picture_in_picture: true,
+            media_video: true,
             ..shell.page(tab)
         };
         shell.set_page(tab, page, cx);
@@ -679,9 +780,14 @@ mod tests {
         let front = shell
             .read_with(cx, |shell, _| shell.media_drawn.get())
             .expect("no player");
-        assert_eq!(f32::from(front.size.height), MEDIA_OPEN);
+        // Its page has a video, which it shows over its title row.
+        let band = shell
+            .read_with(cx, |shell, _| shell.media_stack.video_drawn.get())
+            .expect("no video");
+        let height = MEDIA_OPEN + MEDIA_OPEN_GAP + f32::from(band.size.height);
+        assert_eq!(f32::from(front.size.height), height);
         // From the right, 4.5 in: ×, then Picture in Picture 2 before it.
-        let y = front.top() + px(MEDIA_OPEN_GAP + (MEDIA_OPEN - MEDIA_REST - MEDIA_OPEN_GAP) / 2.);
+        let y = front.bottom() - px(MEDIA_REST + (MEDIA_OPEN - MEDIA_REST - MEDIA_OPEN_GAP) / 2.);
         let close = front.right() - px((MEDIA_REST - MEDIA_BUTTON) / 2. + MEDIA_BUTTON / 2.);
         let float = close - px(MEDIA_BUTTON + 2.);
         host.take();
@@ -705,6 +811,67 @@ mod tests {
         cx.run_until_parked();
         let calls = host.take();
         assert!(calls.contains(&"select 2".to_owned()), "{calls:?}");
+    }
+
+    /// Open and still, the newest card whose page has a video shows it, over its title row and
+    /// fitted to the card, and the core is told where; as the stack closes, or in the reveal, it's
+    /// told it's gone. A page with only sound has no band.
+    #[gpui::test]
+    fn the_open_card_shows_the_newest_video_while_the_stack_is_open(cx: &mut TestAppContext) {
+        let (shell, cx, host) = drawn(cx);
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        shell.update(cx, |shell, cx| {
+            for tab in [2, 3, 4] {
+                playing(shell, tab, true, cx);
+            }
+            let sound = Page {
+                media_video: false,
+                ..shell.page(4)
+            };
+            shell.set_page(4, sound, cx);
+        });
+        cx.run_until_parked();
+        // At rest, nothing.
+        let calls = host.take();
+        assert!(!calls.iter().any(|call| call.starts_with("show video")));
+        shell.update(cx, |shell, cx| {
+            shell.media_hover(true, cx);
+            shell.turn_media(true, cx);
+        });
+        cx.run_until_parked();
+        // The frame after the band's drawn, which the app's window asks for.
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let band = shell
+            .read_with(cx, |shell, _| shell.media_stack.video_drawn.get())
+            .expect("no video");
+        let (w, h) = (f32::from(band.size.width), f32::from(band.size.height));
+        assert!((w / h - MEDIA_VIDEO_ASPECT).abs() < 0.01, "{w}x{h}");
+        let shown = format!(
+            "show video 3 at {} {} {w} {h} round {}",
+            f32::from(band.origin.x),
+            f32::from(band.origin.y),
+            TILE_RADIUS - MEDIA_OPEN_GAP
+        );
+        let calls = host.take();
+        let videos: Vec<&String> = (calls.iter())
+            .filter(|call| call.starts_with("show video"))
+            .collect();
+        assert_eq!(videos, [&shown], "{calls:?}");
+        shell.update(cx, |shell, cx| shell.media_hover(false, cx));
+        cx.run_until_parked();
+        assert!(host.take().contains(&"show video 3 none".to_owned()));
+        // Open in the reveal, nothing.
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            shell.media_hover(true, cx);
+            shell.turn_media(true, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(!calls.iter().any(|call| call.starts_with("show video")));
     }
 
     /// Every window hears every tab, so a player is for the tabs this window lists: another

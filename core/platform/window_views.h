@@ -109,6 +109,11 @@ void ShowPageIn(views::Widget* widget,
                 const gfx::Rect& frame,
                 double corner_radius);
 
+// Lets the pointer through |widget|, a window of the core's over the browser window's UI that
+// shows something but takes nothing, such as a media card's video, to the UI under it. Views'
+// accept_events does it on the Mac and Wayland, but not on X11 or Windows.
+void PassPointerThrough(views::Widget* widget);
+
 // Whether a page's dialog, such as Chrome's passkey dialog, needs a native window of its own to
 // show over the pages, rather than being drawn in the window's own.
 bool PageDialogsInOwnWindow();
