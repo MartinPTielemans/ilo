@@ -9,7 +9,7 @@
 # (#1773). The trace can't tell the two 2-minute timers apart, so a second fails. With Battery Saver
 # on, through the Local State pref Chrome keeps it in (3 is On), a 75 s trace must have the freezing
 # policy's, so the trace would have shown one. A profile of the run's own keeps the pref from the
-# runs after it.
+# runs after it. It says how much CPU the browser's processes took while the window sat idle.
 
 profile_dir="$PWD/$out/idle/profile"
 # The tasks of queries.cc's timers a trace has: those posted 60 s ahead, those but the process
@@ -33,6 +33,24 @@ others = sum(delays.values()) - min(delays[120], 1)
 print(delays[60], others, " ".join(f"{n}x{s}s" for s, n in sorted(delays.items())) or "none")
 PY
 }
+# The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
+# from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+cpu() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
+      -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+      n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
+}
 # Runs the app idle for $2 seconds with the startup trace, and sets $wakes (the minute timer's),
 # $all (all but the process metrics') and $timers from its trace. $1 names it.
 idle_trace() {
@@ -44,12 +62,22 @@ idle_trace() {
     < /dev/null > "$log" 2>&1 &
   pid=$!
   await_load
-  # Chromium writes the trace once its time is up.
-  for _ in $(seq $(($2 + 75))); do
+  # Chromium writes the trace once its time is up. The CPU it takes idle is read from its 30th
+  # second, once it has settled, to its last before the trace is written.
+  idle_from= idle_to=
+  for second in $(seq $(($2 + 75))); do
+    [ "$second" = 30 ] && idle_from="$(cpu) $(date +%s)"
+    [ "$second" = $(($2 - 10)) ] && idle_to="$(cpu) $(date +%s)"
     python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' "$trace" 2> /dev/null && break
     kill -0 "$pid" 2> /dev/null || gone
     sleep 1
   done
+  idle_cpu=
+  if [ -n "$idle_from" ] && [ -n "$idle_to" ]; then
+    idle_cpu=$(echo "$idle_from $idle_to" | awk '{
+      printf "%.2f s of CPU in %d s (%.2f%% of one core), %d processes", $4 - $1, $6 - $3,
+        ($4 - $1) * 100 / ($6 - $3), $5 }')
+  fi
   [ -s "$trace" ] || fail "the $1 window wrote no trace"
   quit
   counted=$(minute_wakes "$trace") || fail "the $1 window's trace didn't read as JSON"
@@ -61,7 +89,8 @@ COUNTED
 rm -rf "$out/idle"
 mkdir -p "$profile_dir"
 idle_trace off 130
-off=$all off_timers=$timers
+off=$all off_timers=$timers off_cpu=$idle_cpu
+echo "idle: off Battery Saver, the browser's processes took ${off_cpu:-no measured CPU}"
 [ "$off" = 0 ] ||
   fail "idle off Battery Saver, the window was woken $off times in 130 s to measure its pages ($off_timers)"
 python3 -I - "$profile_dir/Local State" << 'PY'
@@ -75,11 +104,13 @@ with open(sys.argv[1], "w") as f:
     json.dump(local, f)
 PY
 idle_trace on 75
-on=$wakes on_timers=$timers
+on=$wakes on_timers=$timers on_cpu=$idle_cpu
+echo "idle: on Battery Saver, the browser's processes took ${on_cpu:-no measured CPU}"
 [ "$on" -ge 1 ] ||
   fail "with Battery Saver on, the trace had no minute measurement ($on_timers), so it can't show one's absence"
 rm -rf "$profile_dir"
 echo "ok: idle for 130 s off Battery Saver the window was woken 0 times to measure its pages, but" \
   "for Chrome's process metrics" \
-  "(queries.cc's timers: $off_timers); with Battery Saver on, $on times ($on_timers)." \
+  "(queries.cc's timers: $off_timers), taking ${off_cpu:-no measured CPU}; with Battery Saver on," \
+  "$on times ($on_timers), taking ${on_cpu:-no measured CPU}." \
   "Traces: $out/idle/off.json, $out/idle/on.json"

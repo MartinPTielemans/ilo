@@ -1942,7 +1942,8 @@ impl Settings {
         }
     }
 
-    /// Tabs & Sidebar: when Today tabs are archived and unloaded, who shares the favorites, and
+    /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
+    /// shares the favorites, and
     /// how the hidden sidebar comes.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
@@ -1993,6 +1994,24 @@ impl Settings {
             ),
             vec![unload],
         );
+        let battery = self.toggle(
+            "battery saver setting",
+            "Battery Saver",
+            unsafe { bc::bc_battery_saver_enabled() },
+            set_battery_saver,
+            accent,
+            cx,
+        );
+        let battery = setting(
+            look,
+            "Battery Saver",
+            Some(
+                "Below 20% on battery, pages draw less often and tabs out of sight that keep \
+                 busy pause."
+                    .into(),
+            ),
+            vec![battery],
+        );
         let scope = favorites_scope();
         let favorites = self.popup(
             Popup::Favorites,
@@ -2025,7 +2044,12 @@ impl Settings {
         );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
-            Block::Rows(archive.into_iter().chain([unload, moving]).collect()),
+            Block::Rows(
+                archive
+                    .into_iter()
+                    .chain([unload, battery, moving])
+                    .collect(),
+            ),
             Block::Rows(vec![favorites]),
         ];
         let edge = self.toggle(
@@ -4413,6 +4437,11 @@ fn set_little_windows(on: bool, cx: &mut App) {
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
     unsafe { bc::bc_set_unload_idle_tabs(unload) };
+}
+
+/// Chrome's Local State pref, so off turns Battery Saver off at once and it never comes on.
+fn set_battery_saver(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_battery_saver_enabled(on) };
 }
 
 /// In every profile; a site's own stays as the user set it in the Site Controls.
