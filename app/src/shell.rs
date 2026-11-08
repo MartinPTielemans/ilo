@@ -127,6 +127,7 @@ mod task_area;
 mod themes;
 mod tile_theme;
 mod trace;
+mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
@@ -186,6 +187,7 @@ use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
+pub use translate::Translation;
 pub use trouble::{NOT_RESPONDING, RELOAD, WAIT};
 use undo::{Edit, What};
 
@@ -1638,6 +1640,15 @@ pub struct Shell {
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// The language each tab's page declares, for those Chrome has found one for, and how the
+    /// translation of each one the user asked to translate goes (translate.rs).
+    page_languages: HashMap<u64, SharedString>,
+    translations: HashMap<u64, Translation>,
+    /// The tab whose translation card is open, and where the card and the URL field's mark were
+    /// drawn last, which the log says when it changes.
+    translate_card: Option<u64>,
+    translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
     battery_saver: Option<i32>,
     /// Where its leaf was drawn last, which the log says when it changes.
@@ -1973,6 +1984,11 @@ impl Shell {
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            page_languages: HashMap::new(),
+            translations: HashMap::new(),
+            translate_card: None,
+            translate_card_drawn: Rc::default(),
+            translate_mark_drawn: Rc::default(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -2134,6 +2150,8 @@ impl Shell {
         shell.questions = from.questions.clone();
         shell.drm_notes = from.drm_notes.clone();
         shell.keys = from.keys.clone();
+        shell.page_languages = from.page_languages.clone();
+        shell.translations = from.translations.clone();
         shell.crash_cards = from
             .crash_cards
             .keys()
@@ -4402,6 +4420,7 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.translate_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))

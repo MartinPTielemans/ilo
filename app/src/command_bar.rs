@@ -337,6 +337,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::SelectSpace(_) => "icons/layers.svg",
         Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",
         Command::TurnOffBatterySaver => "icons/leaf.svg",
+        Command::TranslatePage | Command::UseOriginal => "icons/languages.svg",
         Command::ToggleMute | Command::MuteAll(false) => "icons/volume-2.svg",
         Command::MuteAll(true) => "icons/volume-x.svg",
         Command::ToggleFullScreen => "icons/maximize.svg",

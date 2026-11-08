@@ -25,7 +25,7 @@ use super::{
     panes::pane_frames,
     sidebar_keys,
     swap::{CHECK, LINK},
-    trace, user_keys,
+    trace, translate, user_keys,
 };
 
 /// A browser command, from a key or the sidebar.
@@ -90,6 +90,11 @@ pub enum Command {
     ToggleMute,
     /// Turns Chrome's Battery Saver off until the computer's plugged in, while it's on (#686).
     TurnOffBatterySaver,
+    /// Translates the page shown into the user's language on the device, where it's in another
+    /// (#671).
+    TranslatePage,
+    /// Puts the translated page's own words back, as Arc's Use Original does.
+    UseOriginal,
     /// Mutes every tab of the window (`true`), or unmutes them all: Arc's Mute All Tabs.
     MuteAll(bool),
     /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
@@ -475,6 +480,16 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "Turn Off Battery Saver for Now",
         Command::TurnOffBatterySaver,
         &["energy saver", "power"],
+    ),
+    (
+        "Translate Page",
+        Command::TranslatePage,
+        &["translation", "language"],
+    ),
+    (
+        "Use Original",
+        Command::UseOriginal,
+        &["translation", "untranslate", "show original"],
     ),
     (
         "Mute All Tabs",
@@ -1144,6 +1159,8 @@ impl Command {
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
             Command::TurnOffBatterySaver => "turn-off-battery-saver",
+            Command::TranslatePage => "translate-page",
+            Command::UseOriginal => "use-original",
             Command::MuteAll(true) => "mute-all-tabs",
             Command::MuteAll(false) => "unmute-all-tabs",
             Command::ToggleFullScreen => "toggle-full-screen",
@@ -1331,6 +1348,7 @@ pub fn bind_keys(cx: &mut App) {
     extensions::bind(cx);
     agent_bar::bind(cx);
     drm_note::bind(cx);
+    translate::bind(cx);
     sidebar_keys::bind(cx);
 }
 
@@ -1564,6 +1582,8 @@ impl Shell {
             Command::CopyUrl if !self.chosen.is_empty() => return self.copy_chosen(cx),
             Command::CopyUrl => return self.copy_url(false, cx),
             Command::TurnOffBatterySaver => return self.turn_off_battery_saver(cx),
+            Command::TranslatePage => return self.translate_page(cx),
+            Command::UseOriginal => return self.use_original(cx),
             Command::CopyMarkdownLink => return self.copy_url(true, cx),
             Command::PasteUrlAsTab => return self.paste_url_as_tab(cx),
             Command::Share => return self.share_page(cx),
@@ -2155,6 +2175,7 @@ impl Shell {
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
             Command::TurnOffBatterySaver => self.battery_saver.is_some(),
+            Command::TranslatePage | Command::UseOriginal => self.offers_translation(command),
             Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
             // As the menus' New Profile: only an empty Space changes profile.
             Command::ChangeProfile(None) => {
