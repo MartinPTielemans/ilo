@@ -553,6 +553,17 @@ impl Browser for Recorder {
         self.record(format!("device settings {tab}"));
     }
 
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        match pin {
+            Some(pin) => self.record(format!("pair {tab} {pin}")),
+            None => self.record(format!("pair {tab}")),
+        }
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        self.record(format!("cancel pair {tab}"));
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         let id = self.core.ticket();
         self.edit(format!("clear as {id}"));

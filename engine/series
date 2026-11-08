@@ -74,3 +74,4 @@ ours/chromium-private-downloads-save.patch
 ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
 ours/chromium-session-cookies-window-close.patch
+ours/chromium-core-bluetooth-pair.patch

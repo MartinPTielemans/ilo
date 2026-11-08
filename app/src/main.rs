@@ -946,6 +946,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_permission_asked: Some(tab_permission_asked),
         tab_cast: Some(tab_cast),
         tab_chooser: Some(tab_chooser),
+        tab_pair: Some(tab_pair),
         tab_site_controls: Some(tab_site_controls),
         tab_element_box: Some(tab_element_box),
         tab_link_target: Some(tab_link_target),

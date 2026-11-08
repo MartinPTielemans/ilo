@@ -97,6 +97,7 @@ mod onboarding;
 mod page_dialog;
 mod page_menu;
 mod page_motion;
+mod pair;
 mod panes;
 mod permission;
 #[cfg(test)]
@@ -171,6 +172,7 @@ pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
+pub use pair::{Pair, PairKind};
 pub use panes::page_frame;
 use panes::pane_frames;
 pub use permission::{Answer, Question};
@@ -1587,6 +1589,11 @@ pub struct Shell {
     chooser_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tab whose chooser shows, and its moment on screen before a click grants.
     chooser_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What devices the tabs' pages pair with ask (pair.rs), kept as the choosers are.
+    pairs: HashMap<u64, pair::Pairing>,
+    pair_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The PIN field takes the keyboard once it's drawn.
+    pair_wants_keyboard: bool,
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1958,6 +1965,9 @@ impl Shell {
             choosers: HashMap::new(),
             chooser_drawn: Rc::default(),
             chooser_settling: RefCell::default(),
+            pairs: HashMap::new(),
+            pair_drawn: Rc::default(),
+            pair_wants_keyboard: false,
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
@@ -4037,6 +4047,7 @@ impl Render for Shell {
             window.focus(&form.name.focus_handle(cx), cx);
         }
         self.focus_talk(window, cx);
+        self.focus_pair(window, cx);
         // A new folder's field is drawn once the browser reports the folder, and blurs if focused
         // before.
         let drawn = self
@@ -4437,6 +4448,7 @@ impl Shell {
                     .children(self.question_card(cx))
                     .children(self.translate_card(cx))
                     .children(self.chooser_card(cx))
+                    .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))

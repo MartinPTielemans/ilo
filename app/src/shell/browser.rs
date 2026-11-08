@@ -135,6 +135,10 @@ pub trait Browser {
     /// The chooser's Bluetooth Settings… or System Settings…: the system's settings, where
     /// Bluetooth is turned on, or ilo let use it.
     fn device_settings(&self, tab: u64, cx: &mut App);
+    /// The pairing card's Pair: with the PIN typed, for a device that asks for one, else none.
+    fn pair(&self, tab: u64, pin: Option<SharedString>, cx: &mut App);
+    /// The pairing card's ×: the device isn't paired, and the page's connect fails.
+    fn cancel_pair(&self, tab: u64, cx: &mut App);
     /// Closes the Today tabs of the Space shown, but the one shown, unless it shows them all, and
     /// returns the id of the clear, or 0 if it closed none.
     fn clear(&self, cx: &mut App) -> u64;

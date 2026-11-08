@@ -412,6 +412,12 @@ typedef struct bc_autofill_entry {
 #define BC_SCAN_OFF 3
 #define BC_SCAN_DENIED 4
 
+// What a Bluetooth device a page pairs with asks of the user, as Chrome's prompts do: its PIN,
+// whether to pair, or whether the passkey it shows matches.
+#define BC_PAIR_PIN 0
+#define BC_PAIR_CONFIRM 1
+#define BC_PAIR_PASSKEY 2
+
 // A device a page's chooser lists, as Chrome's chooser would.
 typedef struct bc_chooser_device {
   // The core's, for bc_tab_choose_device: the same while the device stays, and again if it comes
@@ -933,6 +939,13 @@ typedef struct bc_host {
                       const bc_chooser_device* devices,
                       size_t count,
                       int scan);
+  // A Bluetooth device the tab's page pairs with asks the user, in place of Chrome's dialogs, on
+  // Linux and Windows (the Mac's own prompt asks there): |device| as Chrome names it, a BC_PAIR_
+  // |kind|, and for BC_PAIR_PASSKEY the |passkey| the device shows, else null. The core keeps it
+  // while another tab shows. Once it ends, with |device| null: answered, bc_tab_cancel_pair, the
+  // page gone or the tab closed. Never for a tab in an agent's Space, whose chooser ended as
+  // cancelled.
+  void (*tab_pair)(void* context, bc_id tab, const char* device, int kind, const char* passkey);
   // The box of the element at (|x|, |y|) bc_tab_element_at asked for, its border's in points from
   // the top-left of the page's view, or a box 0 wide if there's none or the page went.
   void (*tab_element_box)(void* context, bc_id tab, double x, double y, bc_rect box);
@@ -2712,6 +2725,20 @@ BC_EXPORT void bc_tab_scan_devices(bc_id tab);
 // Opens the system's settings for the tab's Bluetooth chooser: where Bluetooth is turned on, for
 // BC_SCAN_OFF, on the Mac and Windows, or where the browser is let use it, for BC_SCAN_DENIED.
 BC_EXPORT void bc_tab_device_settings(bc_id tab);
+
+// Answers the tab's pairing prompt (tab_pair) as Chrome's OK does: with the |pin| typed for
+// BC_PAIR_PIN, which needs a digit, or null to pair for the others. Then tab_pair with a null
+// device. The user's: agents get none.
+BC_EXPORT void bc_tab_pair(bc_id tab, const char* pin);
+
+// Ends the tab's pairing prompt as Chrome's Cancel does: the device isn't paired, and the page's
+// connect fails. Then tab_pair with a null device.
+BC_EXPORT void bc_tab_cancel_pair(bc_id tab);
+
+// For check.sh, as a run has no Bluetooth device: the tab's page asks as if a device "Check device"
+// it pairs with asked with the BC_PAIR_ |kind|, with passkey "123456" for BC_PAIR_PASSKEY. The
+// answer is logged, "browser: tab <id> paired [pin]" or "browser: tab <id> pairing cancelled".
+BC_EXPORT void bc_tab_pair_for_testing(bc_id tab, int kind);
 
 // Takes the device at |index| of the tab's Site Controls' devices away from its site, as Chrome's
 // page info's delete button does, if bc_tab_site_controls is watching the tab. Then

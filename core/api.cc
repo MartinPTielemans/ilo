@@ -29,6 +29,7 @@
 #include "browser_core/autofill_menu.h"
 #include "browser_core/capture.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/bluetooth_pair.h"
 #include "browser_core/device_chooser.h"
 #include "browser_core/clear_site.h"
 #include "browser_core/crash_reports.h"
@@ -2078,6 +2079,18 @@ void bc_tab_scan_devices(bc_id id) {
 
 void bc_tab_device_settings(bc_id id) {
   browser_core::DeviceChooser::Settings(id);
+}
+
+void bc_tab_pair(bc_id id, const char* pin) {
+  browser_core::BluetoothPair::Pair(id, pin);
+}
+
+void bc_tab_cancel_pair(bc_id id) {
+  browser_core::BluetoothPair::Cancel(id);
+}
+
+void bc_tab_pair_for_testing(bc_id id, int kind) {
+  browser_core::BluetoothPair::ShowForTesting(id, kind);
 }
 
 void bc_tab_remove_site_device(bc_id id, size_t index) {
