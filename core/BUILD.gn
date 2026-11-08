@@ -296,6 +296,8 @@ source_set("browser_core") {
     "main_delegate.h",
     "mini_player.cc",
     "mini_player.h",
+    "native_ad_block.cc",
+    "native_ad_block.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",

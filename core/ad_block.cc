@@ -33,6 +33,7 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
+#include "browser_core/native_ad_block.h"
 #include "browser_core/session.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
@@ -50,6 +51,7 @@
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/reload_type.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/disable_reason.h"
@@ -68,8 +70,10 @@
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/url_pattern.h"
 #include "extensions/common/url_pattern_set.h"
+#include "net/base/isolation_info.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace browser_core {
 
@@ -130,12 +134,40 @@ struct Listed {
   std::string group;
   std::string title;
   bool on = false;
+  // Its copy in the folder uBlock Origin comes in, if it comes with one, which the browser's own
+  // ad blocker reads (native_ad_block.h).
+  base::FilePath file;
 };
 
 // The lists, by group and title, once ReadLists has read them.
 std::vector<Listed>& Lists() {
   static base::NoDestructor<std::vector<Listed>> lists;
   return *lists;
+}
+
+// The first of |entry|'s addresses that's a file in |folder|, uBlock Origin's, where it has one:
+// assets.json names its copy beside the lists' authors' addresses. Off the UI thread.
+base::FilePath LocalCopy(const base::FilePath& folder, const base::DictValue& entry) {
+  std::vector<std::string> addresses;
+  if (const std::string* one = entry.FindString("contentURL")) {
+    addresses.push_back(*one);
+  } else if (const base::ListValue* several = entry.FindList("contentURL")) {
+    for (const base::Value& address : *several) {
+      if (address.is_string()) {
+        addresses.push_back(address.GetString());
+      }
+    }
+  }
+  for (const std::string& address : addresses) {
+    if (address.find("://") != std::string::npos) {
+      continue;
+    }
+    const base::FilePath file = folder.AppendASCII(address);
+    if (base::PathExists(file)) {
+      return file;
+    }
+  }
+  return base::FilePath();
 }
 
 // Reads the lists from the assets.json at |path|, the one uBlock Origin comes with. Off the UI
@@ -158,7 +190,8 @@ std::vector<Listed> ReadLists(const base::FilePath& path) {
     const std::string* group = entry ? entry->FindString("group") : nullptr;
     const std::string* title = entry ? entry->FindString("title") : nullptr;
     if (content && *content == "filters" && group && GroupRank(*group) >= 0 && title) {
-      lists.push_back({key, *group, *title, !entry->FindBool("off").value_or(false)});
+      lists.push_back({key, *group, *title, !entry->FindBool("off").value_or(false),
+                       LocalCopy(path.DirName().DirName(), *entry)});
     }
   }
   std::ranges::sort(lists, {}, [](const Listed& list) {
@@ -280,6 +313,26 @@ policy::ConfigurationPolicyProvider* PolicyProvider() {
   return ThePolicy();
 }
 
+// Gives the ad blocker the lists and filters as they are now: uBlock Origin as its policy, which
+// the policy service tells it of only if they changed, or else the browser's own, once the lists
+// are read.
+void Apply() {
+  ThePolicy()->Update();
+  base::FilePath resources;
+  if (!NativeAdBlock() || Lists().empty() ||
+      !base::PathService::Get(base::DIR_ASSETS, &resources)) {
+    return;
+  }
+  std::vector<base::FilePath> files;
+  for (const AdBlockList& list : AdBlockLists()) {
+    const auto listed = std::ranges::find(Lists(), list.key, &Listed::key);
+    if (list.on && listed != Lists().end() && !listed->file.empty()) {
+      files.push_back(listed->file);
+    }
+  }
+  UseNativeAdBlock(resources.Append(FILE_PATH_LITERAL("ublock")), files, AdBlockFilters());
+}
+
 // Reads the lists once, as the first profile loads, and gives them to it.
 void ReadListsOnce() {
   static bool read = false;
@@ -294,7 +347,7 @@ void ReadListsOnce() {
                                      .Append(FILE_PATH_LITERAL("assets.json"))),
       base::BindOnce([](std::vector<Listed> lists) {
         Lists() = std::move(lists);
-        ThePolicy()->Update();
+        Apply();
       }));
 }
 
@@ -547,6 +600,11 @@ void LoadInto(Profile* profile) {
   if (profile->IsOffTheRecord()) {
     return;
   }
+  // The browser's own reads the lists uBlock Origin comes with, which then stays out.
+  if (NativeAdBlock()) {
+    ReadListsOnce();
+    return;
+  }
   Followers()[profile] = std::make_unique<Follower>(profile);
   Load(profile);
   ReadListsOnce();
@@ -564,6 +622,11 @@ bool IsAdBlocker(const std::string& id) {
 }
 
 void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
+  // The browser's own has nothing to wait for: a request waits for it itself, for the moment after
+  // launch it takes to load.
+  if (NativeAdBlock()) {
+    return;
+  }
   content::NavigationHandle& navigation = registry.GetNavigationHandle();
   const GURL& url = navigation.GetURL();
   content::BrowserContext* context = navigation.GetWebContents()->GetBrowserContext();
@@ -585,8 +648,12 @@ void ApplyAdBlocking() {
     return;
   }
   // The settings read, its lists and filters are the user's.
-  ThePolicy()->Update();
+  Apply();
   const bool on = UserSettings().ad_blocking;
+  if (NativeAdBlock()) {
+    SetNativeAdBlockOn(on);
+    return;
+  }
   for (Profile* profile : manager->GetLoadedProfiles()) {
     extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(profile);
     extensions::ExtensionRegistry* registry = extensions::ExtensionRegistry::Get(profile);
@@ -604,12 +671,47 @@ void ApplyAdBlocking() {
   }
 }
 
+void ProxyForAdBlock(content::BrowserContext* context,
+                     content::RenderFrameHost* frame,
+                     content::ContentBrowserClient::URLLoaderFactoryType type,
+                     const url::Origin& request_initiator,
+                     const net::IsolationInfo& isolation_info,
+                     network::URLLoaderFactoryBuilder& factory_builder) {
+  using Type = content::ContentBrowserClient::URLLoaderFactoryType;
+  if (!NativeAdBlock() || !UserSettings().ad_blocking || type == Type::kDownload ||
+      type == Type::kDevTools) {
+    return;
+  }
+  // The page the requests are for, whose site decides: a frame's navigation is its page's, and a
+  // page's own goes ahead (native_ad_block.cc).
+  GURL page;
+  if (type == Type::kNavigation) {
+    if (!frame || !frame->GetParentOrOuterDocument()) {
+      return;
+    }
+    page = frame->GetOutermostMainFrame()->GetLastCommittedURL();
+  } else if (isolation_info.top_frame_origin()) {
+    page = isolation_info.top_frame_origin()->GetURL();
+  } else {
+    page = request_initiator.GetURL();
+  }
+  // Only a web page's, as uBlock Origin sees: not the browser's own pages' nor an extension's.
+  if (!page.SchemeIsHTTPOrHTTPS() ||
+      OffSites(Profile::FromBrowserContext(context)->GetOriginalProfile()).MatchesURL(page)) {
+    return;
+  }
+  ProxyForNativeAdBlock(factory_builder);
+}
+
 std::optional<bool> AdBlockingOnSite(content::WebContents* contents) {
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
   const GURL& url = contents->GetLastCommittedURL();
   // A private window's sites aren't kept, and its windows follow the profile's.
-  if (profile->IsOffTheRecord() || !url.SchemeIsHTTPOrHTTPS() ||
-      !extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(kId)) {
+  const bool on =
+      NativeAdBlock()
+          ? UserSettings().ad_blocking
+          : extensions::ExtensionRegistry::Get(profile)->enabled_extensions().Contains(kId);
+  if (profile->IsOffTheRecord() || !url.SchemeIsHTTPOrHTTPS() || !on) {
     return std::nullopt;
   }
   return !OffSites(profile).MatchesURL(url);
@@ -701,7 +803,7 @@ void SetAdBlockList(const std::string& key, bool on) {
     UserSettings().ad_block_lists[key] = on;
   }
   SessionChanged();
-  ThePolicy()->Update();
+  Apply();
 }
 
 std::string AdBlockFilters() {
@@ -727,7 +829,7 @@ void SetAdBlockFilters(const std::string& filters) {
   }
   UserSettings().ad_block_filters = std::string(base::TrimWhitespaceASCII(filters, base::TRIM_ALL));
   SessionChanged();
-  ThePolicy()->Update();
+  Apply();
 }
 
 std::string AdBlockedOn(content::WebContents* contents) {

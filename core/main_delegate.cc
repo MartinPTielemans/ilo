@@ -403,6 +403,32 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     }
   }
 
+  // Chrome's, and the browser's own ad blocker where it blocks (ad_block.h).
+  void WillCreateURLLoaderFactory(
+      content::BrowserContext* browser_context,
+      content::RenderFrameHost* frame,
+      int render_process_id,
+      URLLoaderFactoryType type,
+      const url::Origin& request_initiator,
+      const net::IsolationInfo& isolation_info,
+      std::optional<int64_t> navigation_id,
+      ukm::SourceIdObj ukm_source_id,
+      network::URLLoaderFactoryBuilder& factory_builder,
+      mojo::PendingRemote<network::mojom::TrustedURLLoaderHeaderClient>* header_client,
+      bool* bypass_redirect_checks,
+      bool* disable_secure_dns,
+      network::mojom::URLLoaderFactoryOverridePtr* factory_override,
+      scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner,
+      bool is_for_network_service) override {
+    ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+        browser_context, frame, render_process_id, type, request_initiator, isolation_info,
+        navigation_id, ukm_source_id, factory_builder, header_client, bypass_redirect_checks,
+        disable_secure_dns, factory_override, navigation_response_task_runner,
+        is_for_network_service);
+    ProxyForAdBlock(browser_context, frame, type, request_initiator, isolation_info,
+                    factory_builder);
+  }
+
   void CreateThrottlesForNavigation(content::NavigationThrottleRegistry& registry) override {
     ChromeContentBrowserClient::CreateThrottlesForNavigation(registry);
     system_engine::CreateThrottlesForNavigation(registry);
