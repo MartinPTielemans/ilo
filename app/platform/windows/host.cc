@@ -3528,10 +3528,18 @@ void host_show_drop_targets(void* ui_view) {
   double width, height;
   ContentSize(Root(ui_view), &width, &height);
   Show(g_drop_targets, ui_view, 0, 0, width, height, false);
+  // As the Mac's and Linux's say, which split waits for.
+  if (g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
+    fprintf(stderr, "browser: drop targets shown\n");
+  }
 }
 
 void host_hide_drop_targets(void) {
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Hide(g_drop_targets);
+  if (shown) {
+    fprintf(stderr, "browser: drop targets hidden\n");
+  }
 }
 
 void host_add_dialog(void* dialog_view) {
