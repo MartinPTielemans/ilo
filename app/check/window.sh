@@ -90,7 +90,7 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("blur", () => leave && (location = "https://example.com/"));
   // A w opens the page the fragment names in a tab.
   addEventListener("keydown", e => e.key == "w" && window.open(location.hash.slice(1)));
-  // A g opens the site's gap.html in a tab.
+  // A g opens gap.html, from the check's server, in a tab.
   addEventListener("keydown", e => e.key == "g" && window.open(location.hash.slice(1).replace(/wait$/, "gap.html")));
   requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>
@@ -379,13 +379,13 @@ check_layout "after a resize"
 check_buttons "after a resize"
 # Widened, the space a page hasn't drawn yet shows the page's own background, as Arc's does, not
 # the colour of a page before its first paint: the frame the page drew before stays at its old
-# size, its blue strip 300 to the left, until the page draws at the new size. Blue at the new right
+# size, its blue strip 200 to the left, until the page draws at the new size. Blue at the new right
 # edge means the page drew, or its frame was stretched to fill, either way leaving no gap.
 send key g
 expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open gap.html"
 tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
 await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
-send resize 1300 700
+send resize 1200 700
 check_layout "after widening the window over gap.html"
 ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
