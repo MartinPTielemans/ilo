@@ -298,6 +298,8 @@ source_set("browser_core") {
     "mini_player.h",
     "native_ad_block.cc",
     "native_ad_block.h",
+    "native_ad_block_lists.cc",
+    "native_ad_block_lists.h",
     "notes.cc",
     "notes.h",
     "open_app_dialog.cc",

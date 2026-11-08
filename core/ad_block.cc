@@ -34,6 +34,7 @@
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/native_ad_block.h"
+#include "browser_core/native_ad_block_lists.h"
 #include "browser_core/session.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
@@ -74,6 +75,7 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
 namespace browser_core {
 
@@ -89,7 +91,13 @@ constexpr char kFilterListsSource[] = "";
 
 // How often, in hours, it updates its lists while the browser stays open: weekly, so an idle
 // browser wakes for them once a week, as a launch updates the lists past their expiry 37 s in.
+// The browser's own ad blocker keeps the same times.
 constexpr char kUpdatePeriodHours[] = "168";
+constexpr base::TimeDelta kUpdatePeriod = base::Hours(168);
+constexpr base::TimeDelta kFirstUpdate = base::Seconds(37);
+
+// How long a list stays current where assets.json doesn't say, as uBlock Origin's default.
+constexpr base::TimeDelta kUpdateAfter = base::Days(5);
 
 // The patterns of the sites the user turned it off on, in its entry of the profile's extension
 // prefs.
@@ -134,9 +142,12 @@ struct Listed {
   std::string group;
   std::string title;
   bool on = false;
-  // Its copy in the folder uBlock Origin comes in, if it comes with one, which the browser's own
-  // ad blocker reads (native_ad_block.h).
+  // The copy the browser's own ad blocker reads (native_ad_block.h): the one it downloaded last,
+  // else the one in the folder uBlock Origin comes in, if it comes with one, else none.
   base::FilePath file;
+  // Where the browser's own downloads it from, and how long a copy stays current.
+  std::vector<GURL> addresses;
+  base::TimeDelta update_after;
 };
 
 // The lists, by group and title, once ReadLists has read them.
@@ -170,6 +181,30 @@ base::FilePath LocalCopy(const base::FilePath& folder, const base::DictValue& en
   return base::FilePath();
 }
 
+// |entry|'s web addresses, in the order uBlock Origin updates a list from: its mirrors, then the
+// list's authors'.
+std::vector<GURL> Addresses(const base::DictValue& entry) {
+  std::vector<GURL> addresses;
+  for (const char* field : {"cdnURLs", "contentURL"}) {
+    std::vector<std::string> strings;
+    if (const std::string* one = entry.FindString(field)) {
+      strings.push_back(*one);
+    } else if (const base::ListValue* several = entry.FindList(field)) {
+      for (const base::Value& address : *several) {
+        if (address.is_string()) {
+          strings.push_back(address.GetString());
+        }
+      }
+    }
+    for (const std::string& address : strings) {
+      if (const GURL url(address); url.SchemeIs(url::kHttpsScheme)) {
+        addresses.push_back(url);
+      }
+    }
+  }
+  return addresses;
+}
+
 // Reads the lists from the assets.json at |path|, the one uBlock Origin comes with. Off the UI
 // thread. Lists its source adds later, as it updates assets.json, aren't Settings' until a browser
 // update brings them.
@@ -190,8 +225,14 @@ std::vector<Listed> ReadLists(const base::FilePath& path) {
     const std::string* group = entry ? entry->FindString("group") : nullptr;
     const std::string* title = entry ? entry->FindString("title") : nullptr;
     if (content && *content == "filters" && group && GroupRank(*group) >= 0 && title) {
+      base::FilePath file = DownloadedAdBlockList(key);
+      if (!base::PathExists(file)) {
+        file = LocalCopy(path.DirName().DirName(), *entry);
+      }
+      const std::optional<double> days = entry->FindDouble("updateAfter");
       lists.push_back({key, *group, *title, !entry->FindBool("off").value_or(false),
-                       LocalCopy(path.DirName().DirName(), *entry)});
+                       std::move(file), Addresses(*entry),
+                       days && *days > 0 ? base::Days(*days) : kUpdateAfter});
     }
   }
   std::ranges::sort(lists, {}, [](const Listed& list) {
@@ -333,6 +374,43 @@ void Apply() {
   UseNativeAdBlock(resources.Append(FILE_PATH_LITERAL("ublock")), files, AdBlockFilters());
 }
 
+// Downloads the lists turned on that are past their expiry, or that the browser has no copy of,
+// for the browser's own ad blocker, and gives it those it downloaded. One update at a time.
+void UpdateLists() {
+  static bool updating = false;
+  if (!NativeAdBlock() || !UserSettings().ad_blocking || updating) {
+    return;
+  }
+  std::vector<NativeAdBlockList> due;
+  for (const AdBlockList& list : AdBlockLists()) {
+    const auto listed = std::ranges::find(Lists(), list.key, &Listed::key);
+    if (list.on && listed != Lists().end() && !listed->addresses.empty()) {
+      due.push_back({listed->key, listed->addresses, listed->update_after});
+    }
+  }
+  updating = true;
+  UpdateNativeAdBlockLists(std::move(due), base::BindOnce([](std::vector<std::string> keys) {
+                             updating = false;
+                             for (const std::string& key : keys) {
+                               const auto listed = std::ranges::find(Lists(), key, &Listed::key);
+                               if (listed != Lists().end()) {
+                                 listed->file = DownloadedAdBlockList(key);
+                               }
+                             }
+                             if (!keys.empty()) {
+                               Apply();
+                             }
+                           }));
+}
+
+// Updates the lists 37 s after launch and weekly after, as uBlock Origin does its own.
+void KeepListsCurrent() {
+  static base::NoDestructor<base::OneShotTimer> first;
+  static base::NoDestructor<base::RepeatingTimer> weekly;
+  first->Start(FROM_HERE, kFirstUpdate, base::BindOnce(&UpdateLists));
+  weekly->Start(FROM_HERE, kUpdatePeriod, base::BindRepeating(&UpdateLists));
+}
+
 // Reads the lists once, as the first profile loads, and gives them to it.
 void ReadListsOnce() {
   static bool read = false;
@@ -348,6 +426,9 @@ void ReadListsOnce() {
       base::BindOnce([](std::vector<Listed> lists) {
         Lists() = std::move(lists);
         Apply();
+        if (NativeAdBlock()) {
+          KeepListsCurrent();
+        }
       }));
 }
 
@@ -804,6 +885,10 @@ void SetAdBlockList(const std::string& key, bool on) {
   }
   SessionChanged();
   Apply();
+  // One the browser has no copy of blocks once it's downloaded.
+  if (on) {
+    UpdateLists();
+  }
 }
 
 std::string AdBlockFilters() {
