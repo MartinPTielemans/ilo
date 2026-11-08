@@ -859,15 +859,15 @@ send key a
 asks "http://localhost:$port" "the site reset in Site Controls didn't ask again"
 send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
 expect "^browser: title $r granted\$" "Allow didn't grant the page after the reset"
-# The footer's … menu is Arc's without Boost's items, and All Site Settings… opens Chrome's for the
-# site.
+# The footer's … menu is Arc's, with New Boost… and View Boosts… (#695), and All Site Settings… opens
+# Chrome's for the site.
 away
 send move $sidebar_point
 expect '^browser: sidebar tools shown$' "the URL field's buttons didn't fade in"
 send click $site_controls_point
 expect '^browser: site controls settled$' "the Site Controls didn't open for their … menu"
 send click 298 $(footer_y)
-more_menu=$(cased 'Clear Cache, Clear Cookies, Manage Extensions…, Add Extension…, All Site Settings…')
+more_menu=$(cased 'Clear Cache, Clear Cookies, New Boost…, View Boosts…, Manage Extensions…, Add Extension…, All Site Settings…')
 expect "^browser: menu shown $more_menu\$" "the … menu didn't list Arc's items"
 send choose "$(cased 'All Site Settings…')"
 expect "^browser: site controls run $(cased 'All Site Settings…')\$" "All Site Settings… didn't run"
