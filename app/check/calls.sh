@@ -135,7 +135,7 @@ pressure() {
 }
 # The tabs that let go of their pages since the driver's command $1, by their ids.
 unloaded_since() {
-  sed -n "/^browser: drive $1: /,\$p" "$log" | sed -n 's/^browser: tab \([0-9]*\) without its page$/\1/p' |
+  sed -n "/^browser: drive $1: /,\$p" "$log" | sed -n 's/^.*browser: tab \([0-9]*\) without its page$/\1/p' |
     tr '\n' ' '
 }
 for _ in $(seq 100); do
