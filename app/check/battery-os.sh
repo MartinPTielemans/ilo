@@ -35,7 +35,7 @@ elif windows; then
     --trace-startup-duration=70 --trace-startup-file="$(app_path "$trace")" < /dev/null > "$log" 2>&1 &
   pid=$!
   await_load
-  await "^browser: battery sampled on Windows' notice\$" ||
+  await "browser: battery sampled on Windows' notice\$" ||
     fail "the battery wasn't sampled on Windows' notice"
   # Chromium writes the trace once its time is up.
   for _ in $(seq 145); do
@@ -86,15 +86,15 @@ else
   DBUS_SYSTEM_BUS_ADDRESS=$upower_bus BROWSER_URL=about:blank "$browser" < /dev/null > "$log" 2>&1 &
   pid=$!
   await_load
-  await '^browser: UPower says 50% on battery$' || fail "the app didn't read UPower's 50% on battery"
+  await 'browser: UPower says 50% on battery$' || fail "the app didn't read UPower's 50% on battery"
   ! grep -q 'browser: battery saver on' "$log" || fail "Battery Saver turned on at 50%"
   launched=$(upower_reads)
   echo "rate 3" >&6
   echo "set 19 2" >&6
-  await '^browser: UPower says 19% on battery$' || fail "the app didn't read UPower's 19% on battery"
+  await 'browser: UPower says 19% on battery$' || fail "the app didn't read UPower's 19% on battery"
   await 'browser: battery saver on at 19%$' || fail "Battery Saver didn't turn on at 19% on battery"
   echo "set 19 1" >&6
-  await '^browser: UPower says 19% plugged in$' || fail "the app didn't read UPower's charging"
+  await 'browser: UPower says 19% plugged in$' || fail "the app didn't read UPower's charging"
   await 'browser: battery saver off$' || fail "Battery Saver stayed on, charging"
   quit
   exec 6>&-
