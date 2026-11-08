@@ -7,7 +7,7 @@
 
 serve
 # "t" puts the page's words in its title, as the log says the title, so the run reads them.
-printf '%s' '<!doctype html><html lang="es"><title>Hola mundo</title>
+printf '%s' '<!doctype html><html lang="es"><meta charset="utf-8"><title>Hola mundo</title>
 <body style="background:#333;color:#eee">
 <h1>Buenos días</h1>
 <p>El gato duerme <b>en la casa</b>.</p>
