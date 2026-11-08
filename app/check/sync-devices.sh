@@ -204,9 +204,9 @@ for _ in $(seq 50); do
 done
 [ "$(today)" = "$a_tab" ] || fail "A's \"from B\" doesn't hold just the tab A moved there: $(today)"
 post rightclick $(row 0)
-expect '^browser: menu shown .*Archive Tab' "A's Today tab's menu didn't offer Archive Tab"
+expect "^browser: menu shown .*$(cased 'Archive Tab')" "A's Today tab's menu didn't offer Archive Tab"
 archived=$(grep '^browser: archive [0-9]* tabs$' "$b_log" | tail -1 | cut -d' ' -f3)
-send choose "Archive Tab"
+send choose "$(cased 'Archive Tab')"
 changed=$(now_ms)
 b_gets "browser: synced close $b_tab\$" 0 "$changed" "A's archiving its tab didn't close B's"
 for _ in $(seq 50); do
