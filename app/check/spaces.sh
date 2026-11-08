@@ -202,8 +202,11 @@ by_name() {
   if [ -n "$3" ]; then
     ../tools/window-screenshot.sh "$pid" "$out/$3" || fail "no window to capture"
   fi
-  for _ in $(seq "$index"); do
+  # Counted, as the Mac's seq 0 counts down to 0 rather than nothing.
+  down=0
+  while [ "$down" -lt "$index" ]; do
     send key down
+    down=$((down + 1))
   done
   send key return
   expect "^browser: command bar runs $2\$" "↩ on $2 ran another row"
