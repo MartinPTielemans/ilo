@@ -131,16 +131,24 @@ perf_memory() {
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
   case $1 in *10) perf_regions "$1" ;; esac
 }
-# What the browser process and the largest renderer hold at memory $1, by kind of memory, for
+# What the browser process and a typical renderer hold at memory $1, by kind of memory, for
 # #2138: vmmap's regions on the Mac, smaps' mappings on Linux. Chrome's may need root on the Mac.
 perf_regions() {
+  # The largest browser process, and a typical renderer: the largest is the one with the page in front.
   for kind in browser renderer; do
-    p=$(python3 -I check/usage.py largest "$perf_dir/memory-$1.json" $kind)
+    pick=largest
+    [ $kind = renderer ] && pick=median
+    p=$(python3 -I check/usage.py $pick "$perf_dir/memory-$1.json" $kind)
     [ -n "$p" ] || continue
     file="$perf_dir/regions-$1-$kind.txt"
     if [ "$(uname)" = Darwin ]; then
       vmmap --summary "$p" > "$file" 2>&1 || sudo -n vmmap --summary "$p" > "$file" 2>&1 ||
         echo "perf: no regions of $1's $kind: $(tail -1 "$file")"
+      # Each image's constant data, whose dirty pages are the ones dyld fixed up rather than the
+      # kernel at page-in, with the dyld variables the process was started with.
+      { vmmap -v "$p" 2>&1 || sudo -n vmmap -v "$p" 2>&1; } | grep -E '^(__DATA_CONST|__DATA |__AUTH_CONST|__AUTH )' > "$file.const" || true
+      ps -Eww -o command= -p "$p" | tr ' ' '\n' | grep '^DYLD_' >> "$file.const" || true
+      echo "perf: $1's $kind (pid $p): $(grep -m1 '^Physical footprint:' "$file")"
     elif [ "$(uname)" = Linux ]; then
       python3 -I check/usage.py regions "$p" > "$file" 2>&1
     fi

@@ -9,6 +9,7 @@ every process of the browser.
   usage.py kinds FILE        prints the memory by kind of process, in MiB, the most first
   usage.py idle-kinds A B     prints the CPU from snapshot A to B by kind of process, the most first
   usage.py largest FILE KIND prints the pid of the largest process of KIND in a snapshot
+  usage.py median FILE KIND  prints the pid of the middle-sized process of KIND, a typical one
   usage.py regions PID       prints a Linux process's private memory by mapping, in MiB, the most
                              first, from /proc/PID/smaps
   usage.py idle FILE...      prints each window's CPU, % of one core, and wakeups a second, from
@@ -201,6 +202,11 @@ def main():
         sized = [(p[3], pid) for pid, p in procs if p[0] == sys.argv[3]]
         if sized:
             print(max(sized)[1])
+    elif command == "median":
+        procs = read(sys.argv[2])["procs"].items()
+        sized = sorted((p[3], pid) for pid, p in procs if p[0] == sys.argv[3])
+        if sized:
+            print(sized[len(sized) // 2][1])
     elif command == "regions":
         totals = {}
         name = ""
