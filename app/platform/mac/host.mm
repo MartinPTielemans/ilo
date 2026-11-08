@@ -4131,6 +4131,20 @@ void host_show_toast(void* ui_view) {
     if (!g_toast_shown || g_toast_over != browser) {
       return;
     }
+    // AppKit tells a window it orders out nothing of the pointer leaving it, so GPUI would still
+    // have it where it was, on the last toast's plate, and this one's first frame would find it
+    // hovered, keeping it past its time (#2076). It's a move outside the window, as GPUI's leave is
+    // on Linux and Windows.
+    [g_toast_view
+        mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                      location:NSMakePoint(-1, NSHeight(g_toast_view.bounds) + 1)
+                                 modifierFlags:NSEvent.modifierFlags
+                                     timestamp:NSProcessInfo.processInfo.systemUptime
+                                  windowNumber:g_toast.windowNumber
+                                       context:nil
+                                   eventNumber:0
+                                    clickCount:0
+                                      pressure:0]];
     PlaceToast();
     [g_toast_view.layer setNeedsDisplay];
     [g_toast_view.layer displayIfNeeded];
