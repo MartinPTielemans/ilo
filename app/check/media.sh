@@ -510,10 +510,26 @@ expect "^browser: window closed $private\$" "⇧⌘W didn't close the private wi
 send window 1
 
 # The Cast card, from View › Cast… and from the page menu, with whatever devices the network has,
-# none clicked.
+# none clicked. Chrome looking for them is the first time on the Mac that the app reaches the local
+# network, and macOS asks whether it may, over the app and with its activation. The user answers
+# once; a check VM or a hosted runner is asked each time it's new, so the run answers it, through
+# check/alert.mm, and the app has its activation back.
 if true; then
   send menu "Cast…"
   expect "^browser: cast $b .* devices [0-9]*\$" "View › Cast… didn't open the tab's Cast dialog"
+  if [ "$(uname)" = Darwin ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
+      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
+    # A Mac that has answered before isn't asked again, and the helper finds no alert.
+    "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
+    for _ in $(seq 50); do
+      send state
+      [ "$active" = 1 ] && break
+      sleep 0.1
+    done
+    [ "$active" = 1 ] || fail "ilo wasn't the active app after macOS's local network question: \
+$(cat "$out/alert.txt")"
+  fi
   expect "^browser: cast $b at " "the Cast card wasn't drawn"
   read -r kx ky kw kh <<EOF
 $(grep "^browser: cast $b at " "$log" | tail -1 | cut -d' ' -f5-)
