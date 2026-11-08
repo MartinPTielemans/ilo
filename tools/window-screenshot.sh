@@ -2,7 +2,9 @@
 # Screenshots one process's main window with its child windows (menus, the command bar) drawn
 # over it, as on screen, but nothing from other apps. A screen capture would include whatever
 # else is open on the owner's Mac. With "all", it takes every window of the process on that display,
-# such as two browser windows, in one picture.
+# such as two browser windows, in one picture. With "screen", the Mac takes the main window's whole
+# display with the process's windows alone drawn on it, such as a Mini Player at the display's
+# corner, and the others take it as "all".
 # On Windows, under Git Bash, it copies the screen where the windows show, as Windows composes it,
 # cut to their shapes, while no other app's window is in front of them there. Otherwise it takes
 # each of the process's windows with Windows.Graphics.Capture, as Windows composes them, in their
@@ -12,14 +14,14 @@
 # frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
-# Usage: tools/window-screenshot.sh <pid> <output.png> [all]
+# Usage: tools/window-screenshot.sh <pid> <output.png> [all|screen]
 set -e
-[ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ] ||
-  { echo "usage: $0 <pid> <output.png> [all]" >&2; exit 2; }
+[ $# -eq 2 ] || [ $# -eq 3 ] && { [ "${3:-all}" = all ] || [ "$3" = screen ]; } ||
+  { echo "usage: $0 <pid> <output.png> [all|screen]" >&2; exit 2; }
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
-    exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:-}" \
+    exec env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:+all}" \
       powershell.exe -NoProfile -NonInteractive -Command '
 Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
 using System;
@@ -357,6 +359,7 @@ import UniformTypeIdentifiers
 let pid = Int32(ProcessInfo.processInfo.environment["PID"]!)!
 let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OUT"]!)
 let all = ProcessInfo.processInfo.environment["ALL"] == "all"
+let screen = ProcessInfo.processInfo.environment["ALL"] == "screen"
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -372,7 +375,7 @@ else { fail("process \(pid) has no window on screen") }
 guard let display = content.displays.first(where: { $0.frame.intersects(main.frame) })
 else { fail("no display shows the window") }
 
-let frame = all
+let frame = screen ? display.frame : all
   ? windows.filter { $0.windowLayer == 0 && $0.frame.intersects(display.frame) }
     .reduce(main.frame) { $0.union($1.frame) }.intersection(display.frame)
   : main.frame
