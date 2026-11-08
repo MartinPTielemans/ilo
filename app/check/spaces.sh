@@ -1095,6 +1095,13 @@ edge=$(grep '^browser: sidebar width ' "$log" | tail -1 | cut -d' ' -f4)
 echo "$at" | awk -v edge="${edge:-228}" '{ x = $1 - (edge + 1); y = $2 - 14 }
   END { exit !(x * x <= 1 && y * y <= 1 && $3 == 370 && $4 == 509) }' ||
   fail "Edit Theme Color… opened the theme picker at $at, not against the sidebar's edge at the top"
+# Its shadow's window is round it, the card's shape cut out of it where the card is, or the page
+# shows through under the card (#2075). Only the Mac's host draws its own.
+if [ "$(uname)" = Darwin ]; then
+  shadow=$(grep '^browser: theme picker shadow off by' "$log" | tail -1)
+  [ "$shadow" = "browser: theme picker shadow off by 0 0 0 0" ] ||
+    fail "the theme picker's shadow isn't round it: ${shadow#browser: theme picker }"
+fi
 send clickkey "$(swatch_x 7)" $swatch_y
 blue='x=-0.619[0-9] y=-0.242[0-9] colors=1'
 expect "^browser: theme picker set $first $blue intensity=0.810 " "the blue swatch gave no colour"
