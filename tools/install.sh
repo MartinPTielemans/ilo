@@ -28,4 +28,5 @@ codesign --force --deep --sign "${identity:--}" "$to/$name.app"
 # The app alone again, with the team's requirement, which --deep would give every helper too.
 requirement=$("$(dirname "$0")/requirement.sh" "$(cat "$root/branding/id")" "${identity:--}")
 [ -z "$requirement" ] || codesign --force --sign "$identity" -r="$requirement" "$to/$name.app"
+codesign --verify --deep --strict "$to/$name.app"
 echo "open $to/$name.app"
