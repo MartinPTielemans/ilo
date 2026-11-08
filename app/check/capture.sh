@@ -84,19 +84,18 @@ if [ "$(uname)" = Linux ]; then
   # The camera's dark body, left of its lens and below it, in fractions of the window.
   body=$(echo "$(in_page 400 250) $content" |
     awk '{ split($3, size, "x"); print ($1 - 7) / size[1], ($2 + 3) / size[2] }')
-  under=$(pixel "$out/capture-element.png" $body)
   send warp $(in_page 400 250)
   shown=
   for _ in $(seq 20); do
     POINTER=1 ../tools/window-screenshot.sh "$pid" "$out/capture-pointer.png" ||
       fail "no window to capture"
     seen=$(pixel "$out/capture-pointer.png" $body)
-    # Within 12 of the body's rgb(30, 41, 48) in each channel, and not the page's own colour.
-    [ "$seen" != "$under" ] && echo "$seen" | awk '{ exit !($1 >= 18 && $1 <= 42 && $2 >= 29 &&
-      $2 <= 53 && $3 >= 36 && $3 <= 60) }' && shown=1 && break
+    # Within 12 of the body's rgb(30, 41, 48) in each channel, where the lit box is teal. Headless
+    # sway draws its pointer into every capture, so there's no capture of the page without it.
+    echo "$seen" | awk '{ exit !($1 >= 18 && $1 <= 42 && $2 >= 29 && $2 <= 53 && $3 >= 36 &&
+      $3 <= 60) }' && shown=1 && break
   done
-  [ -n "$shown" ] ||
-    fail "the pointer over the page isn't the camera: $seen where the page is $under (capture-pointer.png)"
+  [ -n "$shown" ] || fail "the pointer over the page isn't the camera: $seen (capture-pointer.png)"
   send warp
 fi
 send click $(in_page 400 250)
