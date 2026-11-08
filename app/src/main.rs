@@ -178,6 +178,8 @@ mod battery_saver_host;
 use battery_saver_host::*;
 mod other_tabs_host;
 use other_tabs_host::*;
+mod translate_host;
+use translate_host::{tab_language, tab_translate_texts};
 
 use browser::bc;
 
@@ -988,6 +990,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         sync_devices_changed: Some(sync_devices_changed),
         settings_synced: Some(settings_synced),
         tab_text: Some(tab_text),
+        tab_language: Some(tab_language),
+        tab_translate_texts: Some(tab_translate_texts),
         agent_page_done: Some(agent_page_done),
         agent_page_element: Some(agent_page_element),
         agent_download: Some(agent_download),

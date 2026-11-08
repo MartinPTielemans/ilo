@@ -273,6 +273,22 @@ pub trait Browser {
     /// Brings back the tab's offer to save or update its login, closed by showing another tab, as
     /// its key does. The user's alone: agents get no path to it.
     fn show_offer(&self, _tab: u64) {}
+    /// The language pages are translated into on this computer, a BCP 47 tag such as "en", or
+    /// none where it has no translator (#671).
+    fn translation_target(&self) -> Option<SharedString> {
+        None
+    }
+    /// `language`'s name as the user reads it, such as "Spanish" for "es".
+    fn language_name(&self, language: &str) -> SharedString {
+        SharedString::from(language.to_owned())
+    }
+    /// Translates `tab`'s page from `from` to `to` on the computer, its words never leaving it.
+    /// Then Shell::set_translation. The user's alone: agents read pages in their own words.
+    fn translate(&self, _tab: u64, _from: &str, _to: &str, _cx: &mut App) {}
+    /// Puts the page's own words back where `translate` showed its translation.
+    fn use_original(&self, _tab: u64, _cx: &mut App) {}
+    /// Opens the system's settings where the translator's languages are added.
+    fn translation_settings(&self, _cx: &mut App) {}
     fn stop(&self, tab: u64, cx: &mut App);
     /// Zooms the tab's page in (1), out (-1) or to 100 % (0), for its site.
     fn zoom(&self, tab: u64, step: i32, cx: &mut App);

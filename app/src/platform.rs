@@ -12,6 +12,23 @@ pub fn centered(width: f64, height: f64) -> (f64, f64) {
 unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_set_scripting(scripting: *const host_scripting);
+    // Apple's Translation (platform/mac/translate.swift): the user's language, where the Mac
+    // translates pages, from macOS 26.
+    #[cfg(target_os = "macos")]
+    pub fn host_translation_target(out: *mut c_char, capacity: usize) -> bool;
+    #[cfg(target_os = "macos")]
+    pub fn host_language_name(language: *const c_char, out: *mut c_char, capacity: usize) -> bool;
+    // Translates the JSON array |texts| and answers on the main thread, with |context|.
+    #[cfg(target_os = "macos")]
+    pub fn host_translate(
+        from: *const c_char,
+        to: *const c_char,
+        texts: *const c_char,
+        context: *mut c_void,
+        done: extern "C" fn(context: *mut c_void, status: c_int, texts: *const c_char),
+    );
+    #[cfg(target_os = "macos")]
+    pub fn host_open_translation_settings();
     #[cfg(not(target_os = "linux"))]
     pub fn drive_start();
     #[cfg(target_os = "windows")]
