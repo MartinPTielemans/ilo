@@ -8,7 +8,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use browser::import::found::{Address, Page, Tab};
+use browser::import::found::{Address, Page, Split, Tab};
 use browser::import::plan::{Existing, ExistingSpace, Row};
 use browser::import::sources::{Os, Roots};
 use browser::import::{Exported, Passwords};
@@ -367,6 +367,38 @@ impl browser::import::Host for CoreImport {
         if id != 0 {
             unsafe { bc::bc_tab_move(id, true, folder, usize::MAX) };
             keep(id, tab);
+        }
+    }
+
+    fn add_split(&self, space: u64, folder: u64, split: &Split) {
+        let mut first = 0;
+        for tab in &split.tabs {
+            let id = open_in(space, &tab.url);
+            if id == 0 {
+                continue;
+            }
+            if first == 0 {
+                unsafe { bc::bc_tab_move(id, true, folder, usize::MAX) };
+                first = id;
+            } else {
+                // Joining a pinned tab pins this one in the split's place.
+                unsafe { bc::bc_tab_split_with(id, first, false) };
+            }
+            keep(id, tab);
+        }
+        if first == 0 {
+            return;
+        }
+        if !split.name.is_empty() {
+            let name = CString::new(split.name.as_str()).unwrap_or_default();
+            unsafe { bc::bc_tab_set_split_name(first, name.as_ptr()) };
+        }
+        if !split.icon.is_empty() {
+            let icon = CString::new(split.icon.as_str()).unwrap_or_default();
+            unsafe { bc::bc_tab_set_split_icon(first, icon.as_ptr()) };
+        }
+        if split.stacked {
+            unsafe { bc::bc_tab_set_split_stacked(first, true) };
         }
     }
 

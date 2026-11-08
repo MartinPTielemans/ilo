@@ -56,7 +56,7 @@ use crate::tokens::settings::{
 };
 use crate::tokens::shell::import::BADGE;
 use crate::tokens::text;
-use found::{Address, Found, FromProfile, Page, Tab};
+use found::{Address, Found, FromProfile, Page, Split, Tab};
 use plan::{Add, Counts, Existing, Plan, ProfileRef, SpaceRef, Target};
 use read::{Kind, ReadError};
 use sources::{Family, Os, Roots, Source};
@@ -88,6 +88,9 @@ pub trait Host {
     /// Pins a tab at `tab`'s URL, with its name, at the end of `folder`, else of `space`'s pinned
     /// tabs, in `space`'s profile. Its page loads once it's first shown.
     fn add_pinned(&self, space: u64, folder: u64, tab: &Tab);
+    /// Pins `split`'s tabs as `add_pinned` does, together in a split view with its name, icon and
+    /// orientation.
+    fn add_split(&self, space: u64, folder: u64, split: &Split);
     /// Makes a tab at `tab`'s URL the last of the favorites `space` shows, in its profile.
     fn add_favorite(&self, space: u64, tab: &Tab);
     /// Opens a tab at `tab`'s URL at the top of `space`'s Today tabs, in its profile. Its page
@@ -194,6 +197,7 @@ impl Host for Detached {
         0
     }
     fn add_pinned(&self, _: u64, _: u64, _: &Tab) {}
+    fn add_split(&self, _: u64, _: u64, _: &Split) {}
     fn add_favorite(&self, _: u64, _: &Tab) {}
     fn add_today(&self, _: u64, _: &Tab) {}
     fn add_link_rules(&self, _: &[crate::link_rules::Rule]) {}
@@ -337,6 +341,7 @@ impl Job {
             for each in adds {
                 match each {
                     Add::Tab(tab) => host.add_pinned(space, folder, tab),
+                    Add::Split(split) => host.add_split(space, folder, split),
                     Add::Folder {
                         existing,
                         name,

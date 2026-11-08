@@ -13,7 +13,7 @@ use gpui::{App, AppContext, Entity, TestAppContext};
 use super::arc;
 use super::chromium;
 use super::extensions::{self, Extension};
-use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Tab};
+use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Split, Tab};
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
 use super::session;
@@ -52,15 +52,19 @@ fn picked(spaces: bool, favorites: bool) -> Found {
 }
 
 fn tab(url: &str) -> Node {
-    Node::Tab(Tab {
+    Node::Tab(tab_of(url))
+}
+
+fn tab_of(url: &str) -> Tab {
+    Tab {
         url: url.into(),
         name: String::new(),
-    })
+    }
 }
 
 /// Spaces, their pinned tabs and folders, their profiles and the favorites come in; Arc's own
-/// pages, the welcome card, Today tabs and ids that name nothing don't. A split view's tabs take
-/// its place, and a folder named inside itself comes in once.
+/// pages, the welcome card, Today tabs and ids that name nothing don't. A split view comes in as
+/// one, and a folder named inside itself comes in once.
 #[test]
 fn arcs_sidebar_reads_as_its_spaces_and_favorites() {
     let sidebar = sidebar();
@@ -84,8 +88,15 @@ fn arcs_sidebar_reads_as_its_spaces_and_favorites() {
         name: "Reading".into(),
         children: vec![
             tab("https://example.com/a"),
-            tab("https://example.com/b"),
-            tab("https://example.com/c"),
+            Node::Split(Split {
+                tabs: vec![
+                    tab_of("https://example.com/b"),
+                    tab_of("https://example.com/c"),
+                ],
+                name: String::new(),
+                icon: String::new(),
+                stacked: false,
+            }),
             deep,
         ],
     };
@@ -211,6 +222,86 @@ fn arcs_appearance_comes_from_its_window_appearance_else_its_look() {
     let auto = theme_of(format!("{{{both}}}"));
     assert_eq!(auto.appearance, Appearance::Automatic);
     assert!(auto.dark.is_some());
+}
+
+/// The fixture's Reading folder, with its split view's item edited by `edit` and `items` added.
+fn reading_with(edit: &str, items: &str) -> Vec<Node> {
+    let arc = fixture().join("Library/Application Support/Arc");
+    let json = fs::read_to_string(arc.join("StorableSidebar.json")).unwrap();
+    let split = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": null, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "horizontal", "itemWidthFactors": [0.5, 0.5] } } },"#;
+    assert!(json.contains(split));
+    let json = json.replace(split, &format!("{edit},\n{items}"));
+    let found = arc::parse(&json, None).unwrap();
+    let Node::Folder { children, .. } = &found.spaces[0].pinned[1] else {
+        panic!("{:?}", found.spaces[0].pinned)
+    };
+    children.clone()
+}
+
+/// A split view keeps the name and orientation the user gave it in Arc, and its icon if it's an
+/// emoji, as a split's icon is here: Arc's glyphs have no place on a split.
+#[test]
+fn an_arc_split_view_keeps_its_name_icon_and_orientation() {
+    let split = |name: &str, icon: &str, stacked| {
+        Node::Split(Split {
+            tabs: vec![
+                tab_of("https://example.com/b"),
+                tab_of("https://example.com/c"),
+            ],
+            name: name.into(),
+            icon: icon.into(),
+            stacked,
+        })
+    };
+    let named = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": " Docs and notes ", "customInfo": { "iconType": { "emoji_v2": "📚" } }, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "vertical" } } }"#;
+    assert_eq!(
+        reading_with(named, "")[1],
+        split("Docs and notes", "📚", true)
+    );
+    let glyph = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": "Docs", "customInfo": { "iconType": { "icon": "bolt" } }, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "horizontal" } } }"#;
+    assert_eq!(reading_with(glyph, "")[1], split("Docs", "", false));
+}
+
+/// A split here holds three pages, so an Arc split's fourth tab comes in after it, and a split
+/// with one page that opens here comes in as that tab.
+#[test]
+fn an_arc_split_view_holds_what_a_split_here_does() {
+    let tab_item = |id: &str, url: &str| {
+        format!(
+            r#""{id}", {{ "id": "{id}", "parentID": "V-SPLIT", "title": null, "childrenIds": [], "data": {{ "tab": {{ "savedURL": "{url}" }} }} }},"#
+        )
+    };
+    let items = [
+        tab_item("T-E", "https://example.com/e"),
+        tab_item("T-F", "https://example.com/f"),
+        tab_item("T-G", "arc://settings"),
+    ]
+    .concat();
+    let four = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": null, "childrenIds": ["T-B", "T-C", "T-E", "T-F"], "data": { "splitView": {} } }"#;
+    let reading = reading_with(four, &items);
+    assert_eq!(
+        reading[1..4],
+        [
+            Node::Split(Split {
+                tabs: ["b", "c", "e"]
+                    .map(|page| tab_of(&format!("https://example.com/{page}")))
+                    .into(),
+                name: String::new(),
+                icon: String::new(),
+                stacked: false,
+            }),
+            tab("https://example.com/f"),
+            Node::Folder {
+                name: "Deep".into(),
+                children: vec![tab("https://example.com/d")],
+            },
+        ]
+    );
+    let one = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": "Settings", "childrenIds": ["T-B", "T-G"], "data": { "splitView": {} } }"#;
+    assert_eq!(
+        reading_with(one, &items)[..2],
+        [tab("https://example.com/a"), tab("https://example.com/b")]
+    );
 }
 
 #[test]
@@ -568,6 +659,7 @@ struct Space {
 #[derive(Clone, Debug, PartialEq)]
 enum FakeRow {
     Tab(Tab),
+    Split(Split),
     Folder(u64, String, Vec<FakeRow>),
 }
 
@@ -666,14 +758,18 @@ impl Browser {
     /// What the browser has, as existing() says it.
     fn here(&self) -> Existing {
         fn rows(of: &[FakeRow]) -> Vec<Row> {
+            // The core lists a split's tabs as it lists any pinned tab.
             of.iter()
-                .map(|row| match row {
-                    FakeRow::Tab(tab) => Row::Tab(tab.url.clone()),
-                    FakeRow::Folder(id, name, inner) => Row::Folder {
+                .flat_map(|row| match row {
+                    FakeRow::Tab(tab) => vec![Row::Tab(tab.url.clone())],
+                    FakeRow::Split(split) => (split.tabs.iter())
+                        .map(|tab| Row::Tab(tab.url.clone()))
+                        .collect(),
+                    FakeRow::Folder(id, name, inner) => vec![Row::Folder {
                         id: *id,
                         name: name.clone(),
                         rows: rows(inner),
-                    },
+                    }],
                 })
                 .collect()
         }
@@ -768,6 +864,13 @@ impl Host for Browser {
         folder_rows(&mut state.space(space).rows, folder)
             .unwrap()
             .push(FakeRow::Tab(tab.clone()));
+    }
+
+    fn add_split(&self, space: u64, folder: u64, split: &Split) {
+        let mut state = self.state.borrow_mut();
+        folder_rows(&mut state.space(space).rows, folder)
+            .unwrap()
+            .push(FakeRow::Split(split.clone()));
     }
 
     fn add_favorite(&self, space: u64, tab: &Tab) {
@@ -901,13 +1004,30 @@ impl Host for Browser {
     }
 }
 
-/// Rows as text: a tab's URL, after its name if it has one, and a folder's name with its rows.
+/// Rows as text: a tab's URL, after its name if it has one, a split's tabs, after its icon, name
+/// and orientation if it has them, and a folder's name with its rows.
 fn shape(rows: &[FakeRow]) -> String {
     let rows: Vec<String> = rows
         .iter()
         .map(|row| match row {
             FakeRow::Tab(tab) if tab.name.is_empty() => tab.url.clone(),
             FakeRow::Tab(tab) => format!("{}={}", tab.name, tab.url),
+            FakeRow::Split(split) => {
+                let tabs: Vec<FakeRow> = split.tabs.iter().cloned().map(FakeRow::Tab).collect();
+                let stacked = if split.stacked { "stacked" } else { "" };
+                let label: Vec<&str> = [split.icon.as_str(), split.name.as_str(), stacked]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                format!(
+                    "split{}({})",
+                    label
+                        .iter()
+                        .map(|part| format!(" {part}"))
+                        .collect::<String>(),
+                    shape(&tabs)
+                )
+            }
             FakeRow::Folder(_, name, rows) => format!("{name}[{}]", shape(rows)),
         })
         .collect();
@@ -956,8 +1076,8 @@ fn an_import_brings_in_spaces_folders_and_favorites(cx: &mut TestAppContext) {
     assert_eq!(personal.theme.unwrap().count, 3);
     assert_eq!(
         shape(&personal.rows),
-        "HN=https://news.ycombinator.com/, Reading[https://example.com/a, https://example.com/b, \
-         https://example.com/c, Deep[https://example.com/d]]"
+        "HN=https://news.ycombinator.com/, Reading[https://example.com/a, \
+         split(https://example.com/b, https://example.com/c), Deep[https://example.com/d]]"
     );
     let work = &state.spaces[2];
     assert_eq!((work.profile, work.icon.as_str()), (3, "glyph:bolt"));
@@ -1112,8 +1232,40 @@ fn a_space_already_here_gets_only_what_it_lacks(cx: &mut TestAppContext) {
     assert_eq!(personal.icon, "");
     assert_eq!(
         shape(&personal.rows),
-        "https://news.ycombinator.com/, Reading[https://example.com/a, https://example.com/b, \
-         https://example.com/c, Deep[https://example.com/d]]"
+        "https://news.ycombinator.com/, Reading[https://example.com/a, \
+         split(https://example.com/b, https://example.com/c), Deep[https://example.com/d]]"
+    );
+}
+
+/// A split view comes in once: importing again adds nothing, and one with a page already in its
+/// place brings only the pages that aren't, a single one as a tab.
+#[gpui::test]
+fn an_arc_split_view_comes_in_once(cx: &mut TestAppContext) {
+    let found = picked(true, false);
+    let browser = Browser::new(None);
+    cx.update(|cx| import(&browser, &found, cx));
+    let first = shape(&browser.spaces()[1].rows);
+    assert!(first.contains("split(https://example.com/b, https://example.com/c)"));
+    cx.update(|cx| import(&browser, &found, cx));
+    assert_eq!(shape(&browser.spaces()[1].rows), first);
+
+    let browser = Browser::new(None);
+    {
+        let mut state = browser.state.borrow_mut();
+        let space = state.space(2);
+        space.name = "Personal".into();
+        space.rows = vec![FakeRow::Folder(
+            9,
+            "Reading".into(),
+            vec![FakeRow::Tab(tab_of("https://example.com/b"))],
+        )];
+        state.next = 9;
+    }
+    cx.update(|cx| import(&browser, &found, cx));
+    assert_eq!(
+        shape(&browser.spaces()[0].rows),
+        "Reading[https://example.com/b, https://example.com/a, https://example.com/c, \
+         Deep[https://example.com/d]], HN=https://news.ycombinator.com/"
     );
 }
 
@@ -2389,6 +2541,7 @@ fn firefoxs_bookmarks_and_history_come_from_places() {
                     Node::Tab(tab) if tab.name.is_empty() => tab.url.clone(),
                     Node::Tab(tab) => format!("{}={}", tab.name, tab.url),
                     Node::Folder { name, children } => format!("{name}[{}]", shape(children)),
+                    Node::Split(_) => unreachable!("bookmarks have no split views"),
                 })
                 .collect();
             nodes.join(", ")
@@ -2531,6 +2684,7 @@ fn node_shape(nodes: &[Node]) -> String {
         .map(|node| match node {
             Node::Tab(tab) => format!("{}={}", tab.name, tab.url),
             Node::Folder { name, children } => format!("{name}[{}]", node_shape(children)),
+            Node::Split(_) => unreachable!("bookmarks have no split views"),
         })
         .collect();
     nodes.join(", ")

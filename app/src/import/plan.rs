@@ -5,7 +5,7 @@
 //! History and addresses are added whole, and the core skips the pages and addresses it has
 //! (bc_profile_add_history, bc_profile_add_addresses).
 
-use super::found::{Address, Found, FromProfile, Node, Page, Tab};
+use super::found::{Address, Found, FromProfile, Node, Page, Split, Tab};
 use crate::link_rules::{Condition, Rule};
 use crate::theme::Theme;
 
@@ -122,6 +122,8 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Add {
     Tab(Tab),
+    /// A split view of its tabs not here yet, two or more.
+    Split(Split),
     Folder {
         existing: Option<u64>,
         name: String,
@@ -144,6 +146,7 @@ impl Plan {
             adds.iter()
                 .map(|add| match add {
                     Add::Tab(_) => 1,
+                    Add::Split(split) => split.tabs.len(),
                     Add::Folder { adds, .. } => tabs(adds),
                 })
                 .sum()
@@ -320,11 +323,27 @@ fn add(nodes: &[Node], rows: &[Row], adds: &mut Vec<Add>) {
                 let here = rows
                     .iter()
                     .any(|row| matches!(row, Row::Tab(url) if *url == tab.url));
-                let planned = adds
-                    .iter()
-                    .any(|each| matches!(each, Add::Tab(each) if each.url == tab.url));
-                if !here && !planned {
+                if !here && !lists(adds, &tab.url) {
                     adds.push(Add::Tab(tab.clone()));
+                }
+            }
+            // Its tabs that aren't in this place yet make it, as a tab's would come; one alone
+            // comes as a tab.
+            Node::Split(split) => {
+                let new = |tab: &&Tab| {
+                    !rows
+                        .iter()
+                        .any(|row| matches!(row, Row::Tab(url) if *url == tab.url))
+                        && !lists(adds, &tab.url)
+                };
+                let tabs: Vec<Tab> = split.tabs.iter().filter(new).cloned().collect();
+                match &tabs[..] {
+                    [] => {}
+                    [tab] => adds.push(Add::Tab(tab.clone())),
+                    _ => adds.push(Add::Split(Split {
+                        tabs,
+                        ..split.clone()
+                    })),
                 }
             }
             Node::Folder { name, children } => {
@@ -371,7 +390,17 @@ fn has(rows: &[Row], url: &str) -> bool {
 fn planning(adds: &[Add], url: &str) -> bool {
     adds.iter().any(|add| match add {
         Add::Tab(tab) => tab.url == url,
+        Add::Split(split) => split.tabs.iter().any(|tab| tab.url == url),
         Add::Folder { adds, .. } => planning(adds, url),
+    })
+}
+
+/// Whether `adds` has a tab at `url` in its own place, not in a folder: a tab's or a split's.
+fn lists(adds: &[Add], url: &str) -> bool {
+    adds.iter().any(|add| match add {
+        Add::Tab(tab) => tab.url == url,
+        Add::Split(split) => split.tabs.iter().any(|tab| tab.url == url),
+        Add::Folder { .. } => false,
     })
 }
 
@@ -380,11 +409,13 @@ fn merge(adds: &mut Vec<Add>, more: Vec<Add>) {
     for each in more {
         match each {
             Add::Tab(tab) => {
-                if !adds
-                    .iter()
-                    .any(|add| matches!(add, Add::Tab(each) if each.url == tab.url))
-                {
+                if !lists(adds, &tab.url) {
                     adds.push(Add::Tab(tab));
+                }
+            }
+            Add::Split(split) => {
+                if !split.tabs.iter().any(|tab| lists(adds, &tab.url)) {
+                    adds.push(Add::Split(split));
                 }
             }
             Add::Folder {
