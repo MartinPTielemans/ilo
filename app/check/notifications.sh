@@ -116,8 +116,9 @@ PY
     [ -n "$id" ] || fail "the page's notification didn't reach the desktop's server: $(cat "$notes")"
   }
   # On the Mac, Allow on the banners macOS shows as the app starts, asking whether the app may
-  # notify, and Chromium's alert service in it, each in one of its own, as the user answering them
-  # does: a notification posted before is delivered to no banner. The banner's log is in $notes.
+  # notify, and its alert helper, which posts alert-style ones, each in one of its own, as the user
+  # answering them does: a notification posted before is delivered to no banner. Each names the
+  # app, never Chromium (#2126). The banner's log is in $notes.
   allow() {
     [ "$notify" = mac ] || return 0
     for _ in 1 2; do
@@ -125,6 +126,11 @@ PY
     done
     grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
       fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+    asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
+    while read -r each; do
+      [ "$each" = "“$app_name”" ] || fail "macOS asked whether $each may notify, not $app_name"
+    done <<< "$asked"
+    echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
   # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
   # presses macOS's banner.

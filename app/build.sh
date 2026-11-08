@@ -221,6 +221,25 @@ plutil -replace CFBundleIconName -string "$name" "$plist"
 for strings in "$app"/Contents/Resources/*.lproj/InfoPlist.strings; do
   plutil -create binary1 "$strings"
 done
+# The framework's alert helpers post a site's alert-style notifications, so macOS names them when it
+# asks whether the app may notify, and in System Settings › Notifications and on each alert: as the
+# engine builds them they're "Chromium", with Chromium's icon and ungoogled-chromium's bundle id,
+# which a Chromium on the same Mac shares (#2126). They're the app's, by its name, icon and id, as
+# Chrome's are Chrome's; nothing in Chromium looks for the id, which its signing names the same way.
+for helper in "$framework"/Helpers/*" Helper ("*"Alerts).app"; do
+  [ -d "$helper" ] || continue
+  helper_plist=$helper/Contents/Info.plist
+  plutil -replace CFBundleIdentifier -string "$id.framework.AlertNotificationService" "$helper_plist"
+  plutil -replace CFBundleName -string "$name" "$helper_plist"
+  plutil -replace CFBundleDisplayName -string "$name" "$helper_plist"
+  for strings in "$helper"/Contents/Resources/*.lproj/InfoPlist.strings; do
+    plutil -create binary1 "$strings"
+  done
+  rm -f "$helper/Contents/Resources/app.icns"
+  cp branding/Assets.car "branding/$name.icns" "$helper/Contents/Resources/"
+  plutil -replace CFBundleIconFile -string "$name" "$helper_plist"
+  plutil -replace CFBundleIconName -string "$name" "$helper_plist"
+done
 # The prod build opens web links and files, so it can be the default browser: http, https and file
 # URLs, and the documents Chrome views, such as .html. Not what's Chromium's own, which the core
 # doesn't open: its chromium:// scheme, its extension and shortcut files and the types it exports
