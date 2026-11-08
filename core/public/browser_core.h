@@ -476,6 +476,10 @@ typedef struct bc_site_controls {
   size_t login_count;
   // A BC_AD_BLOCKING_ value, which bc_tab_set_ad_blocking changes.
   int ad_blocking;
+  // How many requests the ad blocker blocked on the page, as it counts them, such as "12" or
+  // ">1k", or "" while it blocked none or ad_blocking isn't BC_AD_BLOCKING_ON. Each change reports
+  // again.
+  const char* ad_blocked;
   // A BC_DEVELOPER_MODE_ value, which bc_tab_set_developer_mode changes.
   int developer_mode;
   // The devices the site was given, |device_count| of them, as Chrome's page info lists them, which
@@ -904,7 +908,8 @@ typedef struct bc_host {
   void (*window_show_downloads)(void* context, bc_id window);
   // The profile's extensions changed, or were first read: one was added, removed, turned on or
   // off, pinned or unpinned, a command's key changed, or bc_extensions_report asked. |extensions|
-  // is all of them that Chrome's extensions page lists, by name.
+  // is all of them that Chrome's extensions page lists, by name, but the ad blocker the browser
+  // comes with, which is Settings' Ad blocking (bc_ad_blocking).
   void (*extensions_changed)(void* context,
                              bc_id profile,
                              const bc_extension* extensions,
@@ -915,8 +920,8 @@ typedef struct bc_host {
   void (*window_extension_popup)(void* context, bc_id window, const char* extension);
   // The actions the window shows changed: those pinned in the profile of the tab it shows, in
   // their order, as they are for that tab, then, while the Site Controls show for the tab
-  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Once the tab
-  // shown changes, if they're different for it.
+  // (bc_tab_site_controls), every other turned-on extension's of the profile, by name. Never the
+  // ad blocker's. Once the tab shown changes, if they're different for it.
   void (*window_extension_actions)(void* context,
                                    bc_id window,
                                    const bc_extension_action* actions,
@@ -2279,8 +2284,8 @@ BC_EXPORT void bc_set_battery_saver_enabled(bool enabled);
 // |plugged| in or not, read at once. Does nothing without the switch.
 BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // Whether the browser blocks ads and trackers, in every profile and its private windows, with the
-// uBlock Origin it comes with: on unless the user turned it off. Off turns uBlock Origin off in
-// each profile, as its switch in Chrome's extensions page does. The core keeps it with the Spaces.
+// ad blocker it comes with, uBlock Origin, which no extension list shows: on unless the user
+// turned it off. The core keeps it with the Spaces.
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
@@ -2291,6 +2296,29 @@ BC_EXPORT void bc_set_ad_blocking(bool on);
 // two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
 BC_EXPORT bool bc_cookie_notices_hidden(void);
 BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
+// Settings › Ad blocking's filter lists and the user's own filters, browser-wide like
+// bc_ad_blocking: each change applies at once in every profile and its private windows, and the
+// core keeps them with the Spaces. The user's, as bc_set_ad_blocking is.
+//
+// Copies the filter lists the ad blocker can use into |lists| as bc_space_name does, each
+// "key\tgroup\ton\ttitle" on a line of its own, UTF-8: |group| one of default, ads, privacy,
+// malware, multipurpose, annoyances and regions, and |on| 1 or 0. The default group's lists and
+// most others' start on, the annoyance and regional lists off. Empty until the core has read them,
+// a moment after the first profile loads.
+BC_EXPORT size_t bc_ad_block_lists(char* lists, size_t capacity);
+// Whether an administrator's policy for the ad blocker chose its lists, which are then on as it
+// says, and which bc_set_ad_block_list doesn't change.
+BC_EXPORT bool bc_ad_block_lists_locked(void);
+// Turns the list of |key|, one of bc_ad_block_lists, on or off.
+BC_EXPORT void bc_set_ad_block_list(const char* key, bool on);
+// Copies the user's own filters, Settings' My filters, into |filters| as bc_space_name does, one
+// a line.
+BC_EXPORT size_t bc_ad_block_filters(char* filters, size_t capacity);
+// Whether an administrator's policy for the ad blocker set its filters in place of the user's,
+// which bc_set_ad_block_filters then doesn't change.
+BC_EXPORT bool bc_ad_block_filters_locked(void);
+// Makes |filters|, one a line, the user's own.
+BC_EXPORT void bc_set_ad_block_filters(const char* filters);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
