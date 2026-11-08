@@ -191,7 +191,7 @@ use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
-pub use translate::Translation;
+pub use translate::{AlwaysTranslated, Translation};
 pub use trouble::{NOT_RESPONDING, RELOAD, WAIT};
 use undo::{Edit, What};
 

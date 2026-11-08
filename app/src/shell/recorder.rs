@@ -873,12 +873,23 @@ impl Browser for Recorder {
         Some("en".into())
     }
 
+    /// English, and Dutch, as a user who reads both.
+    fn reads_language(&self, language: &str) -> bool {
+        matches!(language, "en" | "nl")
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         match language {
             "es" => "Spanish".into(),
             "en" => "English".into(),
+            "nl" => "Dutch".into(),
             other => SharedString::from(other.to_owned()),
         }
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        let languages: Vec<&str> = languages.iter().map(AsRef::as_ref).collect();
+        self.record(format!("always translated {}", languages.join(",")))
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {

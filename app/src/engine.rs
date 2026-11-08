@@ -729,8 +729,16 @@ impl Browser for Engine {
         crate::translate_host::target().map(SharedString::from)
     }
 
+    fn reads_language(&self, language: &str) -> bool {
+        crate::translate_host::reads(language)
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         crate::translate_host::language_name(language).into()
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        crate::translate_host::save_always(languages);
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
