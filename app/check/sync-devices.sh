@@ -193,11 +193,15 @@ for _ in $(seq 50); do
 done
 grep '^browser: today' "$b_log" | tail -1 | tr ' ' '\n' | grep -qx "$b_tab" ||
   fail "B's sidebar doesn't list the tab A moved to the Space B shows: $(grep '^browser: today' "$b_log" | tail -1)"
+# Xvfb's capture is the screen, so B's window goes in front of A's for it.
 device b
+send window 1
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-today.png" || fail "no window to capture"
+grep -q "^browser: selected $b_tab\( in .*\)\{0,1\}\$" "$log" && fail "B showed the Today tab A moved to the Space B shows"
 
 # Archived on A, it goes to B's archive. A's window went with the tab it moved, to "from B".
 device a
+send window 1
 for _ in $(seq 50); do
   [ "$(today)" = "$a_tab" ] && break
   sleep 0.1
