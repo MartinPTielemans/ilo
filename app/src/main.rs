@@ -491,6 +491,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
         settings::read_look(cx);
+        translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);

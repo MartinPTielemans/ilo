@@ -5,15 +5,46 @@
 # with ActionInvoked, as a desktop's does: the page's tab sits in a Space its window doesn't show,
 # with another window in front, and the click shows the Space and the tab in that window and makes
 # it the key window. A page whose click handler focuses its tab too, as many sites' do, switches
-# once. The Mac and Windows can't post or click a real notification in a run, so they skip it: the
-# click's way to the tab is Chromium's content layer's on every platform.
+# once. On the Mac the banner is macOS's own, which check/banner.mm presses through the accessibility
+# API as a click does, after Allow on the banner asking whether the app may notify. It does so only
+# in a check VM with System Integrity Protection off, where check-mac.yml grants the run
+# Accessibility, and never on a Mac in use, whose banners aren't the run's to press. Windows shows a
+# toast only for an installed copy (mcp.sh), so it skips: the click's way to the tab is Chromium's
+# content layer's on every platform.
 
-if [ "$(uname)" != Linux ]; then
-  echo "skip: notifications, as only Linux's desktop notification server can be stood in for in a run."
+notify=
+if [ "$(uname)" = Darwin ]; then
+  if [ "$(sysctl -n kern.hv_vmm_present)" != 1 ] || ! csrutil status | grep -q disabled; then
+    echo "skip: notifications, which presses macOS's banners only in a check VM with System Integrity Protection off."
+  else
+    clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
+      fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
+    # The hosted runner's image turns Notification Center's agent off, which draws the banners:
+    # usernoted delivers them to it, finding none. It's started before the app posts any.
+    if ! pgrep -x NotificationCenter > /dev/null; then
+      agent=gui/$(id -u)/com.apple.notificationcenterui.agent
+      launchctl enable "$agent" || true
+      launchctl bootstrap "gui/$(id -u)" /System/Library/LaunchAgents/com.apple.notificationcenterui.plist 2> /dev/null ||
+        true
+      launchctl kickstart "$agent" 2> /dev/null || true
+      for _ in $(seq 100); do
+        pgrep -x NotificationCenter > /dev/null && break
+        sleep 0.1
+      done
+      pgrep -x NotificationCenter > /dev/null ||
+        fail "Notification Center's agent didn't start: $(launchctl print "$agent" 2>&1 | head -20)"
+    fi
+    notify=mac
+  fi
+elif [ "$(uname)" != Linux ]; then
+  echo "skip: notifications, as Windows shows a toast only for an installed copy."
 elif ! command -v dbus-daemon > /dev/null ||
   ! python3 -I -c 'from gi.repository import Gio' 2> /dev/null; then
   echo "skip: notifications, which needs dbus-daemon and python3-gi for its notification server."
 else
+  notify=linux
+fi
+if [ -n "$notify" ]; then
   serve
   log="$out/notifications.log"
   step=0
@@ -55,29 +86,70 @@ with open(path, "w") as f:
 PY
   }
   site_notifications allow
-  # The run's session bus, with its notification server on it before the app looks for one.
-  started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
-  session=$(echo "$started" | cut -d' ' -f1)
-  buses=$(echo "$started" | cut -d' ' -f2)
-  [ -n "$session" ] || fail "dbus-daemon didn't start the run's session bus"
   notes="$out/notify-server.log"
-  mkfifo "$out/notify-in"
-  DBUS_SESSION_BUS_ADDRESS=$session python3 -I check/notify-server.py < "$out/notify-in" > "$notes" 2>&1 &
-  buses="$buses $!"
-  exec 6> "$out/notify-in"
-  for _ in $(seq 50); do
-    grep -q '^ready$' "$notes" && break
-    sleep 0.1
-  done
-  grep -q '^ready$' "$notes" || fail "the notification server didn't take its name: $(cat "$notes")"
-  # Waits for a line matching $1 in the server's log, then prints the notification's id.
-  notified() {
-    for _ in $(seq 100); do
-      grep -q "$1" "$notes" && break
+  : > "$notes"
+  session=
+  if [ "$notify" = linux ]; then
+    # The run's session bus, with its notification server on it before the app looks for one.
+    started=$(dbus-daemon --session --fork --print-address=1 --print-pid=1 2> /dev/null | tr '\n' ' ')
+    session=$(echo "$started" | cut -d' ' -f1)
+    buses=$(echo "$started" | cut -d' ' -f2)
+    [ -n "$session" ] || fail "dbus-daemon didn't start the run's session bus"
+    mkfifo "$out/notify-in"
+    DBUS_SESSION_BUS_ADDRESS=$session python3 -I check/notify-server.py < "$out/notify-in" > "$notes" 2>&1 &
+    buses="$buses $!"
+    exec 6> "$out/notify-in"
+    for _ in $(seq 50); do
+      grep -q '^ready$' "$notes" && break
       sleep 0.1
     done
-    grep "$1" "$notes" | tail -1 | cut -d' ' -f2 | grep . ||
-      fail "the page's notification didn't reach the desktop's server: $(cat "$notes")"
+    grep -q '^ready$' "$notes" || fail "the notification server didn't take its name: $(cat "$notes")"
+  fi
+  # Waits for notification $1 to reach the desktop's server, keeping its id for click.
+  notified() {
+    [ "$notify" = linux ] || return 0
+    for _ in $(seq 100); do
+      grep -q "^notify [0-9]* ilo check $1\$" "$notes" && break
+      sleep 0.1
+    done
+    id=$(grep "^notify [0-9]* ilo check $1\$" "$notes" | tail -1 | cut -d' ' -f2)
+    [ -n "$id" ] || fail "the page's notification didn't reach the desktop's server: $(cat "$notes")"
+  }
+  # On the Mac, Allow on the banners macOS shows as the app starts, asking whether the app may
+  # notify, and Chromium's alert service in it, each in one of its own, as the user answering them
+  # does: a notification posted before is delivered to no banner. The banner's log is in $notes.
+  allow() {
+    [ "$notify" = mac ] || return 0
+    for _ in 1 2; do
+      "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
+    done
+    grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
+      fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+  }
+  # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
+  # presses macOS's banner.
+  click() {
+    if [ "$notify" = linux ]; then
+      echo "click $id" >&6
+      return
+    fi
+    "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
+      mac_notifications_said
+      fail "macOS showed no banner for the page's notification $1: $(grep '^banner' "$notes" | tail -2)"
+    }
+  }
+  # What macOS made of the app's notifications, for the run's artifact: its notification processes,
+  # what usernoted logged, and what it keeps of the app's leave to notify.
+  mac_notifications_said() {
+    {
+      echo "processes:"
+      pgrep -lf 'NotificationCenter|usernoted' || true
+      echo "usernoted:"
+      log show --last 3m --style compact --predicate \
+        'process == "usernoted" OR subsystem == "com.apple.UserNotifications"' 2>&1 | tail -80
+      echo "ncprefs:"
+      defaults read com.apple.ncprefs apps 2>&1 | grep -B3 -A8 "$app_id" || true
+    } > "$out/notifications-macos.txt"
   }
   # Waits for more lines matching $1 in the app's log than the $2 there were, for up to 10 s.
   more() {
@@ -89,8 +161,8 @@ PY
   }
 
   rm -f "$saved" "$launch_frame"
-  DBUS_SESSION_BUS_ADDRESS=$session BROWSER_DRIVE=1 BROWSER_URL="${site}notify.html" "$browser" \
-    < "$out/drive" > "$log" 2>&1 &
+  env ${session:+DBUS_SESSION_BUS_ADDRESS=$session} BROWSER_DRIVE=1 BROWSER_URL="${site}notify.html" \
+    "$browser" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"
   await_load
@@ -99,6 +171,7 @@ PY
   first=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
   home=$(space)
   tab=$(today | cut -d' ' -f1)
+  allow
   send click $page_point
   if [ "$active" != 1 ]; then
     exec 3>&- 6>&-
@@ -114,10 +187,10 @@ PY
     [ "$other" != "$home" ] || fail "New Space showed the page's Space"
     await "^browser: title $tab notification 1 shown\$" ||
       fail "the hidden page's notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
-    id=$(notified '^notify [0-9]* ilo check 1$')
+    notified 1
     shows=$(grep -c "^browser: window $first shows $tab\$" "$log" || true)
     homed=$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log" || true)
-    echo "click $id" >&6
+    click 1
     await "^browser: title $tab notification 1 clicked\$" ||
       fail "the notification's click didn't reach the page: $(cat "$notes")"
     more "^browser: window $first shows $tab\$" "$shows" ||
@@ -137,7 +210,7 @@ PY
     expect "^browser: space $other\( in .*\)\{0,1\}\$" "⌃2 didn't show the other Space"
     await "^browser: title $tab notification 2 shown\$" ||
       fail "the page's second notification didn't show: $(grep "^browser: title $tab " "$log" | tail -1)"
-    id=$(notified '^notify [0-9]* ilo check 2$')
+    notified 2
     send key n cmd
     expect '^browser: command new-window via ' "⌘N didn't run New Window"
     for _ in $(seq 100); do
@@ -149,7 +222,7 @@ PY
     shows=$(grep -c "^browser: window $first shows $tab\$" "$log" || true)
     keyed=$(grep -c "^browser: key window $first\$" "$log" || true)
     homed=$(grep -c "^browser: space $home\( in .*\)\{0,1\}\$" "$log" || true)
-    echo "click $id" >&6
+    click 2
     await "^browser: title $tab notification 2 clicked\$" ||
       fail "the second notification's click didn't reach the page: $(cat "$notes")"
     more "^browser: window $first shows $tab\$" "$shows" ||
@@ -161,7 +234,7 @@ PY
     ../tools/window-screenshot.sh "$pid" "$out/notification-clicked.png" || fail "no window to capture"
     exec 3>&- 6>&-
     quit
-    echo "ok: a click on a site's notification, which the desktop's notification server sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
+    echo "ok: a click on a site's notification, which $([ "$notify" = mac ] && echo "macOS's banner" || echo "the desktop's notification server") sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
   fi
   site_notifications take-back
   kill $buses 2> /dev/null || true

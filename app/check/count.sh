@@ -9,7 +9,8 @@
 # - one the endpoint refuses keeps the date, and the next launch sends it, flagged for the day it
 #   is, with first off;
 # - the launch after on the same day sends none;
-# - a dev build, given no endpoint, sends none and offers no switch, as main's Privacy did.
+# - a dev build, given no endpoint, sends none and offers no switch, as main's Privacy did, and
+#   still offers the privacy policy, with the line on what ilo never sees, as every build does.
 # A launch on a new UTC day while the app stays open isn't checked: the run can't move the clock,
 # and the tests check the flags of the day (daily_count.rs).
 
@@ -185,6 +186,9 @@ utc_day 1 > "$last_file"
 launch_count none ""
 await '^browser: daily count none: no server$' || fail "the dev build didn't say it has no server"
 privacy count-privacy-none.png
+# Every build's Privacy says what ilo never sees, beside its policy (#684).
+expect '^browser: settings open privacy policy at ' \
+  "Privacy didn't offer the privacy policy, with what ilo never sees"
 grep -q '^browser: settings switch send a daily usage count at ' "$log" &&
   fail "Privacy offered the count's switch in a build that names no server"
 exec 3>&-
@@ -197,5 +201,6 @@ echo "ok: a new profile's first launch sent one count, flagged first, weekly and
   "a cookie: $first_count. Turned off in Settings › Privacy, the next launch sent none though one" \
   "was due, and turned back on, its file went. One the endpoint refused kept yesterday's date," \
   "and the next launch sent it, weekly $weekly and monthly $monthly; the launch after on the same" \
-  "day sent none, and a dev build given no endpoint sent none and offered no switch. Windows:" \
+  "day sent none, and a dev build given no endpoint sent none and offered no switch, but did" \
+  "offer the privacy policy, with what ilo never sees. Windows:" \
   "$out/count-privacy.png, $out/count-privacy-off.png, $out/count-privacy-none.png"

@@ -147,11 +147,8 @@ share_from_url_toast() {
   send move $share
   first_move=$step
   send move $share
-  # A toast that came in place of one the pointer was on is hovered already, which it doesn't log
-  # again (#2076).
-  [ "$(last 'toast hovered')" = true ] ||
-    expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $what" \
-      "$first_move"
+  expect '^browser: toast hovered true$' "the pointer at $share wasn't on ⇧⌘C's toast, $what" \
+    "$first_move"
   [ -z "$then" ] || $then
   send click $share
   expect '^browser: toast button share$' "a click on Share at $share on ⇧⌘C's toast, $what, didn't take"
@@ -176,12 +173,19 @@ if [ "$(uname)" = Linux ]; then
   url_toast_capture
 else
   share_from_url_toast "from the page" url_toast_capture
+  expect '^browser: toast hidden$' "⇧⌘C's toast stayed after its Share"
 fi
 send click $sidebar_point
 send key c cmd shift alt
 expect '^browser: command copy-markdown-link via ui$' "⌥⇧⌘C with the UI focused didn't run"
 expect '^browser: copied \[Example Domain](https://example.org/)$' \
   "⌥⇧⌘C didn't copy a Markdown link to the tab"
+# Its toast comes where the last one went from under the pointer, which is on the sidebar now, so
+# it isn't hovered and leaves on time (#2076).
+expect '^browser: toast shown Copied URL as Markdown' "⌥⇧⌘C showed no toast"
+expect '^browser: toast settled$' "⌥⇧⌘C's toast didn't settle"
+none_since '^browser: toast hovered true$' ||
+  fail "⌥⇧⌘C's toast, where ⇧⌘C's went from under the pointer, took the pointer on the sidebar as on it"
 clipboard_holds '[Example Domain](https://example.org/)' ||
   fail "⌥⇧⌘C left the clipboard holding \"$(WAYLAND_DISPLAY="$BROWSER_HEADLESS" wl-paste -n)\""
 

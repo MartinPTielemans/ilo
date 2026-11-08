@@ -2748,16 +2748,18 @@ void host_set_overlays_still(bool still) {
   g_overlays_still = still;
 }
 
-// |overlay| at the size it grows from, about its growth point, as a sublayer transform of the
-// layer holding its blur and drawing; at its size under Reduce Motion.
-static CATransform3D ShrunkOverlay(const Overlay& overlay) {
-  NSView* container = overlay.view.superview;
+// |overlay| at the size it grows from, about its growth point, as a sublayer transform of
+// |container|'s layer: the one holding its blur and drawing, or its shadow's, whose window reaches
+// |inset| past it on each side. At its size under Reduce Motion.
+static CATransform3D ShrunkOverlay(const Overlay& overlay, NSView* container, double inset) {
   CALayer* layer = container.layer;
   const NSSize size = container.bounds.size;
+  const double grow_x = overlay.grow_x + inset;
+  const double grow_y = overlay.grow_y + inset;
   // A sublayer transform applies about the layer's anchor point, which AppKit puts at a view's
   // bottom left, and y goes up unless the view is flipped.
-  const double x = overlay.grow_x - layer.anchorPoint.x * size.width;
-  const double y = (container.isFlipped ? overlay.grow_y : size.height - overlay.grow_y) -
+  const double x = grow_x - layer.anchorPoint.x * size.width;
+  const double y = (container.isFlipped ? grow_y : size.height - grow_y) -
                    layer.anchorPoint.y * size.height;
   CATransform3D shrunk = CATransform3DMakeTranslation(x, y, 0);
   const double scale = g_overlays_still ? 1 : overlay.grow_from;
@@ -2765,21 +2767,30 @@ static CATransform3D ShrunkOverlay(const Overlay& overlay) {
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 
-// Grows |overlay| in about its growth point, its blur and drawing together, as NSPopover does,
-// with its shadow fading in alongside.
+// Grows |overlay| in about its growth point, its blur, drawing and shadow together, as NSPopover
+// does, with its shadow fading in alongside.
 static void GrowOverlay(Overlay& overlay) {
   NSView* container = overlay.view.superview;
   container.wantsLayer = YES;
   CALayer* layer = container.layer;
+  // The shadow, and the overlay's shape cut out of it, grow with the overlay, or they'd stand at
+  // full size round the small overlay, the page showing through all of that shape (#2084).
+  NSView* shadow = overlay.shadow.contentView;
   // Shown again while it shrank away.
-  [layer removeAnimationForKey:@"shrink"];
+  for (CALayer* each in @[ layer, shadow.layer ]) {
+    [each removeAnimationForKey:@"shrink"];
+  }
   [layer removeAnimationForKey:@"shrink fade"];
-  CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
-  grow.fromValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
-  grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
-  grow.duration = overlay.grow_time;
-  grow.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15:0.75:0.35:1];
-  [layer addAnimation:grow forKey:@"grow"];
+  auto grow = [&overlay](NSView* view, double inset) {
+    CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
+    grow.fromValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, view, inset)];
+    grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+    grow.duration = overlay.grow_time;
+    grow.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15:0.75:0.35:1];
+    [view.layer addAnimation:grow forKey:@"grow"];
+  };
+  grow(container, 0);
+  grow(shadow, overlay.reach());
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.fromValue = @0;
   fade.toValue = @1;
@@ -2798,6 +2809,7 @@ static void GrowOverlay(Overlay& overlay) {
 // |parent|.
 static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
   CALayer* layer = overlay.view.superview.layer;
+  NSView* shadow = overlay.shadow.contentView;
   NSWindow* window = overlay.window;
   // What it shows stays, and the clicks go through it to what's under it.
   window.ignoresMouseEvents = YES;
@@ -2810,6 +2822,7 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
     }
     [layer removeAnimationForKey:@"shrink"];
     [layer removeAnimationForKey:@"shrink fade"];
+    [shadow.layer removeAnimationForKey:@"shrink"];
     [parent removeChildWindow:window];
     [window orderOut:nil];
   }];
@@ -2817,10 +2830,15 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
       [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
   const double seconds = overlay.fade_out > 0 ? overlay.fade_out : kOverlayShrink;
   CABasicAnimation* shrink = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
-  shrink.toValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
+  shrink.toValue =
+      [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, overlay.view.superview, 0)];
+  // Its shadow shrinks with it, as it grew.
+  CABasicAnimation* shrink_shadow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
+  shrink_shadow.toValue =
+      [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, shadow, overlay.reach())];
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.toValue = @0;
-  for (CABasicAnimation* animation in @[ shrink, fade ]) {
+  for (CABasicAnimation* animation in @[ shrink, shrink_shadow, fade ]) {
     animation.duration = seconds;
     animation.timingFunction = timing;
     // Held at its end until the window goes, so it doesn't come back for a frame.
@@ -2829,6 +2847,7 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
   }
   if (overlay.shrinks) {
     [layer addAnimation:shrink forKey:@"shrink"];
+    [shadow.layer addAnimation:shrink_shadow forKey:@"shrink"];
   }
   [layer addAnimation:fade forKey:@"shrink fade"];
   [CATransaction commit];
@@ -4131,6 +4150,20 @@ void host_show_toast(void* ui_view) {
     if (!g_toast_shown || g_toast_over != browser) {
       return;
     }
+    // AppKit tells a window it orders out nothing of the pointer leaving it, so GPUI would still
+    // have it where it was, on the last toast's plate, and this one's first frame would find it
+    // hovered, keeping it past its time (#2076). It's a move outside the window, as GPUI's leave is
+    // on Linux and Windows.
+    [g_toast_view
+        mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                      location:NSMakePoint(-1, NSHeight(g_toast_view.bounds) + 1)
+                                 modifierFlags:NSEvent.modifierFlags
+                                     timestamp:NSProcessInfo.processInfo.systemUptime
+                                  windowNumber:g_toast.windowNumber
+                                       context:nil
+                                   eventNumber:0
+                                    clickCount:0
+                                      pressure:0]];
     PlaceToast();
     [g_toast_view.layer setNeedsDisplay];
     [g_toast_view.layer displayIfNeeded];

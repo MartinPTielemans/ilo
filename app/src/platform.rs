@@ -17,6 +17,8 @@ unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_translation_target(out: *mut c_char, capacity: usize) -> bool;
     #[cfg(target_os = "macos")]
+    pub fn host_preferred_languages(out: *mut c_char, capacity: usize) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_language_name(language: *const c_char, out: *mut c_char, capacity: usize) -> bool;
     // Translates the JSON array |texts| and answers on the main thread, with |context|.
     #[cfg(target_os = "macos")]
