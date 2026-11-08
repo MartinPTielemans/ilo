@@ -2453,6 +2453,25 @@ impl Settings {
         if !sending.is_empty() {
             blocks.push(Block::Rows(sending));
         }
+        // What it never does, in a line, beside the policy that names every service it talks to,
+        // as the owner asked (#684).
+        let policy = self
+            .button("privacy-policy", "Open")
+            .relative()
+            .child(self.drawn("open privacy policy".into()))
+            .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
+        let line = concat!(
+            env!("APP_NAME"),
+            " never sees the sites you visit or what you type, and never sells your data. ",
+            "The policy names every service it talks to."
+        );
+        let policy = setting(
+            look,
+            "Privacy Policy",
+            Some(line.into()),
+            vec![policy.into_any_element()],
+        );
+        blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
             concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
