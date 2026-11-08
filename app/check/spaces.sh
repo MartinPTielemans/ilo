@@ -431,9 +431,9 @@ library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
 # Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is the third of five, with
-# Agents (#1080) last, 100 apart and centred 5 above the window's middle, 56 in.
-send click 56 $((${content#*x} / 2 - 5))
+# leave the page less than 56, as Arc 1.171's. The section's button is the third of six, with
+# Agents (#1080) and Boosts (#695) last, 100 apart and centred 5 above the window's middle, 56 in.
+send click 56 $((${content#*x} / 2 - 55))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
 spaces_wide=$((216 + 264 * 2))
 [ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))

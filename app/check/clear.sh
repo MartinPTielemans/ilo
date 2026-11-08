@@ -532,9 +532,9 @@ expect '^browser: remove archived [0-9][0-9]*$' "Delete from Archive didn't run"
 expect "^browser: archive $((archived - 1)) tabs\$" "Delete from Archive didn't take the tab out"
 none_since '^browser: library hidden$' || fail "Delete from Archive closed the Library"
 # A right-click on the Archived Tabs section offers Clear Archive, as Arc's does, which asks as
-# the menu's does, and ⌘Z brings the tabs back. It's the fourth of five, with Agents (#1080) last,
-# 100 apart and centred 5 above the column's middle.
-archive_section="56 $((height / 2 + 95))"
+# the menu's does, and ⌘Z brings the tabs back. It's the fourth of six, with Agents (#1080) and
+# Boosts (#695) last, 100 apart and centred 5 above the column's middle.
+archive_section="56 $((height / 2 + 45))"
 post rightclick $archive_section
 expect "^browser: menu shown $(cased 'Clear Archive')\$" \
   "a right-click on the Archived Tabs section didn't offer Clear Archive"
