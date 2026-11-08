@@ -1942,7 +1942,8 @@ impl Settings {
         }
     }
 
-    /// Tabs & Sidebar: when Today tabs are archived and unloaded, who shares the favorites, and
+    /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
+    /// shares the favorites, and
     /// how the hidden sidebar comes.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
@@ -1993,6 +1994,24 @@ impl Settings {
             ),
             vec![unload],
         );
+        let battery = self.toggle(
+            "battery saver setting",
+            "Battery Saver",
+            unsafe { bc::bc_battery_saver_enabled() },
+            set_battery_saver,
+            accent,
+            cx,
+        );
+        let battery = setting(
+            look,
+            "Battery Saver",
+            Some(
+                "Below 20% on battery, pages draw less often and tabs out of sight that keep \
+                 busy pause."
+                    .into(),
+            ),
+            vec![battery],
+        );
         let scope = favorites_scope();
         let favorites = self.popup(
             Popup::Favorites,
@@ -2025,7 +2044,12 @@ impl Settings {
         );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
-            Block::Rows(archive.into_iter().chain([unload, moving]).collect()),
+            Block::Rows(
+                archive
+                    .into_iter()
+                    .chain([unload, battery, moving])
+                    .collect(),
+            ),
             Block::Rows(vec![favorites]),
         ];
         let edge = self.toggle(
@@ -2282,6 +2306,11 @@ impl Settings {
         if self.widevine.read(cx).shown() {
             blocks.push(Block::Rows(vec![self.widevine_row(cx)]));
         }
+        let always = cx.try_global::<shell::AlwaysTranslated>().cloned();
+        if let Some(always) = always.filter(|always| !always.0.is_empty()) {
+            blocks.push(Block::Heading("Always translated".into()));
+            blocks.push(Block::Group(self.always_translated(&always.0, cx)));
+        }
         Page::new(
             Section::Features,
             concat!(
@@ -2448,11 +2477,58 @@ impl Settings {
         if !sending.is_empty() {
             blocks.push(Block::Rows(sending));
         }
+        // What it never does, in a line, beside the policy that names every service it talks to,
+        // as the owner asked (#684).
+        let policy = self
+            .button("privacy-policy", "Open")
+            .relative()
+            .child(self.drawn("open privacy policy".into()))
+            .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
+        let line = concat!(
+            env!("APP_NAME"),
+            " never sees the sites you visit or what you type, and never sells your data. ",
+            "The policy names every service it talks to."
+        );
+        let policy = setting(
+            look,
+            "Privacy Policy",
+            Some(line.into()),
+            vec![policy.into_any_element()],
+        );
+        blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
             concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
             blocks,
         )
+    }
+
+    /// The languages a page's translate card said to always translate, each with Remove, after
+    /// which a page in it asks again (#671).
+    fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let rows = languages.iter().enumerate().map(|(index, language)| {
+            let at = self.drawn(format!("always translated {language}"));
+            let gone = language.clone();
+            let remove = self
+                .button(("always-translated-remove", index as u64), "Remove")
+                .relative()
+                .child(at)
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    let mut languages = (cx.try_global::<shell::AlwaysTranslated>())
+                        .map(|always| always.0.clone())
+                        .unwrap_or_default();
+                    languages.retain(|each| *each != gone);
+                    crate::translate_host::save_always(&languages);
+                    // check.sh waits for this line.
+                    log!("browser: always translate {gone} off");
+                    cx.set_global(shell::AlwaysTranslated(languages));
+                    cx.refresh_windows();
+                }));
+            let name = crate::translate_host::language_name(language);
+            line_row(look, name, None, vec![remove.into_any_element()])
+        });
+        group(look, rows)
     }
 
     /// The sites the user turned ad blocking off on in their Site Controls, each with the way to
@@ -4361,6 +4437,11 @@ fn set_little_windows(on: bool, cx: &mut App) {
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
     unsafe { bc::bc_set_unload_idle_tabs(unload) };
+}
+
+/// Chrome's Local State pref, so off turns Battery Saver off at once and it never comes on.
+fn set_battery_saver(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_battery_saver_enabled(on) };
 }
 
 /// In every profile; a site's own stays as the user set it in the Site Controls.

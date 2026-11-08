@@ -282,10 +282,17 @@ pub trait Browser {
     fn translation_target(&self) -> Option<SharedString> {
         None
     }
+    /// Whether the user reads `language`, a language alone such as "es": one the system prefers,
+    /// which no page is offered translation from.
+    fn reads_language(&self, _language: &str) -> bool {
+        false
+    }
     /// `language`'s name as the user reads it, such as "Spanish" for "es".
     fn language_name(&self, language: &str) -> SharedString {
         SharedString::from(language.to_owned())
     }
+    /// Keeps the languages always translated for the next launch (`AlwaysTranslated`).
+    fn keep_always_translated(&self, _languages: &[SharedString], _cx: &mut App) {}
     /// Translates `tab`'s page from `from` to `to` on the computer, its words never leaving it.
     /// Then Shell::set_translation. The user's alone: agents read pages in their own words.
     fn translate(&self, _tab: u64, _from: &str, _to: &str, _cx: &mut App) {}

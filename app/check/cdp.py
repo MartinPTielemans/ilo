@@ -31,6 +31,12 @@ takes a command a line on its standard input:
                   last at an address starting with PREFIX, through its shadow trees, its label or
                   its text, or none for no such page or nothing focused: a WebUI dialog takes the
                   keyboard a moment after its page loads
+  requests FILE   records each request the attached page and its frames make from now on, a JSON
+                  line each in FILE: "sent" with its id, address and wall time in ms, "failed"
+                  with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
+                  blocker's, and "answered" with its id for a response from no server, network
+                  cache or service worker, as the browser's own ad blocker's stand-in is, then
+                  logs "cdp: recording requests"
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -118,6 +124,8 @@ replies = {}
 answered = threading.Condition(lock)
 events = []
 sent = 0
+# Where requests records to, once it's asked to.
+recording = None
 # The passkeys the run's authenticators took, by their ids.
 passkeys = {}
 
@@ -143,9 +151,49 @@ def call(method, params=None, session=None):
     return reply["result"]
 
 
+def post(method, params, session):
+    """Sends a command whose reply nothing waits for, from the thread that reads the replies."""
+    global sent
+    with lock:
+        sent += 1
+        number = sent
+    send(json.dumps({"id": number, "method": method, "params": params,
+                     "sessionId": session}).encode())
+
+
+def record(message):
+    """Records a request's event for requests, and attaches to each frame the page gets in a
+    process of its own, an ad's often, to record its requests too. True for what it took."""
+    method, params = message.get("method"), message.get("params", {})
+    if method == "Target.attachedToTarget":
+        child = params["sessionId"]
+        post("Network.enable", {}, child)
+        post("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False,
+                                      "flatten": True}, child)
+        return True
+    if method == "Network.requestWillBeSent":
+        line = {"event": "sent", "id": params["requestId"], "url": params["request"]["url"],
+                "at": int(params["wallTime"] * 1000)}
+    elif method == "Network.loadingFailed":
+        line = {"event": "failed", "id": params["requestId"], "error": params["errorText"]}
+    elif method == "Network.responseReceived":
+        response = params["response"]
+        kept = ("fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "fromEarlyHints")
+        if response.get("remoteIPAddress") or any(response.get(key) for key in kept):
+            return True
+        line = {"event": "answered", "id": params["requestId"]}
+    else:
+        return False
+    recording.write(json.dumps(line) + "\n")
+    return True
+
+
 def read():
     for raw in receive():
         message = json.loads(raw)
+        # Not kept with the events, as a run records tens of thousands.
+        if recording and record(message):
+            continue
         with answered:
             if "id" in message:
                 replies[message["id"]] = message
@@ -310,5 +358,11 @@ for line in sys.stdin:
         log("reveal " + reveal(words[1]))
     elif words[:1] == ["focus"] and len(words) == 2:
         log("focus " + focus(words[1]))
+    elif words[:1] == ["requests"] and len(words) == 2 and session and not recording:
+        recording = open(words[1], "w", encoding="utf-8", buffering=1)
+        call("Network.enable", {}, session)
+        call("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False,
+                                      "flatten": True}, session)
+        log("recording requests")
     elif words[:1] == ["shows"] and len(words) == 3:
         log("shows " + shows(words[1], words[2]))

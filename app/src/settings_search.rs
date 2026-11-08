@@ -80,6 +80,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Show what's new after an update" => &["release notes", "changelog"],
         "Check for updates automatically" => &["auto update", "software update"],
         "Dock icon takes the Space's color" => &["dock dot"],
+        "Battery Saver" => &["energy saver", "low power"],
         _ => &[],
     }
 }
