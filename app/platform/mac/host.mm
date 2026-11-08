@@ -5026,9 +5026,26 @@ void host_share(void* ui_view,
                 const char* url,
                 const char* title) {
   Browser* browser = BrowserWithView(ui_view);
+  // The toast's view, for ⇧⌘C's Share, is no browser's: the menu hangs from the same place in the
+  // browser window the toast shows over (#2067).
+  const bool from_toast = !browser && g_toast_shown && ui_view == (__bridge void*)g_toast_view;
+  if (from_toast) {
+    browser = g_toast_over;
+  }
   NSURL* link = [NSURL URLWithString:@(url)];
   if (!browser || !browser->window || !link) {
     return;
+  }
+  NSView* content = browser->window.contentView;
+  // From the content's top left, under the tile it hangs from.
+  NSRect rect = NSMakeRect(x, content.flipped ? y : NSHeight(content.bounds) - y - height, width,
+                           height);
+  if (from_toast) {
+    const NSRect in_toast = NSMakeRect(
+        x, g_toast_view.flipped ? y : NSHeight(g_toast_view.bounds) - y - height, width, height);
+    const NSRect on_screen =
+        [g_toast convertRectToScreen:[g_toast_view convertRect:in_toast toView:nil]];
+    rect = [content convertRect:[browser->window convertRectFromScreen:on_screen] fromView:nil];
   }
   // check.sh reads this line. A driven run doesn't show the menu, which would wait on a choice.
   fprintf(stderr, "browser: share %s\n", url);
@@ -5042,10 +5059,6 @@ void host_share(void* ui_view,
   delegate.title = @(title);
   picker = [[NSSharingServicePicker alloc] initWithItems:@[ link ]];
   picker.delegate = delegate;
-  NSView* content = browser->window.contentView;
-  // From the content's top left, under the tile it hangs from.
-  const NSRect rect = NSMakeRect(x, content.flipped ? y : NSHeight(content.bounds) - y - height,
-                                 width, height);
   [picker showRelativeToRect:rect
                       ofView:content
                preferredEdge:content.flipped ? NSRectEdgeMaxY : NSRectEdgeMinY];

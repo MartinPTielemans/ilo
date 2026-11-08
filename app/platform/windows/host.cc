@@ -4890,8 +4890,19 @@ void host_share(void* ui_view,
                 double,
                 const char* url,
                 const char* title) {
+  // The toast's view, for ⇧⌘C's Share, is no browser's: the sheet is the browser window's that the
+  // toast shows over, as the Mac's is (#2067).
+  if (ui_view && g_toast_over && Hwnd(ui_view) == g_toast.hwnd) {
+    ui_view = g_toast_over;
+  }
   HWND root = Root(ui_view);
   if (!root || !url) {
+    return;
+  }
+  // check.sh reads this line. A driven run doesn't show the sheet, which would take the keyboard
+  // from the window and wait on a choice.
+  fprintf(stderr, "browser: share %s\n", url);
+  if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
   winrt::hstring link{Wide(url)};
