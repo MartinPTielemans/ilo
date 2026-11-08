@@ -494,42 +494,38 @@ expect "$trashed" "the page's second download didn't finish"
 t=$(grep "$trashed" "$log" | tail -1 | cut -d' ' -f3)
 send key j cmd shift
 expect '^browser: library shown$' "⇧⌘J didn't open the Library on the second download"
-# On Windows the app stops in DoDragDrop under the driver (#1583).
-if windows; then
-  echo "skip: a download's row dragged out: Windows' system drag stops under the driver (#1583)."
+press=$((step + 1))
+send press 300 111
+send dragto 300 140
+expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
+# Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
+# On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
+# driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
+# took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
+# which takes no file, and left of the page, where it's then let go.
+let_go="300 140"
+if [ "$(uname)" = Darwin ]; then
+  let_go="100 60"
+  send dragto $let_go
 else
-  press=$((step + 1))
-  send press 300 111
-  send dragto 300 140
-  expect "^browser: download $t drag\$" "dragging the download's row didn't start the system's drag"
-  # Off the Mac a user holds the drag until the Library has gone, as the release waits for it there.
-  # On the Mac nothing waits: with no real button down, the system's drag ends at the next event the
-  # driver posts, with the Library on its way out, and on GitHub's hosted Mac the page under the row
-  # took the file there (#1690). So that event is a move to the sidebar's top, above its tab list,
-  # which takes no file, and left of the page, where it's then let go.
-  let_go="300 140"
-  if [ "$(uname)" = Darwin ]; then
-    let_go="100 60"
-    send dragto $let_go
-  else
-    expect '^browser: library hidden$' "the Library didn't close for the download's drag"
-  fi
-  send release $let_go
-  # No real button holds the system's drag, so it may end before the release reaches it.
-  dragged() {
-    for _ in $(seq 100); do
-      sed -n "/^browser: drive $press: /,\$p" "$log" | sed -n "/$1/,\$p" | grep -q "$2" && return 0
-      sleep 0.1
-    done
-    return 1
-  }
-  dragged "download $t drag" '^browser: library hidden$' ||
-    fail "the Library didn't close for the download's drag"
-  dragged "download $t drag" '^browser: file drag ended nowhere$' ||
-    fail "the download's drag didn't end where nothing took it"
-  dragged 'file drag ended' '^browser: library shown$' ||
-    fail "the Library didn't come back after the download's drag"
+  expect '^browser: library hidden$' "the Library didn't close for the download's drag"
 fi
+send release $let_go
+# No real button holds the system's drag on the Mac or Linux, so it may end before the release
+# reaches it. On Windows the driver holds it.
+dragged() {
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $press: /,\$p" "$log" | sed -n "/$1/,\$p" | grep -q "$2" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+dragged "download $t drag" '^browser: library hidden$' ||
+  fail "the Library didn't close for the download's drag"
+dragged "download $t drag" '^browser: file drag ended nowhere$' ||
+  fail "the download's drag didn't end where nothing took it"
+dragged 'file drag ended' '^browser: library shown$' ||
+  fail "the Library didn't come back after the download's drag"
 send key j cmd shift
 expect '^browser: library hidden$' "⇧⌘J didn't close the Library after the download's drag"
 # Its row in the recent downloads shows the Library row's menu, whose Move to Trash takes the rows
