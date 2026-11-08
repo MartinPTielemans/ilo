@@ -2,7 +2,8 @@
 # Screenshots one process's main window with its child windows (menus, the command bar) drawn
 # over it, as on screen, but nothing from other apps. A screen capture would include whatever
 # else is open on the owner's Mac. With "all", it takes every window of the process on that display,
-# such as two browser windows, in one picture.
+# such as two browser windows, in one picture. With "menubar", on the Mac, it takes the process's
+# button in the menu bar alone, which is a window of its own.
 # On Windows, under Git Bash, it copies the screen where the windows show, as Windows composes it,
 # cut to their shapes, while no other app's window is in front of them there. Otherwise it takes
 # each of the process's windows with Windows.Graphics.Capture, as Windows composes them, in their
@@ -12,10 +13,10 @@
 # frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
-# Usage: tools/window-screenshot.sh <pid> <output.png> [all]
+# Usage: tools/window-screenshot.sh <pid> <output.png> [all|menubar]
 set -e
-[ $# -eq 2 ] || [ $# -eq 3 ] && [ "${3:-all}" = all ] ||
-  { echo "usage: $0 <pid> <output.png> [all]" >&2; exit 2; }
+[ $# -eq 2 ] || [ $# -eq 3 ] && { [ "${3:-all}" = all ] || [ "$3" = menubar ]; } ||
+  { echo "usage: $0 <pid> <output.png> [all|menubar]" >&2; exit 2; }
 case "$(uname)" in
   MINGW* | MSYS*)
     [ -e "/proc/$1/winpid" ] || { echo "process $1 isn't running" >&2; exit 1; }
@@ -349,6 +350,7 @@ if ours:
   exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim "$2"
 fi
 PID="$1" OUT="$2" ALL="${3:-}" swift - <<'SWIFT'
+import CoreGraphics
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -357,6 +359,7 @@ import UniformTypeIdentifiers
 let pid = Int32(ProcessInfo.processInfo.environment["PID"]!)!
 let out = URL(fileURLWithPath: ProcessInfo.processInfo.environment["OUT"]!)
 let all = ProcessInfo.processInfo.environment["ALL"] == "all"
+let menuBar = ProcessInfo.processInfo.environment["ALL"] == "menubar"
 
 func fail(_ message: String) -> Never {
   FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -365,10 +368,12 @@ func fail(_ message: String) -> Never {
 
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
-// The largest normal window; a process can also own invisible helper windows.
-guard let main = windows.filter({ $0.windowLayer == 0 })
+// The largest normal window, as a process can also own invisible helper windows, or its button
+// in the menu bar, at the status windows' level.
+let layer = menuBar ? Int(CGWindowLevelForKey(.statusWindow)) : 0
+guard let main = windows.filter({ $0.windowLayer == layer })
   .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-else { fail("process \(pid) has no window on screen") }
+else { fail("process \(pid) has no \(menuBar ? "button in the menu bar" : "window on screen")") }
 guard let display = content.displays.first(where: { $0.frame.intersects(main.frame) })
 else { fail("no display shows the window") }
 

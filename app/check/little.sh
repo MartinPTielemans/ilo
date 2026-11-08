@@ -11,7 +11,8 @@
 # past its time closes into the archive by itself. The first opens 900 × 640, and each after at the
 # size the last one closed at. On the Mac one grows in, from its middle when a key opened it, else
 # from under the pointer, and is recorded doing so. It opens over a full-screen window, and the
-# Dock's menu opens one after its New Window, and hides and shows them all. One takes its Space's
+# Dock's menu opens one after its New Window, and hides and shows them all, and the menu bar's
+# button, once Settings turns it on, opens one and is captured alone. One takes its Space's
 # look as its theme turns light and dark, captured with a title too long for its bar. A page in one
 # goes full screen in it, as a video's button takes it, and its escape leaves full screen without
 # closing the window. Closed over
@@ -376,6 +377,10 @@ if [ "$(uname)" = Darwin ] || windows; then
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
   expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
+  if [ "$(uname)" = Darwin ]; then
+    ../tools/window-screenshot.sh "$pid" "$out/little-menu-bar.png" menubar ||
+      fail "no button in the menu bar to capture"
+  fi
   send statusitem click
   expect "^browser: $place opened little window [0-9]*\$" "the $place's button didn't open a Little ilo window"
   little=$(opened)
