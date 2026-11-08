@@ -537,8 +537,12 @@ if [ "$(uname)" = Darwin ]; then
   dropdown_shown "Edit › AutoFill › Passwords… showed no dropdown at the focused field"
   dropdown_gone "escape didn't close the dropdown of logins"
   # A click below the form takes the page's focus off its fields, which the core hears from the
-  # page after the click's done.
-  send click 600 700
+  # page after the click's done. It's 30 above the page's bottom, which is 10 above the window's:
+  # the Mac runner's window is 700 tall, where 700 was below the page (#771).
+  send layout
+  window_height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content ' |
+    sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+  send click 600 $((window_height - 40))
   expect "^browser: title $tab unfocused\$" "a click below the form left a field with the page's focus"
   send menu "AutoFill › Credit Card…"
   expect "^browser: autofill $tab no field\$" "Edit › AutoFill found a field after a click off them"
