@@ -729,8 +729,16 @@ impl Browser for Engine {
         crate::translate_host::target().map(SharedString::from)
     }
 
+    fn reads_language(&self, language: &str) -> bool {
+        crate::translate_host::reads(language)
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         crate::translate_host::language_name(language).into()
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        crate::translate_host::save_always(languages);
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
@@ -1844,6 +1852,14 @@ impl Browser for Engine {
             log!("browser: window {new} took {tab} from window {id}");
             update_window_in(new, cx, |shell, cx| shell.came_by_window_drag(tab, id, cx));
         });
+    }
+
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+        unsafe {
+            platform::host_window_frame(self.ui_view, &mut x, &mut y, &mut width, &mut height)
+        }
+        .then(|| gpui::point(x as f32 + at.x, y as f32 + at.y))
     }
 
     fn tab_window(&self, tab: u64) -> u64 {

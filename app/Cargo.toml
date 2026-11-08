@@ -52,6 +52,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
 # bring it already.
 base64 = "0.22"
+# Capture's Edit: its marks' round ends, as GPUI strokes with lyon's options, and the marks drawn
+# into the picture. GPUI's dependencies bring both already.
+lyon = "1.0"
+tiny-skia = "0.11"
 
 # The session and the timeout of the shell Connect reads the user's PATH from
 # (src/agents/clients.rs), in the version GPUI's already brings.
