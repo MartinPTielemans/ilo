@@ -4,7 +4,7 @@
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
 #   split favorites cards extensions adblock adblock-lists windows private blank little capture media
-#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
+#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
@@ -19,6 +19,8 @@
 # the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
 # tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
 # runs only when named, and skips elsewhere, where the windows run checks it.
+# Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
+# so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -78,11 +80,11 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
-runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
+runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate"
-named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag"
+named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf perf-native"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -169,7 +171,9 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
+# The translate run always translates Spanish, which a failed one left.
+rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
+  "$(dirname "$saved")/Always Translated"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its

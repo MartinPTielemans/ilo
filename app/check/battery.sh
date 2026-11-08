@@ -4,7 +4,8 @@
 # and a leaf shows among the URL field's buttons, whose press says so again. Turn Off Battery Saver
 # for Now in the command bar turns it off until the computer's plugged in, and it stays off lower
 # still; plugged in and out again it's back. While it's on, a page busy out of sight freezes, which
-# its row's hover card says, and thaws once shown. Plugged in, it goes, the leaf with it.
+# its row's hover card says, and thaws once shown. Plugged in, it goes, the leaf with it. Settings'
+# switch turns it off at once, and on again below 20%.
 
 serve
 # Each page is named by its query, "battery" without one. "o" opens the next page of the names,
@@ -75,6 +76,29 @@ send battery 18 plugged
 send battery 17 unplugged
 expect 'browser: battery saver on at 17%$' "plugged in and out again, Battery Saver didn't come back"
 
+# Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
+# back, below 20% on battery.
+send menu Settings…
+expect '^browser: settings shown General$' "Settings… didn't show General"
+settings_drew General
+send clickkey $(drawn "toolbar Tabs & Sidebar")
+expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
+settings_drew 'Tabs & Sidebar'
+in_sight "switch battery saver setting" || fail "Settings didn't draw Battery Saver's switch"
+../tools/window-screenshot.sh "$pid" "$out/battery-setting.png" all || fail "no window to capture"
+send clickkey $at
+expect '^browser: battery saver setting off$' "a click on Battery Saver's switch didn't turn it off"
+expect 'browser: battery saver off$' "Battery Saver stayed on with its switch off"
+expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Saver's switch off"
+send battery 16 unplugged
+none_since 'browser: battery saver on' || fail "Battery Saver came on with its switch off"
+send clickkey $at
+expect '^browser: battery saver setting on$' "a click on Battery Saver's switch didn't turn it on"
+expect 'browser: battery saver on at 16%$' "Battery Saver's switch on didn't turn it on at 16%"
+settings_close
+post clickkey $close
+expect '^browser: settings hidden$' "the close button didn't hide Settings"
+
 # On Battery Saver a page busy out of sight freezes once Chrome has measured it, a minute at a time,
 # and says so in its row's hover card; shown, it thaws.
 send click $page_point
@@ -110,6 +134,7 @@ exec 3>&-
 quit
 echo "ok: at 50% on battery Battery Saver stayed off; at 19% it turned on, the toast said so with" \
   "Turn Off and the URL field drew its leaf, whose press said so again; the command bar turned it" \
-  "off until plugged in, and it came back plugged in and out; a page busy out of sight froze," \
+  "off until plugged in, and it came back plugged in and out; Settings' switch turned it off and" \
+  "on again; a page busy out of sight froze," \
   "its hover card said so, and it thawed once shown; plugged in, Battery Saver and the leaf went." \
-  "Windows: $out/battery-notice.png, $out/battery-paused.png"
+  "Windows: $out/battery-notice.png, $out/battery-setting.png, $out/battery-paused.png"
