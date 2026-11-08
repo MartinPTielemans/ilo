@@ -257,6 +257,47 @@ std::vector<gfx::Rect> RoundShape(const gfx::Size& size, double radius, bool bot
   return rects;
 }
 
+// |whole| less |holes|, as bands of rows, for a shape set in one request. Set whole, then less
+// each hole, the window shows whole in between, and a frame the UI draws then stays over the pages
+// once they show through again, until they draw: a Space switch, which lays the pages out at each
+// step of its slide, flickered to the UI's card under them (#1438).
+std::vector<gfx::Rect> Without(const gfx::Rect& whole, const std::vector<gfx::Rect>& holes) {
+  std::vector<int> edges = {whole.y(), whole.bottom()};
+  for (const gfx::Rect& hole : holes) {
+    edges.push_back(std::clamp(hole.y(), whole.y(), whole.bottom()));
+    edges.push_back(std::clamp(hole.bottom(), whole.y(), whole.bottom()));
+  }
+  std::ranges::sort(edges);
+  edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+  std::vector<gfx::Rect> rects;
+  for (size_t i = 0; i + 1 < edges.size(); ++i) {
+    const int top = edges[i];
+    const int bottom = edges[i + 1];
+    // The holes across the band, left to right.
+    std::vector<std::pair<int, int>> spans;
+    for (const gfx::Rect& hole : holes) {
+      if (!hole.IsEmpty() && hole.y() <= top && hole.bottom() >= bottom) {
+        spans.emplace_back(hole.x(), hole.right());
+      }
+    }
+    std::ranges::sort(spans);
+    int x = whole.x();
+    for (const auto& [left, right] : spans) {
+      if (left > x) {
+        rects.emplace_back(x, top, std::min(left, whole.right()) - x, bottom - top);
+      }
+      x = std::max(x, right);
+      if (x >= whole.right()) {
+        break;
+      }
+    }
+    if (x < whole.right()) {
+      rects.emplace_back(x, top, whole.right() - x, bottom - top);
+    }
+  }
+  return rects;
+}
+
 x11::Rectangle XRectangle(const gfx::Rect& rect) {
   return {static_cast<int16_t>(rect.x()), static_cast<int16_t>(rect.y()),
           static_cast<uint16_t>(rect.width()), static_cast<uint16_t>(rect.height())};
@@ -527,18 +568,40 @@ class WindowViews : public views::WidgetObserver,
     }
     // shortcut: a shape's corners are aliased, as Windows' regions are and Core Animation's on the
     // Mac aren't; the page's own round corners show through them.
+    std::vector<gfx::Rect> holes;
+    for (const Slot* slot : shown) {
+      const gfx::Rect frame = gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale));
+      for (gfx::Rect row : RoundShape(
+               frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
+               slot->bottom_corners_only)) {
+        row.Offset(frame.OffsetFromOrigin());
+        holes.push_back(row);
+      }
+    }
+    std::vector<gfx::Rect> bounding = Without(gfx::Rect(pixels), holes);
+    // The band takes no input in the UI's window, so it goes to the browser window under it, still
+    // showing the UI.
+    gfx::Rect input(pixels);
+    input.Inset(gfx::Insets(edge));
+    // Only when it changes: the pages are laid out again for a colour or a step of the UI's motion
+    // that leaves them where they are.
+    if (bounding == ui_bounding_ && input == ui_input_) {
+      return;
+    }
+    std::vector<x11::Rectangle> rectangles;
+    for (const gfx::Rect& rect : bounding) {
+      rectangles.push_back(XRectangle(rect));
+    }
+    ui_bounding_ = std::move(bounding);
+    ui_input_ = input;
     x11::Shape& shape = x11::Connection::Get()->shape();
     shape.Rectangles(x11::Shape::RectanglesRequest{
         .operation = x11::Shape::So::Set,
         .destination_kind = x11::Shape::Sk::Bounding,
         .ordering = x11::ClipOrdering::Unsorted,
         .destination_window = ui_,
-        .rectangles = {XRectangle(gfx::Rect(pixels))},
+        .rectangles = std::move(rectangles),
     });
-    // The band takes no input in the UI's window, so it goes to the browser window under it, still
-    // showing the UI.
-    gfx::Rect input(pixels);
-    input.Inset(gfx::Insets(edge));
     shape.Rectangles(x11::Shape::RectanglesRequest{
         .operation = x11::Shape::So::Set,
         .destination_kind = x11::Shape::Sk::Input,
@@ -546,23 +609,6 @@ class WindowViews : public views::WidgetObserver,
         .destination_window = ui_,
         .rectangles = {XRectangle(input)},
     });
-    for (const Slot* slot : shown) {
-      const gfx::Rect frame = gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale));
-      std::vector<x11::Rectangle> hole;
-      for (gfx::Rect row : RoundShape(
-               frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
-               slot->bottom_corners_only)) {
-        row.Offset(frame.OffsetFromOrigin());
-        hole.push_back(XRectangle(row));
-      }
-      shape.Rectangles(x11::Shape::RectanglesRequest{
-          .operation = x11::Shape::So::Subtract,
-          .destination_kind = x11::Shape::Sk::Bounding,
-          .ordering = x11::ClipOrdering::Unsorted,
-          .destination_window = ui_,
-          .rectangles = std::move(hole),
-      });
-    }
   }
 
   // Lends the keyboard to an overlay of the app's, or takes it back, for the page or UI that had it.
@@ -1158,6 +1204,9 @@ class WindowViews : public views::WidgetObserver,
   bool held_ = false;
   // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
   std::vector<gfx::Rect> input_region_;
+  // On X11, the shape and input shape last given the UI's window, in pixels (ShowThrough).
+  std::vector<gfx::Rect> ui_bounding_;
+  gfx::Rect ui_input_;
   // Whether the window manager's state for the window last said full screen.
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
