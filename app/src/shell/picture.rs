@@ -17,7 +17,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
-use super::{CARD_RADIUS, Shell, new_space::ease_out, pane_frames};
+use super::{Shell, new_space::ease_out, pane_frames};
 use crate::elevation::Level;
 
 use crate::tokens::shell::picture::REST;
@@ -357,7 +357,7 @@ impl Shell {
         let scale = picture.scale(now);
         let veil = VEIL * (1. - (scale - REST) / (1. - REST)).clamp(0., 1.);
         let image = ready.image.clone();
-        let radius = px(CARD_RADIUS);
+        let radius = px(self.card_radius());
         let picture = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {

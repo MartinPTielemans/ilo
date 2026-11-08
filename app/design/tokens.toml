@@ -845,9 +845,19 @@ on-detail = 0.77
 sidebar-width = 228.0
 # The card's inset from the window's top, right and bottom edges.
 card-inset = 10.0
-# The radius of the card's corners and the page's in it: Arc's, a circle of 12 pixels in its
-# window at 2×.
+# The radius of the card's corners and the page's in it where the window's own corner is square
+# (full screen, maximized, Windows 10, Linux): Arc's, a circle of 12 pixels in its window at 2×.
 card-radius = 6.0
+# The corner the OS gives a browser window, which the card's corners follow where it rounds them:
+# the card's radius is this less card-inset, never under 0, so the frame between them is as thick
+# round the curve as along the sides (outer = inner + inset, as #361 has the chrome's own). The
+# Mac's is macOS 26's continuous corner on a window with no toolbar, measured in window captures
+# on GitHub's macos-26 runner (16.75) and the owner's Mac (16), and the core rounds the page with
+# the same curve. Windows 11's is 8 points across, unless the window is maximized or full screen.
+# Linux's compositors don't tell a window how they round it, so it's taken as square.
+window-radius-mac = 16.0
+window-radius-windows = 8.0
+window-radius-linux = 0.0
 # Between the pages of a split view, as in Arc. The core's is the same.
 split-gap = 10.0
 # The glow outside a split view's focused page, in its ring's colour (Arc: ≈ 8 pt).

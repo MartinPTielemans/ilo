@@ -556,7 +556,7 @@ impl Shell {
             .top(card.top())
             .w(card.size.width)
             .h(card.size.height)
-            .rounded(px(super::CARD_RADIUS))
+            .rounded(px(self.card_radius()))
             .overflow_hidden()
             .children(targets);
         let picture = (tab != 0).then(|| {

@@ -241,7 +241,10 @@ void Unhide(NSView* view, bool hidden) {
   view.wantsLayer = YES;
 }
 
+// On the continuous curve the Mac rounds its windows with, so the card's corners, the window's
+// radius less the frame, are concentric with the window's (tokens' window-radius-mac).
 void RoundCorners(NSView* view, double radius, CACornerMask corners) {
+  view.layer.cornerCurve = kCACornerCurveContinuous;
   view.layer.cornerRadius = radius;
   view.layer.maskedCorners = corners;
   view.layer.masksToBounds = radius > 0 && corners;
@@ -492,6 +495,7 @@ void ShowPages(views::Widget* widget,
       // Arc's: 2 pt, inside the page's edge.
       view.ring.layer.borderWidth = 2;
     }
+    view.ring.layer.cornerCurve = kCACornerCurveContinuous;
     view.ring.layer.cornerRadius = corner_radius;
     view.ring.layer.borderColor = [NSColor colorWithSRGBRed:((ring_color >> 16) & 0xff) / 255.0
                                                       green:((ring_color >> 8) & 0xff) / 255.0
