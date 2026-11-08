@@ -1678,7 +1678,7 @@ impl Shell {
                     .get(&folder)
                     .map(|(name, _)| name.clone());
                 let name = title(&palette, name.unwrap_or_default(), false).pr(px(PLATE_INSET));
-                let elided = space.eliding() == Some(folder);
+                let elided = space.elides(folder);
                 let icon = folder_icon(&palette, space.is_open(folder), elided);
                 card_row(depth, plate(icon, name))
             }
@@ -3304,6 +3304,7 @@ mod tests {
             splits,
             folders,
             shown: 0,
+            peeked: Vec::new(),
         }
     }
 
@@ -3373,7 +3374,7 @@ mod tests {
                 [Line::Folder(10, 0), Line::Tab(3, 1), Line::Tab(4, 0)],
                 "Plans open: {inner_open}"
             );
-            assert_eq!(card.eliding(), Some(10), "Plans open: {inner_open}");
+            assert_eq!(card.dotted(), [(10, 3)], "Plans open: {inner_open}");
             assert_eq!(card.depth(3), 2, "the drop's depth is where it is");
         }
 
@@ -3385,10 +3386,10 @@ mod tests {
             card.card_lines(),
             [Line::Folder(10, 0), Line::Folder(11, 1), Line::Tab(3, 2)]
         );
-        assert_eq!(card.eliding(), None);
+        assert_eq!(card.dotted(), []);
         // Nothing shown there, nothing is listed in them.
         card.shown = 0;
-        assert_eq!(card.eliding(), None);
+        assert_eq!(card.dotted(), []);
     }
 
     /// A right-click on a card shows its Space's menu at the pointer, as a right-click on the

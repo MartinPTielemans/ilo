@@ -126,15 +126,15 @@ impl Swaps {
         &mut self,
         before: &Folders,
         after: &Folders,
-        eliding: (Option<u64>, Option<u64>),
+        eliding: (Vec<u64>, Vec<u64>),
         now: Instant,
     ) {
         for (&folder, &(_, open)) in &after.folders {
             if let Some(&(_, was)) = before.folders.get(&folder) {
                 self.start(
                     Swapped::Folder(folder),
-                    folder_glyph(was, eliding.0 == Some(folder)),
-                    folder_glyph(open, eliding.1 == Some(folder)),
+                    folder_glyph(was, eliding.0.contains(&folder)),
+                    folder_glyph(open, eliding.1.contains(&folder)),
                     now,
                 );
             }

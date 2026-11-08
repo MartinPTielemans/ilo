@@ -152,6 +152,7 @@ impl Shell {
                             splits: Vec::new(),
                             folders: Folders::default(),
                             shown: 0,
+                            peeked: Vec::new(),
                         }
                     }
                 }
