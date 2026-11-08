@@ -45,11 +45,13 @@ case $(uname -s) in
   *) systems=(wayland x11) ;;
 esac
 # Captures the screen, with the preview's settings in the environment, and with a point, again
-# with sway's pointer there, at the window's own point, as the window fills the output.
+# with sway's pointer there, at the window's own point, as the window fills the output. A warp
+# alone sends the window no motion, so it moves on by a pixel, which hovers what's under it.
 capture() { # <system> <output.png> <ready> [<point>]
   local then=()
   [ -z "${4:-}" ] || then=(--then "set -e; at=\$(grep -m1 '$4' \"\$LOG\" | awk '{ print \$(NF - 1), \$NF }')
-    swaymsg seat seat0 cursor set \$at > /dev/null; sleep 1; grim '$2'")
+    swaymsg seat seat0 cursor set \$at > /dev/null; swaymsg seat seat0 cursor move 1 0 > /dev/null
+    sleep 1.5; grim -c '$2'")
   case $1 in
     windows) timeout 90 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/window-capture.ps1" \
       "$2" "$3" "$preview" -Moving 400 ;;
