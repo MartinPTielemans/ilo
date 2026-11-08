@@ -1700,6 +1700,11 @@ impl Browser for Recorder {
         ))
     }
 
+    /// The window's top left at 100, 50 on the screen.
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        Some(gpui::point(at.x + 100., at.y + 50.))
+    }
+
     fn tab_window(&self, tab: u64) -> u64 {
         self.tab_windows.borrow().get(&tab).copied().unwrap_or(0)
     }

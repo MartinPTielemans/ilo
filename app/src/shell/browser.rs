@@ -865,6 +865,11 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// `at` in this window as a point on the screen, in tab_to_new_window's terms, if the window
+    /// has a place there, as a full-screen one hasn't.
+    fn screen_point(&self, _at: Point<f32>) -> Option<Point<f32>> {
+        None
+    }
     /// The browser window that shows `tab`'s page, else 0.
     fn tab_window(&self, _tab: u64) -> u64 {
         0

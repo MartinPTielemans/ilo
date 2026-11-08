@@ -25,7 +25,8 @@
 # brings the sidebar back. The sidebar's edge drags its width between 164 and 500, stopping at
 # them, and dragged on past half the narrowest it hides the sidebar, keeping its width; a
 # double-click on it puts the width back. A page that hasn't drawn yet shows black, or white with
-# View › Appearance on Light. In a check VM, the sidebar over grey backdrops is Dia's composite,
+# View › Appearance on Light, and with the window widened, the space a page hasn't drawn at its new
+# size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back.
 
@@ -89,6 +90,8 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("blur", () => leave && (location = "https://example.com/"));
   // A w opens the page the fragment names in a tab.
   addEventListener("keydown", e => e.key == "w" && window.open(location.hash.slice(1)));
+  // A g opens gap.html from the check server in a tab.
+  addEventListener("keydown", e => e.key == "g" && window.open(location.hash.slice(1).replace(/wait$/, "gap.html")));
   requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>
 HTML
@@ -97,6 +100,22 @@ log="$out/window.log"
 step=0
 rm -f "$saved" "$launch_frame"
 serve
+# An orange page with a blue strip down its right edge that, once it has drawn, stalls for 6 s on
+# its first resize, so the frame it drew before stays up while the window is wider.
+printf '%s' '<!doctype html><title>loading</title>
+<style>html { background: rgb(224 90 0) } div { position: fixed; inset: 0 0 0 auto; width: 60px; background: rgb(0 90 224) }</style>
+<div></div>
+<script>
+let armed = false;
+addEventListener("resize", () => {
+  if (!armed) return;
+  armed = false;
+  const start = performance.now();
+  while (performance.now() - start < 6000);
+  requestAnimationFrame(() => setTimeout(() => document.title = "gap drew"));
+});
+requestAnimationFrame(() => setTimeout(() => (armed = true, document.title = "gap ready")));
+</script>' > "$out/site/gap.html"
 url="data:text/html;base64,$page#${site}wait"
 # With the motion GitHub's hosted Mac and Windows reduce, Windows' as "Show animations in Windows"
 # is off on its runner: the sidebar's steps below and the toast recorded below move.
@@ -358,6 +377,34 @@ fi
 send resize 1000 700
 check_layout "after a resize"
 check_buttons "after a resize"
+# Widened, the space a page hasn't drawn yet shows the page's own background, as Arc's does, not
+# the colour of a page before its first paint: the frame the page drew before stays at its old
+# size, its blue strip 200 to the left, until the page draws at the new size. Blue at the new right
+# edge means the page drew, or its frame was stretched to fill, either way leaving no gap.
+send key g
+expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open gap.html"
+tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
+await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
+# Its layout was checked after the resize above: the Mac keeps the page it left at its old size
+# in the layout's list, which check_layout would read.
+send resize 1200 700
+expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
+../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
+set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
+if [ "$1" -ge 170 ] && [ "$2" -ge 50 ] && [ "$2" -le 130 ] && [ "$3" -le 60 ]; then
+  gap="the space gap.html hadn't drawn yet showed its orange, $*"
+elif [ "$3" -ge 170 ] && [ "$1" -le 60 ]; then
+  gap="gap.html's frame filled the wider page view, $*, leaving no gap"
+else
+  fail "widened, the space gap.html hadn't drawn yet showed $*, not the page's orange"
+fi
+await "^browser: title $tab gap drew\$" || fail "gap.html didn't draw at the new size"
+send key w cmd
+expect_tabs "$first" "$first" "after closing gap.html"
+send resize 1000 700
+check_layout "after narrowing the window back"
+send click $page_point
 # The window's resize border, about 3 outside its edge (Dia), is AppKit's to track, as for any
 # resizable window. Whether AppKit takes a drag the driver posts there only a Mac's run tells: a
 # drag from 2 outside the right edge either widens the window by 100 or leaves it, and the run
@@ -1323,4 +1370,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png${light_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}"
