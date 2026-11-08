@@ -13,7 +13,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "browser_core/platform/window_views.h"
@@ -57,8 +56,8 @@ struct Ask {
 };
 
 std::optional<Ask>& Asked() {
-  static base::NoDestructor<std::optional<Ask>> asked;
-  return *asked;
+  static std::optional<Ask> asked;
+  return asked;
 }
 
 // |natural|, as large as fits in |box|, in its middle: the black about it is the card's.
