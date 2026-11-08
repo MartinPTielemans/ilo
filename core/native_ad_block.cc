@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
@@ -146,7 +147,7 @@ void StandIn(const GURL& url, mojo::PendingRemote<network::mojom::URLLoaderClien
   mojo::Remote<network::mojom::URLLoaderClient> client(std::move(pending));
   client->OnReceiveResponse(std::move(head), std::move(consumer), std::nullopt);
   network::URLLoaderCompletionStatus status(net::OK);
-  status.decoded_body_length = static_cast<int64_t>(data.size());
+  status.decoded_body_length = base::ByteSize(data.size());
   client->OnComplete(status);
 }
 
