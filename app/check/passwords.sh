@@ -554,8 +554,8 @@ if [ "$(uname)" = Darwin ]; then
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
-# isn't listed.
-saved_autofill() { grep '^browser: autofill ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
+# isn't listed. Its lines are the counts Settings hears, not Edit › AutoFill's "autofill N dropdown".
+saved_autofill() { grep '^browser: autofill [0-9]*: ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
 send key , cmd
 expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab again"
 settings_drew Passwords
