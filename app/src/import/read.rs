@@ -28,7 +28,7 @@ pub enum Kind {
     /// Arc's favorites.
     Favorites,
     Bookmarks,
-    /// The tabs a Chromium-based browser had open in its last session.
+    /// The tabs a Chromium-based browser had open in its last session, or Arc's Today tabs.
     OpenTabs,
     /// Safari's Reading List, as a folder beside its bookmarks.
     ReadingList,
@@ -100,6 +100,7 @@ pub fn kinds(source: &Source) -> &'static [Kind] {
     if source.arc_sidebar().is_some() {
         &[
             Kind::Spaces,
+            Kind::OpenTabs,
             Kind::Favorites,
             Kind::History,
             Kind::Addresses,
@@ -140,17 +141,18 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
     let mut found = Found::default();
     let wants = |kind| picked.contains(&kind);
     if let Some(path) = source.arc_sidebar()
-        && (wants(Kind::Spaces) || wants(Kind::Favorites))
+        && [Kind::Spaces, Kind::OpenTabs, Kind::Favorites]
+            .iter()
+            .any(|kind| wants(*kind))
     {
         // Arc's link rules come with its Spaces, each to the Space its Arc Space becomes.
         let routing = (source.arc_link_routing())
             .filter(|_| wants(Kind::Spaces))
             .and_then(|routing| std::fs::read_to_string(routing).ok());
-        let sidebar = super::arc::parse(&std::fs::read_to_string(&path)?, routing.as_deref())?;
-        if wants(Kind::Spaces) {
-            found.spaces = sidebar.spaces;
-            found.link_rules = sidebar.link_rules;
-        }
+        let mut sidebar = super::arc::parse(&std::fs::read_to_string(&path)?, routing.as_deref())?;
+        keep_arc(&mut sidebar, picked);
+        found.spaces = sidebar.spaces;
+        found.link_rules = sidebar.link_rules;
         if wants(Kind::Favorites) {
             found.favorites = sidebar.favorites;
         }
@@ -159,11 +161,15 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
     let since = now
         .checked_sub(Duration::from_secs(HISTORY_DAYS * 24 * 60 * 60))
         .unwrap_or(UNIX_EPOCH);
+    // Arc's open tabs are its sidebar's Today tabs, never its Chromium session's.
+    let picked: Vec<Kind> = (picked.iter().copied())
+        .filter(|kind| source.arc_sidebar().is_none() || *kind != Kind::OpenTabs)
+        .collect();
     for profile in &source.profiles {
         let read = match source.browser.family {
-            Family::Chromium => chromium::read(&profile.path, picked, since)?,
-            Family::Firefox => firefox::read(&profile.path, picked, since)?,
-            Family::Safari => safari::read(&profile.path, picked, since)?,
+            Family::Chromium => chromium::read(&profile.path, &picked, since)?,
+            Family::Firefox => firefox::read(&profile.path, &picked, since)?,
+            Family::Safari => safari::read(&profile.path, &picked, since)?,
         };
         let from = from(profile);
         if !read.pinned.is_empty() || !read.today.is_empty() {
@@ -208,10 +214,7 @@ pub fn keep(found: &Found, source: &Source, picked: &[Kind]) -> Option<Found> {
     let wants = |kind| picked.contains(&kind);
     let mut found = found.clone();
     if source.arc_sidebar().is_some() {
-        if !wants(Kind::Spaces) {
-            found.spaces.clear();
-            found.link_rules.clear();
-        }
+        keep_arc(&mut found, picked);
     } else {
         if source.browser.family == Family::Safari
             && wants(Kind::Bookmarks) != wants(Kind::ReadingList)
@@ -244,6 +247,28 @@ pub fn keep(found: &Found, source: &Source, picked: &[Kind]) -> Option<Found> {
         found.extensions.clear();
     }
     Some(found)
+}
+
+/// Leaves of Arc's Spaces in `found` what of `picked` comes: with Spaces, every Space with its
+/// pinned tabs and folders, and the link rules to them; with Open tabs, each Space's Today tabs,
+/// which bring their Space where Spaces stay off, as a Today tab belongs to one.
+fn keep_arc(found: &mut Found, picked: &[Kind]) {
+    let (spaces, today) = (
+        picked.contains(&Kind::Spaces),
+        picked.contains(&Kind::OpenTabs),
+    );
+    for space in &mut found.spaces {
+        if !spaces {
+            space.pinned.clear();
+        }
+        if !today {
+            space.today.clear();
+        }
+    }
+    if !spaces {
+        found.link_rules.clear();
+        found.spaces.retain(|space| !space.today.is_empty());
+    }
 }
 
 /// How much of each kind a browser has, as its choices say before anything comes.
@@ -316,9 +341,9 @@ pub fn tally(found: &Found, source: &Source) -> Tally {
             false => {
                 tally.bookmarks += counted.0;
                 tally.bookmark_folders += counted.1;
-                tally.open_tabs += space.today.len();
             }
         }
+        tally.open_tabs += space.today.len();
     }
     tally
 }

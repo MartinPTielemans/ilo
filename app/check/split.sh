@@ -627,6 +627,29 @@ bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the split: \"$(splits)\""
 expect "^browser: panes $c\$" "Separate All Tabs didn't show the focused page alone"
 expect "^browser: today.* $c $a\( \|\$\)" "Separate All Tabs lost the pages' order: $(today)"
+# Let go over the page off the target, the tab opens in a window of its own, as big as this one and
+# centred on the pointer, where its picture of a window was (Dia), and ⌘Z sends it back.
+send press $(row 0)
+send dragto 110 $(row 0 | cut -d' ' -f2)
+send dragto $((x + w / 2)) $((y + h / 2))
+expect '^browser: drop targets shown$' "the targets didn't come for the tab over the page's middle"
+send release $((x + w / 2)) $((y + h / 2))
+expect '^browser: tab [0-9]* let go off the targets$' "the tab let go off the targets didn't leave"
+off=$(grep '^browser: tab [0-9]* let go off the targets$' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: window [0-9]* took $off from window [0-9]*\$" "no window took the tab let go off the targets"
+off_window=$(grep "^browser: window [0-9]* took $off from window " "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: window $off_window shows $off\$" "the window opened for the tab didn't show it"
+expect '^browser: drop targets hidden$' "the targets' window stayed after the tab left"
+../tools/window-screenshot.sh "$pid" "$out/split-off-target.png" all || fail "no window to capture"
+# The driver counts windows in the order they opened, closed ones too.
+send window $(grep -c '^browser: \(private \)\{0,1\}window opened ' "$log")
+# ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
+# empty foot.
+send click 100 600
+send key z cmd
+expect "^browser: window closed $off_window\$" "⌘Z didn't close the window the tab let go off the targets opened"
+expect "^browser: window [0-9]* shows $off\$" "⌘Z didn't send the tab back"
+send window 1
 # A page alone has targets at the card's top and bottom too, as Arc stacks a split, and let go on
 # the top one the tab joins the page above it.
 top="$((x + w / 2)) $((y + 80))"

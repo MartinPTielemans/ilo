@@ -537,12 +537,9 @@ if [ "$(uname)" = Darwin ]; then
   dropdown_shown "Edit › AutoFill › Passwords… showed no dropdown at the focused field"
   dropdown_gone "escape didn't close the dropdown of logins"
   # A click below the form takes the page's focus off its fields, which the core hears from the
-  # page after the click's done. It's 30 above the page's bottom, which is 10 above the window's:
-  # the Mac runner's window is 700 tall, where 700 was below the page (#771).
-  send layout
-  window_height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content ' |
-    sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
-  send click 600 $((window_height - 40))
+  # page after the click's done. On the page: the window's content is 700 tall and the page ends
+  # 10 above that, so a click at 700 lands on the window's edge, which leaves the field focused.
+  send click 600 600
   expect "^browser: title $tab unfocused\$" "a click below the form left a field with the page's focus"
   send menu "AutoFill › Credit Card…"
   expect "^browser: autofill $tab no field\$" "Edit › AutoFill found a field after a click off them"
@@ -554,7 +551,8 @@ if [ "$(uname)" = Darwin ]; then
 fi
 # Settings' Passwords tab, which ⌘, shows again, lists the saved address under the logins, and its
 # Remove asks first, as a login's does, and removes it, which Settings hears. The card declined
-# isn't listed. Its lines are the counts Settings hears, not Edit › AutoFill's "autofill N dropdown".
+# isn't listed.
+# Settings says "autofill <profile>: …"; the core's "autofill <tab> no field" isn't its count.
 saved_autofill() { grep '^browser: autofill [0-9]*: ' "$log" | tail -1 | sed 's/^browser: autofill [0-9]*: //'; }
 send key , cmd
 expect '^browser: settings shown Passwords$' "⌘, didn't show Settings' Passwords tab again"
