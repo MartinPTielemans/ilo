@@ -704,9 +704,9 @@ send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
-expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View, New Note'), " \
+expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split View (disabled), New Note'), " \
   "the footer's + didn't offer New Note"
-send choose New Note
+send choose "$(cased 'New Note')"
 expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"
 expect "$atop" "the footer's note didn't open at the top of Today: Today is \"$(today)\""
 send key w cmd
