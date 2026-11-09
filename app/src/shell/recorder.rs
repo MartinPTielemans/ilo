@@ -529,6 +529,10 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        self.record(format!("volume {tab} {volume:.2}"));
+    }
+
     fn cast(&self, tab: u64, _: &mut App) {
         self.record(format!("cast {tab}"));
     }
@@ -1040,6 +1044,31 @@ impl Browser for Recorder {
 
     fn profile_folder(&self, profile: u64) -> Option<std::path::PathBuf> {
         self.profile_folders.borrow().get(&profile).cloned()
+    }
+
+    fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
+        for change in changes {
+            self.record(format!(
+                "boost {} {}: {}",
+                change.profile,
+                change.site,
+                change.css.trim_end()
+            ));
+        }
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        self.record(format!("zap {tab} {on}"))
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("edit {name}"))
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("show {name}"))
     }
 
     fn agent_history(&self, profile: u64) -> String {

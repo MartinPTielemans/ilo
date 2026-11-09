@@ -7,7 +7,8 @@
 #   <asked> <got> flat|page <luma range> <mean red> <mean green> <mean blue>
 # with the seconds since 1970 as it was asked for and as it came back: it shows the window at some
 # moment between, which on the Mac spans 25 ms or more. It keeps the first ten flat pictures in
-# <flat-dir>, named for when they were asked for.
+# <flat-dir>, named for when they were asked for: on Linux of the whole window, to show what the UI
+# around the page area drew with it.
 # On the Mac it takes them as tools/window-screenshot.sh does. On Linux it reads check.sh's Xvfb,
 # which holds nothing but the app, and refuses outside it; on Windows it copies the screen where
 # the window is, only on a CI runner, whose desktop holds nothing but the app.
@@ -114,17 +115,17 @@ Linux)
     eval "$(xdotool getwindowgeometry --shell "$window")"
     if [ -z "$where" ] || [ $((WIDTH * HEIGHT)) -gt "$area" ]; then
       area=$((WIDTH * HEIGHT))
-      where="$X $Y"
+      where="$X $Y $WIDTH $HEIGHT"
     fi
   done
   [ -n "$where" ] || { echo "no window of process $1" >&2; exit 1; }
-  # shellcheck disable=SC2086 # two numbers
+  # shellcheck disable=SC2086 # four numbers
   exec python3 -I - "$2" "$3" $where "$4" "$5" "$6" "$7" "$8" "$flat" << 'PY'
 import ctypes, ctypes.util, os, struct, sys, time, zlib
 
 seconds, stop = float(sys.argv[1]), sys.argv[2]
-left, top, x, y, w, h = (int(each) for each in sys.argv[3:9])
-flat_dir, flat = sys.argv[9], int(sys.argv[10])
+left, top, width, height, x, y, w, h = (int(each) for each in sys.argv[3:11])
+flat_dir, flat = sys.argv[11], int(sys.argv[12])
 
 
 class XImage(ctypes.Structure):
@@ -155,7 +156,7 @@ def png(path, rows):
             ">I", zlib.crc32(kind + body) & 0xffffffff)
     raw = b"".join(b"\0" + row for row in rows)
     with open(path, "wb") as file:
-        file.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+        file.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
                    + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
 
 
@@ -163,19 +164,20 @@ print("capturing %dx%d" % (w, h), flush=True)
 end, saved = time.time() + seconds, 0
 while time.time() < end and not os.path.exists(stop):
     at = time.time()
-    image = x11.XGetImage(display, root, left + x, top + y, w, h, 0xffffffff, 2)  # ZPixmap
+    # The whole window, so a flat picture shows what the UI around the page area drew with it.
+    image = x11.XGetImage(display, root, left, top, width, height, 0xffffffff, 2)  # ZPixmap
     got = time.time()
     if not image:
         continue
     line, depth = image.contents.bytes_per_line, image.contents.bits_per_pixel
-    data = ctypes.string_at(image.contents.data, line * h)
+    data = ctypes.string_at(image.contents.data, line * height)
     x11.XFree(image.contents.data)
     x11.XFree(image)
     if depth != 32:
         sys.exit("the screen has %d bits a pixel, not 32" % depth)
     low, high, red, green, blue, n = 255, 0, 0, 0, 0, 0
-    for row in range(0, h, 6):
-        for i in range(row * line, row * line + w * 4, 24):
+    for row in range(y, y + h, 6):
+        for i in range(row * line + x * 4, row * line + (x + w) * 4, 24):
             b, g, r = data[i], data[i + 1], data[i + 2]
             luma = (r * 299 + g * 587 + b * 114) // 1000
             low, high = min(low, luma), max(high, luma)
@@ -186,9 +188,9 @@ while time.time() < end and not os.path.exists(stop):
     if is_flat and saved < 10:
         saved += 1
         rows = []
-        for row in range(h):
-            bgrx = data[row * line:row * line + w * 4]
-            rgb = bytearray(w * 3)
+        for row in range(height):
+            bgrx = data[row * line:row * line + width * 4]
+            rgb = bytearray(width * 3)
             rgb[0::3], rgb[1::3], rgb[2::3] = bgrx[2::4], bgrx[1::4], bgrx[0::4]
             rows.append(bytes(rgb))
         png(os.path.join(flat_dir, "%.3f.png" % at), rows)
