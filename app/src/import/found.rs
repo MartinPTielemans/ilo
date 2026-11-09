@@ -37,7 +37,23 @@ pub struct Tab {
 pub enum Node {
     Tab(Tab),
     Folder { name: String, children: Vec<Node> },
+    Split(Split),
 }
+
+/// A split view: its tabs, two or three, left to right, and the name, icon and orientation the
+/// user gave it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Split {
+    pub tabs: Vec<Tab>,
+    /// Empty for none, as for an icon, which is an emoji.
+    pub name: String,
+    pub icon: String,
+    /// Its pages top to bottom rather than side by side.
+    pub stacked: bool,
+}
+
+/// The most tabs a split view holds, as the core keeps it (bc_tab_split_with).
+pub const SPLIT_TABS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Space {
@@ -91,15 +107,26 @@ pub struct Found {
     pub addresses: Vec<(FromProfile, Vec<Address>)>,
     /// Arc's Air Traffic Control rules, in its order.
     pub link_rules: Vec<LinkRule>,
+    /// Where Arc opens a link no rule matches, if not in Little Arc, ours' default too.
+    pub link_otherwise: Option<Destination>,
 }
 
-/// A link rule: links whose URL meets `condition` with `text` open in the Space at `space` among
-/// the found Spaces.
+/// A link rule: links whose URL meets `condition` with `text` open at `to`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkRule {
     pub condition: Condition,
     pub text: String,
-    pub space: usize,
+    pub to: Destination,
+}
+
+/// Where a link rule, or everything else, opens a link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Destination {
+    /// The Space at this index among the found Spaces.
+    Space(usize),
+    /// The Space the window in front shows.
+    Front,
+    Little,
 }
 
 /// Whether a page at `url` can open here: another browser's own pages, such as `arc://` or

@@ -129,6 +129,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Default::default(),
             shown: 0,
+            peeked: Vec::new(),
         }];
         if let Some(look) = look {
             shell.take_look(look.name, look.color, look.theme, look.icon);
@@ -195,6 +196,17 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings › Features' Little ilo switch: off, File, the command bar and ⌥⌘N offer no Little
+    /// ilo window, and ⌥⌘-click on a row is a click. The windows open stay.
+    pub fn set_little_windows(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.little_windows == on {
+            return;
+        }
+        self.little_windows = on;
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// An Esc the page didn't use closes a Little ilo window, once there's no load for it to stop
     /// and no page full screen for it to leave (Arc), and says whether it did.
     pub fn escape_unused(&mut self, cx: &mut Context<Self>) -> bool {
@@ -221,7 +233,14 @@ impl Shell {
             .is_some_and(|space| space.agent.is_empty());
         // ⌘ is Control off the Mac, where the platform key is Super.
         let takes = event.modifiers.alt && event.modifiers.secondary(cx) && !event.modifiers.shift;
-        if !takes || !users || self.private || self.little.is_some() || self.is_folder(tab) {
+        // With Little ilo off it's a click, as on any row.
+        if !takes
+            || !users
+            || self.one_space()
+            || !self.little_windows
+            || self.little.is_some()
+            || self.is_folder(tab)
+        {
             return false;
         }
         if !self.today().contains(&tab) || self.panes(tab).len() > 1 {
@@ -724,13 +743,17 @@ impl Shell {
 }
 
 /// Whether a Little ilo window runs `command`: it has one page and no sidebar, so what works on the
-/// Spaces, the sidebar, the Library or other tabs isn't its, as it isn't a private window's.
+/// Spaces, the sidebar, the Library or other tabs isn't its, as it isn't a private window's. Its
+/// page is in a profile's site settings, as a private window's isn't, so it has Developer Mode,
+/// which ⌘O takes to the main window with it (Arc).
 pub(super) fn little_runs(command: Command) -> bool {
-    matches!(command, Command::NewLittleWindow)
-        || (super::commands::private_runs(command)
-            && !matches!(
-                command,
-                Command::NewTab
+    matches!(
+        command,
+        Command::NewLittleWindow | Command::ToggleDeveloperMode
+    ) || (super::commands::private_runs(command)
+        && !matches!(
+            command,
+            Command::NewTab
                     | Command::SearchTabs
                     | Command::NextTab
                     | Command::PreviousTab
@@ -742,5 +765,10 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::Clear
                     | Command::ToggleSidebar
                     | Command::AddSplit
-            ))
+                    // A private window's Library has its session's downloads; a Little ilo
+                    // window has no Library at all.
+                    | Command::ViewLibrary
+                    | Command::ViewDownloads
+                    | Command::ViewMedia
+        ))
 }

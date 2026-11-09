@@ -120,14 +120,21 @@ impl Swaps {
         }
     }
 
-    /// Starts each folder of the Space shown that opened or closed.
-    pub(super) fn folders_changed(&mut self, before: &Folders, after: &Folders, now: Instant) {
+    /// Starts each folder of the Space shown that opened or closed, to its dots if it lists the
+    /// tab shown over folders it hides, `eliding` before and after.
+    pub(super) fn folders_changed(
+        &mut self,
+        before: &Folders,
+        after: &Folders,
+        eliding: (Vec<u64>, Vec<u64>),
+        now: Instant,
+    ) {
         for (&folder, &(_, open)) in &after.folders {
             if let Some(&(_, was)) = before.folders.get(&folder) {
                 self.start(
                     Swapped::Folder(folder),
-                    folder_glyph(was),
-                    folder_glyph(open),
+                    folder_glyph(was, eliding.0.contains(&folder)),
+                    folder_glyph(open, eliding.1.contains(&folder)),
                     now,
                 );
             }
@@ -219,11 +226,13 @@ impl Swaps {
 }
 
 /// A folder's icon, open or closed.
-pub(super) fn folder_glyph(open: bool) -> &'static str {
-    if open {
-        "icons/folder-open.svg"
-    } else {
-        "icons/folder.svg"
+/// A folder's glyph, open or closed, and closed with three dots while it lists the tab shown with
+/// folders hidden between them (#1405).
+pub(super) fn folder_glyph(open: bool, elided: bool) -> &'static str {
+    match (open, elided) {
+        (true, _) => "icons/folder-open.svg",
+        (false, true) => "icons/folder-ellipsis.svg",
+        (false, false) => "icons/folder.svg",
     }
 }
 

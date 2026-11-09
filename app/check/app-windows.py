@@ -2,7 +2,9 @@
 
 `close PID [front]` asks each browser window of process PID to close, as its close button does: the
 top-level windows holding the UI's view (platform/windows/host.cc's BrowserUI), or with front the
-one in front alone. `list PID` prints each top-level window of the process, with its class, title,
+one in front alone. `end-session PID` ends the session for the process as Windows does when the
+user signs out: each of its top-level windows is asked WM_QUERYENDSESSION, and once all agree,
+told WM_ENDSESSION, and it fails if one refuses (#1990). `list PID` prints each top-level window of the process, with its class, title,
 state and whether it's a browser window, minimized (IsIconic) or the one in front
 (GetForegroundWindow). `icon PID ICO` checks that each window of the process the taskbar and
 Alt+Tab show has the .ico's image for its big and small icons, read as the shell reads them, and
@@ -12,19 +14,25 @@ window away from it, or with behind between ilo's window with the foreground and
 window another app opens behind the one the user is in (#1689), says "cover <handle>, foreground
 <ilo|away|other>" and keeps it until it's ended
 (#1419), or with FRONT until that file exists, when it brings the browser window to the front, as
-a click on its taskbar button does, and ends (#1365).
-Usage: app-windows.py close|list|icon PID [front|ICO] or app-windows.py cover PID ilo|away|behind [FRONT]"""
+a click on its taskbar button does, and ends (#1365). `foreground PID [TITLE]` gives the
+foreground to the process's browser window in front, or to its window titled TITLE (#2114).
+Usage: app-windows.py close|end-session|list|icon PID [front|ICO], cover PID ilo|away|behind [FRONT] or foreground PID [TITLE]"""
 
 import ctypes
 import ctypes.wintypes as w
 import os
 import sys
+import time
 
 # Git Bash's grep reads UTF-8 lines ending in \n alone.
 sys.stdout.reconfigure(encoding="utf-8", newline="\n")
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 WM_CLOSE = 0x0010
+WM_QUERYENDSESSION = 0x0011
+WM_ENDSESSION = 0x0016
+ENDSESSION_LOGOFF = 0x80000000
+SMTO_ABORTIFHUNG = 0x0002
 GW_OWNER = 4
 EnumProc = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
 
@@ -158,6 +166,57 @@ class WNDCLASSW(ctypes.Structure):
                 ("lpszClassName", w.LPCWSTR)]
 
 
+def end_session(pid):
+    """Asks each top-level window of process PID whether the session may end, as Windows does at a
+    sign-out, then tells each that it ends, as Windows does once every app agreed. A window that
+    refuses, or doesn't answer within 5 s, fails it. The process may end while a window hears the
+    end, and the windows left then answer nothing."""
+    user32.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT,
+                                           ctypes.POINTER(ctypes.c_size_t)]
+    found = windows(pid)
+    for hwnd in found:
+        answer = ctypes.c_size_t()
+        sent = user32.SendMessageTimeoutW(hwnd, WM_QUERYENDSESSION, 0, ENDSESSION_LOGOFF,
+                                          SMTO_ABORTIFHUNG, 5000, ctypes.byref(answer))
+        if not sent or not answer.value:
+            sys.exit("window %#x of %d refused the session end" % (hwnd or 0, pid))
+    for hwnd in found:
+        answer = ctypes.c_size_t()
+        user32.SendMessageTimeoutW(hwnd, WM_ENDSESSION, 1, ENDSESSION_LOGOFF, SMTO_ABORTIFHUNG,
+                                   30000, ctypes.byref(answer))
+
+
+def bring_forward(pid, title):
+    """Gives the foreground to process PID's browser window in front of its others, or with TITLE
+    to its window of that title, such as Settings' "Sync", as a click on it would. The driver's
+    window command can't: it activates a window within its own app alone, and the runs with several
+    copies of the app need the one they drive in front (#2114). Windows lets a process take the
+    foreground only while it shares the input of the thread that has it, so this one attaches to
+    that thread for the moment. Fails if the window doesn't have the foreground 2 s later."""
+    user32.GetForegroundWindow.restype = w.HWND
+    kernel32 = ctypes.windll.kernel32
+    found = [hwnd for hwnd in windows(pid) if user32.IsWindowVisible(hwnd) and
+             (text(user32.GetWindowTextW, hwnd) == title if title else holds_ui(hwnd))]
+    if not found:
+        sys.exit("process %d has no %s on screen" % (pid, "window %r" % title if title else
+                                                     "browser window"))
+    target = found[0]
+    if user32.GetForegroundWindow() != target:
+        held = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+        ours = kernel32.GetCurrentThreadId()
+        attached = held and held != ours and user32.AttachThreadInput(ours, held, True)
+        user32.BringWindowToTop(w.HWND(target))
+        user32.SetForegroundWindow(w.HWND(target))
+        if attached:
+            user32.AttachThreadInput(ours, held, False)
+    for _ in range(20):
+        if user32.GetForegroundWindow() == target:
+            print("foreground %#x" % target)
+            return
+        time.sleep(0.1)
+    sys.exit("window %#x of %d didn't take the foreground" % (target, pid))
+
+
 def cover(pid, foreground, front_file):
     """Another app's plain window over the lower half of the browser window of process PID, where
     the link target's corner is, with ilo's window under it, and the foreground in ilo's window
@@ -265,17 +324,24 @@ def cover(pid, foreground, front_file):
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     front = command == "close" and sys.argv[3:] == ["front"]
-    known = ("close", "list", "icon", "cover")
-    wanted = (4, 5) if command == "cover" else (4,) if command == "icon" or front else (3,)
+    known = ("close", "end-session", "list", "icon", "cover", "foreground")
+    wanted = ((4, 5) if command == "cover" else (3, 4) if command == "foreground" else
+              (4,) if command == "icon" or front else (3,))
     if len(sys.argv) not in wanted or command not in known:
         sys.exit(__doc__.splitlines()[-1])
     pid = int(sys.argv[2])
+    if command == "foreground":
+        bring_forward(pid, sys.argv[3] if len(sys.argv) == 4 else None)
+        return
     if command == "icon":
         sys.exit(0 if check_icons(pid, sys.argv[3]) else 1)
     if command == "cover":
         if sys.argv[3] not in ("ilo", "away", "behind"):
             sys.exit(__doc__.splitlines()[-1])
         cover(pid, sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else None)
+        return
+    if command == "end-session":
+        end_session(pid)
         return
     user32.GetForegroundWindow.restype = w.HWND
     foreground = user32.GetForegroundWindow()

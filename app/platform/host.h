@@ -20,12 +20,16 @@ void drive_start(void);
 void host_centered(double width, double height, double* x, double* y);
 
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
-// first browser window will open, with the window's material and the sidebar as it was when the
-// app last quit at that size, from |profile_dir|. For the moment between NSApp being made and the
-// browser starting. With |maximized|, Windows' alone, it's maximized on that frame's screen, as the
-// first browser window will be (host_maximize_window), without a picture of another size's sidebar.
+// first browser window will open, with the window's material and, unless |picture_width| is 0,
+// the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took
+// (host_save_launch_picture). Its part above |foot_top| points from the window's top shows at the
+// window's top and the rest at its bottom, the room just above |foot_top| cropped or repeated to
+// fit (launch_picture.rs says when that draws the sidebar as the UI will). For the moment between
+// NSApp being made and the browser starting. With |maximized|, Windows' alone, it's maximized on
+// that frame's screen, as the first browser window will be (host_maximize_window), with no picture.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool maximized);
+                             double height, bool maximized, double picture_width,
+                             double picture_height, double foot_top);
 
 // The visible frames of the screens a window may open on, in host_centered's terms, as x, y,
 // width and height, four to a screen: the main display's first, or with BROWSER_DISPLAY=builtin
@@ -143,9 +147,12 @@ bool host_window_shown(void* ui_view);
 // Incognito Window: those two, as File's run them (|chosen| 3 and 4), then Little ilo's, as Arc's:
 // New Little ilo Window, then, while one is open, Hide All Little ilo Windows, or Show All Little
 // ilo Windows once they're all hidden. |little| is asked as the menu opens: 0 with no Little ilo
-// window open, 1 with one on screen and 2 with all hidden. |chosen| gets the item picked: 0 New, 1
+// window open, 1 with one on screen, 2 with all hidden, and -1 with Little ilo off in Settings,
+// which leaves out all of Little ilo's items. |chosen| gets the item picked: 0 New, 1
 // Show All, 2 Hide All, 3 New Window, 4 New Incognito Window. Once the app has finished launching, as the engine's delegate is set then.
-// Off the Mac, which has no Dock menu, nothing.
+// Off the Mac, which has no Dock menu: on Windows the taskbar's jump list gets New window and New
+// incognito window, which launch ilo again with --new-window and --incognito (bc_host's
+// app_new_window), once a window is shown; on Linux nothing, as the desktop file has them.
 void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 
 // Puts a button in the menu bar whose click calls |clicked|, which opens a Little ilo window, as
@@ -154,8 +161,19 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item));
 // Off the Mac, nothing, and Settings offers no switch there.
 void host_set_little_status_item(void (*clicked)(void));
 
+// Puts a task called |title| in the taskbar's jump list, which runs the browser with |arguments|,
+// as Windows' jump lists hold an app's tasks: New Little ilo Window, which the core hands the app.
+// Windows keeps the list, so it's written once a launch, as the first window opens with the
+// AppUserModelID the list goes under, and nothing waits for it. Off Windows,
+// whose Dock menu and launcher have their own, nothing.
+void host_set_little_task(const char* title, const char* arguments);
+
 // Calls |changed| with the view of each browser window that becomes the key window.
 void host_watch_key_window(void (*changed)(void* ui_view));
+
+// Mac only: whether the window of |ui_view|, any of the app's, is the key window now. GPUI hears
+// it in a task of its own, after a menu's window has handed the keyboard back (#2019).
+bool host_window_is_key(void* ui_view);
 
 // Calls |changed| with the view of a browser window as it becomes the window the user is in, or
 // stops being, and with each one's state as the watch starts and as it shows. That's the active
@@ -269,6 +287,11 @@ void host_set_overlay_growth(int overlay, double x, double y);
 // Makes the overlay, once it grows in, shrink back to where it grew from as it hides, fading.
 void host_set_overlay_shrink(int overlay);
 
+// Makes the overlay that grows in (host_set_overlay_growth) grow from |from| of its size, rather
+// than near nothing, over |seconds|, fading in alongside, and fade out over |out| seconds as it
+// hides, shrinking back to |from| only if host_set_overlay_shrink asked: a folder's preview. Each
+// show takes the motion last set.
+void host_set_overlay_motion(int overlay, double from, double seconds, double out);
 // Under Reduce Motion the overlays that grow in and shrink back only fade, at their size. The UI
 // says so as its own Reduce Motion changes (main.rs, set_reduce_motion).
 void host_set_overlays_still(bool still);
@@ -475,6 +498,12 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
+// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
+// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
+// system gives none, as off the Mac for now.
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size));
+
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
 // for when it was taken, and saves it there. It returns at once, before the panel shows, since the
 // UI calls it from an event its panel can't wait in.
@@ -615,7 +644,7 @@ bool host_window_maximized(void* ui_view);
 // otherwise.
 bool host_window_restored_frame(void* ui_view, double* x, double* y, double* width, double* height);
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
-// the first window comes back when it quit maximized.
+// a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
 #endif
 

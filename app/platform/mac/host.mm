@@ -228,6 +228,19 @@ void StripTint(CALayer* layer) {
 }
 @end
 
+// An overlay's shadow, round it by the shadow's reach. Near the browser window's top that reaches
+// past the screen's, and AppKit would keep it below the menu bar, away from the overlay, its
+// cut-out showing the page under the overlay's bottom edge (#2075). It goes where the host puts it,
+// as the overlay does (Unconstrained).
+@interface HostShadowWindow : NSWindow
+@end
+
+@implementation HostShadowWindow
+- (NSRect)constrainFrameRect:(NSRect)frame toScreen:(NSScreen*)screen {
+  return frame;
+}
+@end
+
 // The view the link preview's page goes in, over the UI's: flipped, so the core places the page
 // from its top left at any size, and the mouse goes through it but for the page.
 @interface HostPageHolder : NSView
@@ -366,6 +379,8 @@ Browser* FrontBrowser() {
 // (Arc 1.170 rec at 2×, the Space's icon picker: 0.57 of its size at 55 ms, 0.83 at 105 ms).
 constexpr double kOverlayGrow = 0.2;
 constexpr double kOverlayGrowFade = 0.1;
+// The size it grows from, about its growth point.
+constexpr double kOverlayShrunk = 0.05;
 // Arc's theme picker shrinks to its arrow and fades as it closes, gone in 0.11 s.
 constexpr double kOverlayShrink = 0.11;
 // Little ilo grows in as Little Arc does, from a small rectangle to its frame in 6 to 7 frames,
@@ -418,6 +433,12 @@ struct Overlay {
   double reach() const { return 3 * shadow_radius + shadow_drop; }
   // From host_set_overlay_shrink: whether it shrinks back there as it hides.
   bool shrinks = false;
+  // From host_set_overlay_motion: the size it grows from, over how long, how long its fade in
+  // takes, and how long it fades out as it hides, or 0 for a popover's shrink.
+  double grow_from = kOverlayShrunk;
+  double grow_time = kOverlayGrow;
+  double grow_fade = kOverlayGrowFade;
+  double fade_out = 0;
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
@@ -1110,10 +1131,10 @@ void AddBlurAndShadow(Overlay& overlay) {
   [overlay.view.superview addSubview:overlay.blur
                           positioned:NSWindowBelow
                           relativeTo:overlay.view];
-  overlay.shadow = [[NSWindow alloc] initWithContentRect:NSZeroRect
-                                               styleMask:NSWindowStyleMaskBorderless
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:YES];
+  overlay.shadow = [[HostShadowWindow alloc] initWithContentRect:NSZeroRect
+                                                       styleMask:NSWindowStyleMaskBorderless
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:YES];
   overlay.shadow.releasedWhenClosed = NO;
   overlay.shadow.opaque = NO;
   overlay.shadow.backgroundColor = NSColor.clearColor;
@@ -1348,7 +1369,7 @@ bool SystemIsLight() {
 // What the first window looks like until its UI has drawn, put on screen before the browser
 // starts, and the sidebar's picture in it, which the browser window takes over.
 NSWindow* g_launch_window;
-NSImageView* g_launch_picture;
+NSView* g_launch_picture;
 
 // The picture of a |width| by |height| window's sidebar, named for the size, as a window opens at
 // another size than the one it quit at.
@@ -1356,11 +1377,43 @@ NSString* LaunchPicturePath(const char* profile_dir, double width, double height
   return [NSString stringWithFormat:@"%s/launch-picture-%.0fx%.0f.png", profile_dir, width, height];
 }
 
+// With BROWSER_LAUNCH_CAPTURE, writes the launch window as it has been on screen to that PNG, for
+// check.sh: its first frame is up for only a moment before the browser window takes its place.
+void CaptureLaunchWindow() {
+  const char* path = getenv("BROWSER_LAUNCH_CAPTURE");
+  if (!path || !g_launch_window) {
+    return;
+  }
+  // As host_save_launch_picture takes the browser window's.
+  using CreateImage = CGImageRef (*)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
+  static const auto create_image =
+      reinterpret_cast<CreateImage>(dlsym(RTLD_DEFAULT, "CGWindowListCreateImage"));
+  CGImageRef image =
+      create_image ? create_image(CGRectNull, kCGWindowListOptionIncludingWindow,
+                                  (CGWindowID)g_launch_window.windowNumber,
+                                  kCGWindowImageBoundsIgnoreFraming)
+                   : nullptr;
+  NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+  CGImageDestinationRef png =
+      image ? CGImageDestinationCreateWithURL((__bridge CFURLRef)url, CFSTR("public.png"), 1,
+                                              nullptr)
+            : nullptr;
+  if (png) {
+    CGImageDestinationAddImage(png, image, nullptr);
+    CGImageDestinationFinalize(png);
+    CFRelease(png);
+  }
+  if (image) {
+    CGImageRelease(image);
+  }
+}
+
 }  // namespace
 
 // Never maximized, which is Windows' alone: a zoomed window's frame is the one it has.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool) {
+                             double height, bool, double picture_width, double picture_height,
+                             double foot_top) {
   // The core's y runs down from the main display's top, AppKit's up from its bottom.
   const NSRect frame =
       NSMakeRect(x, NSHeight(NSScreen.screens.firstObject.frame) - y - height, width, height);
@@ -1384,20 +1437,43 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   // light composite over grey 20, as the dark is near its dark one.
   window.backgroundColor = [NSColor colorWithWhite:SystemIsLight() ? 0.91 : 0.15 alpha:1];
   NSView* content = window.contentView;
-  NSImage* picture = [[NSImage alloc] initWithContentsOfFile:LaunchPicturePath(profile_dir, width, height)];
-  NSImageRep* pixels = picture.representations.firstObject;
+  NSString* path = LaunchPicturePath(profile_dir, picture_width, picture_height);
+  NSImage* picture = picture_width > 0 ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
+  NSBitmapImageRep* pixels = (NSBitmapImageRep*)picture.representations.firstObject;
   const CGFloat scale = window.backingScaleFactor;
   // A picture taken on a screen of another scale is left out.
-  if (pixels && pixels.pixelsHigh == lround(height * scale)) {
-    if ([pixels isKindOfClass:NSBitmapImageRep.class]) {
-      // The sidebar's right edge, halfway down, is the material with nothing on it.
-      NSColor* edge = [(NSBitmapImageRep*)pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
-      window.backgroundColor = [edge colorWithAlphaComponent:1];
+  if ([pixels isKindOfClass:NSBitmapImageRep.class] && pixels.CGImage &&
+      pixels.pixelsHigh == lround(picture_height * scale)) {
+    // The sidebar's right edge, halfway down, is the material with nothing on it.
+    NSColor* edge = [pixels colorAtX:pixels.pixelsWide - 1 y:pixels.pixelsHigh / 2];
+    window.backgroundColor = [edge colorWithAlphaComponent:1];
+    const long rows = pixels.pixelsHigh;
+    const long columns = pixels.pixelsWide;
+    const long foot = std::clamp(lround(foot_top * scale), 0L, rows);
+    const long grows = lround(height * scale) - rows;
+    NSView* shown = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, columns / scale, height)];
+    // Puts the picture's rows |from| to |to| |at| rows down from the window's top.
+    auto place = [&](long from, long to, long at) {
+      if (to <= from) {
+        return;
+      }
+      CGImageRef rows_of = CGImageCreateWithImageInRect(pixels.CGImage,
+                                                        CGRectMake(0, from, columns, to - from));
+      const NSSize size = NSMakeSize(columns / scale, (to - from) / scale);
+      NSImageView* part =
+          [NSImageView imageViewWithImage:[[NSImage alloc] initWithCGImage:rows_of size:size]];
+      CGImageRelease(rows_of);
+      part.imageScaling = NSImageScaleNone;
+      part.frame = NSMakeRect(0, height - (at + to - from) / scale, size.width, size.height);
+      [shown addSubview:part];
+    };
+    // The top at the window's top and the foot at its bottom: a shorter window loses the room
+    // just above the foot, and a taller one repeats it (launch_picture.rs).
+    place(0, foot + std::min(grows, 0L), 0);
+    place(foot, rows, foot + grows);
+    if (grows > 0) {
+      place(foot - grows, foot, foot);
     }
-    picture.size = NSMakeSize(pixels.pixelsWide / scale, height);
-    NSImageView* shown = [NSImageView imageViewWithImage:picture];
-    shown.frame = NSMakeRect(0, 0, picture.size.width, height);
-    shown.imageScaling = NSImageScaleNone;
     [content addSubview:shown];
     g_launch_picture = shown;
     // check.sh reads this line.
@@ -1461,6 +1537,12 @@ void LogExit() {
 }
 
 void host_watch_finished_launching(void (*finished)(void)) {
+  // AppKit adds the system's AutoFill submenu to the Edit menu, filling a field from Contacts and
+  // the Passwords app; ilo's own fills from the profile with Chrome's dropdown (docs/ux-spec.md ›
+  // Passwords and autofill). AppKit reads this before it first shows a menu.
+  [NSUserDefaults.standardUserDefaults registerDefaults:@{
+    @"NSAutoFillSystemInsertMenuEnabled" : @NO,
+  }];
   // AppKit posts it once.
   [NSNotificationCenter.defaultCenter
       addObserverForName:NSApplicationDidFinishLaunchingNotification
@@ -1809,6 +1891,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     // drawn. The launch window itself can't stay over it: Chromium counts a covered window's
     // pages as hidden, and they don't paint.
     window.animationBehavior = NSWindowAnimationBehaviorNone;
+    CaptureLaunchWindow();
     if (g_launch_picture) {
       [view addSubview:g_launch_picture];
     }
@@ -2117,6 +2200,10 @@ void host_set_window_shown(void* ui_view, bool shown) {
   }
 }
 
+bool host_window_is_key(void* ui_view) {
+  return ((__bridge NSView*)ui_view).window.isKeyWindow;
+}
+
 bool host_window_shown(void* ui_view) {
   Browser* browser = BrowserWithView(ui_view);
   return browser && browser->window.visible;
@@ -2169,8 +2256,12 @@ static NSMenu* DockMenu(id delegate, SEL selector, NSApplication* app) {
   };
   add(@"New Window", 3);
   add(@"New Incognito Window", 4);
-  add(@"New Little ilo Window", 0);
-  switch (g_dock_little()) {
+  // With Little ilo off (-1), none of its items.
+  const int little = g_dock_little();
+  if (little >= 0) {
+    add(@"New Little ilo Window", 0);
+  }
+  switch (little) {
     case 1:
       add(@"Hide All Little ilo Windows", 2);
       break;
@@ -2218,6 +2309,9 @@ static LittleStatusTarget* g_little_status_target;
 NSStatusBarButton* HostLittleStatusButton() {
   return g_little_status_item.button;
 }
+
+// The Dock's menu has the Mac's New Little ilo Window (host_add_dock_items).
+void host_set_little_task(const char* title, const char* arguments) {}
 
 void host_set_little_status_item(void (*clicked)(void)) {
   g_little_clicked = clicked;
@@ -2654,55 +2748,68 @@ void host_set_overlays_still(bool still) {
   g_overlays_still = still;
 }
 
-// |overlay| at near nothing about its growth point, as a sublayer transform of the layer holding
-// its blur and drawing; at its size under Reduce Motion.
-static CATransform3D ShrunkOverlay(const Overlay& overlay) {
-  NSView* container = overlay.view.superview;
+// |overlay| at the size it grows from, about its growth point, as a sublayer transform of
+// |container|'s layer: the one holding its blur and drawing, or its shadow's, whose window reaches
+// |inset| past it on each side. At its size under Reduce Motion.
+static CATransform3D ShrunkOverlay(const Overlay& overlay, NSView* container, double inset) {
   CALayer* layer = container.layer;
   const NSSize size = container.bounds.size;
+  const double grow_x = overlay.grow_x + inset;
+  const double grow_y = overlay.grow_y + inset;
   // A sublayer transform applies about the layer's anchor point, which AppKit puts at a view's
   // bottom left, and y goes up unless the view is flipped.
-  const double x = overlay.grow_x - layer.anchorPoint.x * size.width;
-  const double y = (container.isFlipped ? overlay.grow_y : size.height - overlay.grow_y) -
+  const double x = grow_x - layer.anchorPoint.x * size.width;
+  const double y = (container.isFlipped ? grow_y : size.height - grow_y) -
                    layer.anchorPoint.y * size.height;
   CATransform3D shrunk = CATransform3DMakeTranslation(x, y, 0);
-  const double scale = g_overlays_still ? 1 : 0.05;
+  const double scale = g_overlays_still ? 1 : overlay.grow_from;
   shrunk = CATransform3DScale(shrunk, scale, scale, 1);
   return CATransform3DTranslate(shrunk, -x, -y, 0);
 }
 
-// Grows |overlay| in from near nothing about its growth point, its blur and drawing together, as
-// NSPopover does, with its shadow fading in alongside.
+// Grows |overlay| in about its growth point, its blur, drawing and shadow together, as NSPopover
+// does, with its shadow fading in alongside.
 static void GrowOverlay(Overlay& overlay) {
   NSView* container = overlay.view.superview;
   container.wantsLayer = YES;
   CALayer* layer = container.layer;
+  // The shadow, and the overlay's shape cut out of it, grow with the overlay, or they'd stand at
+  // full size round the small overlay, the page showing through all of that shape (#2084).
+  NSView* shadow = overlay.shadow.contentView;
   // Shown again while it shrank away.
-  [layer removeAnimationForKey:@"shrink"];
+  for (CALayer* each in @[ layer, shadow.layer ]) {
+    [each removeAnimationForKey:@"shrink"];
+  }
   [layer removeAnimationForKey:@"shrink fade"];
-  CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
-  grow.fromValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
-  grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
-  grow.duration = kOverlayGrow;
-  grow.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15:0.75:0.35:1];
-  [layer addAnimation:grow forKey:@"grow"];
+  auto grow = [&overlay](NSView* view, double inset) {
+    CABasicAnimation* grow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
+    grow.fromValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, view, inset)];
+    grow.toValue = [NSValue valueWithCATransform3D:CATransform3DIdentity];
+    grow.duration = overlay.grow_time;
+    grow.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.15:0.75:0.35:1];
+    [view.layer addAnimation:grow forKey:@"grow"];
+  };
+  grow(container, 0);
+  grow(shadow, overlay.reach());
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.fromValue = @0;
   fade.toValue = @1;
-  fade.duration = kOverlayGrowFade;
+  fade.duration = overlay.grow_fade;
   [layer addAnimation:fade forKey:@"fade"];
   overlay.shadow.alphaValue = 0;
   [NSAnimationContext
       runAnimationGroup:^(NSAnimationContext* context) {
-        context.duration = kOverlayGrow;
+        context.duration = overlay.grow_time;
         overlay.shadow.animator.alphaValue = 1;
       }
       completionHandler:nil];
 }
 
-// Shrinks |overlay| back to its growth point and fades it, then takes it off |parent|.
+// Fades |overlay| out, shrinking it back to its growth point if it shrinks, then takes it off
+// |parent|.
 static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
   CALayer* layer = overlay.view.superview.layer;
+  NSView* shadow = overlay.shadow.contentView;
   NSWindow* window = overlay.window;
   // What it shows stays, and the clicks go through it to what's under it.
   window.ignoresMouseEvents = YES;
@@ -2715,28 +2822,38 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
     }
     [layer removeAnimationForKey:@"shrink"];
     [layer removeAnimationForKey:@"shrink fade"];
+    [shadow.layer removeAnimationForKey:@"shrink"];
     [parent removeChildWindow:window];
     [window orderOut:nil];
   }];
   CAMediaTimingFunction* timing =
       [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn];
+  const double seconds = overlay.fade_out > 0 ? overlay.fade_out : kOverlayShrink;
   CABasicAnimation* shrink = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
-  shrink.toValue = [NSValue valueWithCATransform3D:ShrunkOverlay(overlay)];
+  shrink.toValue =
+      [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, overlay.view.superview, 0)];
+  // Its shadow shrinks with it, as it grew.
+  CABasicAnimation* shrink_shadow = [CABasicAnimation animationWithKeyPath:@"sublayerTransform"];
+  shrink_shadow.toValue =
+      [NSValue valueWithCATransform3D:ShrunkOverlay(overlay, shadow, overlay.reach())];
   CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
   fade.toValue = @0;
-  for (CABasicAnimation* animation in @[ shrink, fade ]) {
-    animation.duration = kOverlayShrink;
+  for (CABasicAnimation* animation in @[ shrink, shrink_shadow, fade ]) {
+    animation.duration = seconds;
     animation.timingFunction = timing;
     // Held at its end until the window goes, so it doesn't come back for a frame.
     animation.fillMode = kCAFillModeForwards;
     animation.removedOnCompletion = NO;
   }
-  [layer addAnimation:shrink forKey:@"shrink"];
+  if (overlay.shrinks) {
+    [layer addAnimation:shrink forKey:@"shrink"];
+    [shadow.layer addAnimation:shrink_shadow forKey:@"shrink"];
+  }
   [layer addAnimation:fade forKey:@"shrink fade"];
   [CATransaction commit];
   [NSAnimationContext
       runAnimationGroup:^(NSAnimationContext* context) {
-        context.duration = kOverlayShrink;
+        context.duration = seconds;
         overlay.shadow.animator.alphaValue = 0;
       }
       completionHandler:nil];
@@ -2745,6 +2862,15 @@ static void ShrinkOverlay(Overlay& overlay, NSWindow* parent) {
 void host_set_overlay_shrink(int index) {
   if (Overlay* overlay = OverlayAt(index)) {
     overlay->shrinks = true;
+  }
+}
+
+void host_set_overlay_motion(int index, double from, double seconds, double out) {
+  if (Overlay* overlay = OverlayAt(index)) {
+    overlay->grow_from = from;
+    overlay->grow_time = seconds;
+    overlay->grow_fade = seconds;
+    overlay->fade_out = out;
   }
 }
 
@@ -2847,10 +2973,16 @@ void host_show_overlay(int index,
     }
     [overlay->window makeKeyAndOrderFront:nil];
     ReleaseKeys(overlay->window);
-    // check.sh reads these lines.
+    // check.sh reads these lines. The shadow's window holds the overlay's shape cut out of it, so
+    // off by any amount it shows what's under the overlay past its edge (#2075).
     fprintf(stderr, "browser: %s at %g %g %g %g\n", overlay->name,
             NSMinX(frame) - NSMinX(content), NSMaxY(content) - NSMaxY(frame), NSWidth(frame),
             NSHeight(frame));
+    const NSRect shadow = overlay->shadow.frame;
+    const NSRect around = NSInsetRect(overlay->window.frame, -overlay->reach(), -overlay->reach());
+    fprintf(stderr, "browser: %s shadow off by %g %g %g %g\n", overlay->name,
+            NSMinX(shadow) - NSMinX(around), NSMaxY(around) - NSMaxY(shadow),
+            NSWidth(shadow) - NSWidth(around), NSHeight(shadow) - NSHeight(around));
     fprintf(stderr, "browser: %s shown\n", overlay->name);
   });
 }
@@ -2891,7 +3023,7 @@ void host_hide_overlay(int index) {
     }
   }
   Browser* browser = overlay->over;
-  if (overlay->shrinks && overlay->grows && overlay->window.visible) {
+  if (overlay->grows && (overlay->shrinks || overlay->fade_out > 0) && overlay->window.visible) {
     ShrinkOverlay(*overlay, browser->window);
   } else {
     [browser->window removeChildWindow:overlay->window];
@@ -3893,6 +4025,51 @@ void host_copy_png(const uint8_t* png, size_t size) {
           [pasteboard.name isEqualToString:NSPasteboardNameGeneral] ? "general" : "private");
 }
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  NSScreen* screen = NSScreen.mainScreen;
+  NSURL* url = screen ? [NSWorkspace.sharedWorkspace desktopImageURLForScreen:screen] : nil;
+  NSImage* image = url ? [[NSImage alloc] initWithContentsOfURL:url] : nil;
+  if (!image) {
+    return false;
+  }
+  // Drawn at the display's size in pixels, filling it as the desktop does, so a 6K picture isn't
+  // encoded whole.
+  NSSize points = screen.frame.size;
+  CGFloat scale = screen.backingScaleFactor;
+  NSInteger width = (NSInteger)(points.width * scale), height = (NSInteger)(points.height * scale);
+  NSBitmapImageRep* bitmap =
+      [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nil
+                                              pixelsWide:width
+                                              pixelsHigh:height
+                                           bitsPerSample:8
+                                         samplesPerPixel:4
+                                                hasAlpha:YES
+                                                isPlanar:NO
+                                          colorSpaceName:NSCalibratedRGBColorSpace
+                                             bytesPerRow:0
+                                            bitsPerPixel:0];
+  if (!bitmap || image.size.width <= 0 || image.size.height <= 0) {
+    return false;
+  }
+  CGFloat fill = MAX(width / image.size.width, height / image.size.height);
+  NSSize drawn = NSMakeSize(image.size.width * fill, image.size.height * fill);
+  [NSGraphicsContext saveGraphicsState];
+  NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+  [image drawInRect:NSMakeRect((width - drawn.width) / 2, (height - drawn.height) / 2, drawn.width,
+                               drawn.height)
+           fromRect:NSZeroRect
+          operation:NSCompositingOperationCopy
+           fraction:1];
+  [NSGraphicsContext restoreGraphicsState];
+  NSData* data = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+  if (!data) {
+    return false;
+  }
+  png(context, (const uint8_t*)data.bytes, data.length);
+  return true;
+}
+
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser || !browser->window) {
@@ -4018,6 +4195,20 @@ void host_show_toast(void* ui_view) {
     if (!g_toast_shown || g_toast_over != browser) {
       return;
     }
+    // AppKit tells a window it orders out nothing of the pointer leaving it, so GPUI would still
+    // have it where it was, on the last toast's plate, and this one's first frame would find it
+    // hovered, keeping it past its time (#2076). It's a move outside the window, as GPUI's leave is
+    // on Linux and Windows.
+    [g_toast_view
+        mouseMoved:[NSEvent mouseEventWithType:NSEventTypeMouseMoved
+                                      location:NSMakePoint(-1, NSHeight(g_toast_view.bounds) + 1)
+                                 modifierFlags:NSEvent.modifierFlags
+                                     timestamp:NSProcessInfo.processInfo.systemUptime
+                                  windowNumber:g_toast.windowNumber
+                                       context:nil
+                                   eventNumber:0
+                                    clickCount:0
+                                      pressure:0]];
     PlaceToast();
     [g_toast_view.layer setNeedsDisplay];
     [g_toast_view.layer displayIfNeeded];
@@ -4932,9 +5123,26 @@ void host_share(void* ui_view,
                 const char* url,
                 const char* title) {
   Browser* browser = BrowserWithView(ui_view);
+  // The toast's view, for ⇧⌘C's Share, is no browser's: the menu hangs from the same place in the
+  // browser window the toast shows over (#2067).
+  const bool from_toast = !browser && g_toast_shown && ui_view == (__bridge void*)g_toast_view;
+  if (from_toast) {
+    browser = g_toast_over;
+  }
   NSURL* link = [NSURL URLWithString:@(url)];
   if (!browser || !browser->window || !link) {
     return;
+  }
+  NSView* content = browser->window.contentView;
+  // From the content's top left, under the tile it hangs from.
+  NSRect rect = NSMakeRect(x, content.flipped ? y : NSHeight(content.bounds) - y - height, width,
+                           height);
+  if (from_toast) {
+    const NSRect in_toast = NSMakeRect(
+        x, g_toast_view.flipped ? y : NSHeight(g_toast_view.bounds) - y - height, width, height);
+    const NSRect on_screen =
+        [g_toast convertRectToScreen:[g_toast_view convertRect:in_toast toView:nil]];
+    rect = [content convertRect:[browser->window convertRectFromScreen:on_screen] fromView:nil];
   }
   // check.sh reads this line. A driven run doesn't show the menu, which would wait on a choice.
   fprintf(stderr, "browser: share %s\n", url);
@@ -4948,10 +5156,6 @@ void host_share(void* ui_view,
   delegate.title = @(title);
   picker = [[NSSharingServicePicker alloc] initWithItems:@[ link ]];
   picker.delegate = delegate;
-  NSView* content = browser->window.contentView;
-  // From the content's top left, under the tile it hangs from.
-  const NSRect rect = NSMakeRect(x, content.flipped ? y : NSHeight(content.bounds) - y - height,
-                                 width, height);
   [picker showRelativeToRect:rect
                       ofView:content
                preferredEdge:content.flipped ? NSRectEdgeMaxY : NSRectEdgeMinY];

@@ -16,9 +16,9 @@ use gpui::{
 use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, DIVIDER, EMOJI_SIZE, FAVICON_DRAWN,
-    FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName, LOADING_ROW_MIN,
-    LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
+    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, EMOJI_SIZE,
+    FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName,
+    LOADING_ROW_MIN, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
@@ -222,10 +222,24 @@ impl Shell {
     }
 
     /// Opens or closes the folder as it's pressed, as Arc's does, even if the press becomes a drag.
-    fn press_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
-        let open = self
-            .shown_space()
-            .is_some_and(|space| space.is_open(folder));
+    pub(super) fn press_folder(&mut self, folder: u64, cx: &mut Context<Self>) {
+        let head = self.list_head();
+        let Some(space) = self.spaces.iter_mut().find(|space| space.id == self.space) else {
+            return;
+        };
+        let open = space.is_open(folder);
+        let before = space.slots(head);
+        let shown = space.panes(space.shown)[0];
+        let holds_shown = space.holders(shown).any(|holder| holder == folder);
+        // A closed folder still listing tabs shown before closes over them for good, as Arc's
+        // does, and opens on the next click. Opening or closing one lets go of them too, so it
+        // closes whole next time.
+        if space.drop_peeks(folder) && !open && !holds_shown {
+            log!("browser: folder {folder} closed for good");
+            self.move_rows(before, Curve::Slide, cx);
+            cx.notify();
+            return;
+        }
         log!("browser: command toggle-folder via sidebar");
         self.folding = Some(!open);
         self.browser.set_folder_open(folder, !open, cx);
@@ -272,7 +286,7 @@ impl Shell {
         // In from its folders, or where a dragged row would go.
         let depth = match (row, &self.drag) {
             (_, Some(drag)) if ghost => drag.depth,
-            (Row::Tab(tab), _) => self.depth(tab),
+            (Row::Tab(tab), _) => self.listed_depth(tab),
             (Row::NewTab, _) => 0,
         };
         let ring = match row {
@@ -441,7 +455,7 @@ impl Shell {
             .opacity((1. - done).clamp(0., 1.))
             .child(plate(
                 match row.folder {
-                    Some(open) => folder_icon(&self.palette, open),
+                    Some(open) => folder_icon(&self.palette, open, false),
                     None if !row.icon.is_empty() => emoji(row.icon.clone()),
                     None => favicon(&self.palette, row.favicon.clone()),
                 },
@@ -528,7 +542,7 @@ impl Shell {
                 .swaps
                 .glyph(
                     Swapped::Folder(folder),
-                    folder_glyph(open),
+                    folder_glyph(open, self.elides(folder)),
                     FAVICON_DRAWN,
                     self.palette.text(SECONDARY).into(),
                     cx,
@@ -1046,19 +1060,39 @@ impl Shell {
                 .tab()
                 .is_some_and(|tab| panes.contains(&tab))
         });
+        let (name, icon): (SharedString, SharedString) =
+            self.split(first).map_or_else(Default::default, |split| {
+                (split.name.clone(), split.icon.clone())
+            });
+        let named = !name.is_empty() || has_icon(&icon);
         let content = match renaming {
             Some(renaming) => {
-                let Some(tab) = renaming.naming.tab() else {
-                    unreachable!()
+                let icon = match renaming.naming {
+                    Naming::Split(_) => self.split_icon(&icon, first),
+                    naming => self.tab_icon(naming.tab().unwrap_or(first)),
                 };
-                plate(self.tab_icon(tab), self.naming_field(renaming, cx))
+                plate(icon, self.naming_field(renaming, cx))
+            }
+            None if named => {
+                let close = hovered
+                    .then(|| self.row_button(panes.clone(), closable, cx))
+                    .flatten();
+                let name = match name.is_empty() {
+                    true => panes
+                        .iter()
+                        .map(|&tab| self.title(tab))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    false => name.to_string(),
+                };
+                self.named_split(first, &panes, name.into(), &icon, close, cx)
             }
             None => {
                 let close = hovered
                     .then(|| self.row_button(panes.clone(), closable, cx))
                     .flatten();
                 let count = panes.len() + usize::from(drop.is_some());
-                let width = self.segment_width(self.depth(first), count);
+                let width = self.segment_width(self.listed_depth(first), count);
                 let slot = drop.map(|(_, left)| if left { 0 } else { panes.len() });
                 let mut segments: Vec<_> = panes
                     .iter()
@@ -1077,19 +1111,102 @@ impl Shell {
             }
         };
         let renaming = renaming.is_some();
-        self.row(Row::Tab(first), content, ghost, cx)
-            .when(!renaming, |row| {
-                row.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |shell, event: &MouseDownEvent, _, _| {
-                        shell.press_row(first, event.position)
-                    }),
-                )
-                .on_mouse_down(
-                    MouseButton::Middle,
-                    cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
-                )
+        let bounds = self.drawn_for_picker(Subject::Tab(first));
+        let row = self
+            .row(Row::Tab(first), content, ghost, cx)
+            .children(bounds);
+        row.when(!renaming, |row| {
+            row.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, _| {
+                    shell.press_row(first, event.position)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |shell, _, _, cx| shell.middle_press(first, closable, cx)),
+            )
+        })
+    }
+
+    /// A split view's row with a name or an icon of its own, as Arc's custom-info cell: one plate
+    /// with the split's icon and `name`, in place of its segments. A press shows the page shown
+    /// last, a double-click renames the split and a right-click shows its menu, as a segment's do.
+    fn named_split(
+        &self,
+        first: u64,
+        panes: &[u64],
+        name: SharedString,
+        icon: &SharedString,
+        close: Option<impl IntoElement>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let row_selected = self.selected_row() == Some(Row::Tab(first));
+        let dot = panes.iter().find_map(|&tab| self.status_dot(tab));
+        let label = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .when(close.is_none(), |label| label.pr(px(TITLE_END_INSET)))
+            .child(title(&self.palette, name.clone(), row_selected))
+            .when(close.is_none(), |label| label.children(dot))
+            .children(close);
+        let content = div()
+            .id(("named-split", first))
+            .size_full()
+            .when(self.a11y, |content| {
+                content
+                    .role(Role::Tab)
+                    .accessibility_id(Self::tab_access_id(first))
+                    .aria_label(format!("{name}, split view"))
+                    .aria_selected(row_selected)
+                    .pressed_by_mouse_down(true, true)
             })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    // The first press showed the split; the row's press may start a drag.
+                    if event.click_count == 2 {
+                        cx.stop_propagation();
+                        return shell.rename_tab(first, cx);
+                    }
+                    if shell.choose_by_press(first, event, cx) {
+                        return cx.stop_propagation();
+                    }
+                    shell.show_row(shell.row_tab(first), cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                    if shell.dragging().is_none() {
+                        shell.tab_menu(shell.row_tab(first), event.position, cx)
+                    }
+                }),
+            )
+            .child(plate(self.split_icon(icon, first), label));
+        div().size_full().child(content)
+    }
+
+    /// The icon of `tab`'s split view: the one the user gave it, else Lucide's columns-2, or rows-2
+    /// while it's stacked, in a folder's ink.
+    fn split_icon(&self, icon: &SharedString, tab: u64) -> AnyElement {
+        if has_icon(icon) {
+            return emoji(icon.clone());
+        }
+        let glyph = if self.stacked(tab) {
+            "icons/rows-2.svg"
+        } else {
+            "icons/columns-2.svg"
+        };
+        svg()
+            .path(glyph)
+            .flex_none()
+            .size(px(FAVICON_DRAWN))
+            .text_color(self.palette.text(SECONDARY))
+            .into_any_element()
     }
 
     /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
@@ -1392,7 +1509,7 @@ impl Shell {
             .map(|space| space.name.clone())
             .unwrap_or_default();
         // A heading VoiceOver can jump to, whose menu is the Space's.
-        let row = name_box(&self.palette, room)
+        let row = name_box(&self.palette, room, self.blank)
             .id("space-name")
             // Lit while the pinned rows are collapsed, where Arc's turns bold.
             .when(shut, |row| {
@@ -1733,9 +1850,21 @@ pub(super) struct Breath {
 impl Breath {
     /// How strong a loading dot drawn now is.
     pub(super) fn strength(&self) -> f32 {
+        self.through(BREATH).map_or(1., breath_strength)
+    }
+
+    /// How far round a loading ring drawn now is, as a fraction of a turn each `turn`: none while
+    /// motion is reduced.
+    pub(super) fn turned(&self, turn: Duration) -> f32 {
+        self.through(turn).unwrap_or(0.)
+    }
+
+    /// How far through its `period` something drawn now on this clock is, or None while motion is
+    /// reduced and it holds still.
+    fn through(&self, period: Duration) -> Option<f32> {
         self.drawn.set(true);
         if self.still.get() {
-            return 1.;
+            return None;
         }
         let now = Instant::now();
         if self
@@ -1746,7 +1875,7 @@ impl Breath {
             self.since.set(Some(now));
         }
         let since = self.since.get().unwrap_or(now);
-        breath_strength((now.duration_since(since).as_secs_f32() / BREATH.as_secs_f32()).fract())
+        Some((now.duration_since(since).as_secs_f32() / period.as_secs_f32()).fract())
     }
 
     /// Something drawn now moves on this clock, as a loading dot does.
@@ -2783,6 +2912,121 @@ mod tests {
             folds(Command::CollapseFolders, cx),
             (vec!["folder open 20 false".into()], Some(false))
         );
+    }
+
+    /// A tab shown in closed folders stays listed there, with its dots, as another tab shows, as
+    /// Arc keeps it (#1405). A click on the folder then closes it over the tab for good, and the
+    /// next click opens it. While the tab shown is in the folder, a click opens it as ever.
+    #[gpui::test]
+    fn a_peeked_tab_stays_listed_until_its_folder_is_clicked(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        let listed = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let space = shell.shown_space().unwrap();
+                (space.pinned_rows(false).collect::<Vec<_>>(), space.dotted())
+            })
+        };
+        assert_eq!(listed(cx), (vec![10, 3], vec![(10, 3)]));
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            listed(cx),
+            (vec![10, 3], vec![(10, 3)]),
+            "kept after 4 shows"
+        );
+        // A second tab shown there is kept with the first.
+        shell.update(cx, |shell, cx| shell.set_selected(6, cx));
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        cx.run_until_parked();
+        assert_eq!(listed(cx), (vec![10, 3, 6], vec![(10, 3)]));
+
+        host.take();
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.take(),
+            Vec::<String>::new(),
+            "closed for good, not opened"
+        );
+        assert_eq!(listed(cx), (vec![10], vec![]));
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        assert_eq!(host.take(), ["folder open 10 true"]);
+    }
+
+    /// A tab shown two closed folders down slides in from under the outer folder's row over
+    /// 0.15 s, fading in as it comes, and the rows under it make room on the same curve, as Arc
+    /// 1.171's does (#1405).
+    #[gpui::test]
+    fn a_tab_shown_in_closed_folders_slides_in_under_them(cx: &mut TestAppContext) {
+        let (shell, cx, _host) =
+            window_with(cx, vec![10, 11, 3, 6, 7], vec![4], 4, work_and_plans());
+        let before = shell.read_with(cx, |shell, _| shell.layout());
+        shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+        shell.read_with(cx, |shell, _| {
+            let after = shell.layout();
+            let (folder, tab) = (after[&Slot::Tab(10)], after[&Slot::Tab(3)]);
+            let (from, _, curve) = shell.slides[&Slot::Tab(3)];
+            assert_eq!(from, folder - tab, "it starts under the folder's row");
+            assert!(matches!(curve, crate::shell::Curve::Peek));
+            let (from, _, curve) = shell.slides[&Slot::Tab(7)];
+            assert_eq!(from, before[&Slot::Tab(7)] - after[&Slot::Tab(7)]);
+            assert!(
+                from < 0. && matches!(curve, crate::shell::Curve::Peek),
+                "7 makes room"
+            );
+            let opened = shell.opened.as_ref().expect("the row fades in");
+            assert!(
+                opened.tabs == [3]
+                    && opened.whole
+                    && matches!(opened.curve, crate::shell::Curve::Peek)
+            );
+        });
+    }
+
+    /// While the tab shown is in a folder that keeps tabs shown before, a click opens it as ever,
+    /// and lets go of the kept tabs, so it closes whole next time.
+    #[gpui::test]
+    fn a_click_with_the_tab_shown_in_the_folder_opens_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        shell.update(cx, |shell, cx| shell.set_selected(6, cx));
+        cx.run_until_parked();
+        host.take();
+        shell.update(cx, |shell, cx| shell.press_folder(10, cx));
+        assert_eq!(host.take(), ["folder open 10 true"]);
+        let peeked = shell.read_with(cx, |shell, _| shell.shown_space().unwrap().peeked.clone());
+        assert_eq!(peeked, Vec::<u64>::new());
+    }
+
+    /// A folder opened and closed again from anywhere, as by Expand All Folders, lets go of the
+    /// tabs it kept, so it closes whole.
+    #[gpui::test]
+    fn a_folder_opened_elsewhere_lets_go_of_its_kept_tabs(cx: &mut TestAppContext) {
+        let (shell, cx, _) = window_with(cx, vec![10, 11, 3, 6], vec![4], 3, work_and_plans());
+        shell.update(cx, |shell, cx| shell.set_selected(4, cx));
+        let fold = |open, cx: &mut VisualTestContext| {
+            let mut folders = work_and_plans();
+            folders.folders.insert(10, ("Work".into(), open));
+            shell.update(cx, |shell, cx| {
+                shell.set_tabs(1, vec![10, 11, 3, 6], vec![4], Vec::new(), folders, cx)
+            });
+            cx.run_until_parked();
+        };
+        fold(true, cx);
+        fold(false, cx);
+        let listed = shell.read_with(cx, |shell, _| {
+            let space = shell.shown_space().unwrap();
+            space.pinned_rows(false).collect::<Vec<_>>()
+        });
+        assert_eq!(listed, [10]);
+    }
+
+    /// Work, closed, holds Plans, closed, which holds 3; Work also holds 6.
+    fn work_and_plans() -> Folders {
+        Folders {
+            folders: [(10, ("Work".into(), false)), (11, ("Plans".into(), false))].into(),
+            parents: [(11, 10), (3, 11), (6, 10)].into(),
+            ..Default::default()
+        }
     }
 
     /// A dragged row that rests on another tab's row's middle for less than SPLIT_REST still goes

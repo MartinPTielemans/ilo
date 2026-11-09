@@ -24,11 +24,13 @@
 #include "browser_core/downloads.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
+#include "browser_core/history_deletions.h"
 #include "browser_core/host.h"
 #include "browser_core/search.h"
 #include "browser_core/session.h"
 #include "browser_core/space.h"
 #include "browser_core/system_engine.h"
+#include "browser_core/webrtc.h"
 #include "browser_core/window.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
@@ -50,6 +52,10 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
@@ -279,7 +285,10 @@ void UseProfile(Profile* profile) {
   GiveArchiveDefault(profile);
   ObserveDownloads(profile);
   ObserveExtensions(profile);
+  ObserveHistoryDeletions(profile);
+  FollowProxy(profile);
   ApplyAutoPictureInPicture(/*changed=*/false);
+  ApplyEveryday(std::nullopt);
 }
 
 Profile* ProfileOrLoad(bc_id id) {
@@ -315,6 +324,32 @@ void ApplyAutoPictureInPicture(bool changed) {
   }
 }
 
+void ApplyEveryday(std::optional<Everyday> changed) {
+  ProfileManager* manager = g_browser_process->profile_manager();
+  if (!manager) {
+    return;
+  }
+  const Settings& settings = UserSettings();
+  const auto writes = [&](Everyday which, bool chromes_own) {
+    return changed == which || !chromes_own;
+  };
+  for (Profile* profile : manager->GetLoadedProfiles()) {
+    if (writes(Everyday::kAskWhereToSave, !settings.ask_where_to_save)) {
+      profile->GetPrefs()->SetBoolean(prefs::kPromptForDownload, settings.ask_where_to_save);
+    }
+    if (ChromeZoomLevelPrefs* zoom = profile->GetZoomLevelPrefs();
+        zoom && writes(Everyday::kPageZoom, settings.page_zoom == 1)) {
+      zoom->SetDefaultZoomLevelPref(blink::ZoomFactorToZoomLevel(settings.page_zoom));
+    }
+    // The default alone: a site the user allowed or blocked keeps its own.
+    if (writes(Everyday::kNotificationPrompts, settings.notification_prompts)) {
+      HostContentSettingsMapFactory::GetForProfile(profile)->SetDefaultContentSetting(
+          ContentSettingsType::NOTIFICATIONS,
+          settings.notification_prompts ? CONTENT_SETTING_ASK : CONTENT_SETTING_BLOCK);
+    }
+  }
+}
+
 Profile* StartPrivateSession(Profile* profile) {
   // A session that has ended is gone at once, so the new window's starts without its cookies, and
   // Chrome doesn't destroy the profile later under the new window's Browser. Not while the window
@@ -327,6 +362,11 @@ Profile* StartPrivateSession(Profile* profile) {
   if (off_the_record && !Sessions().contains(off_the_record)) {
     Sessions()[off_the_record] = std::make_unique<SessionEnd>(off_the_record);
     Unheard().insert(ProfileId(DirOf(profile)));
+  }
+  // Its downloads join the list for its private windows' Library, for as long as it runs, each
+  // time a window asks for it, as the downloads list watches each session once.
+  if (off_the_record) {
+    ObserveDownloads(off_the_record);
   }
   return off_the_record;
 }
@@ -434,6 +474,11 @@ std::string ProfileDir(bc_id profile) {
   return std::string();
 }
 
+base::FilePath ProfileFolder(bc_id profile) {
+  const std::string dir = ProfileDir(profile);
+  return dir.empty() ? base::FilePath() : PathOf(dir);
+}
+
 std::string ProfileName(bc_id profile) {
   ProfileAttributesEntry* entry = AttributesOf(profile);
   if (!entry) {
@@ -498,14 +543,14 @@ bool DeleteProfile(bc_id profile) {
       return false;
     }
   }
-  if (!Favorites::Of(dir).empty()) {
-    return false;
-  }
   // Nor while a private window of it is open.
   if (Profile* loaded = ProfileFor(dir);
       DirOf(loaded) == dir && loaded->HasPrimaryOTRProfile()) {
     return false;
   }
+  // Its favorites go with it: with no Space of its own they may show nowhere, so the user
+  // couldn't take them out first (#1524).
+  Favorites::ProfileDeleting(dir);
   // Let go first: Chrome deletes it once it's unloaded, and a window may have built on it.
   if (Profile* loaded = ProfileFor(dir); DirOf(loaded) == dir) {
     Window::LetProfileGo(loaded);

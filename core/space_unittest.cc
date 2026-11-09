@@ -71,6 +71,23 @@ class SpaceTest : public testing::Test {
   bc_id notes_ = 0;
 };
 
+// What an archived tab goes back to: the user's Space it closed in, while there's one.
+TEST_F(SpaceTest, ASpaceIsFoundByItsNodeWhileItIsTheUsers) {
+  const base::Uuid work = work_->node().id;
+  ASSERT_TRUE(work.is_valid());
+  EXPECT_EQ(Space::WithNode(work), work_);
+  EXPECT_EQ(Space::WithNode(base::Uuid()), nullptr);
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  const base::Uuid agents = agent->node().id;
+  EXPECT_EQ(Space::WithNode(agents), nullptr);
+  Space::Delete(agent->id());
+
+  Space::Delete(work_->id());
+  EXPECT_EQ(Space::WithNode(work), nullptr);
+  work_ = Space::Create("Work");
+}
+
 TEST_F(SpaceTest, AFolderMovesWholeAndInOrderToTheBottomOfThePinnedTabs) {
   Fill();
   const base::Uuid node = work_->NodeOf(docs_)->id;
@@ -112,6 +129,28 @@ TEST_F(SpaceTest, AFolderMovesWholeAndInOrderToTheBottomOfThePinnedTabs) {
   EXPECT_TRUE(home_->NodeOf(7)->position.LessThan(home_->NodeOf(docs_)->position));
 }
 
+// A split's name and icon are the split's, given by any of its tabs: they go where it goes, and
+// they go once it does, so a split made again of the same tabs has none.
+TEST_F(SpaceTest, ASplitsNameAndIconAreItsOwnAndGoWithIt) {
+  Fill();
+  EXPECT_TRUE(work_->SetSplitName(4, "Reading"));
+  EXPECT_TRUE(work_->SetSplitIcon(3, "📚"));
+  EXPECT_FALSE(work_->SetSplitName(1, "Alone"));
+  EXPECT_EQ(work_->SplitName(3), "Reading");
+  EXPECT_EQ(work_->SplitIcon(4), "📚");
+  EXPECT_EQ(work_->SplitName(1), "");
+
+  home_->TakeFolder(*work_, docs_, {});
+  EXPECT_EQ(home_->SplitName(3), "Reading");
+  EXPECT_EQ(home_->SplitIcon(4), "📚");
+
+  home_->Separate(4);
+  EXPECT_EQ(home_->SplitName(3), "");
+  ASSERT_TRUE(home_->Split(4, 3, GURL()));
+  EXPECT_EQ(home_->SplitName(3), "");
+  EXPECT_EQ(home_->SplitIcon(4), "");
+}
+
 // Into another profile's Space each tab goes as the new one standing in for it.
 TEST_F(SpaceTest, TabsCopiedToAnotherProfileTakeTheirPlaces) {
   Fill();
@@ -138,6 +177,40 @@ TEST_F(SpaceTest, OnlyAFolderMovesAndNeverIntoAWindowsOwnSpace) {
   EXPECT_TRUE(little->pinned_rows().empty());
   EXPECT_EQ(home_->pinned_rows(), (Rows{7}));
   Space::Delete(little->id());
+}
+
+// A Space moved goes right after the one named, or first, and only its place changes, so sync
+// sends it alone. Where it is already, or after a Space that's gone, changes nothing.
+TEST_F(SpaceTest, ASpaceMovedTakesANewPlaceAndTheOthersKeepTheirs) {
+  Space* play = Space::Create("Play");
+  auto order = [] {
+    Rows ids;
+    for (Space* space : Space::All()) {
+      ids.push_back(space->id());
+    }
+    return ids;
+  };
+  const syncer::UniquePosition work = work_->node().position;
+  const syncer::UniquePosition home = home_->node().position;
+
+  Space::MoveAfter(play->id(), 0);
+  EXPECT_EQ(order(), (Rows{play->id(), work_->id(), home_->id()}));
+  EXPECT_TRUE(work_->node().position.Equals(work));
+  EXPECT_TRUE(home_->node().position.Equals(home));
+  EXPECT_TRUE(play->node().position.LessThan(work));
+
+  Space::MoveAfter(play->id(), work_->id());
+  EXPECT_EQ(order(), (Rows{work_->id(), play->id(), home_->id()}));
+  Space::MoveAfter(play->id(), home_->id());
+  EXPECT_EQ(order(), (Rows{work_->id(), home_->id(), play->id()}));
+  const syncer::UniquePosition last = play->node().position;
+  EXPECT_TRUE(home.LessThan(last));
+  Space::MoveAfter(play->id(), home_->id());
+  Space::MoveAfter(play->id(), play->id());
+  Space::MoveAfter(play->id(), 999999);
+  EXPECT_EQ(order(), (Rows{work_->id(), home_->id(), play->id()}));
+  EXPECT_TRUE(play->node().position.Equals(last));
+  Space::Delete(play->id());
 }
 
 }  // namespace

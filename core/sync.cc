@@ -15,6 +15,7 @@
 #include "base/base64.h"
 #include "base/base64url.h"
 #include "base/command_line.h"
+#include "base/containers/enum_set.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
@@ -40,10 +41,15 @@
 #include "base/uuid.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
+#include "browser_core/public/browser_core.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/sync_guard.h"
+#include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_pairing.h"
+#include "browser_core/sync_settings.h"
+#include "browser_core/sync_spaces.h"
 #include "browser_core/sync_relay.h"
 #include "browser_core/sync_words.h"
 #include "browser_core/window.h"
@@ -63,14 +69,19 @@
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/base/user_selectable_type.h"
+#include "components/sync/engine/cycle/model_neutral_state.h"
+#include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/events/protocol_event.h"
 #include "components/sync/engine/events/protocol_event_observer.h"
+#include "components/sync/engine/sync_protocol_error.h"
+#include "components/sync/engine/syncer_error.h"
 #include "components/sync/invalidations/fcm_registration_token_observer.h"
 #include "components/sync/invalidations/interested_data_types_handler.h"
 #include "components/sync/invalidations/invalidations_listener.h"
 #include "components/sync/invalidations/sync_invalidations_service.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_invalidations_payload.pb.h"
+#include "components/sync/service/data_type_controller.h"
 #include "components/sync/service/sync_auth_manager.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_service_observer.h"
@@ -453,6 +464,7 @@ using Fetched = base::OnceCallback<void(int status, std::optional<base::DictValu
 // This device asking the others for the secret (protocol.md, Pairing: the requester).
 struct Request {
   PairingRequest pairing;
+  PairingWait wait;
   std::string id;
   base::OneShotTimer expiry;
 };
@@ -697,18 +709,30 @@ class Account : public syncer::SyncServiceObserver,
       return;
     }
     problem_ = BC_SYNC_PROBLEM_NONE;
-    if (!relay_open_) {
-      problem_ = BC_SYNC_PROBLEM_SERVER;
-      Notify();
-      return;
-    }
     request_ = std::make_unique<Request>();
+    request_->wait.Start(relay_open_, base::BindOnce(&Account::SendRequest, base::Unretained(this)),
+                         base::BindOnce(&Account::RelayDidntOpen, base::Unretained(this)));
+    // A relay waiting out its backoff tries now, as the user waits on it.
+    if (relay_retry_.IsRunning()) {
+      relay_retry_.Stop();
+      ConnectRelay();
+    }
+    Notify();
+  }
+
+  // The request's pair_request, once the relay is open.
+  void SendRequest() {
     base::DictValue frame;
     frame.Set("type", "pair_request");
     frame.Set("commitment", Base64Url(request_->pairing.commitment()));
     frame.Set("name", device_name_);
     frame.Set("os", kOs);
     relay_->Send(Frame(std::move(frame)));
+  }
+
+  void RelayDidntOpen() {
+    request_.reset();
+    problem_ = BC_SYNC_PROBLEM_SERVER;
     Notify();
   }
 
@@ -768,10 +792,81 @@ class Account : public syncer::SyncServiceObserver,
         weak_factory_.GetWeakPtr(), url));
   }
 
+  void ReadActivity(bc_sync_activity* activity) const {
+    *activity = {};
+    syncer::SyncService* service = Service();
+    if (Status() != BC_SYNC_ON || !service) {
+      return;
+    }
+    const base::Time synced = service->GetLastSyncedTimeForDebugging();
+    activity->last_synced = synced.is_null() ? 0 : synced.InMillisecondsFSinceUnixEpoch();
+    if (service->HasUnrecoverableError()) {
+      activity->trouble = BC_SYNC_TROUBLE_STOPPED;
+      return;
+    }
+    // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.
+    const syncer::ModelNeutralState cycle =
+        service->GetLastCycleSnapshotForDebugging().model_neutral_state();
+    for (const syncer::SyncerError& error : {cycle.last_download_updates_result,
+                                             cycle.commit_result}) {
+      if (error.type() == syncer::SyncerError::Type::kSuccess) {
+        continue;
+      }
+      const bool throttled = error.type() == syncer::SyncerError::Type::kProtocolError &&
+                             error.GetProtocolErrorOrDie() == syncer::THROTTLED;
+      activity->trouble = throttled ? BC_SYNC_TROUBLE_THROTTLED : BC_SYNC_TROUBLE_UNREACHABLE;
+      return;
+    }
+  }
+
+  // The server deletes the account and signs out its devices, this one with them, so nothing is
+  // revoked: the core forgets the account as a sign-out does.
+  void DeleteAccount() {
+    if (!SignedIn() || deleting_) {
+      return;
+    }
+    deleting_ = true;
+    problem_ = BC_SYNC_PROBLEM_NONE;
+    Notify();
+    WithToken(base::BindOnce(
+        [](base::WeakPtr<Account> account, int generation, const std::string& token) {
+          if (!account || generation != account->generation_) {
+            return;
+          }
+          if (token.empty()) {
+            account->Undeleted();
+            return;
+          }
+          account->Fetch("DELETE", account->Server().Resolve("/api/account"), token,
+                         std::string(),
+                         base::BindOnce(&Account::AccountDeleted, account, generation));
+        },
+        weak_factory_.GetWeakPtr(), generation_));
+  }
+
   void WindowActivated() {
     if (asked_ && !asked_->accepted) {
       Accept();
     }
+  }
+
+  void Choose(int what, bool on) {
+    using Type = syncer::UserSelectableType;
+    std::optional<Type> type;
+    if (what == BC_SYNC_SETTINGS) {
+      type = Type::kPreferences;
+    } else if (what == BC_SYNC_EXTENSIONS) {
+      type = Type::kExtensions;
+    }
+    syncer::SyncService* service = Service();
+    // Sync CHECKs that a type it's given has a controller.
+    if (type && service && Status() == BC_SYNC_ON &&
+        service->GetUserSettings()->GetRegisteredSelectableTypes().Has(*type)) {
+      service->GetUserSettings()->SetSelectedType(*type, on);
+    }
+    // The app's switch moved as it asked, so it hears what was chosen even when nothing changed.
+    notified_ = false;
+    Notify();
   }
 
  private:
@@ -850,14 +945,18 @@ class Account : public syncer::SyncServiceObserver,
     const std::string email = SignedIn() ? email_ : std::string();
     const std::array<std::string, 3> now = {trimmed, email, code};
     const int status = Status();
+    const bool on = status == BC_SYNC_ON;
+    const std::array<bool, 2> chosen = {on && Chosen(syncer::UserSelectableType::kPreferences),
+                                        on && Chosen(syncer::UserSelectableType::kExtensions)};
     if (notified_ && status == notified_status_ && problem_ == notified_problem_ &&
-        now == notified_strings_) {
+        now == notified_strings_ && chosen == notified_chosen_) {
       return;
     }
     notified_ = true;
     notified_status_ = status;
     notified_problem_ = problem_;
     notified_strings_ = now;
+    notified_chosen_ = chosen;
     if (!Host().sync_changed) {
       return;
     }
@@ -866,8 +965,16 @@ class Account : public syncer::SyncServiceObserver,
                            .server = trimmed.c_str(),
                            .default_server = !server_.is_valid() && !server.empty(),
                            .email = email.c_str(),
-                           .code = code.c_str()};
+                           .code = code.c_str(),
+                           .settings = chosen[0],
+                           .extensions = chosen[1]};
     Host().sync_changed(Host().context, &state);
+  }
+
+  // Whether this device syncs |type|, one sync can: an engine without extensions has none.
+  bool Chosen(syncer::UserSelectableType type) const {
+    syncer::SyncService* service = Service();
+    return service && service->GetUserSettings()->GetSelectedTypes().Has(type);
   }
 
   // The secret, which also keys passwords' client tags (sync_guard.h).
@@ -1046,6 +1153,25 @@ class Account : public syncer::SyncServiceObserver,
     return true;
   }
 
+  void AccountDeleted(int generation, int status, std::optional<base::DictValue> json) {
+    if (generation != generation_) {
+      return;
+    }
+    if (status != 204 && status != 200) {
+      Undeleted();
+      return;
+    }
+    CloseSignInWindow();
+    signing_in_ = false;
+    Forget(BC_SYNC_PROBLEM_NONE);
+  }
+
+  void Undeleted() {
+    deleting_ = false;
+    problem_ = BC_SYNC_PROBLEM_SERVER;
+    Notify();
+  }
+
   void StartedOver(int generation, int status, std::optional<base::DictValue> json) {
     if (generation != generation_) {
       return;
@@ -1208,7 +1334,10 @@ class Account : public syncer::SyncServiceObserver,
     email_.clear();
     account_.clear();
     device_.clear();
-    problem_ = problem;
+    // The server signs this device out as it deletes the account, which the relay or a refresh
+    // can tell before the deletion's own answer does: that's no removal to report.
+    problem_ = deleting_ ? BC_SYNC_PROBLEM_NONE : problem;
+    deleting_ = false;
     Save();
     RunRefreshWaiters(false);
     AccountChanged();
@@ -1260,10 +1389,14 @@ class Account : public syncer::SyncServiceObserver,
       settings->SetEncryptionPassphrase(words);
     }
     if (!settings->IsInitialSyncFeatureSetupComplete()) {
-      settings->SetSelectedTypes(/*sync_everything=*/false,
-                                 {syncer::UserSelectableType::kBookmarks,
-                                  syncer::UserSelectableType::kPasswords,
-                                  syncer::UserSelectableType::kTabs});
+      // Settings and extensions too, as a device signing in is meant to become the user's
+      // browser; each device can turn them off (bc_sync_choose).
+      using Type = syncer::UserSelectableType;
+      const syncer::UserSelectableTypeSet types = {Type::kBookmarks, Type::kPasswords, Type::kTabs,
+                                                   Type::kPreferences, Type::kExtensions};
+      settings->SetSelectedTypes(
+          /*sync_everything=*/false,
+          base::Intersection(types, settings->GetRegisteredSelectableTypes()));
       settings->SetInitialSyncFeatureSetupComplete();
     }
     setup_.reset();
@@ -1291,6 +1424,7 @@ class Account : public syncer::SyncServiceObserver,
     sync_observation_.Observe(service);
     service->AddProtocolEventObserver(this);
     LogState(service);
+    WatchOtherTabs(StartProfile());
   }
 
   // What sync's service is doing, each time that changes, so a check sees that a profile signed
@@ -1333,6 +1467,11 @@ class Account : public syncer::SyncServiceObserver,
     if (state != logged_state_) {
       logged_state_ = state;
       LOG(ERROR) << "browser: sync service " << state;
+      // check.sh reads it: what this device syncs, for the account's docs to say.
+      if (sync->GetTransportState() == State::ACTIVE) {
+        LOG(ERROR) << "browser: sync types "
+                   << syncer::DataTypeSetToDebugString(sync->GetActiveDataTypes());
+      }
     }
   }
 
@@ -1411,6 +1550,9 @@ class Account : public syncer::SyncServiceObserver,
   void OnRelayOpen() override {
     relay_open_ = true;
     relay_backoff_ = base::TimeDelta();
+    if (request_) {
+      request_->wait.Opened();
+    }
     // Anything another device committed while this one wasn't listening.
     if (Profile* start = StartProfile(); start && secret_) {
       if (auto* invalidations = static_cast<RelayInvalidations*>(
@@ -1423,7 +1565,8 @@ class Account : public syncer::SyncServiceObserver,
   void OnRelayClosed(uint16_t code, int response_code) override {
     relay_open_ = false;
     base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(relay_));
-    if (request_) {
+    // One yet to go out waits on through RetryRelay's next tries.
+    if (request_ && !request_->wait.waiting()) {
       request_.reset();
       problem_ = BC_SYNC_PROBLEM_EXPIRED;
     }
@@ -1706,6 +1849,8 @@ class Account : public syncer::SyncServiceObserver,
   bool using_secret_ = false;
   // The server cleared the account's data for bc_sync_start_over, and the engine is yet to see.
   bool starting_over_ = false;
+  // bc_sync_delete_account asked the server, whose answer is yet to come.
+  bool deleting_ = false;
   base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver> sync_observation_{
       this};
 
@@ -1713,6 +1858,7 @@ class Account : public syncer::SyncServiceObserver,
   int notified_status_ = 0;
   int notified_problem_ = 0;
   std::array<std::string, 3> notified_strings_;
+  std::array<bool, 2> notified_chosen_ = {};
   std::string logged_state_;
 
   base::WeakPtrFactory<Account> weak_factory_{this};
@@ -1745,6 +1891,18 @@ void Install() {
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
   };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
+  g_browser_core_sync_controllers = [](Profile* profile, syncer::SyncService*) {
+    std::vector<std::unique_ptr<syncer::DataTypeController>> controllers;
+    controllers.push_back(sync_spaces::Controller(profile));
+    controllers.push_back(sync_settings::Controller(profile));
+    return controllers;
+  };
+  // A tab of an agent's Space, held by the user or not, stays on its device (#1796); a page of no
+  // Space's keeps Chrome's answer.
+  g_browser_core_sync_tab = [](content::WebContents* contents) {
+    const Space* space = Window::SpaceOf(contents);
+    return !space || !space->agent();
+  };
   g_browser_core_passkey_normal_wording = [](content::WebContents* contents) {
     const Profile* profile =
         contents ? Profile::FromBrowserContext(contents->GetBrowserContext()) : nullptr;
@@ -1808,6 +1966,18 @@ void ReadDevices() {
 
 void RemoveDevice(const std::string& id) {
   Account::Get().RemoveDevice(id);
+}
+
+void ReadActivity(bc_sync_activity* activity) {
+  Account::Get().ReadActivity(activity);
+}
+
+void Choose(int what, bool on) {
+  Account::Get().Choose(what, on);
+}
+
+void DeleteAccount() {
+  Account::Get().DeleteAccount();
 }
 
 }  // namespace browser_core::sync

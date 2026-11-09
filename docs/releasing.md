@@ -38,12 +38,14 @@ Turn the track off by removing `app/branding/update-feed-nightly` from main. The
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
 3. **Write the release's changelog entry** in [ilo-site](https://github.com/MartinPTielemans/ilo-site)'s `src/changelog.ts` from the notes, and merge it before tagging. Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
-4. **Tag the commit and push the tag.** The release's notes are the tag's message:
+4. **Tag the commit and push the tag.** The release's notes are the tag's message, written in Markdown with no title line, since GitHub shows the release's name above them:
 
    ```bash
-   git tag -a v0.1.4 <commit>    # the editor's text is the release's notes
+   git tag -a --cleanup=verbatim -F notes.md v0.1.4 <commit>
    git push origin v0.1.4
    ```
+
+   `--cleanup=verbatim` keeps the notes' `##` headings, which git's default cleanup strips as comment lines.
 
    A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.
 5. **Check the draft release's files, then publish it.**
@@ -66,7 +68,7 @@ Publish each draft before building the next: a Linux build doesn't follow a draf
 
   A nightly is marked as one (`APP_TRACK=nightly`), so About says "Nightly 0.2.0 (1688)".
 - **What it publishes**, to release `nightly`, a prerelease made with `--latest=false`, so the site's buttons never offer it:
-  - `ilo-mac-arm64-<build>.dmg` and `ilo-windows-x64-setup-<build>.exe`, uploaded before `appcast.xml`, which names each entry "0.2.0 (<build>)";
+  - `ilo-mac-arm64-<build>.dmg`, its deltas from the three nightlies before it, and `ilo-windows-x64-setup-<build>.exe`, uploaded before `appcast.xml`, which names each entry "0.2.0 (<build>)";
   - each OS's newest three builds stay, and packages the appcast no longer names go.
 - **A failure** opens or comments on one issue, "Release fails on main", and the next night that publishes closes it (`.github/scripts/main-check.sh`).
 - **To try it** from a branch, `gh workflow run release.yml --ref <branch> -f tag=nightly-<name>` publishes the same to a release `nightly-<name>`. It needs no feed file. Delete the release and its tag when done. `-f tag=nightly` runs only from main.
@@ -82,6 +84,7 @@ A draft release whose files keep their names, so `releases/latest/download/<name
 - `ilo-windows-x64-setup.exe`: unsigned, for winget and direct downloads.
 - `ilo-linux-x86_64.flatpak` and `ilo.flatpakref`.
 - `SHA256SUMS` and `appcast.xml`.
+- `ilo-mac-arm64-<a>-to-<b>.delta`: Sparkle's deltas to the DMG's app from the feed's three Mac builds before it, made from their releases' DMGs. A copy on one downloads a few MB instead of the DMG; any other copy, or one a delta doesn't match, takes the DMG.
 - `ilo-demo.tar.gz`, the site's live demo built from the same commit (`.github/workflows/demo.yml`), when the commit has one.
 
 Once the draft is published:

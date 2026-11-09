@@ -178,6 +178,7 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
         println!("cargo:rustc-link-lib=framework=VideoToolbox");
+        translator_swift(&root);
     }
 
     // A local engine built from another header would run with shifted calls and layouts. Only the
@@ -227,6 +228,63 @@ fn main() {
 /// Why the Mac's engine, which setup.sh links at `link`, can't run with bindings from
 /// `header`, if it can't: engine/build.sh keeps the header it built from beside it. A prebuilt
 /// engine's header was checked by engine/fetch.sh, and Linux and Windows link only those.
+/// The Mac's translator, Apple's Translation, which is Swift's alone (platform/mac/translate.swift):
+/// a static library for the browser, whose objects name the Swift runtime and the framework they
+/// need, which the linker finds in the SDK and the toolchain, the runtime at /usr/lib/swift.
+fn translator_swift(root: &Path) {
+    let source = root.join("platform/mac/translate.swift");
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let library = out.join("libilo_translate.a");
+    let xcrun = |args: &[&str]| -> String {
+        let run = std::process::Command::new("xcrun").args(args).output();
+        let run = run.expect("no xcrun, for the translator's Swift");
+        assert!(run.status.success(), "xcrun {args:?} failed");
+        String::from_utf8_lossy(&run.stdout).trim().to_owned()
+    };
+    let sdk = xcrun(&["--sdk", "macosx", "--show-sdk-path"]);
+    let swiftc = PathBuf::from(xcrun(&["--find", "swiftc"]));
+    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+        "aarch64" => "arm64",
+        other => other,
+    }
+    .to_owned();
+    // The app's own minimum, which build.sh gives its Info.plist.
+    let minimum = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.0".into());
+    let status = std::process::Command::new(&swiftc)
+        .args([
+            "-parse-as-library",
+            "-O",
+            "-swift-version",
+            "5",
+            "-static",
+            "-emit-library",
+        ])
+        .args(["-module-name", "IloTranslate", "-sdk", &sdk])
+        .arg("-target")
+        .arg(format!("{arch}-apple-macos{minimum}"))
+        .arg("-o")
+        .arg(&library)
+        .arg(&source)
+        .status()
+        .expect("couldn't run swiftc");
+    assert!(
+        status.success(),
+        "swiftc couldn't build {}",
+        source.display()
+    );
+    let toolchain = swiftc.parent().and_then(Path::parent).unwrap();
+    for arg in [
+        library.display().to_string(),
+        format!("-L{sdk}/usr/lib/swift"),
+        format!("-L{}", toolchain.join("lib/swift/macosx").display()),
+        "-Wl,-rpath,/usr/lib/swift".into(),
+    ] {
+        println!("cargo:rustc-link-arg-bin=Browser={arg}");
+    }
+}
+
 fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
     let engine = std::fs::canonicalize(link).ok()?;
     // A relinked or rebuilt engine checks again, and one without a record every build until it has.

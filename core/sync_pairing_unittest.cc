@@ -1,8 +1,11 @@
 #include "browser_core/sync_pairing.h"
 
+#include <memory>
 #include <string>
 
 #include "base/base64url.h"
+#include "base/test/bind.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_core {
@@ -82,6 +85,58 @@ TEST(SyncPairingTest, NothingBeforeTheKey) {
   EXPECT_FALSE(answer.Seal("p", Filled(0x33)));
   EXPECT_FALSE(request.Open("p", std::vector<uint8_t>(48)));
   EXPECT_TRUE(request.code().empty());
+}
+
+// #1975: the new device asks before its relay has opened. The request goes out once it opens, and
+// once only, however long the relay took within the wait.
+TEST(SyncPairingTest, RequestWaitsForTheRelay) {
+  base::test::TaskEnvironment task_environment(base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  int sent = 0;
+  bool gave_up = false;
+  PairingWait wait;
+  wait.Start(false, base::BindLambdaForTesting([&] { ++sent; }),
+             base::BindLambdaForTesting([&] { gave_up = true; }));
+  EXPECT_TRUE(wait.waiting());
+  task_environment.FastForwardBy(PairingWait::kWait - base::Milliseconds(1));
+  EXPECT_EQ(sent, 0);
+  wait.Opened();
+  EXPECT_EQ(sent, 1);
+  EXPECT_FALSE(wait.waiting());
+  // A relay that closes and opens again doesn't ask twice.
+  wait.Opened();
+  task_environment.FastForwardBy(PairingWait::kWait);
+  EXPECT_EQ(sent, 1);
+  EXPECT_FALSE(gave_up);
+}
+
+// On a relay already open, the request goes out at once.
+TEST(SyncPairingTest, RequestGoesOnAnOpenRelay) {
+  base::test::TaskEnvironment task_environment(base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  int sent = 0;
+  bool gave_up = false;
+  PairingWait wait;
+  wait.Start(true, base::BindLambdaForTesting([&] { ++sent; }),
+             base::BindLambdaForTesting([&] { gave_up = true; }));
+  EXPECT_EQ(sent, 1);
+  EXPECT_FALSE(wait.waiting());
+  task_environment.FastForwardBy(PairingWait::kWait * 2);
+  EXPECT_FALSE(gave_up);
+}
+
+// A relay that hasn't opened within the wait gives up, and the request, which the account drops
+// as it gives up, never goes out.
+TEST(SyncPairingTest, RequestGivesUpOnARelayThatDoesntOpen) {
+  base::test::TaskEnvironment task_environment(base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  int sent = 0;
+  auto wait = std::make_unique<PairingWait>();
+  wait->Start(false, base::BindLambdaForTesting([&] { ++sent; }),
+              base::BindLambdaForTesting([&] { wait.reset(); }));
+  task_environment.FastForwardBy(PairingWait::kWait - base::Milliseconds(1));
+  ASSERT_TRUE(wait);
+  EXPECT_TRUE(wait->waiting());
+  task_environment.FastForwardBy(base::Milliseconds(1));
+  EXPECT_FALSE(wait);
+  EXPECT_EQ(sent, 0);
 }
 
 }  // namespace

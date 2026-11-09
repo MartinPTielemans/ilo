@@ -16,12 +16,16 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "browser_core/autofill_menu.h"
 #include "browser_core/favorites.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
+#include "browser_core/page_press.h"
+#include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
 #include "browser_core/platform/keyboard.h"
+#include "browser_core/platform/window_views.h"
 #include "browser_core/script_dialog.h"
 #include "browser_core/session.h"
 #include "browser_core/developer_mode.h"
@@ -54,6 +58,7 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/dom_storage_context.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/navigation_controller.h"
@@ -64,6 +69,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "content/public/browser/web_contents_view_delegate.h"
@@ -72,6 +78,7 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-shared.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/dom_key.h"
@@ -278,8 +285,11 @@ bool Tab::LinkDragged(content::WebContents* contents,
   }
   const int dragged =
       phase == content::PageLinkDrag::kDrop ? BC_LINK_DRAG_DROP : BC_LINK_DRAG_OVER;
+  // From where the app laid the page out, as it draws its targets there, though the page is
+  // drawn smaller under the drag.
+  const gfx::PointF at = platform::LaidOutPagePoint(contents->GetNativeView(), point);
   return Host().tab_link_dragged(Host().context, tab->id_, dragged,
-                                 data.url_infos.front().url.spec().c_str(), point.x(), point.y());
+                                 data.url_infos.front().url.spec().c_str(), at.x(), at.y());
 }
 
 // static
@@ -303,6 +313,18 @@ bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   unloaded.history = saved.history;
   unloaded.current = std::clamp(saved.current, 0, static_cast<int>(saved.history.size()) - 1);
   unloaded.muted = saved.muted;
+  // Its page's sessionStorage from the last launch, unless a tab has it already, as one a sidebar
+  // backup brings back may.
+  const std::string& storage = saved.session_storage;
+  if (!storage.empty() && std::ranges::none_of(All(), [&](const Tab* other) {
+        return other != tab && other->SessionStorageId() == storage;
+      })) {
+    tab->storage_ =
+        profile->GetDefaultStoragePartition()->GetDOMStorageContext()->RecreateSessionStorage(
+            storage);
+    // Kept on disk should it go unshown to the next launch too, as an unloaded tab's is (Unload).
+    tab->storage_->SetShouldPersist(true);
+  }
   tab->name_ = saved.name;
   tab->icon_ = saved.icon;
   if (!saved.last_seen.is_null()) {
@@ -351,6 +373,12 @@ void Tab::Attach(content::WebContents* contents) {
   }
   // Its page's alert(), confirm() and prompt() ask with the app's dialog.
   ScriptDialogs::Attach(contents);
+  // A press with a modifier held may be the app's, such as ⇧⌘-drag's capture.
+  PagePresses::CreateForWebContents(contents, id_);
+  // Edit › AutoFill opens Chrome's dropdown at the field its page's focus is in.
+  AutofillMenu::Watch(contents);
+  // Its page's language, and the app's translation of it (#671).
+  PageTranslate::CreateForWebContents(contents, id_);
   // A tab is often made with its first page already on its way, before anything observes it, so
   // the app hears it's loading now rather than once the page commits.
   ReportStateSoon();
@@ -471,6 +499,13 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+std::string Tab::SessionStorageId() const {
+  if (content::WebContents* contents = web_contents()) {
+    return contents->GetController().GetDefaultSessionStorageNamespace()->id();
+  }
+  return storage_ ? storage_->id() : std::string();
+}
+
 SavedTab Tab::Save() const {
   SavedTab saved = web_contents() ? SaveTab(*web_contents()) : unloaded_.value_or(SavedTab());
   saved.name = name_;
@@ -502,6 +537,8 @@ void Tab::Unload() {
   unloaded_->history = std::move(saved.history);
   unloaded_->current = saved.current;
   unloaded_->muted = muted();
+  // Its page's sessionStorage outlives the page, for its next (Wake).
+  storage_ = contents->GetController().GetDefaultSessionStorageNamespace();
   if (system_page_) {
     DropSystemPage();
   }
@@ -516,6 +553,9 @@ void Tab::Unload() {
     base::AutoReset<bool> unloading(&unloading_, true);
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
   }
+  // Chrome's session forgets the storage of a tab its tab strip deletes, which would delete it
+  // with the tab's last reference, so it's kept for the next launch as the tab is.
+  storage_->SetShouldPersist(true);
   LOG(ERROR) << "browser: tab " << id_ << " without its page";
   StateChanged();
 }
@@ -527,11 +567,14 @@ content::WebContents* Tab::Wake(Window& window) {
   content::WebContents* contents = nullptr;
   {
     base::AutoReset<Tab*> waking(&g_waking, this);
-    contents = window.RestoreTab(profile(), unloaded_->history, unloaded_->current);
+    contents = window.RestoreTab(profile(), unloaded_->history, unloaded_->current,
+                                 storage_.get());
   }
   if (!contents) {
     return nullptr;
   }
+  // The page has it now.
+  storage_.reset();
   if (!web_contents()) {
     Attach(contents);
   }
@@ -545,11 +588,30 @@ content::WebContents* Tab::Wake(Window& window) {
   return contents;
 }
 
+bool Tab::AsksBeforeLeaving() const {
+  content::WebContents* contents = web_contents();
+  if (!contents) {
+    return false;
+  }
+  bool asks = false;
+  contents->GetPrimaryMainFrame()->ForEachRenderFrameHost([&asks](content::RenderFrameHost* frame) {
+    asks = asks || (frame->IsRenderFrameLive() &&
+                    frame->GetSuddenTerminationDisablerState(
+                        blink::mojom::SuddenTerminationDisablerType::kBeforeUnloadHandler));
+  });
+  return asks;
+}
+
 void Tab::Close() {
   if (web_contents()) {
     return;
   }
   ReportClosed();
+  // Its sessionStorage goes with it, unless it comes back at the next launch, which ReportClosed
+  // has kept the session for if it closes with the quit or the last window.
+  if (storage_) {
+    storage_->SetShouldPersist(SessionKept());
+  }
   Forget(id_);
 }
 
@@ -992,6 +1054,10 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
   }
   if (navigation->HasCommitted() && !navigation->IsSameDocument()) {
     net_error_ = navigation->IsErrorPage() ? navigation->GetNetErrorCode() : 0;
+    if (net_error_) {
+      // check.sh waits for this line, such as -22 for a page an administrator's policy blocks.
+      LOG(ERROR) << "browser: tab " << id_ << " error " << net_error_;
+    }
     ShowOnPageColor();
     ClearHang();
     if (std::exchange(crashed_, false)) {
@@ -1613,6 +1679,11 @@ void Tab::WebContentsDestroyed() {
   // Closed, as at a quit or with its window. Its page is still there, so the session kept as the
   // first tab closes saves this one from it too.
   ReportClosed();
+  // Its sessionStorage stays on disk for the next launch with the session, which ReportClosed has
+  // kept for the quit or the last window as the first tab closed, as Chrome's session keeps its
+  // tabs'. Closed by the user, it goes.
+  web_contents()->GetController().GetDefaultSessionStorageNamespace()->SetShouldPersist(
+      SessionKept());
   // What it posted, such as a report of its renderer ending, would tell the app of a closed tab.
   weak_factory_.InvalidateWeakPtrs();
   Observe(nullptr);

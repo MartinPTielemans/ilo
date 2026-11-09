@@ -105,6 +105,14 @@
 //                                         panel" if none begins within 5 s. The driver keeps each
 //                                         save panel the app begins off screen, logging "browser:
 //                                         save panel offers <name> in <folder>"
+//   savecancel                            ends the save panel the app began as its Cancel does,
+//                                         once it has, logging "browser: save panel cancelled",
+//                                         or "browser: no save panel" if none begins within 5 s
+//   pip                                   logs the frame of Chrome's Picture in Picture window, a
+//                                         floating call's or the Mini Player's, as "browser: pip
+//                                         at <x> <y> <width> <height>" in place's terms, or
+//                                         "browser: pip none". The driver doesn't move or size it:
+//                                         the window server does that with the real pointer
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -135,8 +143,10 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
-//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
-//                                         "browser: status item shown" or "none", or clicks it
+//   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it,
+//                                         or draws it to a PNG at <path>, logged as "browser:
+//                                         status item captured <w>x<h>"
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -174,6 +184,11 @@
 //                                         later, for the next tab shown to unload those
 //                                         bc_unload_idle_tabs lets go. From then each check logs
 //                                         "browser: idle tabs checked" once it's done
+//   battery <percent> plugged|unplugged   the battery reads that from now, with
+//                                         --battery-for-testing (core/battery_saver.h)
+//   pair <tab> pin|confirm|passkey        a Bluetooth device <tab>'s page pairs with asks for its
+//                                         PIN, whether to pair, or whether its passkey matches, as
+//                                         bc_tab_pair_for_testing
 //
 // Clicks, drags and moves go to the app's window on top at that point of the browser window
 // driven, such as the sidebar reveal over its edge, scrolls and layout to the browser window
@@ -181,9 +196,12 @@
 // command n arrives and "browser: drive <n> done, key <window class>, focus <view class>, active
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
-// and buttons>" as an alert does, and "browser: desktop space changed" once macOS has slid to
-// another Space. A page ignores clicks while the app isn't the active app, and macOS doesn't let a
-// background process make it active.
+// and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
+// another Space, "browser: window resigned key" and "browser: window became key" as the browser
+// window driven loses the keyboard and has it back, and "browser: app activated <bundle
+// id|unbundled>, windows <level:size...>" as another app becomes the active one. A page ignores
+// clicks while the app isn't the active app, and macOS doesn't let a background process make it
+// active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -293,7 +311,7 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"f12", 111}, {"f10", 109}, {"f6", 97},
+    {":", 41}, {"@", 19}, {"!", 18}, {"f12", 111}, {"f10", 109}, {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
@@ -889,6 +907,7 @@ void (^g_save_panel_done)(NSModalResponse);
 NSURL* g_save_panel_url;
 IMP g_save_panel_class;
 IMP g_begin_panel;
+IMP g_begin_sheet;
 IMP g_panel_url;
 
 void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) {
@@ -901,6 +920,18 @@ void BeginPanel(NSSavePanel* self, SEL selector, void (^done)(NSModalResponse)) 
   g_save_panel_done = done;
   fprintf(stderr, "browser: save panel offers %s in %s\n",
           self.nameFieldStringValue.UTF8String ?: "", self.directoryURL.path.UTF8String ?: "");
+}
+
+// Chrome begins a download's panel as a sheet on the browser window, which the driver keeps off
+// screen too: its view is out of process, where a posted escape never reaches it.
+void BeginSheet(NSSavePanel* self, SEL selector, NSWindow* parent,
+                void (^done)(NSModalResponse)) {
+  if ([self isKindOfClass:NSOpenPanel.class]) {
+    ((void (*)(id, SEL, NSWindow*, void (^)(NSModalResponse)))g_begin_sheet)(self, selector, parent,
+                                                                             done);
+    return;
+  }
+  BeginPanel(self, @selector(beginWithCompletionHandler:), done);
 }
 
 NSURL* PanelURL(NSSavePanel* self, SEL selector) {
@@ -918,6 +949,12 @@ NSSavePanel* SavePanel(id self, SEL selector) {
       class_getInstanceMethod(kind, @selector(beginWithCompletionHandler:)), (IMP)BeginPanel);
   if (begin != (IMP)BeginPanel) {
     g_begin_panel = begin;
+  }
+  IMP sheet = method_setImplementation(
+      class_getInstanceMethod(kind, @selector(beginSheetModalForWindow:completionHandler:)),
+      (IMP)BeginSheet);
+  if (sheet != (IMP)BeginSheet) {
+    g_begin_sheet = sheet;
   }
   IMP url = method_setImplementation(class_getInstanceMethod(kind, @selector(URL)), (IMP)PanelURL);
   if (url != (IMP)PanelURL) {
@@ -957,14 +994,15 @@ void AwaitKeyTitle(NSString* text, int tries, void (^done)(void)) {
 
 // Picks |path| in the save panel the app began, once it has, which may be a moment after the app
 // asked for it: for up to 5 s.
+// With no |path|, as its Cancel.
 void AnswerSavePanel(NSString* path, int tries, void (^done)(void)) {
   if (g_save_panel_done) {
     void (^answer)(NSModalResponse) = g_save_panel_done;
     g_save_panel_done = nil;
-    g_save_panel_url = [NSURL fileURLWithPath:path isDirectory:NO];
-    fprintf(stderr, "browser: save panel answered\n");
+    g_save_panel_url = path ? [NSURL fileURLWithPath:path isDirectory:NO] : nil;
+    fprintf(stderr, "browser: save panel %s\n", path ? "answered" : "cancelled");
     // The app's handler reads the panel's URL as it runs.
-    answer(NSModalResponseOK);
+    answer(path ? NSModalResponseOK : NSModalResponseCancel);
     g_save_panel = nil;
     g_save_panel_url = nil;
     done();
@@ -1033,6 +1071,18 @@ NSString* Describe(id element) {
   return [NSString stringWithFormat:@"%@ %.0fx%.0f %@", NSStringFromClass(window.class),
                                     NSWidth(window.frame), NSHeight(window.frame),
                                     window.accessibilityRole];
+}
+
+// Chrome's Picture in Picture window: one of the app's on screen, over the normal level, that is
+// Chrome's own, not a browser window, and no other window's child, as the command bar and Peek are.
+NSWindow* PictureInPicture() {
+  for (NSWindow* window in NSApp.orderedWindows) {
+    if (window.visible && !window.parentWindow && window.level > NSNormalWindowLevel &&
+        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
+      return window;
+    }
+  }
+  return nil;
 }
 
 // The app's first window on screen at the normal level, front to back, as another app finds it.
@@ -1422,13 +1472,15 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
-  if (action == "scroll") {
+  // As scroll, in the window with the keyboard, such as Settings', as clickkey clicks there.
+  if (action == "scroll" || action == "scrollkey") {
     double x, y, dy;
     int count;
-    if (!(words >> x >> y >> dy >> count) || count < 1) {
+    NSWindow* in = action == "scrollkey" ? NSApp.keyWindow : window;
+    if (!in || !(words >> x >> y >> dy >> count) || count < 1) {
       return false;
     }
-    Scroll(window, x, y, dy, count, done);
+    Scroll(in, x, y, dy, count, done);
     return true;
   }
   if (action == "swipe") {
@@ -1516,6 +1568,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
     [window setFrame:NSMakeRect(x, top - y - height, width, height) display:YES];
+    done();
+    return true;
+  }
+  if (action == "pip") {
+    NSWindow* pip = PictureInPicture();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+    } else {
+      const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
+      const NSRect frame = pip.frame;
+      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
+              top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
+    }
     done();
     return true;
   }
@@ -1649,6 +1714,31 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "battery") {
+    int percent;
+    std::string power;
+    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
+      return false;
+    }
+    bc_battery_for_testing(percent, power == "plugged");
+    done();
+    return true;
+  }
+  if (action == "pair") {
+    bc_id tab;
+    std::string kind;
+    if (!(words >> tab >> kind)) {
+      return false;
+    }
+    const int pair = kind == "pin" ? BC_PAIR_PIN : kind == "confirm" ? BC_PAIR_CONFIRM
+                   : kind == "passkey" ? BC_PAIR_PASSKEY : -1;
+    if (pair < 0) {
+      return false;
+    }
+    bc_tab_pair_for_testing(tab, pair);
+    done();
+    return true;
+  }
   if (action == "stack") {
     NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
         kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
@@ -1701,6 +1791,10 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "savepanel") {
     AnswerSavePanel(@(line.substr(std::min(line.size(), action.size() + 1)).c_str()), 50, done);
+    return true;
+  }
+  if (action == "savecancel") {
+    AnswerSavePanel(nil, 50, done);
     return true;
   }
   if (action == "pasteboard") {
@@ -1799,11 +1893,30 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "statusitem") {
     NSStatusBarButton* button = HostLittleStatusButton();
-    if (line.size() > action.size()) {
+    std::string what;
+    words >> what;
+    if (what == "click") {
       if (!button) {
         return false;
       }
       [button performClick:nil];
+    } else if (what == "capture") {
+      // The button draws itself into a picture, as the menu bar shows it: the menu bar's window
+      // isn't one a capture of the app's windows finds, and a capture of the screen would hold
+      // other apps' buttons.
+      std::string path;
+      std::getline(words >> std::ws, path);
+      if (!button || path.empty()) {
+        return false;
+      }
+      NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+      [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+      NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (![png writeToFile:@(path.c_str()) atomically:YES]) {
+        return false;
+      }
+      fprintf(stderr, "browser: status item captured %.0fx%.0f\n", button.bounds.size.width,
+              button.bounds.size.height);
     } else {
       fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
     }
@@ -2009,6 +2122,35 @@ void drive_start(void) {
               usingBlock:^(NSNotification*) {
                 fprintf(stderr, "browser: desktop space changed\n");
               }];
+  // Another app taking activation mid-run leaves every later key with nowhere to go (#968). Only
+  // the bundle identifier, as an unbundled process's name can name the machine.
+  [NSWorkspace.sharedWorkspace.notificationCenter
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* notification) {
+                NSRunningApplication* app = notification.userInfo[NSWorkspaceApplicationKey];
+                if ([app isEqual:NSRunningApplication.currentApplication]) {
+                  return;
+                }
+                // Its windows on screen, by level and size alone, to tell an alert from a panel.
+                NSMutableString* windows = [NSMutableString string];
+                NSArray* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+                    kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+                for (NSDictionary* info in list) {
+                  if ([info[(id)kCGWindowOwnerPID] intValue] != app.processIdentifier) {
+                    continue;
+                  }
+                  CGRect r;
+                  CGRectMakeWithDictionaryRepresentation(
+                      (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &r);
+                  [windows appendFormat:@" %@:%.0fx%.0f", info[(id)kCGWindowLayer],
+                                        r.size.width, r.size.height];
+                }
+                fprintf(stderr, "browser: app activated %s, windows%s\n",
+                        app.bundleIdentifier ? app.bundleIdentifier.UTF8String : "unbundled",
+                        windows.length ? windows.UTF8String : " none");
+              }];
   // Full-screen transitions animate, and end well after the command's done.
   for (NSNotificationName name :
        {NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification}) {
@@ -2037,6 +2179,24 @@ void drive_start(void) {
                 fprintf(stderr, "browser: window on screen %.0fx%.0f, full screen %d\n", size.width,
                         size.height, (window.styleMask & NSWindowStyleMaskFullScreen) != 0);
               }];
+  // The browser window losing the keyboard and having it back between two commands, as to
+  // Chrome's dialog for what a page shares, which the commands' own lines miss: Chrome does what
+  // waits on the window being active, such as showing the tab a page shares, only while it is
+  // (#2148).
+  for (NSNotificationName name :
+       {NSWindowDidResignKeyNotification, NSWindowDidBecomeKeyNotification}) {
+    const char* what =
+        [name isEqualToString:NSWindowDidBecomeKeyNotification] ? "became" : "resigned";
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (notification.object == (__bridge NSWindow*)host_browser_window(g_driven)) {
+                    fprintf(stderr, "browser: window %s key\n", what);
+                  }
+                }];
+  }
   // The same transitions timed, on the uptime clock the core's and the app's lines read: when
   // AppKit starts one, when the window gets its size, and when it ends (above). check.sh reads them.
   for (NSNotificationName name :

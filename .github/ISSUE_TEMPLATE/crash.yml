@@ -7,17 +7,42 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Crash.** macOS keeps a report in `~/Library/Logs/DiagnosticReports` (Console → Crash
-        Reports shows the same). Take the `.ips` file from the time of the crash whose name starts
-        with `Browser`, or a Helper's name if a page or the GPU process crashed.
+        **Crash on the Mac.** macOS keeps a report in `~/Library/Logs/DiagnosticReports` (Console →
+        Crash Reports shows the same). Take the `.ips` file from the time of the crash whose name
+        starts with `Browser`, or a Helper's name if a page or the GPU process crashed.
 
-        **Hang.** While it's stuck, sample the browser for 10 seconds:
+        **Hang on the Mac.** While it's stuck, sample the browser for 10 seconds:
         ```
         sample "$(pgrep -x Browser)" 10 -file ~/Desktop/ilo-hang.txt
         ```
 
+        **Crash on Linux.** ilo writes a minidump of the crash, a `.dmp` file, in the `Crashpad`
+        folder of its profile: `~/.var/app/app.ilo.browser/config/ilo/Crashpad` for the Flatpak,
+        `~/.cache/browser-app/Crashpad` built from source. Take the one from the time of the crash:
+        ```
+        find ~/.var/app/app.ilo.browser/config/ilo/Crashpad -name '*.dmp'
+        ```
+
+        **Hang on Linux.** While it's stuck, have the browser write a minidump of where it's stuck,
+        which ends it, and take that one as for a crash:
+        ```
+        pkill -ABRT -o -f '^[^ ]*/(ilo|Browser)/chrome( |$)'
+        ```
+
+        **Crash on Windows.** ilo writes a minidump of the crash, a `.dmp` file, in
+        `%LOCALAPPDATA%\ilo\User Data\Crashpad`. Take the one from the time of the crash: File
+        Explorer's search in that folder finds `*.dmp`.
+
+        **Hang on Windows.** Say whether Windows shows ilo as Not responding, and for how long. A
+        memory dump is too big to attach here; a maintainer may ask for one.
+
+        Take a minidump before you open ilo again: if its next launch offers to send the crash's
+        report, either answer removes the file. Zip it to attach it.
+
         Reports and samples hold file paths with your user name, and can hold URLs. Replace your
-        user name and anything private before uploading.
+        user name and anything private before uploading. A minidump can't be edited: it holds file
+        paths with your user name, though ilo leaves the page's address and the memory its stack
+        points to out of it. Attach one only if you're comfortable with that.
 
   - type: dropdown
     id: kind
@@ -43,7 +68,7 @@ body:
     id: report
     attributes:
       label: Crash report or sample
-      description: The sample, or the `.ips` file zipped or renamed to `.txt` (GitHub won't take `.ips`), redacted.
+      description: The sample, the `.ips` file zipped or renamed to `.txt` (GitHub won't take `.ips`), or the minidump zipped, redacted.
     validations:
       required: false
       accept: ".txt,.log,.json,.zip"
@@ -51,8 +76,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: ilo commit
-      description: ilo has no releases yet. The commit you built (`git rev-parse --short HEAD`).
+      label: ilo version
+      description: "Settings › About shows it, and Copy Build Info copies it with the Chromium version, the system and the chip: Help › Troubleshooting on the Mac, the command bar elsewhere. Built from source, the commit (`git rev-parse --short HEAD`)."
+      placeholder: 0.1.0 (4321)
     validations:
       required: true
 
@@ -60,16 +86,42 @@ body:
     id: chromium
     attributes:
       label: Chromium version
-      description: "`chromium.version` in `engine/pins.ini` at that commit."
+      description: "Copy Build Info has it. Built from source, `chromium.version` in `engine/pins.ini` at that commit."
+      placeholder: 156.0.7600.12
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
 
   - type: input
     id: os
     attributes:
-      label: macOS version and chip
-      description: "`sw_vers -productVersion` and `uname -m`."
-      placeholder: 26.1, arm64
+      label: System and chip
+      description: "The system's version and the chip, as Copy Build Info gives them. By hand: on the Mac `sw_vers -productVersion` and `uname -m`; on Linux the distribution (`PRETTY_NAME` in `/etc/os-release`) and `uname -m`; on Windows the version `winver` shows."
+      placeholder: macOS 15.1, Apple M2 Pro
     validations:
       required: true
+
+  - type: input
+    id: linux
+    attributes:
+      label: On Linux, how ilo is installed, the session and the desktop
+      description: "The Flatpak from ilo's releases, or built from source; Wayland or X11 (`echo $XDG_SESSION_TYPE`); and the desktop or compositor (`echo $XDG_CURRENT_DESKTOP`), such as GNOME, KDE Plasma, or Hyprland on Omarchy."
+      placeholder: Flatpak, Wayland, Hyprland (Omarchy)
+
+  - type: input
+    id: windows
+    attributes:
+      label: On Windows, how ilo is installed
+      description: "The installer (ilo-windows-x64-setup.exe), winget, the Microsoft Store, or built from source."
+      placeholder: ilo-windows-x64-setup.exe
 
   - type: textarea
     id: extensions

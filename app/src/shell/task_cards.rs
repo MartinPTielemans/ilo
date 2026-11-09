@@ -649,14 +649,16 @@ impl Shell {
     /// The Agents' cards, newest first, none of which a private window shows, as it offers no
     /// tasks. A new one takes the ask's slot once ⌘T ran it, so nothing at the foot moves.
     pub fn set_task_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
-        if self.private {
+        if self.one_space() {
             cards.clear();
         }
         if cards == self.task_cards {
             return;
         }
+        let mut waits = false;
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
+            waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
             if was.is_none_or(|was| (&was.status, was.dot) != (&card.status, card.dot)) {
                 // check.sh reads this line.
                 log!(
@@ -686,6 +688,12 @@ impl Shell {
             self.foot.slot = false;
         }
         self.task_cards = cards;
+        // A card that turns to wait for the user brings a hidden sidebar out, once, as a question
+        // does, so it reaches them while ilo is in front (#1080); the Dock's badge does otherwise.
+        // It isn't held out, as a task may wait a long while over the page.
+        if waits && self.can_reveal() {
+            self.set_revealed(true, cx);
+        }
         // A conversation whose card went, dismissed, goes with it.
         if let Some(agent) = self.talk_agent()
             && !self.task_cards.iter().any(|card| card.agent == agent)
@@ -871,7 +879,7 @@ impl Shell {
     }
 
     /// The most room the opened foot takes before it scrolls: the closed foot never does.
-    fn foot_cap(&self) -> Option<f32> {
+    pub(super) fn foot_cap(&self) -> Option<f32> {
         self.foot
             .all
             .then(|| FOOT_SHARE * f32::from(self.viewport.height))
@@ -1179,7 +1187,8 @@ impl Shell {
             return;
         }
         let now = Instant::now();
-        let flies = self.foot.primed && !cx.reduce_motion() && !self.private && self.foot_drawn();
+        let flies =
+            self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
         let from = self
             .foot
             .plates_drawn

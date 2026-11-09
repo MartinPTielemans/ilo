@@ -1,8 +1,8 @@
 //! Add Split View's targets (Dia, docs/ux-spec.md › Split view › Drag targets): a tab dragged out
-//! of the sidebar over the page becomes a picture of a window, and a target slides in at each of
-//! the card's sides, and at its top and bottom as Arc's stacks them. Let go over one, the tab joins
-//! the page shown in a split view on that side. A link dragged over the page brings the same
-//! targets, and let go on one it opens in a pane there.
+//! of the sidebar over the page becomes a picture of a window, and one target slides in, as Arc's
+//! one region, at the card's side nearest the pointer, its top and bottom too as Arc's stacks them.
+//! Let go over it, the tab joins the page shown in a split view on that side. A link dragged over
+//! the page brings the same target, and let go on it it opens in a pane there.
 //! GPUI can't draw over the page's native view, so the app draws them in a window of its own over
 //! the browser window, which the mouse goes through (`Browser::show_drop_targets`).
 
@@ -42,6 +42,11 @@ const TARGET_DASH_UNDER: (f32, f32) = (7., 2.);
 use crate::tokens::shell::split_targets::TARGET_DASHES;
 use crate::tokens::shell::split_targets::TARGET_EDGE;
 use crate::tokens::shell::split_targets::TARGET_TEXT;
+/// Arc 1.170 draws the window's content at about 0.92 of its size while a tab or a link is over the
+/// page, about its centre, and back after. How long it takes isn't measured: ours, the targets'
+/// slide and grow, on their ease-out.
+const CONTENT_SCALE: f32 = 0.92;
+const CONTENT_SCALE_TIME: f32 = TARGET_SLIDE + TARGET_GROW;
 /// Dia's targets came once the pointer was 26 pt into the page from its top strip. Ours: the same
 /// past the card's left edge, until Arc's is measured.
 const TARGET_TRIGGER: f32 = 26.;
@@ -56,6 +61,48 @@ use crate::tokens::shell::split_targets::PICTURE_LIGHTS;
 use crate::tokens::shell::split_targets::PICTURE_RADIUS;
 use crate::tokens::shell::split_targets::PICTURE_TOP;
 use crate::tokens::text;
+
+/// The pages' scale on its way to `to`, from `from` at `since`.
+#[derive(Clone, Copy)]
+pub(super) struct ContentScale {
+    from: f32,
+    to: f32,
+    since: Instant,
+}
+
+impl Default for ContentScale {
+    fn default() -> Self {
+        Self {
+            from: 1.,
+            to: 1.,
+            since: Instant::now(),
+        }
+    }
+}
+
+impl ContentScale {
+    pub(super) fn now(&self) -> f32 {
+        let progress = self.since.elapsed().as_secs_f32() / CONTENT_SCALE_TIME;
+        if progress >= 1. {
+            self.to
+        } else {
+            self.from + (self.to - self.from) * ease_out(progress)
+        }
+    }
+}
+
+/// `bounds` drawn at `scale` of their size about `centre`.
+pub(super) fn scaled_about(
+    bounds: Bounds<Pixels>,
+    centre: Point<Pixels>,
+    scale: f32,
+) -> Bounds<Pixels> {
+    let at = |edge: Pixels, mid: Pixels| mid + (edge - mid) * scale;
+    Bounds::new(
+        point(at(bounds.left(), centre.x), at(bounds.top(), centre.y)),
+        size(bounds.size.width * scale, bounds.size.height * scale),
+    )
+}
 
 /// Where a target is on the card, and so where the tab joins the page.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,32 +138,42 @@ impl Edge {
 pub(super) struct OverPage {
     /// The tab it would join.
     with: u64,
-    /// When the targets began sliding in.
-    since: Instant,
     /// Where the pointer is in the window.
     pointer: Point<Pixels>,
     /// Each target, as one split has one orientation: all four for a page alone, else the two
     /// along its split's. For each, whether the tab is over it, since when, and how far it had
     /// grown toward its size under the tab then.
     targets: Vec<(Edge, bool, Instant, f32)>,
+    /// The one target shown, at the card's edge nearest the pointer, as Arc's one region, or the
+    /// one under the tab while it's there; and since when, as it slides in from that edge.
+    shown: (Edge, Instant),
     /// The dragged tab, where its press showed it in place of the page it would join, which shows
     /// under the targets instead: it shows again once they go without it let go on one.
     back: Option<u64>,
 }
 
 impl OverPage {
-    fn new(with: u64, edges: Vec<Edge>, pointer: Point<Pixels>, back: Option<u64>) -> Self {
+    fn new(
+        with: u64,
+        edges: Vec<Edge>,
+        card: Bounds<Pixels>,
+        pointer: Point<Pixels>,
+        back: Option<u64>,
+    ) -> Self {
         log!("browser: drop targets for {with}");
         let since = Instant::now();
+        let shown = (nearest(&edges, card, pointer), since);
+        // check.sh reads this line.
+        log!("browser: drop target shown {}", shown.0.name());
         let targets = edges
             .into_iter()
             .map(|edge| (edge, false, since, 0.))
             .collect();
         OverPage {
             with,
-            since,
             pointer,
             targets,
+            shown,
             back,
         }
     }
@@ -139,15 +196,29 @@ impl OverPage {
     fn point(&mut self, card: Bounds<Pixels>, position: Point<Pixels>, now: Instant) {
         let edge = self.edge();
         self.pointer = position;
+        // The one under the tab lets it go once the pointer leaves it.
         for target in &mut self.targets {
             let (at, under, since, from) = *target;
-            // Under once the pointer is in the grown target, until it leaves the one under it.
-            let bounds = match under {
-                true => under_bounds(card, at, position),
-                false => target_bounds(card, at, grown_at(at)),
-            };
-            if bounds.contains(&position) != under {
-                *target = (at, !under, now, grown(under, since, from));
+            if under && !under_bounds(card, at, position).contains(&position) {
+                *target = (at, false, now, grown(true, since, from));
+            }
+        }
+        // It stays shown while the tab is over it, so the pointer passing nearer another edge on
+        // its way in doesn't take away the target it's aiming at.
+        let edges: Vec<Edge> = self.targets.iter().map(|(at, ..)| *at).collect();
+        let shown = self
+            .edge()
+            .unwrap_or_else(|| nearest(&edges, card, position));
+        if shown != self.shown.0 {
+            self.shown = (shown, now);
+            // check.sh reads this line.
+            log!("browser: drop target shown {}", shown.name());
+        }
+        // The one shown is under the tab once the pointer is in it grown.
+        for target in &mut self.targets {
+            let (at, under, since, from) = *target;
+            if !under && at == shown && target_bounds(card, at, grown_at(at)).contains(&position) {
+                *target = (at, true, now, grown(false, since, from));
             }
         }
         if self.edge() != edge {
@@ -247,16 +318,61 @@ impl Shell {
         if back.is_some() {
             self.select(with, cx);
         }
+        // Where the pages are drawn now, smaller once the tab is over them.
+        let card = self.scaled_card();
         let Some(drag) = &mut self.drag else {
             return false;
         };
         drag.moving = true;
         let over = drag
             .over_page
-            .get_or_insert_with(|| OverPage::new(with, edges, position, back));
+            .get_or_insert_with(|| OverPage::new(with, edges, card, position, back));
         over.point(card, position, crate::motion::start(cx));
         cx.notify();
         true
+    }
+
+    /// Draws the pages smaller while a tab or a link is over them, and at their size again once it
+    /// isn't, a step each frame, telling the core each step. Under Reduce Motion they keep their
+    /// size.
+    pub(super) fn step_content_scale(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scale_content(cx) {
+            window.request_animation_frame();
+        }
+    }
+
+    /// The step of `step_content_scale`: returns whether the pages are still on their way.
+    fn scale_content(&mut self, cx: &mut Context<Self>) -> bool {
+        let over = (self.drag.as_ref()).is_some_and(|drag| drag.over_page.is_some())
+            || self.link_over.is_some();
+        let to = if over {
+            crate::motion::scale(CONTENT_SCALE, cx)
+        } else {
+            1.
+        };
+        if to != self.content_scale.to {
+            self.content_scale = ContentScale {
+                from: self.content_scale.now(),
+                to,
+                since: crate::motion::start(cx),
+            };
+        }
+        let scale = self.content_scale.now();
+        if scale != self.content_scale_told {
+            self.content_scale_told = scale;
+            self.browser.set_page_scale(scale, cx);
+            if scale == to {
+                // check.sh waits for this line.
+                log!("browser: page scale {scale}");
+            }
+        }
+        scale != to
+    }
+
+    /// The card as the pages are drawn now: smaller under a tab or a link over them.
+    pub(super) fn scaled_card(&self) -> Bounds<Pixels> {
+        let card = self.page_frame(self.viewport).0;
+        scaled_about(card, card.center(), self.content_scale.now())
     }
 
     /// The targets a tab or a link can join `with` at: all four for a page alone, else the two
@@ -282,7 +398,7 @@ impl Shell {
     }
 
     /// A link to `url` is dragged over `tab`'s page, at `point` in it. Over a page shown that has
-    /// room for another, the targets slide in as for a tab, and the one under the pointer grows.
+    /// room for another, the target slides in as for a tab, and grows once the pointer is in it.
     /// Returns whether the pointer is on one, where the drag is the app's and the page doesn't see
     /// it.
     pub fn link_over_page(
@@ -299,14 +415,14 @@ impl Shell {
             return false;
         };
         let position = page.origin + point;
-        let card = self.page_frame(self.viewport).0;
+        let card = self.scaled_card();
         let with = self.selected;
         if self
             .link_over
             .as_ref()
             .is_none_or(|link| link.over.with != with)
         {
-            let over = OverPage::new(with, self.edges_for(with), position, None);
+            let over = OverPage::new(with, self.edges_for(with), card, position, None);
             self.link_over = Some(LinkOver {
                 url: url.to_string(),
                 over,
@@ -358,8 +474,10 @@ impl Shell {
     }
 
     /// The pointer let go of a tab over the page: over a target, it joins the page shown in a split
-    /// view on that side and shows there, and anywhere else it goes back to its row. Returns
-    /// whether it was over the page.
+    /// view on that side and shows there, and anywhere else it opens in a window of its own, as big
+    /// as this one and centred on the pointer, where the picture of a window was (Dia). A private or
+    /// Little ilo window's tab, which no other window takes, goes back to its row. Returns whether
+    /// it was over the page.
     pub(super) fn drop_over_page(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = &self.drag else {
             return false;
@@ -368,14 +486,24 @@ impl Shell {
             return false;
         };
         let (tab, with, edge, back) = (drag.tab, over.with, over.edge(), over.back());
+        let pointer = point(f32::from(over.pointer.x), f32::from(over.pointer.y));
         let alone = self.panes(with).len() == 1;
+        let own = self.private || self.little.is_some();
         // The release that ends the drag isn't a click.
         self.dragged = true;
         self.settle_drag(cx);
         match edge {
             // A page alone has every target, and the top and bottom ones stack its new split.
             Some(edge) => self.join_split(tab, with, edge.first(), alone && edge.stacked(), cx),
-            None => self.show_back(back, cx),
+            None if own => self.show_back(back, cx),
+            None => {
+                let at = self.browser.screen_point(pointer);
+                let size = self.viewport;
+                let middle = point(f32::from(size.width) / 2., f32::from(size.height) / 2.);
+                // check.sh waits for this line.
+                log!("browser: tab {tab} let go off the targets");
+                self.browser.tab_to_new_window(tab, at, middle, cx);
+            }
         }
         cx.notify();
         true
@@ -400,10 +528,10 @@ impl Shell {
         let Some((over, tab)) = dragged.or(link) else {
             return div().into_any_element();
         };
-        let card = self.page_frame(self.viewport).0;
+        let card = self.scaled_card();
         let palette = self.palette;
         let fill = self.window_fill().blend(palette.plate(TARGET_PLATE));
-        let t = over.since.elapsed().as_secs_f32();
+        let t = over.shown.1.elapsed().as_secs_f32();
         let growing = over
             .targets
             .iter()
@@ -411,14 +539,13 @@ impl Shell {
         if growing || t < TARGET_SLIDE + TARGET_GROW {
             window.request_animation_frame();
         }
-        let mut targets: Vec<_> = over
+        // Only the one shown: one the pointer left for another edge goes at once.
+        let targets = over
             .targets
             .iter()
-            .map(|&(edge, under, since, from)| (edge, grown(under, since, from)))
-            .collect();
-        // The one growing under the tab goes over the others, which it can reach.
-        targets.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let targets = targets.into_iter().map(|(edge, way)| {
+            .filter(|(edge, ..)| *edge == over.shown.0);
+        let targets = targets.map(|&(edge, under, since, from)| {
+            let way = grown(under, since, from);
             let under = under_bounds(card, edge, over.pointer);
             let bounds = mix_bounds(arriving(card, edge, t), under, way);
             target(bounds, card, edge, way, fill, palette)
@@ -429,7 +556,7 @@ impl Shell {
             .top(card.top())
             .w(card.size.width)
             .h(card.size.height)
-            .rounded(px(super::CARD_RADIUS))
+            .rounded(px(self.card_radius()))
             .overflow_hidden()
             .children(targets);
         let picture = (tab != 0).then(|| {
@@ -458,6 +585,25 @@ impl Shell {
 
 /// How far a target has grown toward its size under the tab: `from` at `since`, going to all the
 /// way if `under`, else none.
+/// Which of `edges` is nearest `pointer`, each as a fraction of the card's width or height, so its
+/// diagonals split it, the first of them on a tie.
+fn nearest(edges: &[Edge], card: Bounds<Pixels>, pointer: Point<Pixels>) -> Edge {
+    let away = |edge: &Edge| -> f32 {
+        let (gap, across) = match edge {
+            Edge::Left => (pointer.x - card.left(), card.size.width),
+            Edge::Right => (card.right() - pointer.x, card.size.width),
+            Edge::Top => (pointer.y - card.top(), card.size.height),
+            Edge::Bottom => (card.bottom() - pointer.y, card.size.height),
+        };
+        gap / across
+    };
+    edges
+        .iter()
+        .min_by(|a, b| away(a).total_cmp(&away(b)))
+        .copied()
+        .unwrap_or(Edge::Right)
+}
+
 fn grown(under: bool, since: Instant, from: f32) -> f32 {
     let to = if under { 1. } else { 0. };
     from + (to - from) * ease_out(since.elapsed().as_secs_f32() / TARGET_GROW)
@@ -728,7 +874,7 @@ fn picture(
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
 
     use gpui::{Bounds, Entity, Pixels, Point, TestAppContext, point, px, size};
 
@@ -824,6 +970,47 @@ mod tests {
         );
     }
 
+    /// One target shows, Arc's one region, at the card's edge nearest the pointer as a fraction
+    /// of its width or height, and the one under the tab stays shown while it's there, though the
+    /// pointer comes nearer another edge.
+    #[gpui::test]
+    fn one_target_shows_at_the_edge_nearest_the_pointer(cx: &mut TestAppContext) {
+        let (shell, _host, card) = shown_alone(cx);
+        let url = "https://example.org/";
+        let at = |x: f32, y: f32| {
+            let point = point(
+                card.left() + card.size.width * x,
+                card.top() + card.size.height * y,
+            );
+            in_page(card, point)
+        };
+        let mut shown = |x: f32, y: f32| {
+            shell.update(cx, |shell, cx| {
+                shell.link_over_page(10, at(x, y), url, cx);
+                let over = &shell.link_over.as_ref().unwrap().over;
+                (over.shown.0.name(), over.edge().map(Edge::name))
+            })
+        };
+        // Off the targets grown, which reach about a quarter of the way in.
+        assert_eq!(shown(0.3, 0.5), ("left", None));
+        assert_eq!(shown(0.5, 0.3), ("top", None));
+        assert_eq!(shown(0.6, 0.7), ("bottom", None));
+        assert_eq!(shown(0.7, 0.5), ("right", None));
+        let left = target_bounds(card, Edge::Left, grown_at(Edge::Left)).center();
+        let left = ((left.x - card.left()) / card.size.width, 0.5);
+        assert_eq!(shown(left.0, left.1), ("left", Some("left")));
+        assert_eq!(
+            shown(0.2, 0.17),
+            ("left", Some("left")),
+            "nearer the top, but under the left target"
+        );
+        assert_eq!(
+            shown(0.5, 0.17),
+            ("top", Some("top")),
+            "out of the left target, into the top one"
+        );
+    }
+
     /// A tab's row pressed, which shows it at once, and the drag it becomes: `reported` once the
     /// core has said it's shown. Returns where the row was pressed, down its middle.
     fn press_to_drag(
@@ -843,8 +1030,9 @@ mod tests {
 
     /// A tab its press showed in place of the page alone, dragged out over the page: the page it
     /// would join shows under the targets, whether or not the core has shown the tab yet, and the
-    /// tab shows again once they go, back over the sidebar or let go off them. Let go on one, it
-    /// joins the page shown under them (#1467).
+    /// tab shows again once they go back over the sidebar. Let go on one, it joins the page shown
+    /// under them (#1467); let go off them, it opens in a window of its own centred on the pointer,
+    /// and the page under the targets stays.
     #[gpui::test]
     fn the_page_under_the_targets_is_the_one_the_tab_joins(cx: &mut TestAppContext) {
         let (shell, host, card) = shown_alone(cx);
@@ -891,9 +1079,11 @@ mod tests {
             "the press's switch under way showed the tab"
         );
         shell.update(cx, |shell, cx| shell.drop_row(cx));
+        // The recorder's window is at 100, 50 on the screen, and 1200 by 800.
+        let (x, y) = (f32::from(middle.x) + 100., f32::from(middle.y) + 50.);
         assert_eq!(
             host.take(),
-            ["select 12", "focus page"],
+            [format!("new window for 12 at {x} {y}, held at 600 400")],
             "let go off the targets"
         );
         assert!(host.take_edits().is_empty());
@@ -907,6 +1097,52 @@ mod tests {
             ["select 11", "focus page"],
             "escape over the targets"
         );
+    }
+
+    /// In a private window, whose tabs no other window takes, a tab let go off the targets goes
+    /// back to its row.
+    #[gpui::test]
+    fn a_private_windows_tab_let_go_off_the_targets_stays(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        shell.update(cx, |shell, _| shell.private = true);
+        press_to_drag(&shell, cx, 11, true);
+        let middle = card.center();
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        host.take();
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take(), ["select 11", "focus page"]);
+    }
+
+    /// A tab dragged over the page draws the pages at Arc's 0.92 of their size about the card's
+    /// centre, with the targets on the card drawn so, and back over the sidebar at their own size
+    /// again.
+    #[gpui::test]
+    fn a_tab_over_the_page_draws_the_pages_smaller(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        let settled = |cx: &mut TestAppContext| {
+            shell.update(cx, |shell, cx| {
+                shell.scale_content(cx);
+                shell.content_scale.since -= Duration::from_secs(1);
+                assert!(!shell.scale_content(cx), "the pages are still on their way");
+                (
+                    *host.page_scales.borrow().last().unwrap(),
+                    shell.scaled_card(),
+                )
+            })
+        };
+        let y = press_to_drag(&shell, cx, 11, true);
+        let middle = card.center();
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        let (scale, drawn) = settled(cx);
+        assert_eq!(scale, 0.92);
+        assert_eq!(drawn.center(), card.center());
+        assert!((drawn.size.width - card.size.width * 0.92).abs() < px(0.01));
+        assert!((drawn.size.height - card.size.height * 0.92).abs() < px(0.01));
+
+        drag_to(&shell, cx, X, y);
+        let (scale, drawn) = settled(cx);
+        assert_eq!(scale, 1., "back over the sidebar");
+        assert_eq!(drawn, card);
     }
 
     /// The tab shown dragged over its own page splits with the one used before it (Dia), which

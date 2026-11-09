@@ -32,6 +32,30 @@ impl Drop for Engine {
     }
 }
 
+/// Opens `url` in a link preview over the tab `over` in the browser window `window`, of the
+/// archived tab `archived` if it's one (Browser::open_preview, open_archived_preview).
+fn open_preview_in(
+    window: u64,
+    over: u64,
+    url: SharedString,
+    link: Point<Pixels>,
+    page: (Bounds<Pixels>, f32),
+    archived: Option<u64>,
+) {
+    // Outside the shell's update, as the core tells the shell of the tab it opens.
+    update_app_later(move |cx| {
+        let Ok(text) = CString::new(url.as_ref()) else {
+            return;
+        };
+        let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
+        if preview == 0 {
+            log!("browser: link preview over {over} not opened");
+            return;
+        }
+        link_preview::show(window, preview, over, url, page, link, archived, cx);
+    });
+}
+
 impl Browser for Engine {
     fn select(&self, tab: u64, _: &mut App) {
         browser::handover_clicked();
@@ -68,14 +92,22 @@ impl Browser for Engine {
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     fn move_to_favorites(&self, tab: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_tab_move_to_favorites(tab, index) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
+    }
+
+    fn move_split_to_favorites(&self, tab: u64, index: usize, _: &mut App) {
+        unsafe { bc::bc_tab_move_split_to_favorites(tab, index) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_tab_move(tab, pinned, folder, index) };
+        agents_core::update(move |agents, _| agents.users_pin(tab));
     }
 
     // The ones after the first load once shown, as links opened behind do.
@@ -141,6 +173,10 @@ impl Browser for Engine {
         unsafe { bc::bc_space_set_pinned_open(space, open) };
     }
 
+    fn battery_saver_off_for_now(&self, _: &mut App) {
+        unsafe { bc::bc_battery_saver_off_for_now() };
+    }
+
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         unsafe { bc::bc_folder_move(folder, to, index) };
     }
@@ -159,6 +195,16 @@ impl Browser for Engine {
 
     fn set_split_stacked(&self, tab: u64, stacked: bool, _: &mut App) {
         unsafe { bc::bc_tab_set_split_stacked(tab, stacked) };
+    }
+
+    fn set_split_name(&self, tab: u64, name: &str, _: &mut App) {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_tab_set_split_name(tab, name.as_ptr()) };
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, _: &mut App) {
+        let icon = CString::new(icon).unwrap_or_default();
+        unsafe { bc::bc_tab_set_split_icon(tab, icon.as_ptr()) };
     }
 
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, _: &mut App) {
@@ -265,6 +311,33 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_cast_to(tab, id.as_ptr()) };
     }
 
+    fn choose_device(&self, tab: u64, id: SharedString, _: &mut App) {
+        let id = CString::new(id.as_ref()).unwrap_or_default();
+        unsafe { bc::bc_tab_choose_device(tab, id.as_ptr()) };
+    }
+
+    fn cancel_chooser(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_cancel_chooser(tab) };
+    }
+
+    fn scan_devices(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_scan_devices(tab) };
+    }
+
+    fn device_settings(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_device_settings(tab) };
+    }
+
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        let pin = pin.map(|pin| CString::new(pin.as_ref()).unwrap_or_default());
+        let pin = pin.as_ref().map_or(std::ptr::null(), |pin| pin.as_ptr());
+        unsafe { bc::bc_tab_pair(tab, pin) };
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_cancel_pair(tab) };
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         unsafe { bc::bc_window_clear(self.window) }
     }
@@ -293,19 +366,19 @@ impl Browser for Engine {
         page: (Bounds<Pixels>, f32),
         _: &mut App,
     ) {
-        let window = self.window;
-        // Outside the shell's update, as the core tells the shell of the tab it opens.
-        update_app_later(move |cx| {
-            let Ok(text) = CString::new(url.as_ref()) else {
-                return;
-            };
-            let preview = unsafe { bc::bc_tab_open_preview(over, text.as_ptr()) };
-            if preview == 0 {
-                log!("browser: link preview over {over} not opened");
-                return;
-            }
-            link_preview::show(window, preview, over, url, page, link, cx);
-        });
+        open_preview_in(self.window, over, url, link, page, None);
+    }
+
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        link: Point<Pixels>,
+        page: (Bounds<Pixels>, f32),
+        _: &mut App,
+    ) {
+        open_preview_in(self.window, over, url, link, page, Some(archived));
     }
 
     fn link_previews(&self) -> bool {
@@ -340,6 +413,17 @@ impl Browser for Engine {
         unsafe { bc::bc_archive_undo_remove(removal) }
     }
 
+    fn undo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        // check.sh reads this line.
+        log!("browser: put back removal {removal}");
+        unsafe { bc::bc_window_undo_remove_suggestion(self.window, removal) }
+    }
+
+    fn redo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        log!("browser: remove again removal {removal}");
+        unsafe { bc::bc_window_redo_remove_suggestion(self.window, removal) }
+    }
+
     fn restore_archived(&self, archived: u64, _: &mut App) {
         unsafe { bc::bc_window_restore_archived(self.window, archived) };
     }
@@ -357,8 +441,8 @@ impl Browser for Engine {
         unsafe { bc::bc_download_act(download, action as i32) };
     }
 
-    fn clear_downloads(&self, _: &mut App) {
-        unsafe { bc::bc_downloads_clear() };
+    fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
+        unsafe { bc::bc_downloads_clear(private.unwrap_or(0), private.is_some()) };
     }
 
     fn download_icon(&self, download: u64, _: &mut App) {
@@ -451,6 +535,10 @@ impl Browser for Engine {
         starts
     }
 
+    fn last_seen(&self, tab: u64) -> f64 {
+        unsafe { bc::bc_tab_last_seen(tab) }
+    }
+
     fn go_back(&self, tab: u64, _: &mut App) {
         unsafe { bc::bc_tab_go_back(tab) };
     }
@@ -477,6 +565,10 @@ impl Browser for Engine {
 
     fn clear_site(&self, tab: u64, cookies: bool, _: &mut App) {
         unsafe { bc::bc_tab_clear_site(tab, cookies) };
+    }
+
+    fn clear_site_data(&self, tab: u64, _: &mut App) {
+        unsafe { bc::bc_tab_clear_site_data(tab) };
     }
 
     fn set_developer_mode(&self, tab: u64, on: bool, _: &mut App) {
@@ -631,6 +723,34 @@ impl Browser for Engine {
 
     fn show_offer(&self, tab: u64) {
         unsafe { bc::bc_tab_show_offer(tab) };
+    }
+
+    fn translation_target(&self) -> Option<SharedString> {
+        crate::translate_host::target().map(SharedString::from)
+    }
+
+    fn reads_language(&self, language: &str) -> bool {
+        crate::translate_host::reads(language)
+    }
+
+    fn language_name(&self, language: &str) -> SharedString {
+        crate::translate_host::language_name(language).into()
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        crate::translate_host::save_always(languages);
+    }
+
+    fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
+        crate::translate_host::translate(tab, from, to);
+    }
+
+    fn use_original(&self, tab: u64, _: &mut App) {
+        crate::translate_host::use_original(tab);
+    }
+
+    fn translation_settings(&self, _: &mut App) {
+        crate::translate_host::open_settings();
     }
 
     fn stop(&self, tab: u64, _: &mut App) {
@@ -865,12 +985,16 @@ impl Browser for Engine {
         open_tab(self.window, CLEAR_BROWSING_DATA);
     }
 
-    fn bar_picks(&self, profile: u64) -> String {
-        bar_picks_host::picks(profile)
+    fn profile_folder(&self, profile: u64) -> Option<std::path::PathBuf> {
+        bar_picks_host::folder(profile)
     }
 
-    fn set_bar_picks(&self, profile: u64, text: &str) {
-        bar_picks_host::set_picks(profile, text);
+    fn agent_history(&self, profile: u64) -> String {
+        bar_picks_host::sessions(profile)
+    }
+
+    fn set_agent_history(&self, profile: u64, text: &str) {
+        bar_picks_host::set_sessions(profile, text);
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {
@@ -914,6 +1038,10 @@ impl Browser for Engine {
 
     fn delete_space(&self, space: u64, _: &mut App) -> bool {
         unsafe { bc::bc_space_delete(space) }
+    }
+
+    fn move_space(&self, space: u64, after: u64, _: &mut App) {
+        unsafe { bc::bc_space_move(space, after) };
     }
 
     fn restore_sidebar(&self, time: u64, _: &mut App) {
@@ -960,6 +1088,10 @@ impl Browser for Engine {
 
     fn delete_profile(&self, profile: u64, _: &mut App) {
         unsafe { bc::bc_profile_delete(profile) };
+    }
+
+    fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
+        shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
     }
 
     fn context_menu(
@@ -1023,11 +1155,14 @@ impl Browser for Engine {
         unsafe { bc::bc_window_focus_page(self.window) };
     }
 
-    fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, cx: &mut App) {
+    fn lay_out_page(&self, frame: Bounds<Pixels>, radius: f32, _: &mut App) {
         set_page_frame(self.window, (frame, radius));
+    }
+
+    fn preview_page_moved(&self, page: (Bounds<Pixels>, f32), cx: &mut App) {
         // After the shell's update, which may be drawing its window.
         let window = self.window;
-        cx.defer(move |cx| link_preview::page_moved(window, (frame, radius), cx));
+        cx.defer(move |cx| link_preview::page_moved(window, page, cx));
     }
 
     fn set_focus_color(&self, color: u32, _: &mut App) {
@@ -1057,6 +1192,10 @@ impl Browser for Engine {
 
     fn page_moving(&self, moving: bool, _: &mut App) {
         unsafe { bc::bc_window_page_moving(self.window, moving) };
+    }
+
+    fn set_page_scale(&self, scale: f32, _: &mut App) {
+        unsafe { bc::bc_window_set_page_scale(self.window, f64::from(scale)) };
     }
 
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, _: &mut App) {
@@ -1514,6 +1653,7 @@ impl Browser for Engine {
         frame: Bounds<Pixels>,
         radius: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         library: bool,
         look: menu::Look,
         cx: &mut App,
@@ -1521,10 +1661,29 @@ impl Browser for Engine {
         with_overlays(
             move |cx| match full_page {
                 true => capture::full_page(tab, cx),
-                false => capture::start(tab, frame, radius, library, look, cx),
+                false => capture::start(tab, frame, radius, library, look, press, cx),
             },
             cx,
         );
+    }
+
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: capture::portrait::Background,
+        cx: &mut App,
+    ) {
+        settings::save_portrait_background(background);
+        with_overlays(
+            move |cx| capture::portrait(tab, frame, radius, background, cx),
+            cx,
+        );
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        cfg!(target_os = "macos")
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -1590,6 +1749,16 @@ impl Browser for Engine {
     fn passwords(&self, space: u64, cx: &mut App) {
         let profile = unsafe { bc::bc_space_profile(space) };
         settings::show_passwords(Some(profile).filter(|&profile| profile != 0), cx);
+    }
+
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool {
+        let shown = unsafe { bc::bc_tab_show_autofill(tab, logins) };
+        // check.sh waits for this line.
+        log!(
+            "browser: autofill {tab} {}",
+            if shown { "dropdown" } else { "no field" }
+        );
+        shown
     }
 
     fn crash_reports(&self, _: &App) -> Option<bool> {
@@ -1704,6 +1873,14 @@ impl Browser for Engine {
         });
     }
 
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+        unsafe {
+            platform::host_window_frame(self.ui_view, &mut x, &mut y, &mut width, &mut height)
+        }
+        .then(|| gpui::point(x as f32 + at.x, y as f32 + at.y))
+    }
+
     fn tab_window(&self, tab: u64) -> u64 {
         unsafe { bc::bc_tab_window(tab) }
     }
@@ -1752,6 +1929,36 @@ impl Browser for Engine {
             {
                 open_bar_when_shown(id, opened, asked, cx);
             }
+        });
+    }
+
+    fn new_blank_window(&self, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |cx| {
+            let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.id == id).cloned());
+            // The profile of the Space this window shows, a private one's base too.
+            let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(id)) };
+            if from.is_some() && profile != 0 {
+                open_window(from, Some(Own::Blank(profile)), cx);
+            }
+        });
+    }
+
+    fn move_out_of_blank(&self, tab: u64, space: u64, cx: &mut App) {
+        let id = self.window;
+        cx.defer(move |_| {
+            let Some(main) = main_window_for(space) else {
+                return;
+            };
+            unsafe {
+                if bc::bc_window_space(main) != space {
+                    bc::bc_window_show_space(main, space);
+                }
+                bc::bc_tab_move_to_space(tab, space);
+                bc::bc_window_select(main, tab);
+            }
+            // check.sh reads this line.
+            log!("browser: blank window {id} moved {tab} to window {main} space {space}");
         });
     }
 
@@ -1958,9 +2165,17 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
         })
     };
     let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let shown = crate::window_opening::drawn_before_shown();
+    if let Some(shown) = shown {
+        // check.sh reads this line, the new window's time from the key to its first frame, which
+        // came on screen with it, before its overlays were made.
+        let ms = shown.duration_since(asked).as_secs_f64() * 1000.;
+        log!("browser: new window first frame at {ms:.1} ms");
+    }
+    let drawn = shown.is_some();
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
-            shell.open_bar_when_shown(asked, full_screen);
+            shell.open_bar_when_shown(asked, full_screen, drawn);
             cx.notify();
         });
     }

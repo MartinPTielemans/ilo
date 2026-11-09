@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
@@ -23,10 +24,15 @@
 #include "browser_core/platform/focus_ring_aura.h"
 #include "browser_core/platform/linux/ui_text_input.h"
 #include "browser_core/platform/linux/wayland.h"
+#include "browser_core/tab.h"
 #include "browser_core/window.h"
+#include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/native_widget_factory.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -34,6 +40,7 @@
 #include "ui/aura/window_observer.h"
 #include "ui/aura/window_tracker.h"
 #include "ui/aura/window_tree_host_platform.h"
+#include "ui/base/ime/input_method.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
@@ -41,10 +48,13 @@
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size_conversions.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/connection.h"
 #include "ui/gfx/x/event.h"
@@ -55,8 +65,10 @@
 #include "ui/base/hit_test.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/wm/wm_move_resize_handler.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/views_delegate.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
+#include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
@@ -77,8 +89,8 @@
 // keyboard (bc_window_ui_takes_keyboard) and asks whose it is.
 // The app's overlays, such as the command bar, show over the pages: on Wayland as subsurfaces over
 // the window's, on X11 as X windows of their own over it, which GPUI places.
-// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard): the page or UI that had
-// it keeps its focus, and has it back as the overlay closes.
+// One that has the keyboard has it lent (bc_window_overlay_takes_keyboard), and the page or UI that
+// had it has it back as the overlay closes. The page is told it lost it meanwhile, as on the Mac.
 
 namespace browser_core::platform {
 
@@ -153,6 +165,44 @@ gfx::Size ContentSizeOf(views::Widget* widget) {
   return gfx::ScaleToFlooredSize(ContentPixelsOf(widget), 1 / ScaleOf(widget));
 }
 
+// Whether |widget| or a bubble of its has the keyboard: under Wayland Chromium makes a bubble
+// active in its window's place, such as Chrome's prompt on a Mini Player.
+bool HasKeyboard(views::Widget* widget) {
+  if (widget->IsActive()) {
+    return true;
+  }
+  for (views::Widget* owned : views::Widget::GetAllOwnedWidgets(widget->GetNativeView())) {
+    if (owned->IsActive()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The Mini Player that Chrome floated by itself as its tab hid, a page's window or a video's, if
+// it's open and has the keyboard.
+views::Widget* AutoMiniPlayerWithKeyboard() {
+  auto* manager = PictureInPictureWindowManager::GetInstance();
+  content::WebContents* opener = manager->GetWebContents();
+  auto* helper = opener ? AutoPictureInPictureTabHelper::FromWebContents(opener) : nullptr;
+  if (!helper || !helper->IsInAutoPictureInPicture()) {
+    return nullptr;
+  }
+  views::Widget* floating = nullptr;
+  if (content::WebContents* child = manager->GetChildWebContents()) {
+    floating = views::Widget::GetTopLevelWidgetForNativeView(child->GetNativeView());
+  } else {
+    for (aura::Window* window : views::DesktopWindowTreeHostPlatform::GetAllOpenWindows()) {
+      views::Widget* widget = window ? views::Widget::GetWidgetForNativeWindow(window) : nullptr;
+      // VideoOverlayWindowViews's name.
+      if (widget && widget->GetName() == "PictureInPictureWindow") {
+        floating = widget;
+      }
+    }
+  }
+  return floating && HasKeyboard(floating) ? floating : nullptr;
+}
+
 // An aura window in the browser window holding one pane's page and its docked DevTools, or the side
 // panel, with their round corners.
 struct Slot {
@@ -167,7 +217,20 @@ struct Slot {
   bool bottom_corners_only = false;
   // Its corners' own, for a link preview's page, else the window's.
   std::optional<double> corner_radius;
+  // The scale a pane draws at, and the point in the window's content it's drawn smaller about
+  // (ScalePages).
+  float scale = 1;
+  gfx::PointF scaled_about;
 };
+
+// Where |slot| shows in the window's content, drawn at its scale.
+gfx::RectF ShownFrame(const Slot& slot) {
+  const gfx::Rect frame = slot.holder->bounds();
+  const gfx::PointF& about = slot.scaled_about;
+  const float s = slot.scale;
+  return gfx::RectF(about.x() + s * (frame.x() - about.x()),
+                    about.y() + s * (frame.y() - about.y()), s * frame.width(), s * frame.height());
+}
 
 // The pages and DevTools a window shows once it changes, which move between its slots unhidden.
 using Staying = std::vector<aura::Window*>;
@@ -235,6 +298,7 @@ class WindowViews : public views::WidgetObserver,
   Slot& preview() { return preview_; }
   FocusRing& ring() { return ring_; }
   void set_corner_radius(double radius) { corner_radius_ = radius; }
+  void set_page_scale(float scale) { page_scale_ = scale; }
   bool held() const { return held_; }
   void set_held(bool held) { held_ = held; }
   void set_preview_color(SkColor4f color) { preview_color_ = color; }
@@ -357,6 +421,38 @@ class WindowViews : public views::WidgetObserver,
     LayOut(side_panel_, size);
     LayOut(preview_, size);
     ring_.Fit();
+    ScalePanes();
+  }
+
+  // Draws the panes, with their DevTools and ring, at page_scale_ of their size about the centre of
+  // their frames, by their holders' transforms, so they're never laid out again for it.
+  void ScalePanes() {
+    gfx::Rect frames;
+    for (const Slot& slot : panes_) {
+      if (slot.holder && slot.page) {
+        frames.Union(slot.holder->bounds());
+      }
+    }
+    const gfx::PointF about(frames.x() + frames.width() / 2.f, frames.y() + frames.height() / 2.f);
+    for (Slot& slot : panes_) {
+      if (!slot.holder) {
+        continue;
+      }
+      slot.scale = page_scale_;
+      slot.scaled_about = about;
+      // A layer's transform is about its own top-left.
+      const float in_x = about.x() - slot.holder->bounds().x();
+      const float in_y = about.y() - slot.holder->bounds().y();
+      gfx::Transform transform;
+      if (page_scale_ != 1) {
+        transform.Translate(in_x, in_y);
+        transform.Scale(page_scale_, page_scale_);
+        transform.Translate(-in_x, -in_y);
+      }
+      if (slot.holder->transform() != transform) {
+        slot.holder->SetTransform(transform);
+      }
+    }
   }
 
   void LayOut(Slot& slot, const gfx::Size& window_size) {
@@ -400,7 +496,7 @@ class WindowViews : public views::WidgetObserver,
     if (OnWayland()) {
       std::vector<gfx::Rect> region;
       for (const Slot* slot : shown) {
-        region.push_back(gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale));
+        region.push_back(gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale)));
       }
       if (edge) {
         const int w = pixels.width();
@@ -449,11 +545,11 @@ class WindowViews : public views::WidgetObserver,
         .rectangles = {XRectangle(input)},
     });
     for (const Slot* slot : shown) {
-      const gfx::Rect frame = gfx::ScaleToEnclosingRect(slot->holder->bounds(), scale);
+      const gfx::Rect frame = gfx::ToEnclosingRect(gfx::ScaleRect(ShownFrame(*slot), scale));
       std::vector<x11::Rectangle> hole;
-      for (gfx::Rect row :
-           RoundShape(frame.size(), slot->corner_radius.value_or(corner_radius_) * scale,
-                      slot->bottom_corners_only)) {
+      for (gfx::Rect row : RoundShape(
+               frame.size(), slot->corner_radius.value_or(corner_radius_) * slot->scale * scale,
+               slot->bottom_corners_only)) {
         row.Offset(frame.OffsetFromOrigin());
         hole.push_back(XRectangle(row));
       }
@@ -474,8 +570,76 @@ class WindowViews : public views::WidgetObserver,
     overlay_has_keyboard_ = takes;
     early_keys_.clear();
     ui_text_input_.SetKeyboard(ui_has_keyboard_ || overlay_has_keyboard_);
-    if (!takes && ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(InputFocus(), ui_)) {
+    if (OnWayland()) {
+      // A page composing keeps its focus until the overlay's field takes the input method from it,
+      // as the field's caret comes a frame later. Text input v3 has no reset, so the input method
+      // still holds what the page composed, and only its client changing straight from the page
+      // to the field keeps it from coming to the field too (InputMethodAuraLinux::ResetContext).
+      lend_awaits_ui_text_input_ = takes && PageComposing();
+      if (!lend_awaits_ui_text_input_) {
+        PageLendsFocusToOverlay(takes);
+      }
+    }
+    if (takes) {
+      return;
+    }
+    const x11::Window focus = OnWayland() ? x11::Window::None : InputFocus();
+    if (ui_ != x11::Window::None && !ui_has_keyboard_ && IsWithin(focus, ui_)) {
       UITakesKeyboard();
+    }
+    // Back in the window on X11, which the window hears only after this, or elsewhere: as the user
+    // went to another app or window with the overlay open.
+    std::vector<base::OnceClosure> let_go = std::exchange(overlay_let_go_, {});
+    if (!OnWayland() && IsWithin(focus, window())) {
+      return;
+    }
+    for (base::OnceClosure& each : let_go) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(each));
+    }
+  }
+
+  void WhenOverlayLetsGo(base::OnceClosure let_go) {
+    overlay_let_go_.push_back(std::move(let_go));
+  }
+
+  // The UI's field's caret came or went: a page that waited for the overlay's field to take the
+  // input method lends its focus now that it has.
+  void UITextInputChanged() {
+    if (lend_awaits_ui_text_input_ && overlay_has_keyboard_ && ui_text_input_.attached()) {
+      lend_awaits_ui_text_input_ = false;
+      PageLendsFocusToOverlay(true);
+    }
+  }
+
+  // Whether the input method's client is a page with a composition open.
+  bool PageComposing() {
+    ui::InputMethod* ime = widget_->GetInputMethod();
+    ui::TextInputClient* client = ime ? ime->GetTextInputClient() : nullptr;
+    return client && client != &ui_text_input_ && client->HasCompositionText();
+  }
+
+  // On Wayland an overlay is a subsurface of the window, which keeps the compositor's keyboard, so
+  // a page with the focus would never be told it lost it, as a game that pauses on blur keeps going
+  // under the command bar (#1608). The page gives its focus to the window while the overlay has the
+  // keyboard, as the window no longer being key or having the input focus does on the Mac and X11,
+  // and has it back as the overlay lets go, unless a page or the UI took it meanwhile.
+  void PageLendsFocusToOverlay(bool takes) {
+    aura::client::FocusClient* client = aura::client::GetFocusClient(content());
+    aura::Window* focused = client ? client->GetFocusedWindow() : nullptr;
+    if (takes) {
+      overlay_lent_.RemoveAll();
+      if (focused && InSlot(focused)) {
+        overlay_lent_.Add(focused);
+        client->ResetFocusWithinActiveWindow(content());
+      }
+      return;
+    }
+    if (overlay_lent_.windows().empty()) {
+      return;
+    }
+    aura::Window* page = overlay_lent_.Pop();
+    if (client && !ui_has_keyboard_ && focused == content() && InSlot(page)) {
+      client->FocusWindow(page);
     }
   }
 
@@ -557,12 +721,40 @@ class WindowViews : public views::WidgetObserver,
   void OnWidgetShowStateChanged(views::Widget*) override {
     ShowThrough();
     // The app asks whether the window is full screen or maximized as it hears the window's size,
-    // and a window already its screen's size goes either way at that size (#1220). Posted, after
-    // the size Wayland's configure brings with the state, so the app lays the page out once.
+    // and a window already its screen's size goes either way at that size (#1220). Told once the
+    // window has the compositor's configure for the state, with its bounds: a state the browser
+    // asks for changes here at once, before that configure comes, and the app would lay the page
+    // out at the size the window is leaving (#1907).
     if (OnWayland()) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
+      AfterStateConfigured(widget_,
+                           base::BindOnce(&WindowViews::TellSize, weak_factory_.GetWeakPtr()));
     }
+  }
+
+  // A window can't map under Wayland without the compositor giving it the keyboard, as sway and
+  // Hyprland do, so the Mini Player that floats as the user leaves its tab takes it from the
+  // browser window, where on the Mac and X11 it never has it (#1961). The window has it back with
+  // an xdg-activation token, which Chromium's Activate asks for, once: a click in the Mini Player
+  // later gives it the keys. Posted, as the compositor tells the Mini Player it has the keyboard
+  // after telling the window it lost it.
+  void OnWidgetActivationChanged(views::Widget*, bool active) override {
+    if (!active && OnWayland()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE,
+          base::BindOnce(&WindowViews::TakeKeyboardFromMiniPlayer, weak_factory_.GetWeakPtr()));
+    }
+  }
+
+  void TakeKeyboardFromMiniPlayer() {
+    static base::NoDestructor<base::WeakPtr<views::Widget>> taken_from;
+    views::Widget* floating = AutoMiniPlayerWithKeyboard();
+    if (!floating || floating == taken_from->get()) {
+      return;
+    }
+    *taken_from = floating->GetWeakPtr();
+    // check.sh reads this line.
+    LOG(ERROR) << "browser: mini player gave the keyboard back";
+    widget_->Activate();
   }
 
   // Under Wayland, where no compositor sizes a subsurface, the app sizes its UI to the content.
@@ -694,6 +886,12 @@ class WindowViews : public views::WidgetObserver,
         connection->Flush();
       }
     }
+    if (!ui_has_keyboard_ && !overlay_has_keyboard_ &&
+        event->type() == ui::EventType::kKeyPressed &&
+        ReachesNoPage(static_cast<aura::Window*>(event->target()))) {
+      KeyToBrowser(event);
+      return;
+    }
     // On X11 only one typed before the overlay that took the keyboard had the input focus reaches
     // the window, as fast typing after ⌃F does once the keys held for the bar were given to it, as
     // GPUI moves the focus on its next turn. They go to the overlay once it has the focus.
@@ -818,6 +1016,55 @@ class WindowViews : public views::WidgetObserver,
     }
   }
 
+  // Whether a key the page has goes nowhere from |target|, aura's focus: the window or a pane, with
+  // no page view in it focused. The view that had it went, as a page's leaving its pane or dying
+  // does, and the core focuses the next page's once the loop has run its tasks (Window::FocusPage),
+  // which Chromium runs after every key the X server or the compositor has queued, as a quick
+  // second ⇧⌘T after the first's tab shows (#1519). A view of the window's own has its own keys.
+  bool ReachesNoPage(aura::Window* target) const {
+    if (!target) {
+      return false;
+    }
+    if (target == content()) {
+      views::FocusManager* focus = widget_->GetFocusManager();
+      return !focus || !focus->GetFocusedView();
+    }
+    return std::ranges::any_of(panes_, [target](const Slot& slot) {
+      return slot.holder &&
+             (target == slot.holder.get() || target == slot.page || target == slot.devtools);
+    });
+  }
+
+  // Gives the browser the key |event| for the page shown, which no page view hears, as Chromium
+  // gives it a page's that its page doesn't keep: ilo's reserved and Prefer ilo shortcuts first,
+  // then the rest, then the window's menus. Its tab or window can close in either.
+  void KeyToBrowser(ui::KeyEvent* event) {
+    content::WebContents* contents = nullptr;
+    for (Window* window : Window::All()) {
+      if (window->widget() == widget_) {
+        contents = Tab::FromId(window->selected());
+      }
+    }
+    if (!contents || !contents->GetDelegate()) {
+      return;
+    }
+    event->StopPropagation();
+    const input::NativeWebKeyboardEvent key(*event);
+    // Never which key, which may be typed text.
+    fprintf(stderr, "browser: key for tab %llu, with no page view to hear it, to the browser\n",
+            static_cast<unsigned long long>(Tab::IdOf(contents)));
+    base::WeakPtr<content::WebContents> alive = contents->GetWeakPtr();
+    const content::KeyboardEventProcessingResult before =
+        contents->GetDelegate()->PreHandleKeyboardEvent(contents, key);
+    if (before != content::KeyboardEventProcessingResult::NOT_HANDLED &&
+        before != content::KeyboardEventProcessingResult::NOT_HANDLED_IS_SHORTCUT) {
+      return;
+    }
+    if (alive && alive->GetDelegate()) {
+      alive->GetDelegate()->HandleKeyboardEvent(alive.get(), key);
+    }
+  }
+
   // Whether |window| is a page or DevTools a slot holds, or in one.
   bool InSlot(aura::Window* window) const {
     auto holds = [window](const Slot& slot) {
@@ -899,6 +1146,8 @@ class WindowViews : public views::WidgetObserver,
   // After the slots, so it leaves its holder before that goes.
   FocusRing ring_;
   double corner_radius_ = 0;
+  // What the panes are drawn at (ScalePages).
+  float page_scale_ = 1;
   // The pages stay where they are as the window resizes, until ShowPages (HoldPagesForResize).
   bool held_ = false;
   // On Wayland, the input region last given the window's surface, in pixels (ShowThrough).
@@ -907,11 +1156,18 @@ class WindowViews : public views::WidgetObserver,
   bool window_manager_full_screen_ = false;
   bool ui_has_keyboard_ = false;
   bool overlay_has_keyboard_ = false;
+  // What runs as the overlay that has the keyboard lets it go (platform::WhenOverlayLetsGo).
+  std::vector<base::OnceClosure> overlay_let_go_;
   // The UI has the keyboard while no page shows, for the next page shown (KeyboardForPage).
   bool ui_holds_for_page_ = false;
   // A window of Chromium's own has the keyboard the UI or a page had, and gives it back as it goes.
   bool ui_lent_ = false;
   aura::WindowTracker page_lent_;
+  // On Wayland, the page that gave its focus to the window while an overlay has the keyboard.
+  aura::WindowTracker overlay_lent_;
+  // On Wayland, whether a page composing as an overlay took the keyboard keeps its focus until the
+  // overlay's field takes the input method.
+  bool lend_awaits_ui_text_input_ = false;
   // The keys typed while the overlay with the keyboard didn't have the input focus yet.
   std::vector<x11::KeyEvent> early_keys_;
   // Whether the core took the input focus back down to the UI's window since the focus last left or
@@ -1091,6 +1347,33 @@ void ShowPages(views::Widget* widget,
   }
 }
 
+void ScalePages(views::Widget* widget, double scale) {
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return;
+  }
+  views->set_page_scale(static_cast<float>(scale));
+  views->ScalePanes();
+  views->ShowThrough();
+}
+
+gfx::PointF LaidOutPagePoint(gfx::NativeView page, const gfx::PointF& point) {
+  aura::Window* root = page ? page->GetRootWindow() : nullptr;
+  if (!root) {
+    return point;
+  }
+  // Where it's drawn, through the holder's scale, less where the page is laid out.
+  gfx::PointF drawn = point;
+  aura::Window::ConvertPointToTarget(page, root, &drawn);
+  float x = 0;
+  float y = 0;
+  for (aura::Window* each = page; each && each != root; each = each->parent()) {
+    x += each->bounds().x();
+    y += each->bounds().y();
+  }
+  return gfx::PointF(drawn.x() - x, drawn.y() - y);
+}
+
 void HoldPagesForResize(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->set_held(true);
@@ -1158,6 +1441,14 @@ bool PageDialogsInOwnWindow() {
   return false;
 }
 
+bool FocusSettledOnActivation() {
+  // Aura's desktop widget tells its observers last, once it has activated its window and given
+  // views their focus back (DesktopNativeWidgetAura::HandleActivationChanged), as X11 reads the
+  // window's FocusIn and Wayland its activated state. A key read with that, in the same batch of
+  // events, comes before any task posted then (#1711).
+  return true;
+}
+
 bool KeyboardForPage(views::Widget* widget) {
   WindowViews* views = ViewsOf(widget);
   // The UI's, unless it only holds it while no page shows.
@@ -1183,6 +1474,17 @@ bool KeyboardForPage(views::Widget* widget) {
 void ReleaseKeyboard(views::Widget* widget) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->PageTakesKeyboard();
+  }
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  WindowViews* views = widget ? ViewsOf(widget) : nullptr;
+  return views && views->overlay_has_keyboard();
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  if (WindowViews* views = ViewsOf(widget)) {
+    views->WhenOverlayLetsGo(std::move(let_go));
   }
 }
 
@@ -1290,6 +1592,38 @@ std::u16string ChildTitle(views::Widget* widget) {
   return {};
 }
 
+std::vector<gfx::Rect> PopupFrames(views::Widget* widget) {
+  // A popup, as autofill's dropdown, is a window of its own, on Wayland an xdg_popup that no other
+  // client sees. Its tree host keeps the window it was opened over as its parent, which the owned
+  // widgets of Chromium's that DialogFrame walks leave out on Linux.
+  using Host = views::DesktopWindowTreeHostPlatform;
+  Host* browser =
+      Host::GetHostForWidget(widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+  std::vector<gfx::Rect> frames;
+  if (!browser) {
+    return frames;
+  }
+  // The topmost comes first.
+  const aura::Window::Windows open = Host::GetAllOpenWindows();
+  for (auto window = open.rbegin(); window != open.rend(); ++window) {
+    views::Widget* popup = *window ? views::Widget::GetWidgetForNativeView(*window) : nullptr;
+    if (!popup || popup == widget || !popup->IsVisible() || !(*window)->GetHost()) {
+      continue;
+    }
+    // Over the window, or over one of its popups, as a submenu is.
+    Host* parent = Host::GetHostForWidget((*window)->GetHost()->GetAcceleratedWidget());
+    while (parent && parent != browser) {
+      parent = parent->window_parent();
+    }
+    if (parent) {
+      gfx::Rect frame = popup->GetWindowBoundsInScreen();
+      frame.Offset(-widget->GetClientAreaBoundsInScreen().OffsetFromOrigin());
+      frames.push_back(frame);
+    }
+  }
+  return frames;
+}
+
 void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->OverlayTakesKeyboard(takes);
@@ -1299,6 +1633,7 @@ void OverlayTakesKeyboard(views::Widget* widget, bool takes) {
 void SetUITextInput(views::Widget* widget, std::optional<gfx::Rect> caret) {
   if (WindowViews* views = ViewsOf(widget)) {
     views->ui_text_input().SetCaret(caret);
+    views->UITextInputChanged();
   }
 }
 
@@ -1315,6 +1650,21 @@ std::optional<gfx::Rect> DialogFrame(views::Widget* widget) {
         frame.Inset(dialog->non_client_view()->frame_view()->GetInsets());
       }
       return frame;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* widget) {
+  // Aura windows in the slot's holder, which the X server doesn't see.
+  WindowViews* views = ViewsOf(widget);
+  if (!views) {
+    return std::nullopt;
+  }
+  for (Slot& slot : views->panes()) {
+    if (slot.holder && slot.page && slot.devtools && slot.devtools->IsVisible()) {
+      const gfx::Vector2d at = slot.holder->bounds().OffsetFromOrigin();
+      return std::pair(slot.devtools->bounds() + at, slot.page->bounds() + at);
     }
   }
   return std::nullopt;

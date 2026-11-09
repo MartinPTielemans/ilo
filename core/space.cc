@@ -138,9 +138,50 @@ void Space::Delete(bc_id id) {
 }
 
 // static
+void Space::MoveAfter(bc_id id, bc_id after) {
+  std::vector<bc_id>& order = SpaceOrder();
+  auto it = std::ranges::find(order, id);
+  if (it == order.end() || after == id) {
+    return;
+  }
+  size_t to = 0;
+  if (after) {
+    auto at = std::ranges::find(order, after);
+    if (at == order.end()) {
+      return;
+    }
+    to = static_cast<size_t>(at - order.begin()) + 1;
+  }
+  const size_t from = static_cast<size_t>(it - order.begin());
+  if (to == from) {
+    return;
+  }
+  order.erase(it);
+  order.insert(order.begin() + (to > from ? to - 1 : to), id);
+  // Only the Space moved is out of order, so it alone gets a new place: without one, PlaceSpaces
+  // keeps it in place where the run it ends ties the run of the others, and moves them instead.
+  FromId(id)->node_.position = syncer::UniquePosition();
+  PlaceSpaces();
+  ReportSpacesChanged();
+}
+
+// static
 Space* Space::FromId(bc_id id) {
   auto it = Spaces().find(id);
   return it == Spaces().end() ? nullptr : it->second.get();
+}
+
+// static
+Space* Space::WithNode(const base::Uuid& node) {
+  if (!node.is_valid()) {
+    return nullptr;
+  }
+  for (Space* space : All()) {
+    if (!space->agent() && space->node().id == node) {
+      return space;
+    }
+  }
+  return nullptr;
 }
 
 // static
@@ -605,6 +646,36 @@ bool Space::SetStacked(bc_id tab, bool stacked) {
   return true;
 }
 
+std::string Space::SplitName(bc_id tab) const {
+  auto split = SplitOf(tab);
+  return split != splits_.end() ? split->name : std::string();
+}
+
+std::string Space::SplitIcon(bc_id tab) const {
+  auto split = SplitOf(tab);
+  return split != splits_.end() ? split->icon : std::string();
+}
+
+bool Space::SetSplitName(bc_id tab, std::string name) {
+  auto split = SplitOf(tab);
+  if (split == splits_.end()) {
+    return false;
+  }
+  split->name = std::move(name);
+  ReportChanged();
+  return true;
+}
+
+bool Space::SetSplitIcon(bc_id tab, std::string icon) {
+  auto split = SplitOf(tab);
+  if (split == splits_.end()) {
+    return false;
+  }
+  split->icon = std::move(icon);
+  ReportChanged();
+  return true;
+}
+
 std::vector<double> Space::Shares(bc_id tab) const {
   auto split = SplitOf(tab);
   return split != splits_.end() ? split->shares : std::vector<double>();
@@ -748,12 +819,12 @@ bc_id Space::NearestOpenedBy(bc_id opener, size_t index) const {
   return 0;
 }
 
-std::vector<Space::SplitView>::iterator Space::SplitOf(bc_id tab) {
+std::vector<SplitView>::iterator Space::SplitOf(bc_id tab) {
   return std::ranges::find_if(
       splits_, [tab](const SplitView& split) { return std::ranges::contains(split.tabs, tab); });
 }
 
-std::vector<Space::SplitView>::const_iterator Space::SplitOf(bc_id tab) const {
+std::vector<SplitView>::const_iterator Space::SplitOf(bc_id tab) const {
   return std::ranges::find_if(
       splits_, [tab](const SplitView& split) { return std::ranges::contains(split.tabs, tab); });
 }

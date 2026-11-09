@@ -18,6 +18,23 @@
 log="$out/agents.log"
 step=0
 rm -f "$saved" "$launch_frame"
+# Library › Agents keeps the profile's past tasks on this computer, 30 days from their end (#1080):
+# the run's, a task that ended an hour ago and one that ended 30 days ago, in the first profile's
+# own folder, as the browser keeps them.
+history_file="$profile_dir/Default/Agent sessions"
+mkdir -p "$profile_dir/Default"
+python3 -I - "$history_file" << 'PY'
+import json, sys, time
+now = int(time.time())
+def past(id, title, ago, orders):
+    return {"id": id, "title": title, "agent": "Claude Code", "started": now - ago - 300,
+            "ended": now - ago, "pages": [{"title": "Booking", "url": "https://example.com/"}],
+            "orders": orders, "messages": 0}
+with open(sys.argv[1], "w", encoding="utf-8") as file:
+    for entry in (past("check-new", "Book a table for four", 3600, 1),
+                  past("check-old", "Compare the museum passes", 30 * 24 * 3600, 0)):
+        file.write(json.dumps(entry) + "\n")
+PY
 # The user's tab, as the first run opens none.
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
   "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -90,6 +107,17 @@ if [ "$driven" = 1 ]; then
   none_since "^browser: \(task \)\{0,1\}space $task" || fail "⌃3 showed the task's Space"
   [ "$(space)" = "$first" ] || fail "the window left the user's Space for $(space)"
 fi
+# Window › View Agents… lists them, and the one 30 days old has gone, from the file too.
+send menu 'View Agents…'
+expect '^browser: command view-agents via ui$' "Window › View Agents… didn't run"
+expect '^browser: library section agents$' "View Agents… didn't open the Library on Agents"
+await '^browser: library shown$' || fail "the Library didn't settle open on Agents"
+../tools/window-screenshot.sh "$pid" "$out/library-agents.png" || fail "no window to capture"
+grep -q 'check-new' "$history_file" || fail "the hour-old past task went: $(cat "$history_file")"
+grep -q 'check-old' "$history_file" && fail "the 30-day-old past task stayed: $(cat "$history_file")"
+send menu 'View Agents…'
+expect '^browser: library hidden$' "View Agents… didn't close the Library"
+rm -f "$history_file"
 quit
 
 # Launched again, the user's Space comes back alone: quit deletes the agent's Space, as it does a

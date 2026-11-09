@@ -1,5 +1,6 @@
 # About ilo shows Settings on its About tab, and the Open of each of its Licence, Notices and
 # Libraries rows opens the file the build carries for it (tools/licences.sh) in a tab, which loads.
+# Sync, which fits its card, doesn't scroll under a scroll.
 # It names the engine's Chromium version wherever the engine carries one: the Mac's framework
 # always, and beside chrome Linux's VERSION and Windows's manifest, in engines packaged since. On
 # Windows, first, a click in the page once its window is back from minimized gives it the keyboard.
@@ -60,6 +61,26 @@ for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
   loaded="$loaded $file"
 done
 ../tools/window-screenshot.sh "$pid" "$out/about-opened.png" all || fail "no window to capture"
+# A section that fits its card doesn't scroll: a scroll over Sync, signed out, holds nothing of its
+# name at the card's top, over its title (#2102).
+send menu "About ilo"
+expect '^browser: settings \(shown\|tab\|drew\) About$' "About ilo didn't show Settings again"
+# shellcheck disable=SC2046 # x and y
+send clickkey $(drawn "toolbar Sync")
+expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
+settings_drew Sync
+sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+at=$(drawn "toolbar Sync")
+send scrollkey $((${at% *} + 300)) $(((${sight%% to *} + ${sight##* to }) / 2)) 120 4
+# The scroll's frames, drawn by the time the next command's done.
+send state
+held=$(sed -n "/^browser: drive $((step - 1)): /,\$p" "$log" | grep '^browser: settings held ' | tail -1)
+[ -z "$held" ] || [ "$held" = 'browser: settings held none' ] ||
+  fail "a scroll over Sync, which fits its card, scrolled it: $held"
+../tools/window-screenshot.sh "$(app_pid)" "$out/settings-sync-scrolled.png" ||
+  fail "no window to capture"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 exec 3>&-
 quit
 [ -n "$engine_version" ] || echo "skip: about's engine version. This engine was packaged before" \

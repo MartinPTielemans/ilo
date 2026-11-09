@@ -25,7 +25,8 @@
 # brings the sidebar back. The sidebar's edge drags its width between 164 and 500, stopping at
 # them, and dragged on past half the narrowest it hides the sidebar, keeping its width; a
 # double-click on it puts the width back. A page that hasn't drawn yet shows black, or white with
-# View › Appearance on Light. In a check VM, the sidebar over grey backdrops is Dia's composite,
+# View › Appearance on Light, and with the window widened, the space a page hasn't drawn at its new
+# size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back.
 
@@ -89,6 +90,8 @@ page=$(base64 << 'HTML' | tr -d '\n'
   addEventListener("blur", () => leave && (location = "https://example.com/"));
   // A w opens the page the fragment names in a tab.
   addEventListener("keydown", e => e.key == "w" && window.open(location.hash.slice(1)));
+  // A g opens gap.html from the check server in a tab.
+  addEventListener("keydown", e => e.key == "g" && window.open(location.hash.slice(1).replace(/wait$/, "gap.html")));
   requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>
 HTML
@@ -97,6 +100,22 @@ log="$out/window.log"
 step=0
 rm -f "$saved" "$launch_frame"
 serve
+# An orange page with a blue strip down its right edge that, once it has drawn, stalls for 6 s on
+# its first resize, so the frame it drew before stays up while the window is wider.
+printf '%s' '<!doctype html><title>loading</title>
+<style>html { background: rgb(224 90 0) } div { position: fixed; inset: 0 0 0 auto; width: 60px; background: rgb(0 90 224) }</style>
+<div></div>
+<script>
+let armed = false;
+addEventListener("resize", () => {
+  if (!armed) return;
+  armed = false;
+  const start = performance.now();
+  while (performance.now() - start < 6000);
+  requestAnimationFrame(() => setTimeout(() => document.title = "gap drew"));
+});
+requestAnimationFrame(() => setTimeout(() => (armed = true, document.title = "gap ready")));
+</script>' > "$out/site/gap.html"
 url="data:text/html;base64,$page#${site}wait"
 # With the motion GitHub's hosted Mac and Windows reduce, Windows' as "Show animations in Windows"
 # is off on its runner: the sidebar's steps below and the toast recorded below move.
@@ -176,6 +195,116 @@ resized_once() {
 check_layout "at launch"
 check_buttons "at launch"
 
+# On Windows, moved to a display of another scale, as Windows tells it (WM_DPICHANGED) with its
+# size in pixels kept, the page fills the content area at that scale: its insets, in DIPs, scaled
+# by the new display's, not the old one's (#1823). 100% to 150% and back, then to 125% and back.
+if windows; then
+  # The content's size and the page's rect, in pixels, in $rect.
+  page_rect() {
+    send layout
+    rect=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' | sed -n \
+      's/^browser: layout content \([0-9]*\)x\([0-9]*\),.*WebContentsViewCocoa \(-*[0-9]*\),\(-*[0-9]*\) \([0-9]*\)x\([0-9]*\).*/\1 \2 \3 \4 \5 \6/p')
+  }
+  page_rect
+  at_100=$rect
+  [ -n "$at_100" ] || fail "the layout named no page at launch"
+  for percent in 150 100 125 100; do
+    send dpi "$percent"
+    page_rect
+    python3 -I - "$percent" $at_100 $rect << 'PY' ||
+import math, sys
+s = int(sys.argv[1]) / 100
+cw, ch, x, y, w, h = map(int, sys.argv[2:8])
+cw2, ch2, x2, y2, w2, h2 = map(int, sys.argv[8:14])
+# The insets at 100%, in DIPs: the layout's y counts from the content's bottom.
+left, bottom, right, top = x, y, cw - x - w, ch - y - h
+# The core's layout: the content in DIPs at the scale, floored, inset, and scaled to pixels.
+fw = math.floor(cw2 / s) - left - right
+fh = math.floor(ch2 / s) - top - bottom
+px_left, px_top = math.floor(left * s), math.floor(top * s)
+px_right, px_bottom = math.ceil((left + fw) * s), math.ceil((top + fh) * s)
+want = (px_left, ch2 - px_bottom, px_right - px_left, px_bottom - px_top)
+got = (x2, y2, w2, h2)
+if any(abs(a - b) > 1 for a, b in zip(want, got)):
+    sys.exit(f"at {sys.argv[1]}% the page is {got[0]},{got[1]} {got[2]}x{got[3]} in {cw2}x{ch2}, "
+             f"not {want[0]},{want[1]} {want[2]}x{want[3]}")
+PY
+      fail "the page didn't fill the content area at the new display's scale"
+  done
+fi
+
+# On Windows, the display's own scale goes up a step and back while the app runs, as Settings'
+# Scale changes it. GPUI's window, a child of the browser window, hears no WM_DPICHANGED of its own,
+# and drew on at the old scale, giving the core a frame for the page in the old scale's points, so
+# the page ran off the window (#1358). Now it lays out at the new scale with its parent, and the
+# page keeps its insets in DIPs. The command bar's window keeps its size in points. The display goes
+# back to its scale even if the run fails.
+if windows; then
+  read -r scale_at scale_least scale_most << EOF
+$(python3 -I check/scale.py get)
+EOF
+  if [ -z "$scale_most" ] || [ "$scale_most" -le "$scale_at" ]; then
+    echo "SKIP: the display's scale is at its largest ($scale_at of $scale_least to $scale_most)"
+  else
+    run_undo="python3 -I check/scale.py set $scale_at"
+    # The page's insets from $rect, in DIPs: left, bottom, right and top.
+    insets() {
+      set -- $rect
+      echo "$3 $4 $(($1 - $3 - $5)) $(($2 - $4 - $6))"
+    }
+    # Whether the insets $1 and $2 are the same, to a DIP, as the core floors the content's size.
+    same_insets() {
+      echo "$1 $2" | awk '{ for (i = 1; i <= 4; i++) if ((d = $i - $(i + 4)) > 1 || d < -1) exit 1 }'
+    }
+    # The overlays' sizes in points, in $bar.
+    bar_now() {
+      send overlays
+      bar=$(grep '^browser: overlays shown ' "$log" | tail -1 | cut -d' ' -f4- |
+        sed 's/ at [0-9-]*,[0-9-]*//g')
+    }
+    # Lays out until the page is inset by $1 and the content isn't $2 in DIPs, for up to 10 s, as
+    # the UI lays out once it has heard the scale.
+    page_inset() {
+      for _ in $(seq 20); do
+        page_rect
+        set -- "$1" "$2" $rect
+        [ "$3x$4" != "$2" ] && same_insets "$1" "$(insets)" && return 0
+        sleep 0.5
+      done
+      return 1
+    }
+    send key l cmd
+    expect '^browser: command bar shown$' "⌘L didn't open the command bar before the scale changed"
+    page_rect
+    rect_before=$rect insets_before=$(insets)
+    set -- $rect
+    content_before="$1x$2"
+    bar_now
+    bar_before=$bar
+    python3 -I check/scale.py set $((scale_at + 1)) > /dev/null
+    page_inset "$insets_before" "$content_before" ||
+      fail "a step up the display's scale left the page at $rect in the content, not inset by $insets_before"
+    ../tools/window-screenshot.sh "$pid" "$out/display-scaled.png" || fail "no window to capture"
+    bar_now
+    [ "$bar" = "$bar_before" ] ||
+      fail "the command bar's window was $bar at the display's new scale, not $bar_before"
+    python3 -I check/scale.py set "$scale_at" > /dev/null
+    run_undo=
+    for _ in $(seq 20); do
+      page_rect
+      [ "$rect" = "$rect_before" ] && break
+      sleep 0.5
+    done
+    [ "$rect" = "$rect_before" ] ||
+      fail "back at the display's scale the page was at $rect in the content, not $rect_before"
+    bar_now
+    [ "$bar" = "$bar_before" ] ||
+      fail "the command bar's window was $bar back at the display's scale, not $bar_before"
+    send key escape
+    expect '^browser: command bar hidden$' "escape didn't close the command bar"
+  fi
+fi
+
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
 # from the start. The page's w opens one whose server never answers, so it never commits, and its
@@ -248,23 +377,56 @@ fi
 send resize 1000 700
 check_layout "after a resize"
 check_buttons "after a resize"
+# Widened, the space a page hasn't drawn yet shows the page's own background, as Arc's does, not
+# the colour of a page before its first paint: the frame the page drew before stays at its old
+# size, its blue strip 200 to the left, until the page draws at the new size. Blue at the new right
+# edge means the page drew, or its frame was stretched to fill, either way leaving no gap.
+send key g
+expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open gap.html"
+tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
+await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
+# Its layout was checked after the resize above: the Mac keeps the page it left at its old size
+# in the layout's list, which check_layout would read.
+send resize 1200 700
+expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
+../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
+set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
+if [ "$1" -ge 170 ] && [ "$2" -ge 50 ] && [ "$2" -le 130 ] && [ "$3" -le 60 ]; then
+  gap="the space gap.html hadn't drawn yet showed its orange, $*"
+elif [ "$3" -ge 170 ] && [ "$1" -le 60 ]; then
+  gap="gap.html's frame filled the wider page view, $*, leaving no gap"
+else
+  fail "widened, the space gap.html hadn't drawn yet showed $*, not the page's orange"
+fi
+await "^browser: title $tab gap drew\$" || fail "gap.html didn't draw at the new size"
+send key w cmd
+expect_tabs "$first" "$first" "after closing gap.html"
+send resize 1000 700
+check_layout "after narrowing the window back"
+send click $page_point
 # The window's resize border, about 3 outside its edge (Dia), is AppKit's to track, as for any
 # resizable window. Whether AppKit takes a drag the driver posts there only a Mac's run tells: a
 # drag from 2 outside the right edge either widens the window by 100 or leaves it, and the run
-# says which.
-send drag 1002 350 1102 350
-check_layout "after a drag at the window's edge"
-case "$width" in
-  1100)
-    edge="a drag 2 outside the window's right edge widened it by 100"
-    check_buttons "after a drag at the window's edge"
-    ../tools/window-screenshot.sh "$pid" "$out/edge-resized.png" || fail "no window to capture"
-    send resize 1000 700
-    check_layout "after the edge's resize"
-    ;;
-  1000) edge="the window didn't take a posted drag 2 outside its right edge, so no run can drag it" ;;
-  *) fail "a drag at the window's edge left it $width wide, neither 1000 nor 1100" ;;
-esac
+# says which. On Wayland the border is the compositor's, and the driver puts the pointer only over
+# the app's own surfaces, so there's no drag to post (#1572).
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  edge="on Wayland the window's border is the compositor's, which the driver can't reach"
+else
+  send drag 1002 350 1102 350
+  check_layout "after a drag at the window's edge"
+  case "$width" in
+    1100)
+      edge="a drag 2 outside the window's right edge widened it by 100"
+      check_buttons "after a drag at the window's edge"
+      ../tools/window-screenshot.sh "$pid" "$out/edge-resized.png" || fail "no window to capture"
+      send resize 1000 700
+      check_layout "after the edge's resize"
+      ;;
+    1000) edge="the window didn't take a posted drag 2 outside its right edge, so no run can drag it" ;;
+    *) fail "a drag at the window's edge left it $width wide, neither 1000 nor 1100" ;;
+  esac
+fi
 send fullscreen
 expect '^browser: window entered full screen$' "the window didn't go full screen"
 # Once there, it says how to leave, at the card's top right, as Arc's does, in Chrome's words off the
@@ -566,24 +728,33 @@ send click $page_point
 
 # A page's full screen timed three times each way, entered by a key as a video's button is and left
 # by the page, as its button leaves, and then by escape. The steps run from the core's line to the
-# window's and the UI's, and the checks wait for the last of them.
+# window's and the UI's, and the checks wait for the last of them. Each key also waits for the page
+# to have heard the change before it: until it has, its document is still in the full screen it's
+# leaving, or not yet in the one it's entering, and requestFullscreen or exitFullscreen does nothing.
+page_heard() {
+  expect "^browser: title [0-9]* fullscreen $1\$" "the page didn't hear its full screen $2"
+}
 timed_from=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key x
   expect '^browser: page left full screen$' "exitFullscreen didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_escape=$(($(wc -l < "$log") + 1))
 for _ in 1 2 3; do
   send key f
   expect '^browser: page entered full screen$' "the page didn't go full screen to be timed"
   full_screen_done enter
+  page_heard 1 "begin, to be timed"
   send key escape
   expect '^browser: page left full screen$' "escape didn't take the page out of full screen to be timed"
   full_screen_done exit
+  page_heard 0 "end, to be timed"
 done
 timed_to=$(($(wc -l < "$log")))
 enter_ms=$(full_screen_times "$timed_from" "$timed_to" enter)
@@ -642,6 +813,10 @@ if [ "$action" = Maximize ]; then
   # On Windows the UI lays out at the maximized size after Windows has zoomed the window, and a
   # press before it draws there is lost.
   ! windows || expect '^browser: drawn at ' "the UI didn't draw the zoomed window"
+  # A click on the same spot within the double-click time (500 ms by default) goes on counting, so
+  # the second pair would be a third and fourth click, which no title bar takes for a double-click.
+  # The zoomed window can draw sooner than that.
+  sleep 0.6
   send doubleclick 115 24
   expect '^browser: window zoomed 0$' "a second double-click on the header didn't zoom it back"
   zoom="zooms it"
@@ -797,7 +972,8 @@ settings_drew About
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 settings_drew "Tabs & Sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -817,69 +993,127 @@ toggle ui shown "⌘S with the edge off"
 send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew "Tabs & Sidebar"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 # ⌥ pressed and let go alone brings the hidden sidebar out with the pointer over the page, which
 # keeps it out, and again sends it away. ⌥ held with ⌘, as for a shortcut, or let go after a key,
 # as for a typed character, doesn't, and with the sidebar docked it does nothing.
+# On Windows ⌥ is Alt, which the driver presses alone as winalt: its alt is the Mac's ⌥, Ctrl+Alt
+# there, as AltGr is. The key after it there is Shift, as Alt+← goes back.
+alone=alt
+after_key() { send key left alt; }
 if windows; then
-  # Windows' core doesn't tell the app of an Alt let go alone (bc_option_reveals_sidebar's tap,
-  # which the Mac's and Linux's cores detect). Alt alone shows the hidden sidebar there too, as
-  # Chrome's Alt goes to its own menu, once the core detects it (#1847).
-  echo "skip: ⌥ alone bringing the hidden sidebar out: Windows' core doesn't detect Alt let go alone yet (#1847)."
-  send click $page_point
-else
-  send flags alt
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
-  send key s cmd
-  toggle ui hidden "⌘S before ⌥"
-  send move 600 300
-  send flags alt
-  send flags
-  expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
-  expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
-  check_reveal "with the sidebar out for ⌥" shown
-  ../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
-  # Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
-  # out again.
-  send move 650 320
-  send flags alt
-  send flags
-  expect '^browser: reveal away by option$' \
-    "the pointer over the page, or a second ⌥, sent the sidebar away"
-  expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
-  send flags alt
-  send flags alt cmd
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
-  send flags alt
-  send key left alt
-  send flags
-  none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
-  # The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
-  # and on the Mac come through the app again when the page doesn't use them.
-  send click $page_point
-  in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
-  send flags alt
-  send flags
-  expect '^browser: reveal by option$' \
-    "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
-  expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
-  send flags alt
-  send flags
-  expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
-  expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
-  send flags alt
-  send key left alt
-  send flags
-  none_since '^browser: reveal by option$' ||
-    fail "⌥ let go after a key with the page focused brought the sidebar out"
-  send key s cmd
-  toggle page shown "⌘S from the page after ⌥"
+  alone=winalt
+  after_key() { send flags winalt shift; }
 fi
+send flags $alone
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
+send key s cmd
+toggle ui hidden "⌘S before ⌥"
+send move 600 300
+send flags $alone
+send flags
+expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
+check_reveal "with the sidebar out for ⌥" shown
+../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
+# Only the panel ⌥ brought out, still out, goes away for it: one the pointer took away would come
+# out again.
+send move 650 320
+send flags $alone
+send flags
+expect '^browser: reveal away by option$' \
+  "the pointer over the page, or a second ⌥, sent the sidebar away"
+expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
+send flags $alone
+send flags $alone cmd
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
+if windows; then
+  send flags cmd
+  send flags cmd winalt
+  send flags
+  none_since '^browser: reveal by option$' || fail "AltGr, Ctrl then Alt, brought the sidebar out"
+fi
+send flags $alone
+after_key
+send flags
+none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
+# The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
+# and on the Mac come through the app again when the page doesn't use them.
+send click $page_point
+in_browser RenderWidgetHostViewCocoa "after a click on the page with the sidebar hidden"
+send flags $alone
+send flags
+expect '^browser: reveal by option$' \
+  "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
+send flags $alone
+send flags
+expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
+expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
+send flags $alone
+after_key
+send flags
+none_since '^browser: reveal by option$' ||
+  fail "⌥ let go after a key with the page focused brought the sidebar out"
+send key s cmd
+toggle page shown "⌘S from the page after ⌥"
+# A shortcut the page hands back hides the row under the pointer until it moves, and the sidebar
+# out, by the edge or by ⌥, hears that move in its own window, so its row under the pointer shows
+# its hover (#2133). While it rests out, the browser takes about the CPU it takes docked: the two
+# windows drawing the sidebar's list each asked the other for a frame, on and on, which took about
+# 0.65 s of CPU in 4 s on GitHub's hosted Mac, against 0.1 s once fixed.
+# hover_out <what>: the pointer on the first tab's row of the sidebar out draws its hover.
+hover_out() {
+  send move $(row 0)
+  expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
+}
+# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
+# below the rows. Not in a subshell, which would lose send's step.
+rest_cpu() {
+  send move 100 600
+  sleep 1
+  local from
+  from=$(cpu)
+  sleep 4
+  set -- $from $(cpu)
+  rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
+}
+rest_cpu
+docked_cpu=$rest
+send key s cmd
+toggle page hidden "⌘S from the page before the sidebar out is hovered"
+send move 400 300
+reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
+hover_out "the sidebar out by the edge"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
+rest_cpu
+out_cpu=$rest
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
+awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
+send move 600 300
+expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+send key s cmd
+toggle page shown "⌘S from the page with the sidebar in"
+send key s cmd
+toggle page hidden "⌘S from the page before ⌥ brings the sidebar out"
+send flags $alone
+send flags
+expect '^browser: reveal by option$' "⌥ after ⌘S from the page didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ after ⌘S from the page didn't bring the sidebar's panel out"
+hover_out "the sidebar out by ⌥"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-option-hover.png" || fail "no window to capture"
+# ⌘S docks the panel in one update, under the pointer, so the layout waits for the frame that
+# draws it and says the pointer is over it: on Linux the driver's layout can come before it.
+send key s cmd
+expect '^browser: sidebar hovered 1$' "⌘S from the page didn't dock the sidebar out by ⌥ under the pointer"
+toggle page shown "⌘S from the page with the sidebar out by ⌥"
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
 # reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on
@@ -1085,10 +1319,18 @@ expect '^browser: window entered full screen$' "the window didn't go full screen
 send key escape
 expect "^browser: title $keeps kept 1\$" "the page didn't get Esc first in full screen"
 none_since '^browser: window left full screen$' || fail "one Esc the page kept took the window out of full screen"
+# The pair goes back to back, the page's answer to its first read after, as a slow runner can take
+# 500 ms between two steps (#2009). It waits out the second press's 1 s (SECOND_PRESS in
+# shell/keys.rs) from the press above first, which would otherwise take the pair's first press
+# out of full screen as a second press of a key the page kept.
+sleep 1.1
 send key escape
+first=$step
+send key escape
+expect "^browser: title $keeps kept 2\$" "the page didn't get the first of two Escs" "$first"
 expect '^browser: escape twice leaves full screen$' "a second Esc at once didn't leave full screen"
 expect '^browser: window left full screen$' "Esc twice didn't take the window out of full screen"
-none_since "^browser: title $keeps kept 2\$" || fail "the second Esc that left full screen reached the page too"
+none_since "^browser: title $keeps kept 3\$" || fail "the second Esc that left full screen reached the page too"
 # Held: the Mac's driver sends the keyboard's repeat, which says it's held; off the Mac a held key's
 # repeats come as presses, so a held Esc leaves there as one pressed twice.
 if [ "$(uname)" = Darwin ]; then
@@ -1181,4 +1423,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png${light_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}"

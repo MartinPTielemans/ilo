@@ -1,7 +1,8 @@
 # Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
 # beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
-# named Work as Arc's Local State names it, their pinned tabs and folders, its favorites, and the
-# three of its link rules that can be ours, each to the Space its Arc Space became; from
+# named Work as Arc's Local State names it, their pinned tabs and folders, Personal's Today tab, its
+# favorites, and the five of its link rules that can be ours, each to the Space its Arc Space became,
+# Little ilo or the Space in front, with where it opens everything else, Personal; from
 # Chrome and from Firefox their bookmarks as a Space named after each and their history, which the
 # core adds, with Chrome's open tabs, but for the one a bookmark pins, as that Space's Today tabs,
 # and its saved address, which the core adds too, never its card. Run again, each adds nothing. A
@@ -292,7 +293,7 @@ settings_shots list
 # row and the profiles it goes into. Esc goes back to the list.
 if [ -n "$arc" ]; then
   first_found=Arc
-  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 3, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 0, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
+  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 6, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 1, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
 else
   first_found=Chrome
   counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
@@ -324,9 +325,9 @@ if [ -n "$arc" ]; then
   # -5814); the cards wait on, as Work is held.
   recorded
   ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
-  expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
-    "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
-  expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
+  expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 1 open tabs, 3 favorites, 0 pages, 0 addresses$' \
+    "Import didn't plan Arc's 2 Spaces, 6 pinned tabs, Today tab and 3 favorites"
+  expect '^browser: import from Arc: 6 link rules$' "Import didn't plan Arc's 5 link rules and everything else"
   expect '^browser: added profile [0-9]* Work$' "Arc's Work profile didn't come in"
   # Work's card stalls, dimmed with ⚠ and its rows waiting once Work opens, and Personal's waits
   # with it, as the tabs go in together.
@@ -337,16 +338,20 @@ if [ -n "$arc" ]; then
   ../tools/window-screenshot.sh "$pid" "$out/import-stalled.png" || fail "no window to capture"
   send key f12 shift
   expect '^browser: import releases 1 Spaces to profile [0-9]*$' "Shift+F12 didn't release Work's Space"
-  arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
+  arc_done='2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
-  # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
+  # The rules go to Arc's Spaces by their places among the user's, Personal second and Work third,
+  # to Little ilo and to the Space in front, and everything else to Personal.
   t=$(printf '\t')
   # After the Meet rule a profile starts with (#692).
   rules="rule${t}contains${t}front${t}meet.google.com
 rule${t}contains${t}3${t}work.example.com
 rule${t}is${t}2${t}https://news.ycombinator.com/
+rule${t}contains${t}Little ilo${t}meet.example.com
+rule${t}contains${t}front${t}front.example.com
 rule${t}is${t}3${t}https://docs.example.com/
+otherwise${t}2
 seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
@@ -360,6 +365,13 @@ seeded${t}meet"
   work_profile=$(sed -n 's/^browser: added profile \([0-9]*\) Work$/\1/p' "$log" | tail -1)
   grep -q "^browser: profiled space $work $work_profile\$" "$log" ||
     fail "Arc's Work Space isn't in the Work profile"
+  # Each Space keeps the theme Arc's has: Personal's three colours, the third its teal, with its
+  # intensity, grain and sand as our dust, forced dark; Work's one colour, following the system,
+  # with its dark look.
+  grep -q "^browser: themed space $personal x=[^ ]* y=[^ ]* colors=3 intensity=0\.600 grain=0\.300 appearance=dark .*texture=dust third=33cc99" "$log" ||
+    fail "Arc's Personal theme didn't come in: $(grep "^browser: themed space $personal " "$log" | tail -1)"
+  grep -q "^browser: themed space $work x=[^ ]* y=[^ ]* colors=1 [^ ]* grain=0\.000 appearance=automatic .*dark=" "$log" ||
+    fail "Arc's Work theme didn't come in with its dark look: $(grep "^browser: themed space $work " "$log" | tail -1)"
   # Done goes back to the list, and the same import again plans nothing.
   expect '^browser: import drawn done$' "the import's end didn't draw"
   click_drawn import-done
@@ -495,11 +507,16 @@ expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 if [ -n "$arc" ]; then
   send key s cmd
   expect '^browser: sidebar shown$' "⌘S didn't bring the sidebar back after the import"
-  # The Personal Space shows its pinned tabs: HN, then Reading with a, b and c and Deep with d.
+  # The Personal Space shows its pinned tabs: HN, then Reading with a, b and c split side by side,
+  # as Arc's split view has them, and Deep with d; then its one Today tab.
   send key 2 ctrl
   expect "^browser: space $personal in " "⌃2 didn't show Arc's Personal Space"
   expect '^browser: pinned [0-9]*\( [0-9]*\)\{6\}$' \
     "Personal's pinned tabs and folders aren't the 7 rows Arc's are: $(pinned)"
+  expect '^browser: splits [0-9][0-9]*+[0-9][0-9]*$' \
+    "Arc's split view of b and c didn't come in as one: $(grep '^browser: splits' "$log" | tail -1)"
+  expect '^browser: today [0-9][0-9]*$' \
+    "Personal's Today tab didn't come in from Arc: $(grep '^browser: today' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
 # The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
@@ -631,8 +648,8 @@ fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
-echo "  one in a new profile, their pinned tabs and folders, and its favorites; from Chrome and"
-echo "  Firefox their bookmarks as a Space and their history, with Chrome's open tab and address; and"
+echo "  one in a new profile, their pinned tabs and folders, Personal's Today tab, and its favorites; from"
+echo "  Chrome and Firefox their bookmarks as a Space and their history, with Chrome's open tab and address; and"
 echo "  a second import of each adds nothing."
 echo "  A bookmarks file comes in as a Space named Bookmarks, and a second time adds nothing."
 echo "  A passwords file comes in, says how many, and is deleted when asked; a second one says its"

@@ -217,7 +217,7 @@ impl Shell {
             },
         );
         vec![
-            card(bounds, self.palette.page)
+            card(bounds, self.card_radius(), self.palette.page)
                 .child(header)
                 .into_any_element(),
             edge.into_any_element(),

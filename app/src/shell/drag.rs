@@ -40,7 +40,7 @@ impl Shell {
     pub(super) fn move_rows(&mut self, before: HashMap<Slot, f32>, curve: Curve, cx: &gpui::App) {
         let (now, moved) = (Instant::now(), crate::motion::start(cx));
         let after = self.layout();
-        let slides: Vec<_> = after
+        let mut slides: Vec<_> = after
             .iter()
             .filter_map(|(&slot, &top)| {
                 let from = before.get(&slot)? + self.slide(slot) - top;
@@ -62,10 +62,27 @@ impl Shell {
             if !whole {
                 self.scroll_to_row(tabs[0]);
             }
+            // A tab shown in a closed folder slides down from under its folder's row as it fades
+            // in, as Arc's does (#1405).
+            if let Curve::Peek = curve {
+                let space = self.shown_space();
+                for &tab in &tabs {
+                    let folder = space.and_then(|space| space.outer_closed(tab));
+                    let under = folder.and_then(|folder| after.get(&Slot::Tab(folder)));
+                    if let (Some(&under), Some(&top)) = (under, after.get(&Slot::Tab(tab))) {
+                        slides.push((Slot::Tab(tab), (under - top, moved, curve)));
+                    }
+                }
+            }
             self.opened = Some(Opened {
                 tabs,
                 whole,
                 start: now,
+                // The rows the other changes bring fade in on the row spring, as they did.
+                curve: match curve {
+                    Curve::Peek => Curve::Peek,
+                    _ => Curve::Slide,
+                },
             });
         }
         for (&slot, &top) in &before {
@@ -79,7 +96,7 @@ impl Shell {
                     favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
                     icon: self.page(tab).icon,
                     folder: folder.map(|space| space.is_open(tab)),
-                    indent: self.depth(tab) as f32 * FOLDER_INDENT,
+                    indent: self.listed_depth(tab) as f32 * FOLDER_INDENT,
                     top: top + self.slide(slot),
                     start: moved,
                 });
@@ -407,7 +424,8 @@ impl Shell {
     /// nearest it. Over the list it's a row, which goes up and down over rows that stay put, and a
     /// line marks the place, in the pinned tabs or Today, nearest where it's drawn. Where that's
     /// at the end of folders or after one, the pointer moved right takes it into them, a row in for
-    /// each FOLDER_INDENT. A split view's row stays in the list, and a folder's in the pinned tabs.
+    /// each FOLDER_INDENT. A split view's row over the favorites is its tile, as it becomes one
+    /// favorite, and a folder's row stays in the pinned tabs.
     pub(super) fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(drag) = self
             .drag
@@ -458,7 +476,6 @@ impl Shell {
         let over_favorites = !incoming
             && !away
             && !folder
-            && self.panes(tab).len() == 1
             && self.has_room_for(tab)
             && pointer.y < self.list_top_with(favorites + 1) - self.tiles_scrolled();
         let mut depth = 0;
@@ -610,7 +627,7 @@ impl Shell {
         let movable = !drag.incoming
             && !self.favorites.contains(&tab)
             && self.panes(tab).len() == 1
-            && !self.private;
+            && !self.one_space();
         let side = side.filter(|_| movable && self.edge_space(side == Some(true)).is_some());
         if drag.edge.map(|(right, _)| right) == side {
             return;
@@ -698,7 +715,7 @@ impl Shell {
     /// it would join it on the left, before a split's first page, as Arc's does
     /// (`SidebarDropTargetRegion`).
     fn left_half(&self, row: u64, x: f32) -> bool {
-        let left = PLATE_INSET + self.depth(row) as f32 * FOLDER_INDENT;
+        let left = PLATE_INSET + self.listed_depth(row) as f32 * FOLDER_INDENT;
         x < (left + self.rows_width() - PLATE_INSET) / 2.
     }
 

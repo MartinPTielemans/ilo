@@ -2,7 +2,6 @@
 //! tabs' pictures are taken, on a host that records what the shell asks.
 
 use std::rc::Rc;
-use std::time::Duration;
 
 use gpui::{
     Modifiers, MouseButton, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
@@ -401,16 +400,11 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    // Not while the core may still keep the page the switch left on screen, up to a second.
-    cx.executor()
-        .advance_clock(Duration::from_secs(1) - PICTURE_HIDDEN / 2);
-    cx.run_until_parked();
-    assert!(
-        pictured(&host).is_empty(),
-        "pictured while the switch may still show it"
-    );
+    // Asked once the last switch has been quiet for the Dock dot's 400 ms, while the core may
+    // still keep the page it left on screen, which it holds for the picture (#1658).
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
+    assert_eq!(PICTURE_HIDDEN, std::time::Duration::from_millis(400));
     assert_eq!(pictured(&host), ["card picture 2", "card picture 4"]);
 }
 
@@ -512,7 +506,14 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
     let titles: Vec<String> = (host.folder_preview.borrow().iter())
         .flat_map(|rest| rest.items.iter().map(|item| item.title.to_string()))
         .collect();
-    assert_eq!(titles, ["News", "Book"]);
+    assert_eq!(
+        titles,
+        ["News", "Book"],
+        "unseen, they keep the sidebar's order"
+    );
+    let aged = (host.folder_preview.borrow().iter())
+        .any(|rest| rest.items.iter().any(|item| !item.age.is_empty()));
+    assert!(!aged, "a tab never seen has an age");
     // An open folder's rows show what's in it, and a tab has its card instead.
     preview_on(&shell, cx, 9);
     preview_on(&shell, cx, 1);
@@ -522,6 +523,39 @@ fn a_closed_folder_previews_the_tabs_in_it_and_in_its_folders(cx: &mut TestAppCo
         shell.folder_preview(Row::Tab(5), false, cx)
     });
     assert_eq!(host.take(), ["folder preview left 5"]);
+}
+
+/// A press that opens a closed folder, with the pointer heard coming onto its row after it, as a
+/// click that moves the pointer is, doesn't rest for the preview, which would show over the folder
+/// opened, or gone by then.
+#[gpui::test]
+fn a_press_opening_a_folder_doesnt_rest_for_its_preview(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_folders(cx);
+    shell.update(cx, |shell, cx| shell.press_folder(5, cx));
+    preview_on(&shell, cx, 5);
+    assert_eq!(host.take(), ["folder open 5 true"]);
+}
+
+#[gpui::test]
+fn a_preview_lists_the_tab_seen_last_first_with_how_long_ago(cx: &mut TestAppContext) {
+    let (shell, cx, host) = with_folders(cx);
+    let (minute, now) = (60_000., super::super::recent_downloads::now());
+    host.seen
+        .borrow_mut()
+        .extend([(6, now - 3. * 24. * 60. * minute), (8, now - 31.5 * minute)]);
+    preview_on(&shell, cx, 5);
+    assert_eq!(host.take(), ["folder preview rest 5 8 6"]);
+    let row = |item: &crate::folder_preview::Item| (item.title.to_string(), item.age.to_string());
+    let rows: Vec<(String, String)> = (host.folder_preview.borrow().iter())
+        .flat_map(|rest| rest.items.iter().map(row))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Book".into(), "31 minutes ago".into()),
+            ("News".into(), "3 days ago".into())
+        ]
+    );
 }
 
 /// A hover lost while the preview is open, with the pointer last moved onto the folder's row, isn't

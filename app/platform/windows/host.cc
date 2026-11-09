@@ -937,6 +937,8 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 void MenuForegroundChanged(HWND root, bool ours);
 // Has the link preview leave as another of the app's windows comes to the front (defined below).
 void LinkPreviewForegroundChanged(HWND front);
+// Ends a Little ilo window's giving way once another app's window is in front (defined below).
+void OtherAppInFront();
 
 // The watchers, which Windows tells of each window that comes to the front.
 void (*g_key_window_changed)(void*) = nullptr;
@@ -991,6 +993,8 @@ void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWO
   MenuForegroundChanged(GetAncestor(hwnd, GA_ROOT), ours);
   if (ours) {
     LinkPreviewForegroundChanged(hwnd);
+  } else if (hwnd) {
+    OtherAppInFront();
   }
   g_active = ours;
   if (ours && g_key_window_changed) {
@@ -1025,6 +1029,12 @@ void AppActivating(bool active, DWORD thread) {
     if (g_resigning_active) {
       g_resigning_active();
     }
+  }
+  // The foreground event says so too, but an out-of-context WinEvent doesn't wake Chromium's
+  // message pump, so an idle browser hears it only at its next message, seconds on. This one,
+  // sent, wakes it.
+  if (!active && !OurThread(thread)) {
+    OtherAppInFront();
   }
 }
 
@@ -1846,6 +1856,22 @@ class FileDropSource : public IDropSource {
   bool cancelled_ = false;
 };
 
+// The driver's (drive.cc) in a driven run, in place of DoDragDrop: Windows' drag waits for the real
+// pointer's messages before it starts, which the driver keeps from the app's windows, so it stopped
+// the app there (#1583). The driver carries the drag as it carries another app's, and says where it
+// was let go.
+HRESULT (*g_drive_drag)(IDataObject* data, DWORD allowed, DWORD* effect, POINT* at) = nullptr;
+
+// DoDragDrop, or the driver's, and where the drag was let go, on the screen.
+HRESULT Drag(IDataObject* data, IDropSource* source, DWORD allowed, DWORD* effect, POINT* at) {
+  if (g_drive_drag) {
+    return g_drive_drag(data, allowed, effect, at);
+  }
+  const HRESULT dropped = DoDragDrop(data, source, allowed, effect);
+  GetCursorPos(at);
+  return dropped;
+}
+
 // The shell's own data object for the file at |path|, so a drag carries it as Explorer does, with
 // its drag image; null if there's no such file.
 ComPtr<IDataObject> FileDataObject(const std::wstring& path) {
@@ -2151,6 +2177,10 @@ struct LaunchWindow {
   HWND owner = nullptr;
   HBITMAP picture = nullptr;
   SIZE picture_size{};
+  // The picture's rows from |foot| down go |grows| rows lower than they were taken
+  // (host_show_launch_window).
+  LONG foot = 0;
+  LONG grows = 0;
   HBRUSH background = nullptr;
 };
 LaunchWindow g_launch;
@@ -2238,8 +2268,22 @@ LRESULT CALLBACK LaunchProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
       if (g_launch.picture) {
         HDC source = CreateCompatibleDC(dc);
         HGDIOBJ old = SelectObject(source, g_launch.picture);
-        BitBlt(dc, 0, 0, g_launch.picture_size.cx, g_launch.picture_size.cy, source, 0, 0,
-               SRCCOPY);
+        const LONG width = g_launch.picture_size.cx;
+        const LONG foot = g_launch.foot;
+        const LONG grows = g_launch.grows;
+        // Rows |from| to |to| of the picture, |at| rows down the window.
+        const auto place = [&](LONG from, LONG to, LONG at) {
+          if (to > from) {
+            BitBlt(dc, 0, at, width, to - from, source, 0, from, SRCCOPY);
+          }
+        };
+        // The top at the window's top and the foot at its bottom: a shorter window loses the
+        // room just above the foot, and a taller one repeats it (launch_picture.rs).
+        place(0, foot + (std::min)(grows, 0L), 0);
+        place(foot, g_launch.picture_size.cy, foot + grows);
+        if (grows > 0) {
+          place(foot - grows, foot, foot);
+        }
         SelectObject(source, old);
         DeleteDC(source);
       }
@@ -2310,6 +2354,30 @@ int TopEdge(HWND root) {
   return GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 }
 
+// Whether |at|, in |root|'s client area, is over a split view's handle, which the UI draws in the
+// window's margin over each of its pages, shell.split-controls' width (32) across and centred over
+// the page (design/tokens.toml: kept in step with it). The top edge leaves it to the UI, which
+// would otherwise have only the margin's last 2 points of it (#2114).
+bool OverSplitHandle(HWND root, POINT at) {
+  const double half = 16 * Scale(root);
+  int pages = 0;
+  bool over = false;
+  for (HWND child = GetWindow(root, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+    wchar_t name[18] = {};
+    if (!IsWindowVisible(child) || !GetClassNameW(child, name, std::size(name)) ||
+        wcsncmp(name, L"Chrome_WidgetWin_", 17) != 0) {
+      continue;
+    }
+    RECT page;
+    GetWindowRect(child, &page);
+    MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&page), 2);
+    ++pages;
+    // A stacked split's lower pages are centred under the top one, whose handle is there too.
+    over |= at.y < page.top && std::abs(at.x - (page.left + page.right) / 2.0) <= half;
+  }
+  return pages > 1 && over;
+}
+
 // What the frame has at |at|, on the screen, over the UI: the top edge, which resizes, or the UI's
 // maximize button, which Windows shows Snap layouts over. 0 where it's the UI's own.
 int FrameHit(HWND root, POINT at) {
@@ -2321,7 +2389,7 @@ int FrameHit(HWND root, POINT at) {
   RECT client{};
   GetClientRect(root, &client);
   const int edge = TopEdge(root);
-  if (!IsZoomed(root) && at.y >= 0 && at.y < edge) {
+  if (!IsZoomed(root) && at.y >= 0 && at.y < edge && !OverSplitHandle(root, at)) {
     return at.x < 2 * edge                   ? HTTOPLEFT
            : at.x >= client.right - 2 * edge ? HTTOPRIGHT
                                              : HTTOP;
@@ -2394,6 +2462,49 @@ HWND WindowBehind(HWND root) {
   return nullptr;
 }
 
+// Set while a Little ilo window gives way (LittleHiding), with the hook that holds ilo's windows
+// back meanwhile and the window giving way.
+HHOOK g_giving_way = nullptr;
+HWND g_giving_way_root = nullptr;
+// Whether the other app's window has come in front since.
+bool g_gave_way = false;
+// Counts the give-ways, so a fallback's timer leaves a later one be.
+int g_give_ways = 0;
+
+// Handing the foreground on as a closing window hides activates the UI's holder, whose focus takes
+// the activation back for the closing window, and Windows activates the app's next window as that
+// one is destroyed, in front of the other app's (#2025). Chromium hides a closing window and
+// destroys it in a task of its own, which can come after a task posted as it hid. The other app
+// takes the foreground only once its thread reads its messages, which can be after the window is
+// destroyed, and an activation of ilo's meanwhile still wins it (#2136). So none of ilo's windows
+// activates, but for the user's own click, until both the window is destroyed and the other app's
+// window is in front, or the window shows again.
+LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HCBT_ACTIVATE && !reinterpret_cast<CBTACTIVATESTRUCT*>(lparam)->fMouse) {
+    return 1;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+// Lets ilo's windows activate again once the window is gone and the other app in front, or the
+// window is back.
+void StopGivingWay() {
+  if (g_giving_way) {
+    UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr));
+  }
+  g_giving_way_root = nullptr;
+  g_gave_way = false;
+}
+
+// Once DestroyWindow, which activates the app's next window, is over.
+void StopGivingWayLater() {
+  Later([give_way = g_give_ways] {
+    if (give_way == g_give_ways) {
+      StopGivingWay();
+    }
+  });
+}
+
 // A Little ilo window going with the keyboard leaves another app's window right behind it in front
 // and active, as closing any app's window does (#1689): Windows would hand the keyboard to the
 // window of the app's that had it before, the main window, and bring it in front of that app's.
@@ -2408,12 +2519,45 @@ void LittleHiding(HWND root) {
   if (!behind || (GetWindowThreadProcessId(behind, &owner), owner == GetCurrentProcessId())) {
     return;
   }
-  // The foreground's app may give the foreground away.
-  SetForegroundWindow(behind);
-  // check.sh reads this line, the title read without a message to that app, which could hang.
+  if (!g_giving_way) {
+    g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
+  }
+  g_giving_way_root = root;
+  g_gave_way = false;
+  // Until the window is destroyed (FrameProc) and the other app's is in front (OtherAppInFront), or
+  // at the latest 5 s on, so a window that's kept or an app that never reads its messages never
+  // leaves ilo unable to activate.
+  After(5, [give_way = ++g_give_ways] {
+    if (give_way == g_give_ways && g_giving_way) {
+      StopGivingWay();
+      // A window kept, which no close leaves, or an app that didn't take the foreground.
+      fprintf(stderr, "browser: little window gave way for 5 s without going\n");
+    }
+  });
+  // check.sh reads these lines, the title read without a message to that app, which could hang.
   wchar_t title[128] = L"";
   InternalGetWindowText(behind, title, static_cast<int>(std::size(title)));
+  // The foreground's app may give the foreground away. Where Windows refuses, nothing waits for the
+  // other app, and the app's next window has the keyboard once the window is gone.
+  if (!SetForegroundWindow(behind)) {
+    g_gave_way = true;
+    fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    return;
+  }
   fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+}
+
+void OtherAppInFront() {
+  // An event from before the give-way can come during it, so it's the foreground now that counts.
+  DWORD process = 0;
+  HWND front = GetForegroundWindow();
+  if (g_giving_way && !g_gave_way && front && GetWindowThreadProcessId(front, &process) &&
+      process != GetCurrentProcessId()) {
+    g_gave_way = true;
+    if (!g_giving_way_root) {
+      StopGivingWayLater();
+    }
+  }
 }
 
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
@@ -2422,6 +2566,9 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     case WM_WINDOWPOSCHANGING:
       if (reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_HIDEWINDOW) {
         LittleHiding(hwnd);
+      } else if ((reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_SHOWWINDOW) &&
+                 hwnd == g_giving_way_root) {
+        StopGivingWay();
       }
       break;
     case WM_NCCALCSIZE: {
@@ -2474,6 +2621,13 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       AppActivating(wparam, static_cast<DWORD>(lparam));
       break;
     case WM_NCDESTROY:
+      // The other app can come in front after this.
+      if (hwnd == g_giving_way_root) {
+        g_giving_way_root = nullptr;
+        if (g_gave_way) {
+          StopGivingWayLater();
+        }
+      }
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
@@ -2559,7 +2713,8 @@ void host_centered(double width, double height, double* x, double* y) {
 }
 
 void host_show_launch_window(const char* profile_dir, double x, double y, double width,
-                             double height, bool maximized) {
+                             double height, bool maximized, double picture_width,
+                             double picture_height, double foot_top) {
   static const wchar_t* launch_class = [] {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = LaunchProc;
@@ -2595,10 +2750,15 @@ void host_show_launch_window(const char* profile_dir, double x, double y, double
   GetClientRect(window, &client);
   // As the Mac's: Dia's light composite over grey 20, and the dark near its dark one.
   COLORREF color = light ? RGB(232, 232, 232) : RGB(38, 38, 38);
-  // A picture is of the window at |width| by |height|; maximized it's another size, kept by none.
-  if (!maximized) {
-    g_launch.picture = LoadLaunchPicture(LaunchPicturePath(profile_dir, width, height),
-                                         client.bottom, &g_launch.picture_size, &color);
+  // Maximized it's another size, kept by none. The picture is of the client area of a window
+  // |picture_height| high, whose frame is the same rows taller than its client area as this one's.
+  if (!maximized && picture_width > 0) {
+    const LONG grows = std::lround(height * scale) - std::lround(picture_height * scale);
+    g_launch.picture =
+        LoadLaunchPicture(LaunchPicturePath(profile_dir, picture_width, picture_height),
+                          client.bottom - grows, &g_launch.picture_size, &color);
+    g_launch.grows = grows;
+    g_launch.foot = std::clamp(std::lround(foot_top * scale), 0L, g_launch.picture_size.cy);
   }
   g_launch.background = CreateSolidBrush(color);
   g_launch.hwnd = window;
@@ -2797,19 +2957,38 @@ void host_maximize_window(void* ui_view) {
   if (!root) {
     return;
   }
+  HWND key = GetForegroundWindow();
+  DWORD process = 0;
+  GetWindowThreadProcessId(key, &process);
   // As Chromium's own Maximize does.
   SendMessageW(root, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+  // Maximizing activates it too, which a window a relaunch brings back behind the one in front
+  // mustn't be (#1454): the keyboard goes back to the app's window that had it.
+  if (key && key != root && key != g_launch.hwnd && process == GetCurrentProcessId()) {
+    SetForegroundWindow(key);
+  }
   // Maximizing brings it to the front, and the launch window stays over it until the UI has drawn.
   if (g_launch.hwnd) {
     SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   }
 }
 
+namespace {
+// Whether the app asked for the jump list (host_add_dock_items), which waits for a window with the
+// AppUserModelID it goes under, and whether it's set.
+bool g_jump_list_wanted = false;
+bool g_jump_list_set = false;
+void SetJumpList();
+}  // namespace
+
 void host_show_window(void* ui_view) {
   HWND root = Root(ui_view);
   TakeTitleBar(ui_view);
   ShowWindow(root, SW_SHOW);
   SetForegroundWindow(root);
+  if (g_jump_list_wanted && !std::exchange(g_jump_list_set, true)) {
+    SetJumpList();
+  }
   // The launch window stays over it until the UI has drawn (host_close_launch_window).
   if (g_launch.hwnd) {
     SetWindowPos(g_launch.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -2872,14 +3051,82 @@ void host_set_window_little(void* ui_view, bool grows) {
 void host_grow_little_window(void* ui_view) {}
 
 // Little ilo's Dock items alone hide windows, and Windows has no Dock menu: its taskbar's jump list
-// isn't ours yet.
+// has New Little ilo Window (host_set_little_task), and there's no Show or Hide All.
 void host_set_window_shown(void* ui_view, bool shown) {}
 bool host_window_shown(void* ui_view) {
   return true;
 }
-void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
 
-void host_set_little_status_item(void (*clicked)(void)) {}
+namespace {
+std::wstring BrowserModelId();
+
+// The taskbar's jump list, Windows' stand-in for the Mac's Dock menu: New window and New incognito
+// window, each launching ilo again with Chrome's switch for it, which the running browser hears as
+// a second launch (bc_host's app_new_window). Under the AppUserModelID the windows have, so the
+// list is the one their taskbar button shows. Set once, after the first window, which has the ID.
+void SetJumpList() {
+  ComPtr<ICustomDestinationList> list;
+  if (FAILED(CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&list)))) {
+    return;
+  }
+  const std::wstring id = BrowserModelId();
+  if (!id.empty()) {
+    list->SetAppID(id.c_str());
+  }
+  UINT slots = 0;
+  ComPtr<IObjectArray> removed;
+  ComPtr<IObjectCollection> tasks;
+  if (FAILED(list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
+      FAILED(CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&tasks)))) {
+    return;
+  }
+  wchar_t exe[MAX_PATH] = {};
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  // PKEY_Title, named here rather than linked from propsys.
+  constexpr PROPERTYKEY kTitle = {
+      {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
+  for (auto [title, switch_name] : {std::pair{L"New window", L"--new-window"},
+                                    std::pair{L"New incognito window", L"--incognito"}}) {
+    ComPtr<IShellLinkW> link;
+    ComPtr<IPropertyStore> store;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&link))) ||
+        FAILED(link.As(&store))) {
+      continue;
+    }
+    link->SetPath(exe);
+    link->SetArguments(switch_name);
+    link->SetIconLocation(exe, 0);
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    value.vt = VT_LPWSTR;
+    if (FAILED(SHStrDupW(title, &value.pwszVal))) {
+      continue;
+    }
+    store->SetValue(kTitle, value);
+    store->Commit();
+    PropVariantClear(&value);
+    tasks->AddObject(link.Get());
+  }
+  ComPtr<IObjectArray> array;
+  if (SUCCEEDED(tasks.As(&array)) && SUCCEEDED(list->AddUserTasks(array.Get()))) {
+    list->CommitList();
+    // check.sh reads this line.
+    fprintf(stderr, "browser: jump list set\n");
+  }
+}
+}  // namespace
+
+// Windows has no Dock menu; its jump list holds New window and New incognito window instead, once
+// the app has finished launching.
+void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {
+  g_jump_list_wanted = true;
+  if (!UiViews().empty() && !std::exchange(g_jump_list_set, true)) {
+    SetJumpList();
+  }
+}
 
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;
@@ -2895,8 +3142,13 @@ static std::map<void*, uint64_t>& WindowIds() {
   return ids;
 }
 
+// Writes the jump list's task host_set_little_task keeps, once a window has the AppUserModelID.
+static void WriteLittleTask();
+
 void host_window_opened(void* ui_view, uint64_t window) {
   WindowIds()[ui_view] = window;
+  // The core gave its window the AppUserModelID as it made it (core's AddWindowViews).
+  WriteLittleTask();
   // Opened behind another, it hears it isn't the one the user is in, which no foreground event says.
   TellMain(GetForegroundWindow());
 }
@@ -2910,6 +3162,7 @@ void host_watch_window_main(void (*changed)(void* ui_view, bool main)) {
 // Windows delivers a touchpad's swipes to the page as scrolls, which it takes, so there's nothing
 // here for the host to watch.
 void host_watch_swipes(bool (*)(void*, double, double, bool)) {}
+// The core tells of Alt let go alone, in the page or the UI (window_option_tapped).
 void host_watch_option_taps(void (*)(void*)) {}
 
 void host_watch_ui_keyboard(void (*left)(void* ui_view)) {
@@ -3065,6 +3318,7 @@ void host_set_overlay_radius(int, double) {}
 void host_set_overlay_elevation(int, float, double, float, double, double) {}
 void host_set_overlay_growth(int, double, double) {}
 void host_set_overlay_shrink(int) {}
+void host_set_overlay_motion(int, double, double, double) {}
 void host_set_overlays_still(bool) {}
 
 void host_show_overlay(int overlay,
@@ -3317,11 +3571,20 @@ void host_add_drop_targets(void* view) {
 void host_show_drop_targets(void* ui_view) {
   double width, height;
   ContentSize(Root(ui_view), &width, &height);
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Show(g_drop_targets, ui_view, 0, 0, width, height, false);
+  // As the Mac's and Linux's say as it comes on screen, which split waits for.
+  if (!shown && g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
+    fprintf(stderr, "browser: drop targets shown\n");
+  }
 }
 
 void host_hide_drop_targets(void) {
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Hide(g_drop_targets);
+  if (shown) {
+    fprintf(stderr, "browser: drop targets hidden\n");
+  }
 }
 
 void host_add_dialog(void* dialog_view) {
@@ -3533,6 +3796,11 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
+
 void host_copy_png(const uint8_t* png, size_t size) {
   static const UINT png_format = RegisterClipboardFormatW(L"PNG");
   if (!OpenClipboard(nullptr)) {
@@ -3715,6 +3983,8 @@ void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
   Show(g_toast, ui_view, left, top, width, height, false);
+  // It shows at once, without a fade, as the Mac's does.
+  LogShown(g_toast, "toast");
 }
 
 void host_hide_toast(void) {
@@ -4346,6 +4616,11 @@ void* host_drop_target(void* hwnd) {
   return found == DropTargets().end() ? nullptr : static_cast<IDropTarget*>(found->second);
 }
 
+// The driver's: carries the app's own drags in place of DoDragDrop (g_drive_drag).
+void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*)) {
+  g_drive_drag = drag;
+}
+
 bool host_trash(const char* path) {
   // Double-null-terminated, as the shell asks.
   std::wstring from = Wide(path) + L'\0';
@@ -4509,9 +4784,8 @@ bool host_drag_tab(void* ui_view, uint64_t tab, double x, double y, double width
     ComPtr<IDropSource> holding;
     holding.Attach(source);
     DWORD effect = DROPEFFECT_NONE;
-    const HRESULT dropped = DoDragDrop(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect);
     POINT at{};
-    GetCursorPos(&at);
+    const HRESULT dropped = Drag(data.Get(), holding.Get(), DROPEFFECT_MOVE, &effect, &at);
     RECT point{at.x, at.y, at.x, at.y};
     double x = 0, y = 0, width = 0, height = 0;
     Logical(point, &x, &y, &width, &height);
@@ -4547,7 +4821,7 @@ bool host_drag_file(const char* path, void (*ended)(bool)) {
     const HWND over = WindowFromPoint(at);
     LogIn("drag", "starts at %ld %ld over %p %s", at.x, at.y, static_cast<void*>(over),
           ClassName(over).c_str());
-    const HRESULT dropped = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    const HRESULT dropped = Drag(data.Get(), source.Get(), DROPEFFECT_COPY, &effect, &at);
     LogIn("drag", "ends: %lx, effect %lu", static_cast<unsigned long>(dropped), effect);
     if (ended) {
       ended(dropped == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE);
@@ -4703,8 +4977,19 @@ void host_share(void* ui_view,
                 double,
                 const char* url,
                 const char* title) {
+  // The toast's view, for ⇧⌘C's Share, is no browser's: the sheet is the browser window's that the
+  // toast shows over, as the Mac's is (#2067).
+  if (ui_view && g_toast_over && Hwnd(ui_view) == g_toast.hwnd) {
+    ui_view = g_toast_over;
+  }
   HWND root = Root(ui_view);
   if (!root || !url) {
+    return;
+  }
+  // check.sh reads this line. A driven run doesn't show the sheet, which would take the keyboard
+  // from the window and wait on a choice.
+  fprintf(stderr, "browser: share %s\n", url);
+  if (GetEnvironmentVariableW(L"BROWSER_DRIVE", nullptr, 0) > 0) {
     return;
   }
   winrt::hstring link{Wide(url)};
@@ -4833,6 +5118,204 @@ const char* host_floating_name(void* hwnd) {
     }
   }
   return g_menu.hwnd && g_menu.hwnd == hwnd ? "menu" : nullptr;
+}
+
+}  // extern "C"
+
+// Little ilo from Windows' own places (#693): the jump list's task, and the notification area's
+// icon, which Settings turns on as the Mac's menu-bar button. Neither has a timer: Windows keeps
+// the list, and the icon's window answers only the icon's messages and Explorer's TaskbarCreated.
+namespace {
+
+// The icon's messages, by its window, and what its click calls, while it's on.
+constexpr UINT kTrayMessage = WM_APP + 69;
+constexpr UINT kTrayId = 1;
+HWND g_tray = nullptr;
+void (*g_tray_clicked)(void) = nullptr;
+UINT g_taskbar_created = 0;
+// The task's title, which the icon's tooltip says too, and its arguments, kept until it's
+// written under the windows' AppUserModelID, which the first window has.
+std::wstring g_little_title;
+std::wstring g_little_arguments;
+bool g_little_task_waits = false;
+
+// PKEY_Title, named here as kAppId is, rather than linked from propsys.
+constexpr PROPERTYKEY kTitle = {
+    {0xF29F85E0, 0x4FF9, 0x1068, {0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9}}, 2};
+
+std::wstring ExePath() {
+  std::wstring path(MAX_PATH, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  path.resize(length);
+  return path;
+}
+
+// Puts the icon in the notification area, or takes it out, as |message| says.
+bool TrayIcon(DWORD message) {
+  NOTIFYICONDATAW data = {sizeof(data)};
+  data.hWnd = g_tray;
+  data.uID = kTrayId;
+  if (message != NIM_DELETE) {
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+    data.uCallbackMessage = kTrayMessage;
+    // The exe's own icon, ilo's, small, as Windows draws the area's icons.
+    ExtractIconExW(ExePath().c_str(), 0, nullptr, &data.hIcon, 1);
+    wcsncpy_s(data.szTip, g_little_title.c_str(), _TRUNCATE);
+  }
+  const bool done = Shell_NotifyIconW(message, &data);
+  if (done && message == NIM_ADD) {
+    data.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &data);
+  }
+  if (data.hIcon) {
+    DestroyIcon(data.hIcon);
+  }
+  return done;
+}
+
+LRESULT CALLBACK TrayProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  if (message == kTrayMessage) {
+    // As the Mac's button, a click opens a window: the primary button, or Enter or Space on it.
+    switch (LOWORD(lparam)) {
+      case NIN_SELECT:
+      case NIN_KEYSELECT:
+        if (g_tray_clicked) {
+          g_tray_clicked();
+        }
+        return 0;
+    }
+    return 0;
+  }
+  // Explorer started again, with an empty notification area.
+  if (g_taskbar_created && message == g_taskbar_created && g_tray_clicked) {
+    TrayIcon(NIM_ADD);
+    return 0;
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+}  // namespace
+
+extern "C" {
+
+void host_set_little_status_item(void (*clicked)(void)) {
+  if (!clicked) {
+    if (g_tray_clicked) {
+      TrayIcon(NIM_DELETE);
+      // check.sh reads this line.
+      fprintf(stderr, "browser: notification icon removed\n");
+    }
+    g_tray_clicked = nullptr;
+    return;
+  }
+  const bool shown = g_tray_clicked;
+  g_tray_clicked = clicked;
+  if (shown) {
+    return;
+  }
+  if (!g_tray) {
+    WNDCLASSEXW window_class = {sizeof(window_class)};
+    window_class.lpfnWndProc = TrayProc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.lpszClassName = L"IloLittleTray";
+    RegisterClassExW(&window_class);
+    // Top-level and never shown, as only top-level windows hear Explorer's TaskbarCreated.
+    g_tray = CreateWindowExW(WS_EX_TOOLWINDOW, L"IloLittleTray", L"", WS_POPUP, 0, 0, 0, 0,
+                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    g_taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: notification icon %s\n", TrayIcon(NIM_ADD) ? "shown" : "refused");
+}
+
+void host_set_little_task(const char* title, const char* arguments) {
+  g_little_title = Wide(title);
+  g_little_arguments = Wide(arguments);
+  g_little_task_waits = true;
+  WriteLittleTask();
+}
+
+}  // extern "C"
+
+static void WriteLittleTask() {
+  // The list goes under the windows' ID, so their taskbar button has it, and no window has it
+  // before the first opens.
+  const std::wstring id = g_little_task_waits ? BrowserModelId() : std::wstring();
+  if (id.empty()) {
+    return;
+  }
+  g_little_task_waits = false;
+  // check.sh reads these lines: which step refused, and why.
+  const auto refused = [](const char* step, HRESULT result) {
+    fprintf(stderr, "browser: jump list refused at %s: 0x%08lx\n", step,
+            static_cast<unsigned long>(result));
+  };
+  ComPtr<ICustomDestinationList> list;
+  ComPtr<IObjectCollection> tasks;
+  ComPtr<IShellLinkW> link;
+  ComPtr<IPropertyStore> store;
+  HRESULT result = CoCreateInstance(CLSID_DestinationList, nullptr, CLSCTX_INPROC_SERVER,
+                                    IID_PPV_ARGS(&list));
+  if (FAILED(result)) {
+    return refused("the list", result);
+  }
+  result = CoCreateInstance(CLSID_EnumerableObjectCollection, nullptr, CLSCTX_INPROC_SERVER,
+                            IID_PPV_ARGS(&tasks));
+  if (FAILED(result)) {
+    return refused("the tasks", result);
+  }
+  result = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
+  if (FAILED(result) || FAILED(result = link.As(&store))) {
+    return refused("the task", result);
+  }
+  if (FAILED(result = list->SetAppID(id.c_str()))) {
+    return refused("its app id", result);
+  }
+  const std::wstring exe = ExePath();
+  link->SetPath(exe.c_str());
+  link->SetArguments(g_little_arguments.c_str());
+  link->SetIconLocation(exe.c_str(), 0);
+  link->SetDescription(g_little_title.c_str());
+  PROPVARIANT value;
+  PropVariantInit(&value);
+  value.vt = VT_LPWSTR;
+  const size_t bytes = (g_little_title.size() + 1) * sizeof(wchar_t);
+  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
+  if (value.pwszVal) {
+    memcpy(value.pwszVal, g_little_title.c_str(), bytes);
+  }
+  result = value.pwszVal ? store->SetValue(kTitle, value) : E_OUTOFMEMORY;
+  PropVariantClear(&value);
+  if (FAILED(result) || FAILED(result = store->Commit())) {
+    return refused("its title", result);
+  }
+  UINT slots = 0;
+  ComPtr<IObjectArray> removed;
+  ComPtr<IObjectArray> array;
+  if (FAILED(result = tasks->AddObject(link.Get())) || FAILED(result = tasks.As(&array)) ||
+      FAILED(result = list->BeginList(&slots, IID_PPV_ARGS(&removed))) ||
+      FAILED(result = list->AddUserTasks(array.Get())) || FAILED(result = list->CommitList())) {
+    return refused("the commit", result);
+  }
+  // check.sh reads this line.
+  fprintf(stderr, "browser: jump list task %ls: %ls\n", g_little_title.c_str(),
+          g_little_arguments.c_str());
+}
+
+extern "C" {
+
+// The notification area's icon's window, for drive.cc's statusitem: null while it's off.
+void* host_drive_little_tray(void) {
+  return g_tray_clicked ? g_tray : nullptr;
+}
+
+// Sends the icon what Explorer sends for a click on it, for drive.cc's statusitem click.
+bool host_drive_little_tray_click(void) {
+  if (!g_tray_clicked || !g_tray) {
+    return false;
+  }
+  SendMessageW(g_tray, kTrayMessage, 0, MAKELPARAM(NIN_SELECT, kTrayId));
+  return true;
 }
 
 }  // extern "C"

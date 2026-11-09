@@ -3,17 +3,24 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists windows private little capture media
-#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp
-#   appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts
-#   handback
-# The store run installs from Google's Web Store, adblock-live blocks Google's ad servers with
-# uBlock Origin's own lists and widevine, Linux's alone, downloads Google's Widevine module, so they
-# need the network and run only when named: ./check.sh store.
+#   split favorites cards extensions adblock adblock-lists windows private blank little capture media
+#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
+#   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
+#   notifications calls battery battery-os policies hosts idle handback webrtc count translate
+# The store run installs from Google's Web Store, as sync-extensions does on one device for the
+# account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
+# adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
+# the same with the browser's own, and widevine,
+# Linux's alone, downloads Google's Widevine module, so they need the network and run only when
+# named: ./check.sh store.
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
 # which build a check copy of their own (build.sh updates), on the Mac and Windows. So does
 # keychain, which uses the real Keychain, on the prod build and only in a check VM. Shots takes
-# the Store's pictures from pages on the internet, so it runs only when named too.
+# the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
+# tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
+# runs only when named, and skips elsewhere, where the windows run checks it.
+# Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
+# so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -34,7 +41,8 @@
 # load and history pass there so far; the others stop where they need what Linux hasn't yet, such
 # as Japanese input in a page (keys), ilo's menu over the command bar (tabs) and IME (spaces),
 # which the driver says it can't do. Captures are the session's whole output.
-# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has. BROWSER_WAYLAND=1 runs it
+# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has, and BROWSER_XVFB=kwin under
+# Xvfb and KWin, which composites and blurs under the overlays that ask. BROWSER_WAYLAND=1 runs it
 # on the sway session's Wayland, where the driver's input is sway's virtual pointer and keyboard
 # (platform/linux/drive_wayland.rs), which it refuses outside that session.
 set -e
@@ -54,12 +62,33 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
     # shellcheck disable=SC2016 # expanded by the session's shell
     exec xvfb-run -a -s "-screen 0 1280x800x24" sh -c '
       ready=$(mktemp -u)
-      openbox --startup "touch $ready" &
-      while [ ! -e "$ready" ]; do
-        kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
-        sleep 0.1
-      done
-      rm -f "$ready"
+      if [ "$BROWSER_XVFB" = kwin ]; then
+        # With OpenGL in Mesa'"'"'s software driver, which KWin composites with only when told to,
+        # and its blur, which it leaves off there unless its config turns it on. Ready once the blur
+        # names its property on the root window (#2134).
+        config=$(mktemp -d)
+        printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
+        tries=0
+        until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
+          grep -q "^_KDE_NET_WM_BLUR_BEHIND_REGION("; do
+          tries=$((tries + 1))
+          if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 600 ]; then
+            echo "kwin: no blur; the effects it says on the root window:" >&2
+            xprop -root | grep "^_KDE" >&2
+            cat "$ready.log" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+      else
+        openbox --startup "touch $ready" &
+        while [ ! -e "$ready" ]; do
+          kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
+          sleep 0.1
+        done
+        rm -f "$ready"
+      fi
       # The real pointer starts mid-screen, over the app, where the X server tells GPUI it left as
       # the page views of Chromium change under it, mid-drag too. The driver sends a pointer of its
       # own, so the real one waits in the corner the window leaves.
@@ -72,11 +101,12 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists windows private little capture media"
-runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp"
-runs="$runs appearance about sync sync-account sync-devices switch-frames devices filled scripting hosts"
-runs="$runs handback"
-named="store adblock-live widevine updates nightly update-checks keychain shots"
+runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
+runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
+runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
+runs="$runs everyday"
+runs="$runs handback webrtc count translate"
+named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -86,7 +116,7 @@ done
 # A file sourced with a syntax error ends the check where it stands, with the status of the EXIT
 # trap's last command, 0 under the Mac's sh, and the runs after it never start (#1267). So each
 # file the check sources is parsed before any run starts.
-for file in lib site ilo-server ${*:-$runs}; do
+for file in lib site ilo-server webstore ${*:-$runs}; do
   why=$(sh -n "check/$file.sh" 2>&1) || {
     echo "FAIL: check/$file.sh doesn't parse: $why" >&2
     exit 1
@@ -163,7 +193,9 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
+# The translate run always translates Spanish, which a failed one left.
+rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
+  "$(dirname "$saved")/Always Translated"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its
@@ -171,7 +203,9 @@ rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts"
 # often it dismissed them, for sites whose ports a later run may get, and a failed clear run may
 # have left localhost out of Developer Mode. A failed media run may have left the Mini Player off,
 # which the core keeps as Block for every site's Automatic picture-in-picture and doesn't undo at
-# launch, so no later run's call floated (#1165).
+# launch, so no later run's call floated (#1165). A failed favorites run may have left the first
+# profile's archive at 24 hours, which the profile keeps as its own and no later run's menu then
+# showed at 12 (#1982); dropped, the profile takes Settings' default again.
 # Each file is Chrome's or the core's, in UTF-8, which Windows' Python doesn't read by default, as a
 # Space's emoji in Spaces.json needs (#1673).
 prefs="$profile_dir/Default/Preferences"
@@ -190,7 +224,8 @@ for kind in ("window_placement", "permission_autoblocking_data", "auto_picture_i
     exceptions.pop(kind, None)
 defaults = prefs.get("profile", {}).get("default_content_setting_values", {})
 defaults.pop("auto_picture_in_picture", None)
-prefs.get("browser_core", {}).pop("developer_mode", None)
+for key in ("developer_mode", "archive_after"):
+    prefs.get("browser_core", {}).pop(key, None)
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
@@ -250,6 +285,10 @@ for run in ${*:-$runs}; do
   rm -f "$profile_dir/Link rules"
   # And without Hide Space Header's choice, which spaces' makes and takes back.
   rm -f "$profile_dir/Space Header"
+  # And without the command bar's picks, which put a command picked first among equal matches
+  # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
+  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
+  rm -f "$profile_dir/Command bar picks"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites

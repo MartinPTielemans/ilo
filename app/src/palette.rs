@@ -427,6 +427,18 @@ impl Palette {
         .into()
     }
 
+    /// A site's own colour as the command bar's accent in its site search (#1397), and its label:
+    /// the colour nearest `main` at its hue that reads on the bar, as the accent does, with Ink or
+    /// Paper on it.
+    pub fn site_accent(&self, main: Rgba) -> (Rgba, Rgba) {
+        let passes = |c: Rgba| {
+            contrast(rgb(INK), c).max(contrast(rgb(PAPER), c)) >= LABEL
+                && contrast(c, self.overlay) >= GLYPH
+        };
+        let fill = nearest(main, passes).unwrap_or(self.accent);
+        (fill, label_on(fill))
+    }
+
     /// Behind selected text in a field: the accent, faint.
     pub fn selection(&self) -> Hsla {
         Hsla::from(self.accent).opacity(SELECTION)
@@ -563,11 +575,16 @@ impl Palette {
         window.samples(self.shade, self.layer_alpha)
     }
 
-    /// The pickers' card as they draw it. Only the Mac's host blurs what's behind a picker;
-    /// elsewhere what's behind shows sharp through the card and reads as noise, so there the card
-    /// is opaque over the dark overlay.
+    /// The pickers' card as they draw it: translucent where the host blurs what's behind a
+    /// picker, the Mac's always and Linux's where its compositor can. Elsewhere what's behind
+    /// shows sharp through the card and reads as noise, so there the card is opaque over the dark
+    /// overlay.
     pub fn card_drawn(&self) -> Rgba {
-        if cfg!(target_os = "macos") {
+        #[cfg(target_os = "linux")]
+        let blurred = gpui_linux::overlays_blur();
+        #[cfg(not(target_os = "linux"))]
+        let blurred = cfg!(target_os = "macos");
+        if blurred {
             return self.card;
         }
         over(rgb(OVERLAY_DARK), self.card, self.card.a)

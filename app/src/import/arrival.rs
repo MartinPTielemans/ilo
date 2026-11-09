@@ -161,6 +161,7 @@ fn tabs(adds: &[Add]) -> usize {
     adds.iter()
         .map(|add| match add {
             Add::Tab(_) => 1,
+            Add::Split(split) => split.tabs.len(),
             Add::Folder { adds, .. } => tabs(adds),
         })
         .sum()

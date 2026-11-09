@@ -16,7 +16,8 @@
 # click (swaymsg seat seat0 cursor ...), type or capture again.
 # --run runs <command> in the session instead, with no capture, and exits with its status: for
 # app/check.sh, which launches the browser itself. It has Xwayland's DISPLAY with --x11, and the
-# session's Wayland socket's name in BROWSER_HEADLESS, which tools/window-screenshot.sh captures.
+# session's Wayland socket's name in BROWSER_HEADLESS, which tools/window-screenshot.sh captures,
+# and without it Xwayland's DISPLAY in BROWSER_XWAYLAND, for another app's X11 window.
 # Usage: tools/headless.sh [--x11] [--page] [--moving <n>] [--scale <n>] [--then <command>]
 #   <output.png> <ready> <program> [arguments...]
 #        tools/headless.sh [--x11] [--scale <n>] --run <command> [arguments...]
@@ -120,7 +121,8 @@ if [ -n "$run" ]; then
       SWAYSOCK="$swaysock" BROWSER_HEADLESS="$wayland" "$@" || status=$?
   else
     env -u DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u GDK_SCALE WAYLAND_DISPLAY="$wayland" \
-      SWAYSOCK="$swaysock" BROWSER_HEADLESS="$wayland" "$@" || status=$?
+      SWAYSOCK="$swaysock" BROWSER_HEADLESS="$wayland" BROWSER_XWAYLAND="$display" "$@" ||
+      status=$?
   fi
   exit $status
 fi

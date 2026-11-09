@@ -3,7 +3,10 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <cmath>
 #include <cstdio>
+#include <memory>
+#include <utility>
 
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
@@ -71,7 +74,10 @@
 @property(strong, nonatomic) NSHashTable<NSView*>* awaited;
 // How many switches have kept pages, so the limit on keeping them ends only the last one's.
 @property(nonatomic) NSUInteger holds;
+// What the panes are drawn at, about the centre of their frames (ScalePages); 0 is 1.
+@property(nonatomic) double pageScale;
 - (void)layOutPage;
+- (void)scalePages;
 - (void)letLeavingGo;
 @end
 
@@ -84,6 +90,7 @@
 @synthesize leaving = _leaving;
 @synthesize awaited = _awaited;
 @synthesize holds = _holds;
+@synthesize pageScale = _pageScale;
 
 - (BOOL)isFlipped {
   return YES;
@@ -160,6 +167,53 @@
   if (self.sidePanel.page.superview == self) {
     self.sidePanel.page.frame = [self frameOf:self.sidePanel];
   }
+  [self scalePages];
+}
+
+// By each view's layer transform, so the pages are never laid out again for it. AppKit keeps each
+// layer's anchor point and which way up it is, so where a transform puts it is measured in this
+// view's layer rather than worked out.
+- (void)scalePages {
+  NSMutableArray<CALayer*>* layers = [NSMutableArray array];
+  for (BrowserCorePane* pane in self.panes) {
+    for (NSView* view in @[ pane.page ?: NSNull.null, pane.devtools ?: NSNull.null ]) {
+      if ([view isKindOfClass:NSView.class] && view.superview == self && view.layer) {
+        [layers addObject:view.layer];
+      }
+    }
+  }
+  if (self.ring.superview == self && self.ring.layer) {
+    [layers addObject:self.ring.layer];
+  }
+  CALayer* space = self.layer;
+  auto frame = [space](CALayer* layer) { return [layer convertRect:layer.bounds toLayer:space]; };
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  CGRect frames = CGRectNull;
+  for (CALayer* layer in layers) {
+    layer.transform = CATransform3DIdentity;
+    frames = CGRectUnion(frames, frame(layer));
+  }
+  const double scale = self.pageScale > 0 ? self.pageScale : 1;
+  if (scale != 1 && !CGRectIsNull(frames)) {
+    const CGPoint about = CGPointMake(CGRectGetMidX(frames), CGRectGetMidY(frames));
+    for (CALayer* layer in layers) {
+      const CGRect own = frame(layer);
+      const CGPoint want = CGPointMake(about.x + scale * (CGRectGetMinX(own) - about.x),
+                                       about.y + scale * (CGRectGetMinY(own) - about.y));
+      const CATransform3D scaled = CATransform3DMakeScale(scale, scale, 1);
+      layer.transform = scaled;
+      const CGRect at = frame(layer);
+      const double dx = want.x - CGRectGetMinX(at);
+      const double dy = want.y - CGRectGetMinY(at);
+      layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, dy, 0));
+      // A layer upside down to this one moves the other way.
+      if (std::abs(CGRectGetMinY(frame(layer)) - want.y) > 0.5) {
+        layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, -dy, 0));
+      }
+    }
+  }
+  [CATransaction commit];
 }
 @end
 
@@ -460,6 +514,17 @@ void ShowPages(views::Widget* widget,
   }
 }
 
+void ScalePages(views::Widget* widget, double scale) {
+  BrowserCoreWindowView* view = WindowView(widget);
+  view.pageScale = scale;
+  [view scalePages];
+}
+
+// AppKit gives a view's points from its frame, which the layer's scale doesn't move.
+gfx::PointF LaidOutPagePoint(gfx::NativeView, const gfx::PointF& point) {
+  return point;
+}
+
 void HoldPagesForResize(views::Widget*) {}
 
 bool PagesHeldForResize(views::Widget*) {
@@ -500,6 +565,13 @@ void ShowPageIn(views::Widget*,
   UpdateOcclusion(holder.window);
 }
 
+bool FocusSettledOnActivation() {
+  // AppKit can be part way through moving the keyboard, as when a committing page hides the view
+  // that had it and Chromium makes the window key: a page view focused inside that move believes
+  // it has the keyboard after AppKit has given it elsewhere.
+  return false;
+}
+
 bool PageDialogsInOwnWindow() {
   // A child NSWindow either way.
   return false;
@@ -527,6 +599,39 @@ bool KeyboardForPage(views::Widget* widget) {
 
 void ReleaseKeyboard(views::Widget* widget) {
   [widget->GetNativeWindow().GetNativeNSWindow() makeFirstResponder:nil];
+}
+
+bool OverlayHasKeyboard(views::Widget* widget) {
+  if (!widget) {
+    return false;
+  }
+  NSWindow* window = widget->GetNativeWindow().GetNativeNSWindow();
+  // A submenu's window is the menu's child.
+  for (NSWindow* over = NSApp.keyWindow.parentWindow; over; over = over.parentWindow) {
+    if (over == window) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void WhenOverlayLetsGo(views::Widget* widget, base::OnceClosure let_go) {
+  NSWindow* overlay = NSApp.keyWindow;
+  if (!overlay) {
+    return;
+  }
+  auto held = std::make_shared<base::OnceClosure>(std::move(let_go));
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  __block id observer = [center addObserverForName:NSWindowDidResignKeyNotification
+                                            object:overlay
+                                             queue:nil
+                                        usingBlock:^(NSNotification*) {
+                                          [center removeObserver:observer];
+                                          observer = nil;
+                                          // Posted, as the next key window takes it after.
+                                          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                                              FROM_HERE, std::move(*held));
+                                        }];
 }
 
 void KeepKeyboard(views::Widget* widget, base::OnceClosure change) {

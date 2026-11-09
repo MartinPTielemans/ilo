@@ -2,7 +2,10 @@ Lets the core handle the Mini Player, a video's Picture in Picture window, as Ar
 (//browser_core/hooks.h): a scroll moves it, ⌘ or Ctrl with a scroll, or a pinch, sizes it, and a
 double-click goes back to its tab. Chrome makes the window's background a caption, so the OS drags
 it and the window never hears the press; while the core's hook is set it's the window's own, and
-the core moves it as a caption would, through Widget::RunMoveLoop.
+the core moves it as a caption would, through Widget::RunMoveLoop. The core also places it, the
+first time 10 pt from the top right of the screen's work area, then where the last was left, which
+it hears as each one closes or hides. It keeps that across launches in local state, in a pref of
+its own that it registers through Chrome's RegisterLocalState.
 
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
@@ -14,7 +17,7 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
  
  #include <memory>
  #include <string>
-@@ -207,6 +208,11 @@
+@@ -207,6 +208,19 @@
  
  }  // namespace
  
@@ -22,11 +25,19 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
 +// double-click (//browser_core/hooks.h).
 +bool (*g_browser_core_mini_player_event)(VideoOverlayWindowViews* window,
 +                                         ui::Event* event) = nullptr;
++// browser_core: the core places the window, and keeps where it was left for the next
++// (//browser_core/hooks.h).
++gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* window,
++                                              const gfx::Rect& bounds,
++                                              bool shown,
++                                              const gfx::Rect& work_area) = nullptr;
++void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window) =
++    nullptr;
 +
  // OverlayWindow implementation of FrameView.
  class OverlayWindowFrameView : public views::FrameView {
    METADATA_HEADER(OverlayWindowFrameView, views::FrameView)
-@@ -260,6 +266,11 @@
+@@ -260,6 +274,11 @@
      }
  
      // Allows for dragging and resizing the window.
@@ -38,7 +49,20 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
      return (window_component == HTNOWHERE) ? HTCAPTION : window_component;
    }
  #if BUILDFLAG(IS_CHROMEOS)
-@@ -696,6 +707,11 @@
+@@ -522,6 +541,12 @@
+   gfx::Point default_origin =
+       gfx::Point(window_diff_width - buffer, window_diff_height - buffer);
+ 
++  // browser_core: the core places it (//browser_core/hooks.h).
++  if (g_browser_core_mini_player_place) {
++    return g_browser_core_mini_player_place(
++        this, gfx::Rect(origin, window_size), has_been_shown_, work_area);
++  }
++
+   if (has_been_shown_) {
+     // Make sure window is displayed entirely in the work area.
+     origin.SetToMin(default_origin);
+@@ -696,6 +721,11 @@
  
    MaybeUpdateMeetsUserInteraction(*event);
  
@@ -50,7 +74,29 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
    views::Widget::OnMouseEvent(event);
  }
  
-@@ -2034,6 +2050,14 @@
+@@ -1720,6 +1750,10 @@
+ }
+ 
+ void VideoOverlayWindowViews::Close() {
++  // browser_core: where it was left, while it's still there (//browser_core/hooks.h).
++  if (g_browser_core_mini_player_left) {
++    g_browser_core_mini_player_left(this);
++  }
+   views::Widget::Close();
+   MaybeUnregisterFrameSinkHierarchy();
+   if (fade_animator_) {
+@@ -1801,6 +1835,10 @@
+ }
+ 
+ void VideoOverlayWindowViews::Hide() {
++  // browser_core: where it was left, while it's still there (//browser_core/hooks.h).
++  if (g_browser_core_mini_player_left) {
++    g_browser_core_mini_player_left(this);
++  }
+   // If there is an existing overlay view, remove it now.
+   RemoveOverlayViewIfExists();
+   views::Widget::Hide();
+@@ -2034,6 +2072,14 @@
    MaybeUnregisterFrameSinkHierarchy();
  }
  
@@ -65,7 +111,7 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
  void VideoOverlayWindowViews::OnGestureEvent(ui::GestureEvent* event) {
    MaybeUpdateMeetsUserInteraction(*event);
  
-@@ -2041,6 +2065,11 @@
+@@ -2041,6 +2087,11 @@
    // hide the controls.
    hide_controls_timer_.Reset();
  
@@ -87,3 +133,36 @@ the core moves it as a caption would, through Widget::RunMoveLoop.
  
    // display::DisplayObserver:
    void OnDisplayMetricsChanged(const display::Display& display,
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/prefs/browser_prefs.h"
++#include "browser_core/hooks.h"  // nogncheck
+ 
+ #include <array>
+ #include <optional>
+@@ -1518,6 +1519,10 @@
+       g_browser_process->variations_service()->GetStoredPermanentCountry());
+ }
+ 
++// browser_core: the core registers its own local state prefs (//browser_core/hooks.h).
++void (*g_browser_core_register_local_state)(PrefRegistrySimple* registry) =
++    nullptr;
++
+ void RegisterLocalState(PrefRegistrySimple* registry) {
+   // Call outs to individual subsystems that register Local State (browser-wide)
+   // prefs en masse. See RegisterProfilePrefs for per-profile prefs. Please
+@@ -1840,6 +1845,11 @@
+       policy::policy_prefs::kLocalNetworkAccessPermissionsPolicyDefaultEnabled,
+       false);
+ 
++  // browser_core: its own (//browser_core/hooks.h).
++  if (g_browser_core_register_local_state) {
++    g_browser_core_register_local_state(registry);
++  }
++
+   // This is intentionally last.
+   RegisterLocalStatePrefsForMigration(registry);
+ }

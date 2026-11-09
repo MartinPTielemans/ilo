@@ -13,7 +13,9 @@ use gpui::{App, AppContext, Entity, TestAppContext};
 use super::arc;
 use super::chromium;
 use super::extensions::{self, Extension};
-use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Tab};
+use super::found::{
+    Address, Destination, Field, Found, FromProfile, LinkRule, Node, Page, Split, Tab,
+};
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
 use super::session;
@@ -21,7 +23,7 @@ use super::sources::{self, Os, Roots};
 use super::suggested;
 use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords, STALL};
 use super::{firefox, safari};
-use crate::link_rules::{Condition, Rule};
+use crate::link_rules::{Condition, FRONT, LITTLE, Rule};
 use crate::theme::{Appearance, Texture, Theme};
 
 fn fixture() -> PathBuf {
@@ -44,6 +46,7 @@ fn picked(spaces: bool, favorites: bool) -> Found {
     if !spaces {
         found.spaces.clear();
         found.link_rules.clear();
+        found.link_otherwise = None;
     }
     if !favorites {
         found.favorites.clear();
@@ -52,15 +55,19 @@ fn picked(spaces: bool, favorites: bool) -> Found {
 }
 
 fn tab(url: &str) -> Node {
-    Node::Tab(Tab {
+    Node::Tab(tab_of(url))
+}
+
+fn tab_of(url: &str) -> Tab {
+    Tab {
         url: url.into(),
         name: String::new(),
-    })
+    }
 }
 
 /// Spaces, their pinned tabs and folders, their profiles and the favorites come in; Arc's own
-/// pages, the welcome card, Today tabs and ids that name nothing don't. A split view's tabs take
-/// its place, and a folder named inside itself comes in once.
+/// pages, the welcome card, Today tabs and ids that name nothing don't. A split view comes in as
+/// one, and a folder named inside itself comes in once.
 #[test]
 fn arcs_sidebar_reads_as_its_spaces_and_favorites() {
     let sidebar = sidebar();
@@ -84,8 +91,15 @@ fn arcs_sidebar_reads_as_its_spaces_and_favorites() {
         name: "Reading".into(),
         children: vec![
             tab("https://example.com/a"),
-            tab("https://example.com/b"),
-            tab("https://example.com/c"),
+            Node::Split(Split {
+                tabs: vec![
+                    tab_of("https://example.com/b"),
+                    tab_of("https://example.com/c"),
+                ],
+                name: String::new(),
+                icon: String::new(),
+                stacked: false,
+            }),
             deep,
         ],
     };
@@ -211,6 +225,86 @@ fn arcs_appearance_comes_from_its_window_appearance_else_its_look() {
     let auto = theme_of(format!("{{{both}}}"));
     assert_eq!(auto.appearance, Appearance::Automatic);
     assert!(auto.dark.is_some());
+}
+
+/// The fixture's Reading folder, with its split view's item edited by `edit` and `items` added.
+fn reading_with(edit: &str, items: &str) -> Vec<Node> {
+    let arc = fixture().join("Library/Application Support/Arc");
+    let json = fs::read_to_string(arc.join("StorableSidebar.json")).unwrap();
+    let split = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": null, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "horizontal", "itemWidthFactors": [0.5, 0.5] } } },"#;
+    assert!(json.contains(split));
+    let json = json.replace(split, &format!("{edit},\n{items}"));
+    let found = arc::parse(&json, None).unwrap();
+    let Node::Folder { children, .. } = &found.spaces[0].pinned[1] else {
+        panic!("{:?}", found.spaces[0].pinned)
+    };
+    children.clone()
+}
+
+/// A split view keeps the name and orientation the user gave it in Arc, and its icon if it's an
+/// emoji, as a split's icon is here: Arc's glyphs have no place on a split.
+#[test]
+fn an_arc_split_view_keeps_its_name_icon_and_orientation() {
+    let split = |name: &str, icon: &str, stacked| {
+        Node::Split(Split {
+            tabs: vec![
+                tab_of("https://example.com/b"),
+                tab_of("https://example.com/c"),
+            ],
+            name: name.into(),
+            icon: icon.into(),
+            stacked,
+        })
+    };
+    let named = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": " Docs and notes ", "customInfo": { "iconType": { "emoji_v2": "📚" } }, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "vertical" } } }"#;
+    assert_eq!(
+        reading_with(named, "")[1],
+        split("Docs and notes", "📚", true)
+    );
+    let glyph = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": "Docs", "customInfo": { "iconType": { "icon": "bolt" } }, "childrenIds": ["T-B", "T-C"], "data": { "splitView": { "layoutOrientation": "horizontal" } } }"#;
+    assert_eq!(reading_with(glyph, "")[1], split("Docs", "", false));
+}
+
+/// A split here holds three pages, so an Arc split's fourth tab comes in after it, and a split
+/// with one page that opens here comes in as that tab.
+#[test]
+fn an_arc_split_view_holds_what_a_split_here_does() {
+    let tab_item = |id: &str, url: &str| {
+        format!(
+            r#""{id}", {{ "id": "{id}", "parentID": "V-SPLIT", "title": null, "childrenIds": [], "data": {{ "tab": {{ "savedURL": "{url}" }} }} }},"#
+        )
+    };
+    let items = [
+        tab_item("T-E", "https://example.com/e"),
+        tab_item("T-F", "https://example.com/f"),
+        tab_item("T-G", "arc://settings"),
+    ]
+    .concat();
+    let four = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": null, "childrenIds": ["T-B", "T-C", "T-E", "T-F"], "data": { "splitView": {} } }"#;
+    let reading = reading_with(four, &items);
+    assert_eq!(
+        reading[1..4],
+        [
+            Node::Split(Split {
+                tabs: ["b", "c", "e"]
+                    .map(|page| tab_of(&format!("https://example.com/{page}")))
+                    .into(),
+                name: String::new(),
+                icon: String::new(),
+                stacked: false,
+            }),
+            tab("https://example.com/f"),
+            Node::Folder {
+                name: "Deep".into(),
+                children: vec![tab("https://example.com/d")],
+            },
+        ]
+    );
+    let one = r#"{ "id": "V-SPLIT", "parentID": "F-READING", "title": "Settings", "childrenIds": ["T-B", "T-G"], "data": { "splitView": {} } }"#;
+    assert_eq!(
+        reading_with(one, &items)[..2],
+        [tab("https://example.com/a"), tab("https://example.com/b")]
+    );
 }
 
 #[test]
@@ -539,6 +633,8 @@ struct State {
     spaces: Vec<Space>,
     favorites: Vec<(u64, Tab)>,
     link_rules: Vec<Rule>,
+    /// Where everything else opens, once an import sets it; Little ilo before.
+    link_otherwise: Option<u64>,
     /// Spaces put in a profile that hasn't loaded yet.
     loading: Vec<(u64, u64)>,
     /// Profiles made that haven't loaded yet.
@@ -568,6 +664,7 @@ struct Space {
 #[derive(Clone, Debug, PartialEq)]
 enum FakeRow {
     Tab(Tab),
+    Split(Split),
     Folder(u64, String, Vec<FakeRow>),
 }
 
@@ -666,14 +763,18 @@ impl Browser {
     /// What the browser has, as existing() says it.
     fn here(&self) -> Existing {
         fn rows(of: &[FakeRow]) -> Vec<Row> {
+            // The core lists a split's tabs as it lists any pinned tab.
             of.iter()
-                .map(|row| match row {
-                    FakeRow::Tab(tab) => Row::Tab(tab.url.clone()),
-                    FakeRow::Folder(id, name, inner) => Row::Folder {
+                .flat_map(|row| match row {
+                    FakeRow::Tab(tab) => vec![Row::Tab(tab.url.clone())],
+                    FakeRow::Split(split) => (split.tabs.iter())
+                        .map(|tab| Row::Tab(tab.url.clone()))
+                        .collect(),
+                    FakeRow::Folder(id, name, inner) => vec![Row::Folder {
                         id: *id,
                         name: name.clone(),
                         rows: rows(inner),
-                    },
+                    }],
                 })
                 .collect()
         }
@@ -695,6 +796,7 @@ impl Browser {
                 .map(|(profile, tab)| (*profile, tab.url.clone()))
                 .collect(),
             link_rules: state.link_rules.clone(),
+            link_otherwise: state.link_otherwise.unwrap_or(LITTLE),
         }
     }
 }
@@ -770,6 +872,13 @@ impl Host for Browser {
             .push(FakeRow::Tab(tab.clone()));
     }
 
+    fn add_split(&self, space: u64, folder: u64, split: &Split) {
+        let mut state = self.state.borrow_mut();
+        folder_rows(&mut state.space(space).rows, folder)
+            .unwrap()
+            .push(FakeRow::Split(split.clone()));
+    }
+
     fn add_favorite(&self, space: u64, tab: &Tab) {
         let mut state = self.state.borrow_mut();
         let profile = state.space(space).profile;
@@ -784,8 +893,10 @@ impl Host for Browser {
             .insert(0, tab.clone());
     }
 
-    fn add_link_rules(&self, rules: &[Rule]) {
-        self.state.borrow_mut().link_rules.extend_from_slice(rules);
+    fn add_link_rules(&self, rules: &[Rule], otherwise: Option<u64>) {
+        let mut state = self.state.borrow_mut();
+        state.link_rules.extend_from_slice(rules);
+        state.link_otherwise = otherwise.or(state.link_otherwise);
     }
 
     fn profile_loaded(&self, profile: u64) -> bool {
@@ -901,13 +1012,30 @@ impl Host for Browser {
     }
 }
 
-/// Rows as text: a tab's URL, after its name if it has one, and a folder's name with its rows.
+/// Rows as text: a tab's URL, after its name if it has one, a split's tabs, after its icon, name
+/// and orientation if it has them, and a folder's name with its rows.
 fn shape(rows: &[FakeRow]) -> String {
     let rows: Vec<String> = rows
         .iter()
         .map(|row| match row {
             FakeRow::Tab(tab) if tab.name.is_empty() => tab.url.clone(),
             FakeRow::Tab(tab) => format!("{}={}", tab.name, tab.url),
+            FakeRow::Split(split) => {
+                let tabs: Vec<FakeRow> = split.tabs.iter().cloned().map(FakeRow::Tab).collect();
+                let stacked = if split.stacked { "stacked" } else { "" };
+                let label: Vec<&str> = [split.icon.as_str(), split.name.as_str(), stacked]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect();
+                format!(
+                    "split{}({})",
+                    label
+                        .iter()
+                        .map(|part| format!(" {part}"))
+                        .collect::<String>(),
+                    shape(&tabs)
+                )
+            }
             FakeRow::Folder(_, name, rows) => format!("{name}[{}]", shape(rows)),
         })
         .collect();
@@ -956,8 +1084,8 @@ fn an_import_brings_in_spaces_folders_and_favorites(cx: &mut TestAppContext) {
     assert_eq!(personal.theme.unwrap().count, 3);
     assert_eq!(
         shape(&personal.rows),
-        "HN=https://news.ycombinator.com/, Reading[https://example.com/a, https://example.com/b, \
-         https://example.com/c, Deep[https://example.com/d]]"
+        "HN=https://news.ycombinator.com/, Reading[https://example.com/a, \
+         split(https://example.com/b, https://example.com/c), Deep[https://example.com/d]]"
     );
     let work = &state.spaces[2];
     assert_eq!((work.profile, work.icon.as_str()), (3, "glyph:bolt"));
@@ -976,35 +1104,60 @@ fn an_import_brings_in_spaces_folders_and_favorites(cx: &mut TestAppContext) {
     );
 }
 
-/// Arc's link rules that match a link's URL and open it in one of its Spaces come in, in Arc's
-/// order, whichever way the file names the Space; one that matches the app a link came from, or
-/// goes to Little Arc, the Space in front or a Space that's gone, doesn't, nor does a file that
-/// can't be read.
+/// Arc's link rules that match a link's URL come in, in Arc's order, to one of its Spaces whichever
+/// way the file names it, to Little Arc or to the Space in front, and so does where it opens
+/// everything else; one that matches the app a link came from or goes to a Space that's gone
+/// doesn't, nor does a file that can't be read.
 #[test]
 fn arcs_link_rules_read_as_ours() {
-    let rule = |condition, text: &str, space| LinkRule {
+    let rule = |condition, text: &str, to| LinkRule {
         condition,
         text: text.into(),
-        space,
+        to,
     };
     let rules = [
-        rule(Condition::Contains, "work.example.com", 1),
-        rule(Condition::Is, "https://news.ycombinator.com/", 0),
-        rule(Condition::Is, "https://docs.example.com/", 1),
+        rule(
+            Condition::Contains,
+            "work.example.com",
+            Destination::Space(1),
+        ),
+        rule(
+            Condition::Is,
+            "https://news.ycombinator.com/",
+            Destination::Space(0),
+        ),
+        rule(Condition::Contains, "meet.example.com", Destination::Little),
+        rule(Condition::Contains, "front.example.com", Destination::Front),
+        rule(
+            Condition::Is,
+            "https://docs.example.com/",
+            Destination::Space(1),
+        ),
     ];
-    assert_eq!(sidebar().link_rules, rules);
+    let found = sidebar();
+    assert_eq!(found.link_rules, rules);
+    assert_eq!(found.link_otherwise, Some(Destination::Space(0)));
     let arc = fixture().join("Library/Application Support/Arc");
     let json = fs::read_to_string(arc.join("StorableSidebar.json")).unwrap();
-    assert!(
-        arc::parse(&json, Some("not json"))
-            .unwrap()
-            .link_rules
-            .is_empty()
+    let otherwise = |to: &str| {
+        let routing = format!(r#"{{"defaultDestination": {to}, "rules": []}}"#);
+        arc::parse(&json, Some(&routing)).unwrap().link_otherwise
+    };
+    // Little Arc is ours' default too, so it changes nothing.
+    assert_eq!(
+        otherwise(r#"{"littleArc": {"_0": {"mostRecent": {}}}}"#),
+        None
     );
+    let front = otherwise(r#"{"space": {"_0": {"mostRecent": {}}}}"#);
+    assert_eq!(front, Some(Destination::Front));
+    let unread = arc::parse(&json, Some("not json")).unwrap();
+    assert!(unread.link_rules.is_empty() && unread.link_otherwise.is_none());
 }
 
-/// Arc's link rules go after the user's, each to the Space its Arc Space became, and one the
-/// user has already, to the Space of that name here, doesn't come twice.
+/// Arc's link rules go after the user's, each to the Space its Arc Space became, Little ilo or
+/// the Space in front, and everything else to the Space Arc sends it to. One the user has
+/// already, to the Space of that name here or the Space in front, doesn't come twice, and a Space
+/// the user picked for everything else stays.
 #[gpui::test]
 fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
     let rule = |condition, text: &str, space| Rule {
@@ -1022,9 +1175,12 @@ fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
         mine,
         rule(Condition::Contains, "work.example.com", work),
         rule(Condition::Is, "https://news.ycombinator.com/", personal),
+        rule(Condition::Contains, "meet.example.com", LITTLE),
+        rule(Condition::Contains, "front.example.com", FRONT),
         rule(Condition::Is, "https://docs.example.com/", work),
     ];
     assert_eq!(state.link_rules, rules);
+    assert_eq!(state.link_otherwise, Some(personal));
     drop(state);
 
     let browser = Browser::new(None);
@@ -1032,13 +1188,19 @@ fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
         let mut state = browser.state.borrow_mut();
         state.space(2).name = "Personal".into();
         let hn = rule(Condition::Is, "https://news.ycombinator.com/", 2);
-        state.link_rules.push(hn);
+        let front = rule(Condition::Contains, "front.example.com", FRONT);
+        state.link_rules.extend([hn, front]);
     }
     let plan = plan::plan(&sidebar(), &profile_names(), &browser.here());
-    assert_eq!(plan.counts().link_rules, 2);
+    assert_eq!(plan.counts().link_rules, 4);
+    assert_eq!(plan.link_otherwise, Some(plan::SpaceRef::Existing(2)));
+    browser.state.borrow_mut().link_otherwise = Some(0);
+    let plan = plan::plan(&sidebar(), &profile_names(), &browser.here());
+    assert_eq!(plan.link_otherwise, None);
 }
 
-/// A Space here that an import gives only Today tabs is still the one its link rules go to.
+/// A Space here that an import gives only Today tabs is still the one its link rules go to; where
+/// everything else opens, set the first time, is set already.
 #[gpui::test]
 fn link_rules_go_to_a_space_that_gains_only_today_tabs(cx: &mut TestAppContext) {
     let browser = Browser::new(None);
@@ -1052,7 +1214,7 @@ fn link_rules_go_to_a_space_that_gains_only_today_tabs(cx: &mut TestAppContext) 
     let plan = plan::plan(&found, &profile_names(), &browser.here());
     let counts = Counts {
         today: 1,
-        link_rules: 3,
+        link_rules: 5,
         ..Counts::default()
     };
     assert_eq!(plan.counts(), counts);
@@ -1102,7 +1264,8 @@ fn a_space_already_here_gets_only_what_it_lacks(cx: &mut TestAppContext) {
     let counts = Counts {
         spaces: 1,
         pinned: 4,
-        link_rules: 3,
+        today: 1,
+        link_rules: 6,
         ..Counts::default()
     };
     assert_eq!(plan.counts(), counts);
@@ -1112,8 +1275,40 @@ fn a_space_already_here_gets_only_what_it_lacks(cx: &mut TestAppContext) {
     assert_eq!(personal.icon, "");
     assert_eq!(
         shape(&personal.rows),
-        "https://news.ycombinator.com/, Reading[https://example.com/a, https://example.com/b, \
-         https://example.com/c, Deep[https://example.com/d]]"
+        "https://news.ycombinator.com/, Reading[https://example.com/a, \
+         split(https://example.com/b, https://example.com/c), Deep[https://example.com/d]]"
+    );
+}
+
+/// A split view comes in once: importing again adds nothing, and one with a page already in its
+/// place brings only the pages that aren't, a single one as a tab.
+#[gpui::test]
+fn an_arc_split_view_comes_in_once(cx: &mut TestAppContext) {
+    let found = picked(true, false);
+    let browser = Browser::new(None);
+    cx.update(|cx| import(&browser, &found, cx));
+    let first = shape(&browser.spaces()[1].rows);
+    assert!(first.contains("split(https://example.com/b, https://example.com/c)"));
+    cx.update(|cx| import(&browser, &found, cx));
+    assert_eq!(shape(&browser.spaces()[1].rows), first);
+
+    let browser = Browser::new(None);
+    {
+        let mut state = browser.state.borrow_mut();
+        let space = state.space(2);
+        space.name = "Personal".into();
+        space.rows = vec![FakeRow::Folder(
+            9,
+            "Reading".into(),
+            vec![FakeRow::Tab(tab_of("https://example.com/b"))],
+        )];
+        state.next = 9;
+    }
+    cx.update(|cx| import(&browser, &found, cx));
+    assert_eq!(
+        shape(&browser.spaces()[0].rows),
+        "Reading[https://example.com/b, https://example.com/a, https://example.com/c, \
+         Deep[https://example.com/d]], HN=https://news.ycombinator.com/"
     );
 }
 
@@ -1174,13 +1369,14 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         };
         assert_eq!(
             said.as_ref(),
-            "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+            "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
         );
     });
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     view.update(cx, |view, cx| view.done(cx));
     cx.run_until_parked();
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc.";
     assert_eq!(
         *events.borrow(),
         [
@@ -1242,7 +1438,7 @@ fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
     cx.update(|cx| browser.load(cx));
     assert_eq!(
         says(&view, cx),
-        "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
     );
     assert_eq!(
         primary(&view, cx),
@@ -1459,7 +1655,7 @@ fn cancel_leaves_the_spaces_empty_and_import_again_fills_them(cx: &mut TestAppCo
     cx.run_until_parked();
     assert_eq!(
         says(&view, cx),
-        "6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
     );
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     assert!(browser.last_import("Arc").is_some());
@@ -1569,7 +1765,8 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     assert_eq!(browser.state.borrow().loading.len(), asked + 1);
     assert_eq!(says(&view, cx), "Importing from Arc…");
     cx.update(|cx| browser.load(cx));
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc.";
     assert_eq!(says(&view, cx), said);
     cx.executor().advance_clock(STALL);
     cx.run_until_parked();
@@ -2389,6 +2586,7 @@ fn firefoxs_bookmarks_and_history_come_from_places() {
                     Node::Tab(tab) if tab.name.is_empty() => tab.url.clone(),
                     Node::Tab(tab) => format!("{}={}", tab.name, tab.url),
                     Node::Folder { name, children } => format!("{name}[{}]", shape(children)),
+                    Node::Split(_) => unreachable!("bookmarks have no split views"),
                 })
                 .collect();
             nodes.join(", ")
@@ -2531,6 +2729,7 @@ fn node_shape(nodes: &[Node]) -> String {
         .map(|node| match node {
             Node::Tab(tab) => format!("{}={}", tab.name, tab.url),
             Node::Folder { name, children } => format!("{name}[{}]", node_shape(children)),
+            Node::Split(_) => unreachable!("bookmarks have no split views"),
         })
         .collect();
     nodes.join(", ")
@@ -2676,7 +2875,7 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| view.pick(0, cx));
     view.read_with(cx, |view, _| {
         let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
-        assert_eq!(counting, ["Counting…"; 5]);
+        assert_eq!(counting, ["Counting…"; 6]);
         assert_eq!(view.note(), None);
         assert_eq!(view.nothing(), None);
     });
@@ -2685,7 +2884,8 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
         assert_eq!(
             view.choices(),
             [
-                (Kind::Spaces, "6 pinned tabs · 3 link rules".into()),
+                (Kind::Spaces, "6 pinned tabs · 6 link rules".into()),
+                (Kind::OpenTabs, "1".into()),
                 (Kind::Favorites, "3".into()),
             ]
         );

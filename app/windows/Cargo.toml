@@ -24,6 +24,8 @@ gpui_windows = { path = "../.deps/zed/crates/gpui_windows" }
 # The version GPUI decodes with, as the browser crate has, for a video tile's frame (src/main.rs).
 image = { version = "0.25", default-features = false, features = ["png"] }
 raw-window-handle = "0.6"
+# For the check's stand-in translator (src/translate_host.rs), as the browser crate has it.
+serde_json = "1"
 
 # Its own, apart from the browser crate's, which has no workspace: Zed's crates in ../.deps would join one.
 # Seeded from ../Cargo.lock, so the two build the same versions.

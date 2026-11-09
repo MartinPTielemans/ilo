@@ -4,10 +4,10 @@
 # search suggestions go out if they do, then quits. Each host in the net log, from the requests'
 # addresses and the names the resolver looked up, must match check/hosts.txt, which says why each
 # is there. Sync points at a port of the run's own where nothing listens, so nothing reaches the
-# hosted server, and nothing may ask it. A dev build has no update feed and no crash collector,
-# which only the prod build names (engine/README.md), so neither shows here. It leaves the hosts
-# it saw, with how often, in hosts-seen.txt, and each address it connected to, with the name that
-# led to it or none, which fails it, in hosts-addresses.txt.
+# hosted server, and nothing may ask it. A dev build has no update feed, crash collector or daily
+# count's server, which only the prod build names (engine/README.md, decision 11), so none shows
+# here. It leaves the hosts it saw, with how often, in hosts-seen.txt, and each address it
+# connected to, with the name that led to it or none, which fails it, in hosts-addresses.txt.
 
 serve
 log="$out/hosts.log"

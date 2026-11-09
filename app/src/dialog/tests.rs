@@ -569,11 +569,34 @@ impl Asking {
     }
 }
 
+/// What a page's dialog asked of the host from `shown` on, answered with `answer`: as it starts
+/// leaving on Linux, whose page has the keyboard back then, and once it has hidden elsewhere.
+fn left(shown: &[&str], answer: &str) -> Vec<String> {
+    let mut calls: Vec<String> = shown.iter().map(|call| call.to_string()).collect();
+    match PAGE_ANSWERED_AS_IT_LEAVES {
+        true => calls.extend([answer.into(), "hide".into()]),
+        false => calls.extend(["hide".into(), answer.into()]),
+    }
+    calls
+}
+
+/// On Linux the page has the keyboard back as its dialog starts leaving, and Chromium drops its keys
+/// until its question is answered, so a shortcut typed right after Esc, such as ⌘L, needs the answer
+/// at once (#1711, #1963).
+#[gpui::test]
+fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
+    dialog.keys("escape");
+    let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
+    assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
+    assert_eq!(*dialog.host.1.borrow(), ["hold"], "it hid before leaving");
+}
+
 #[gpui::test]
 fn a_pages_question_shows_over_its_card_and_return_answers_it(cx: &mut TestAppContext) {
     let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept "]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept "));
 }
 
 #[gpui::test]
@@ -582,7 +605,7 @@ fn a_click_on_the_cards_dim_leaves_a_pages_question(cx: &mut TestAppContext) {
     dialog.click(400., 40.);
     assert_eq!(dialog.calls(), ["show over 100"]);
     dialog.keys("escape");
-    assert_eq!(dialog.calls(), ["hide", "cancel "]);
+    assert_eq!(dialog.calls(), left(&[], "cancel "));
 }
 
 #[gpui::test]
@@ -591,7 +614,7 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     // What it starts with is selected, so typing replaces it.
     dialog.cx.simulate_input("Grace");
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept Grace"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
 }
 
 #[gpui::test]
@@ -604,7 +627,7 @@ fn tab_moves_to_the_next_field(cx: &mut TestAppContext) {
     dialog.keys("enter");
     assert_eq!(
         dialog.calls(),
-        ["show over 100", "hide", "accept ada secret"]
+        left(&["show over 100"], "accept ada secret")
     );
 }
 
@@ -632,7 +655,7 @@ fn a_reply_never_shows_what_was_typed(cx: &mut TestAppContext) {
     });
     assert_eq!(shown, "••••••");
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "accept secret"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "accept secret"));
 }
 
 #[gpui::test]
@@ -652,7 +675,7 @@ fn asked_again_a_pages_question_only_moves(cx: &mut TestAppContext) {
     dialog.keys("enter");
     assert_eq!(
         dialog.calls(),
-        ["show over 100", "show over 240", "hide", "accept typed"]
+        left(&["show over 100", "show over 240"], "accept typed")
     );
 }
 
@@ -668,7 +691,7 @@ fn a_pages_question_taken_back_leaves_untold(cx: &mut TestAppContext) {
         .cx
         .update(|cx| ask_from_page((2, 8), page_question(Vec::new(), None), 100., &host, cx));
     dialog.keys("escape");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "cancel "]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "cancel "));
 }
 
 #[gpui::test]
@@ -684,7 +707,7 @@ fn the_checkbox_answers_with_a_click(cx: &mut TestAppContext) {
     });
     // ↩ cancels, so a page can't time a key to open an app.
     dialog.keys("enter");
-    assert_eq!(dialog.calls(), ["show over 100", "hide", "cancel  checked"]);
+    assert_eq!(dialog.calls(), left(&["show over 100"], "cancel  checked"));
 }
 
 /// A window with a button all over it, and its own dialog, as Settings has on Linux.

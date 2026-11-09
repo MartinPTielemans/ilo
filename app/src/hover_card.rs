@@ -17,8 +17,8 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, Context, DispatchPhase, FontWeight, Global, Image, ImageSource, MouseExitEvent,
-    MouseMoveEvent, ObjectFit, Pixels, RenderImage, Role, SharedString, Size, Task,
+    App, Bounds, Context, DispatchPhase, FontWeight, Global, Hsla, Image, ImageSource,
+    MouseExitEvent, MouseMoveEvent, ObjectFit, Pixels, RenderImage, Role, SharedString, Size, Task,
     TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
     WindowOptions, canvas, div, img, point, prelude::*, px, size, svg,
 };
@@ -30,8 +30,8 @@ use crate::palette::{
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
 use crate::tokens::hover_card::{
     BUTTON, BUTTON_GAP, BUTTON_INSET, BUTTON_RADIUS, FAVICON, GLYPH, GLYPH_ALPHA, GROUND, HOST,
-    HOST_SIZE, PADDING, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS, RADIUS, RIM,
-    TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
+    HOST_SIZE, PADDING, PAUSED_GAP, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS,
+    RADIUS, RIM, SPLIT_GAP, SPLIT_RING, TEXT_TOP, TEXT_X, TITLE, TITLE_LINE, TITLE_SIZE,
 };
 pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 
@@ -187,7 +187,14 @@ pub struct Card {
     pub icon: Icon,
     /// Whether it has a picture's box: not for the tab shown, whose page is on screen.
     pub pictured: bool,
+    /// Whether Battery Saver froze its page out of sight, which it says after the host.
+    pub paused: bool,
     pub actions: Vec<Action>,
+    /// A favorite split's pages, each with what stands for it without a picture, which its box
+    /// shows side by side, else none for a tab alone; the one focused last, and its ring's colour.
+    pub panes: Vec<(u64, Icon)>,
+    pub focused: u64,
+    pub ring: Hsla,
 }
 
 /// The row a card goes beside, in the browser window, and the window's size, which it stays
@@ -291,6 +298,8 @@ pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
 struct Drawn {
     card: Card,
     picture: Option<PagePicture>,
+    /// A split's pages' pictures, in its order.
+    panes: Vec<Option<PagePicture>>,
     height: f32,
 }
 
@@ -314,8 +323,8 @@ pub struct HoverCard {
     /// The tabs' pictures, and the tab each picture asked for is of.
     pictures: HashMap<u64, PagePicture>,
     asked: HashMap<u64, u64>,
-    /// The picture the window last drew, and those it has no more use for, which it lets go of.
-    painted: Option<Arc<RenderImage>>,
+    /// The pictures the window last drew, and those it has no more use for, which it lets go of.
+    painted: Vec<Arc<RenderImage>>,
     stale: Vec<Arc<RenderImage>>,
     /// What it logged as drawn last, for check.sh.
     logged: Option<(u64, &'static str)>,
@@ -345,8 +354,6 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
         is_resizable: false,
         is_minimizable: false,
         window_background: WindowBackgroundAppearance::Transparent,
-        // GPUI holds a window that isn't the key one to 30 fps, and this one never is.
-        inactive_frame_interval: None,
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
@@ -362,7 +369,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<HoverCard>>
             settled: false,
             pictures: HashMap::new(),
             asked: HashMap::new(),
-            painted: None,
+            painted: Vec::new(),
             stale: Vec::new(),
             logged: None,
         })
@@ -578,6 +585,10 @@ impl HoverCard {
                 "browser: hover card shown {tab} {} {picture}",
                 actions.join(" ")
             );
+            if self.shown.as_ref().is_some_and(|rest| rest.card.paused) {
+                // check.sh reads this line.
+                log!("browser: hover card {tab} says paused");
+            }
             events(tab, Event::Shown, cx);
         }
     }
@@ -589,10 +600,18 @@ impl HoverCard {
             return "none";
         };
         let (window, card) = (rest.window, rest.card.clone());
-        let picture = card
-            .pictured
+        let split = !card.panes.is_empty();
+        let picture = (card.pictured && !split)
             .then(|| self.pictures.get(&card.tab).cloned())
             .flatten();
+        let panes: Vec<_> = (card.panes.iter())
+            .map(|(tab, _)| {
+                card.pictured
+                    .then(|| self.pictures.get(tab).cloned())
+                    .flatten()
+            })
+            .collect();
+        // A split's box keeps the default shape, as its pages are of more than one.
         let height = height(picture_height(
             card.pictured,
             picture.as_ref().map(|p| p.size()),
@@ -600,14 +619,16 @@ impl HoverCard {
         let (left, top) = place(rest.anchor, height);
         // check.sh reads this line, to see the card is beside its row.
         log!("browser: hover card at {left} {top} {WIDTH} {height}");
-        let holds = match (&picture, card.pictured) {
-            (Some(_), _) => "picture",
-            (None, true) => "favicon",
-            (None, false) => "none",
+        let pictured = picture.is_some() || panes.iter().any(Option::is_some);
+        let holds = match (pictured, card.pictured) {
+            (true, _) => "picture",
+            (false, true) => "favicon",
+            (false, false) => "none",
         };
         self.drawn = Some(Drawn {
             card,
             picture,
+            panes,
             height,
         });
         self.host.show(window, left, top, WIDTH, height);
@@ -685,13 +706,16 @@ impl HoverCard {
                 .values()
                 .any(|picture| Arc::ptr_eq(&picture.image(), image))
         };
-        if self.painted.as_ref().is_some_and(|image| !held(image)) {
-            self.stale.extend(self.painted.take());
-        }
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.painted)
+            .into_iter()
+            .partition(|image| held(image));
+        self.painted = kept;
+        self.stale.extend(gone);
         if self.shown.is_some() {
             self.draw(cx);
         } else if let Some(drawn) = &mut self.drawn {
             drawn.picture = None;
+            drawn.panes.iter_mut().for_each(|pane| *pane = None);
         }
         cx.notify();
     }
@@ -699,19 +723,20 @@ impl HoverCard {
 
 impl Render for HoverCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let picture = self
-            .drawn
-            .as_ref()
-            .and_then(|drawn| drawn.picture.as_ref())
-            .map(|p| p.image());
-        let same = |a: &Option<Arc<RenderImage>>, b: &Option<Arc<RenderImage>>| match (a, b) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (a, b) => a.is_none() && b.is_none(),
+        let pictures: Vec<Arc<RenderImage>> = (self.drawn.iter())
+            .flat_map(|drawn| drawn.picture.iter().chain(drawn.panes.iter().flatten()))
+            .map(|p| p.image())
+            .collect();
+        let same = |a: &[Arc<RenderImage>], b: &[Arc<RenderImage>]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
         };
-        // One picture at most is in the atlas at a time.
-        if !same(&self.painted, &picture) {
+        // The card's pictures alone are in the atlas: one, or a split's pages'.
+        if !same(&self.painted, &pictures) {
+            let before = std::mem::replace(&mut self.painted, pictures);
+            let kept =
+                |image: &Arc<RenderImage>| self.painted.iter().any(|p| Arc::ptr_eq(p, image));
             self.stale
-                .extend(std::mem::replace(&mut self.painted, picture));
+                .extend(before.into_iter().filter(|image| !kept(image)));
         }
         for image in self.stale.drain(..) {
             window.drop_image(image).ok();
@@ -738,10 +763,11 @@ impl Render for HoverCard {
             log!("browser: hover card settled");
         }
         let pose = self.pose();
-        let holds = match (&drawn.picture, drawn.card.pictured) {
-            (Some(_), _) => "picture",
-            (None, true) => "favicon",
-            (None, false) => "none",
+        let pictured = drawn.picture.is_some() || drawn.panes.iter().any(Option::is_some);
+        let holds = match (pictured, drawn.card.pictured) {
+            (true, _) => "picture",
+            (false, true) => "favicon",
+            (false, false) => "none",
         };
         if self.logged != Some((drawn.card.tab, holds)) {
             self.logged = Some((drawn.card.tab, holds));
@@ -768,6 +794,9 @@ impl Render for HoverCard {
                 .rounded(px(PICTURE_RADIUS))
                 .overflow_hidden()
                 .bg(palette.plate(GROUND));
+            if !card.panes.is_empty() {
+                return frame.child(split_pictures(&palette, card, &drawn.panes, picture_h));
+            }
             match &drawn.picture {
                 // A page of another shape than the box is cut to it about its middle.
                 Some(picture) => frame.child(
@@ -813,7 +842,22 @@ impl Render for HoverCard {
             .items_center()
             .text_size(px(HOST_SIZE))
             .text_color(palette.on_overlay(HOST))
-            .child(div().truncate().child(card.host.clone()));
+            // Paused, the words take the host's place, which the row under the title still shows:
+            // beside the buttons there's no room for both.
+            .when(!card.paused, |host| {
+                host.child(div().truncate().child(card.host.clone()))
+            })
+            .when(card.paused, |host| {
+                host.child(
+                    svg()
+                        .path("icons/pause.svg")
+                        .flex_none()
+                        .mr(px(PAUSED_GAP))
+                        .size(px(HOST_SIZE))
+                        .text_color(palette.on_overlay(HOST)),
+                )
+                .child(div().truncate().child(crate::shell::PAUSED))
+            });
         let buttons = div()
             .absolute()
             .right(px(BUTTON_INSET))
@@ -889,6 +933,61 @@ fn corner_at() -> gpui::Point<Pixels> {
 }
 
 /// What stands for a tab with no picture, at the favicon's size.
+/// A favorite split's pages in its card's picture box `height` tall, side by side as the window
+/// shows them, each its picture cut to its share or its icon on the ground, and the page focused
+/// last ringed in the Space's colour, so the card says which page a click shows focused.
+fn split_pictures(
+    palette: &Palette,
+    card: &Card,
+    pictures: &[Option<PagePicture>],
+    height: f32,
+) -> impl IntoElement + use<> {
+    let count = card.panes.len().max(1) as f32;
+    let width = (INNER - SPLIT_GAP * (count - 1.)) / count;
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .gap(px(SPLIT_GAP))
+        .children(
+            card.panes
+                .iter()
+                .zip(pictures)
+                .map(|((tab, each), picture)| {
+                    let page = div()
+                        .relative()
+                        .w(px(width))
+                        .h(px(height))
+                        .flex_none()
+                        .rounded(px(PICTURE_RADIUS))
+                        .overflow_hidden()
+                        .bg(palette.plate(GROUND));
+                    let page = match picture {
+                        Some(picture) => page.child(
+                            img(ImageSource::Render(picture.image()))
+                                .size_full()
+                                .object_fit(ObjectFit::Cover),
+                        ),
+                        None => page
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon(palette, each)),
+                    };
+                    page.when(*tab == card.focused, |page| {
+                        page.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(PICTURE_RADIUS))
+                                .border(px(SPLIT_RING))
+                                .border_color(card.ring),
+                        )
+                    })
+                }),
+        )
+}
+
 fn icon(palette: &Palette, icon: &Icon) -> gpui::AnyElement {
     match icon {
         Icon::Favicon(Some(favicon)) => img(favicon.clone()).size(px(FAVICON)).into_any_element(),

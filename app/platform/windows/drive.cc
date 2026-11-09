@@ -11,26 +11,32 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
-// menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
-// age, and Windows' own maximize, which the Mac's has no command for, and placement, which logs the
-// window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
-// lists the windows on screen over the app's browser windows; stack, which lists every app's
-// windows over the driven one, front first; and reshow, which shows those of the UI's that are
-// hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
-// drive.mm's does.
-// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
-// with Alt, but Ctrl for ⌃Tab, and alt with both. A click's or a drag's are held as a Windows user
-// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
-// wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
-// scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
-// precision touchpad's, with their touch and lift. choose and dismiss work on ilo's menu and the
-// alerts host_ask shows. savepanel <path> picks <path> in the dialog host_save_png shows, as
-// drive.mm's does in the Mac's save panel, logging "browser: save panel answered", or "browser: no
-// save panel" if none shows. tabpicture writes the picture a tab's drag shows for part of the window
-// to a file and logs its size. dragover, dragdrop and dragleave hand a drag from another app, a shell
-// data object carrying what Explorer or a browser would, straight to the drop target Windows would
-// pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
-// unsupported. ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
+// menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
+// takeback and age, pip, as Linux's finds Chromium's Picture in Picture window but with hit
+// tests in place of drags, and Windows' own maximize, which the Mac's has no command for,
+// dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
+// (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
+// state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
+// on screen over the app's browser windows; stack, which lists every app's windows over the driven
+// one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
+// does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
+// Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
+// Alt, but Ctrl for ⌃Tab, and alt with both; a key's winalt holds Windows' own Alt, as the app's
+// own views bind ⌥ off the Mac, and flags' winalt holds it with its key down and up, for Alt
+// pressed alone. A click's or a drag's are held as a Windows user holds them, cmd with
+// Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are wheel messages with
+// the pixels in their deltas, going the way drive.mm's go, which Chromium scrolls by. Its swipes
+// over GPUI's view are handed to GPUI as Direct Manipulation hands it a precision touchpad's, with
+// their touch and lift. choose works on ilo's menu, ilo's dialog and the alerts host_ask shows, as
+// Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks <path> in the dialog
+// host_save_png shows, as drive.mm's does in the Mac's save panel, logging "browser: save panel
+// answered", or "browser: no save panel" if none shows. tabpicture writes the picture a tab's drag
+// shows for part of the window to a file and logs its size. dragover, dragdrop and dragleave hand a
+// drag from another app, a shell data object carrying what Explorer or a browser would, straight to
+// the drop target Windows would pick: the UI's, or over a page Chromium's; one over an overlay,
+// whose target is GPUI's, logs as unsupported. A drag the app starts, a file's or a tab's, the
+// driver carries the same way, from dragto to release, as Windows' own waits for the real pointer
+// (#1583). ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
 // Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
 // input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
 // modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
@@ -88,8 +94,11 @@ bool browser_drive_marked(void* hwnd, size_t* start, size_t* length);
 // The app's, on GPUI's window |hwnd|, for two fingers as a precision touchpad's.
 bool browser_drive_fingers(void* hwnd, float x, float y, float dx, float dy, int phase);
 void* host_drop_target(void* hwnd);
+void host_drive_drags(HRESULT (*drag)(IDataObject*, DWORD, DWORD*, POINT*));
 bool host_drive_window_part(void* hwnd, double x, double y, double width, double height,
                             const char* path, long* pixels_wide, long* pixels_high);
+void* host_drive_little_tray(void);
+bool host_drive_little_tray_click(void);
 }
 
 namespace {
@@ -104,6 +113,9 @@ LPARAM const kDriverLeave = 0x44524956;
 int const kCtrl = 1;
 int const kShift = 2;
 int const kAlt = 4;
+// Windows' own Alt, held with its key's messages, as a keyboard sends Alt pressed alone (flags
+// winalt). The Mac has no key the app reads as it: its ⌥ is Ctrl+Alt here.
+int const kAltKey = 8;
 
 // A step of a command: what it posts, then how long to wait before the next.
 struct Step {
@@ -143,6 +155,8 @@ struct Click {
 // The app's menus, for menu and menubar: chooses the item titled |title| in the browser window
 // whose UI view is |ui_view|, or with |bar| logs the menu so titled.
 bool (*g_menus)(void* ui_view, const char* title, bool bar) = nullptr;
+// The app's dialog, for choose: answers with the button |label| names in the one that shows.
+bool (*g_dialog)(const char* label) = nullptr;
 
 std::wstring ClassOf(HWND hwnd) {
   wchar_t name[64] = L"";
@@ -477,10 +491,11 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   while (words >> word) {
     cmd = cmd || word == "cmd";
     ctrl = ctrl || word == "ctrl";
-    modifiers |= word == "cmd"     ? kCtrl
-                 : word == "shift" ? kShift
-                 : word == "alt"   ? kCtrl | kAlt
-                                   : 0;
+    modifiers |= word == "cmd"      ? kCtrl
+                 : word == "shift"  ? kShift
+                 : word == "alt"    ? kCtrl | kAlt
+                 : word == "winalt" ? kAlt
+                                    : 0;
   }
   if (ctrl) {
     modifiers |= key == "tab" && !cmd ? kCtrl : kAlt;
@@ -570,16 +585,16 @@ void PostKey(UINT vk, int modifiers, bool down, bool repeat = false) {
   if (host_drive_key(vk, static_cast<long>(lparam))) {
     return;
   }
-  const bool system = ((held & kAlt) && !(held & kCtrl)) || vk == VK_F10;
+  const bool system = ((held & kAlt || vk == VK_MENU) && !(held & kCtrl)) || vk == VK_F10;
   const UINT message =
       down ? (system ? WM_SYSKEYDOWN : WM_KEYDOWN) : (system ? WM_SYSKEYUP : WM_KEYUP);
   PostMessageW(KeyTarget(), message, vk, lparam);
 }
 
-// Ctrl's and Shift's keys going down or up, from |from| held to |to|, as the keyboard sends them.
-// Alt's are left out: Alt let go alone opens the window's menu, which a key with it in between
-// stops on a real keyboard, and a key's Alt is read from the state held, as Chromium and GPUI read
-// every modifier.
+// Ctrl's and Shift's keys going down or up, from |from| held to |to|, as the keyboard sends them,
+// then winalt's Alt. A key's Alt is otherwise left out: Alt let go alone is a tap of its own, which
+// a key with it in between stops on a real keyboard, and a key's Alt is read from the state held,
+// as Chromium and GPUI read every modifier.
 void PostModifiers(int from, int to) {
   static const std::pair<int, UINT> keys[] = {{kCtrl, VK_CONTROL}, {kShift, VK_SHIFT}};
   for (const auto& [modifier, vk] : keys) {
@@ -587,6 +602,10 @@ void PostModifiers(int from, int to) {
       from = (to & modifier) ? from | modifier : from & ~modifier;
       PostKey(vk, from, (to & modifier) != 0);
     }
+  }
+  if ((from & kAltKey) != (to & kAltKey)) {
+    const bool down = (to & kAltKey) != 0;
+    PostKey(VK_MENU, down ? from | kAlt | kAltKey : from & ~(kAlt | kAltKey), down);
   }
 }
 
@@ -681,6 +700,14 @@ void LogLayout(HWND root) {
       snprintf(part, sizeof part, " radius %.0f", radius);
       line += part;
     }
+  }
+  // The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver
+  // lists its view: from the content's bottom-left corner, as the pages are.
+  bc_rect ring{};
+  if (bc_window_focus_ring(host_browser_window_id(g_driven), &ring)) {
+    snprintf(part, sizeof part, ", BrowserCoreFocusRing %.0f,%.0f %.0fx%.0f", ring.x,
+             height - (ring.y + ring.height), ring.width, ring.height);
+    line += part;
   }
   // Windows' own title bar has the window's buttons.
   line += "\nbrowser: layout buttons hidden hidden hidden";
@@ -970,6 +997,39 @@ int AddImeKey(const std::string& key, int modifiers) {
   return 1;
 }
 
+// Chromium's Picture in Picture window, if one shows: a video's, the Mini Player, or a page's, as a
+// call floats in. Chrome keeps it over the others, the only one of the app's own top-level windows
+// it does but a browser window kept on top; the host's floating windows are owned.
+HWND PictureInPicture() {
+  for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+    if (Ours(top) && IsWindowVisible(top) && !GetWindow(top, GW_OWNER) &&
+        (GetWindowLongPtrW(top, GWL_EXSTYLE) & WS_EX_TOPMOST) && BrowserIndex(top) < 0 &&
+        ClassOf(top).rfind(L"Chrome_WidgetWin", 0) == 0) {
+      return top;
+    }
+  }
+  return nullptr;
+}
+
+// What Windows' hit test makes of a point, as it decides a press there moves or sizes the window.
+const char* HitName(LRESULT hit) {
+  switch (hit) {
+    case HTCAPTION: return "caption";
+    case HTCLIENT: return "client";
+    case HTLEFT: return "left";
+    case HTRIGHT: return "right";
+    case HTTOP: return "top";
+    case HTBOTTOM: return "bottom";
+    case HTTOPLEFT: return "topleft";
+    case HTTOPRIGHT: return "topright";
+    case HTBOTTOMLEFT: return "bottomleft";
+    case HTBOTTOMRIGHT: return "bottomright";
+    case HTCLOSE: return "close";
+    case HTNOWHERE: return "nowhere";
+    default: return "other";
+  }
+}
+
 bool Unsupported(const std::string& action) {
   fprintf(stderr, "browser: drive: unsupported %s\n", action.c_str());
   return false;
@@ -1066,6 +1126,11 @@ bool DragOver(double x, double y, std::istringstream& words, bool* taken) {
       view = hwnd;
     }
   }
+  // A page's is Chromium's own, which RegisterDragDrop keeps in the property itself, the target
+  // object as this process has it, so the driver hands it the drag as OLE would (#2114).
+  if (view && !drop && IsChromium(view)) {
+    drop = static_cast<IDropTarget*>(GetPropW(view, L"OleDropTargetInterface"));
+  }
   if (view && !drop) {
     fprintf(stderr, "browser: drive: unsupported drag over %s\n", Utf8(ClassOf(view)).c_str());
     return false;
@@ -1085,9 +1150,98 @@ bool DragOver(double x, double y, std::istringstream& words, bool* taken) {
     drop->DragOver(MK_LBUTTON, at, &effect);
   }
   *taken = drop && effect != DROPEFFECT_NONE;
-  fprintf(stderr, "browser: drag over %s %s\n", view ? "HostUIView" : "nothing",
+  // Named as the Mac names the views: a page's, else the UI's.
+  fprintf(stderr, "browser: drag over %s %s\n",
+          !view              ? "nothing"
+          : IsChromium(view) ? "WebContentsViewCocoa"
+                             : "HostUIView",
           *taken ? "taken" : "refused");
   return true;
+}
+
+// The app's own drag, a file's or a tab's, which the host hands the driver in place of DoDragDrop
+// (host_drive_drags): Windows' drag waits for the real pointer, which the driver keeps from the
+// app, and stopped the app there (#1583). It's held from the move that starts it to the release,
+// and goes to the targets under the driver's pointer as another app's drag does: the UI's take it
+// or not, and over the page, whose target is Chromium's, nothing takes it.
+struct AppDrag {
+  bool held = true;
+  bool taken = false;
+  DWORD effect = DROPEFFECT_NONE;
+  POINT at{};
+};
+AppDrag* g_app_drag = nullptr;
+
+// Moves the app's drag to |x|, |y| of the driven window, if it holds one.
+bool AppDragTo(double x, double y) {
+  if (!g_app_drag || !g_app_drag->held) {
+    return false;
+  }
+  std::istringstream none;
+  if (!DragOver(x, y, none, &g_app_drag->taken)) {
+    g_app_drag->taken = false;
+    if (g_drag_target) {
+      g_drag_target->DragLeave();
+    }
+    g_drag_view = nullptr;
+    g_drag_target = nullptr;
+  }
+  return true;
+}
+
+// Lets the app's drag go at |x|, |y| of the driven window, if it holds one.
+bool AppDragLetGo(double x, double y, int modifiers) {
+  if (!g_app_drag || !g_app_drag->held) {
+    return false;
+  }
+  AppDragTo(x, y);
+  g_app_drag->at = OnScreen(Driven(), x, y);
+  if (g_app_drag->taken) {
+    DWORD effect = DROPEFFECT_COPY | DROPEFFECT_LINK | DROPEFFECT_MOVE;
+    g_drag_target->Drop(g_drag, MK_LBUTTON, {g_app_drag->at.x, g_app_drag->at.y}, &effect);
+    g_app_drag->effect = effect;
+  } else if (g_drag_target) {
+    g_drag_target->DragLeave();
+  }
+  fprintf(stderr, "browser: drive: the app's drag let go, effect %lu\n", g_app_drag->effect);
+  EndDrag();
+  HoldKeys(modifiers, 0);
+  g_app_drag->held = false;
+  return true;
+}
+
+// The host's DoDragDrop in a driven run: a loop of its own until the release, as DoDragDrop's.
+HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
+  if (g_drag_target) {
+    g_drag_target->DragLeave();
+  }
+  EndDrag();
+  data->AddRef();
+  g_drag = data;
+  AppDrag drag;
+  g_app_drag = &drag;
+  fprintf(stderr, "browser: drive: holds the app's drag\n");
+  MSG message;
+  while (drag.held) {
+    const BOOL got = GetMessageW(&message, nullptr, 0, 0);
+    if (got <= 0) {
+      // The app quits: its own loop hears it too.
+      if (got == 0) {
+        PostQuitMessage(static_cast<int>(message.wParam));
+      }
+      if (g_drag_target) {
+        g_drag_target->DragLeave();
+      }
+      EndDrag();
+      break;
+    }
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+  }
+  g_app_drag = nullptr;
+  *effect = drag.effect;
+  *at = drag.at;
+  return drag.held ? DRAGDROP_S_CANCEL : DRAGDROP_S_DROP;
 }
 
 // Adds the steps of |line|'s command. Returns false for one it can't do.
@@ -1152,7 +1306,7 @@ bool Run(const std::string& line) {
   }
   // tabpicture <x> <y> <width> <height> <path>: the picture host_drag_tab shows for that part of
   // the driven window, the row a drag holds, written to <path> as a BMP, logging its size: the
-  // driver can't hold the system's drag itself (#1583).
+  // driver carries the app's drag without Windows' own, which shows it (#1583).
   if (action == "tabpicture") {
     double x, y, width, height;
     std::string path;
@@ -1225,6 +1379,37 @@ bool Run(const std::string& line) {
   }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
   // its overlays, its menu and Chromium's bubbles, each owned by its browser window.
+  // pip logs Chromium's Picture in Picture window's frame, "browser: pip at <x> <y> <width>
+  // <height>", or "browser: pip none", as Linux's driver does. pip hit <x> <y>, at points from its
+  // top-left corner, logs "browser: pip hit <part>", what Windows' hit test says is there: caption
+  // for a part a press moves the window by, bottomright for a corner it sizes it from, client for
+  // the page. Windows moves and sizes it with the desktop's pointer, which the driver never moves.
+  if (action == "pip") {
+    HWND pip = PictureInPicture();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+      return true;
+    }
+    RECT rect;
+    GetWindowRect(pip, &rect);
+    const double scale = Scale(pip);
+    std::string step;
+    words >> step;
+    if (step.empty()) {
+      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", rect.left / scale, rect.top / scale,
+              (rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale);
+      return true;
+    }
+    double x, y;
+    if (step != "hit" || !(words >> x >> y)) {
+      return false;
+    }
+    const LONG at_x = rect.left + std::lround(x * scale);
+    const LONG at_y = rect.top + std::lround(y * scale);
+    const LRESULT hit = SendMessageW(pip, WM_NCHITTEST, 0, MAKELPARAM(at_x, at_y));
+    fprintf(stderr, "browser: pip hit %s\n", HitName(hit));
+    return true;
+  }
   if (action == "overlays") {
     std::string shown;
     for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
@@ -1406,11 +1591,20 @@ bool Run(const std::string& line) {
     } else if (!TargetAt(x, y, &target)) {
       return false;
     }
+    // The app's own drag, if it has started one since, takes them in place of its window.
     if (step == "dragto") {
-      g_steps.push_back({[=] { Move(target, keys, button); }});
+      g_steps.push_back({[=] {
+        if (!AppDragTo(x, y)) {
+          Move(target, keys, button);
+        }
+      }});
     } else {
       g_pressed = nullptr;
-      g_steps.push_back({[=] { Release(target, button, keys); }});
+      g_steps.push_back({[=] {
+        if (!AppDragLetGo(x, y, keys)) {
+          Release(target, button, keys);
+        }
+      }});
     }
     return true;
   }
@@ -1425,13 +1619,16 @@ bool Run(const std::string& line) {
   }
   // A trackpad's scrolls, as a precision touchpad sends them: wheel messages of a pixel's worth
   // each, which Chrome scrolls 100 pixels by for every notch of 120, at the Mac driver's pace.
-  if (action == "scroll" || action == "swipe" || action == "wheel") {
+  // scrollkey scrolls in the window with the keyboard, such as Settings', as clickkey clicks
+  // there.
+  if (action == "scroll" || action == "scrollkey" || action == "swipe" || action == "wheel") {
     double x, y, dx = 0, dy = 0;
     int count = 1, pause = 0;
     if (!(words >> x >> y)) {
       return false;
     }
-    if (action == "scroll" && !(words >> dy >> count)) {
+    const bool in_key = action == "scrollkey";
+    if ((action == "scroll" || in_key) && !(words >> dy >> count)) {
       return false;
     }
     if (action == "swipe" && !(words >> dx >> dy >> count)) {
@@ -1444,7 +1641,7 @@ bool Run(const std::string& line) {
       return false;
     }
     Target target;
-    if (count < 1 || !TargetAt(x, y, &target)) {
+    if (count < 1 || !(in_key ? TargetInKey(x, y, &target) : TargetAt(x, y, &target))) {
       return false;
     }
     // Two fingers over GPUI's view reach it as Direct Manipulation hands it a precision
@@ -1530,6 +1727,22 @@ bool Run(const std::string& line) {
     LogLayout(Driven());
     return true;
   }
+  // As Windows tells a window that moved to a display of another scale, |percent|, keeping its
+  // size in pixels: Chromium and the core take the scale the message carries (#1823).
+  if (action == "dpi") {
+    int percent = 0;
+    if (!(words >> percent) || percent < 100 || percent > 500) {
+      return false;
+    }
+    g_steps.push_back({[percent] {
+      HWND root = Driven();
+      RECT rect{};
+      GetWindowRect(root, &rect);
+      const WORD dpi = static_cast<WORD>(MulDiv(USER_DEFAULT_SCREEN_DPI, percent, 100));
+      SendMessageW(root, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&rect));
+    }, 300});
+    return true;
+  }
   if (action == "state") {
     return true;
   }
@@ -1546,6 +1759,16 @@ bool Run(const std::string& line) {
       CloseClipboard();
     }
     fprintf(stderr, "browser: pasteboard text %s\n", Utf8(text).c_str());
+    return true;
+  }
+  // The notification area's Little ilo icon, as the Mac's driver has the menu bar's button:
+  // "browser: status item shown" or "none", or with click what Explorer sends for a click on it,
+  // as the driver can't reach Explorer's area or its flyout.
+  if (action == "statusitem") {
+    if (rest == "click") {
+      return host_drive_little_tray_click();
+    }
+    fprintf(stderr, "browser: status item %s\n", host_drive_little_tray() ? "shown" : "none");
     return true;
   }
   if (action == "title") {
@@ -1571,7 +1794,8 @@ bool Run(const std::string& line) {
     return g_menus && ui_view && g_menus(ui_view, rest.c_str(), action == "menubar");
   }
   if (action == "choose") {
-    return host_menu_window_choose(rest.c_str()) || host_choose(rest.c_str());
+    return host_menu_window_choose(rest.c_str()) || (g_dialog && g_dialog(rest.c_str())) ||
+           host_choose(rest.c_str());
   }
   if (action == "dismiss") {
     return host_menu_window_dismiss();
@@ -1589,6 +1813,18 @@ bool Run(const std::string& line) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     return true;
   }
   if (action == "agentmayact") {
@@ -1648,6 +1884,29 @@ bool Run(const std::string& line) {
     bc_age_tabs_for_testing(seconds);
     return true;
   }
+  if (action == "battery") {
+    int percent;
+    std::string power;
+    if (!(words >> percent >> power) || (power != "plugged" && power != "unplugged")) {
+      return false;
+    }
+    bc_battery_for_testing(percent, power == "plugged");
+    return true;
+  }
+  if (action == "pair") {
+    bc_id tab;
+    std::string kind;
+    if (!(words >> tab >> kind)) {
+      return false;
+    }
+    const int pair = kind == "pin" ? BC_PAIR_PIN : kind == "confirm" ? BC_PAIR_CONFIRM
+                   : kind == "passkey" ? BC_PAIR_PASSKEY : -1;
+    if (pair < 0) {
+      return false;
+    }
+    bc_tab_pair_for_testing(tab, pair);
+    return true;
+  }
   if (action == "keydown" || action == "keyup") {
     std::string key, repeat;
     words >> key >> repeat;
@@ -1677,7 +1936,8 @@ bool Run(const std::string& line) {
     return true;
   }
   // The modifiers held from now, as their keys going down or up. ⌃ is held only for ⌃Tab, which
-  // is Ctrl+Tab here, so it holds Ctrl, which the app watches for its release.
+  // is Ctrl+Tab here, so it holds Ctrl, which the app watches for its release. winalt is Windows'
+  // Alt, its key going down and up as a keyboard sends it, so it alone is a tap.
   if (action == "flags") {
     int modifiers = 0;
     std::string word;
@@ -1685,6 +1945,7 @@ bool Run(const std::string& line) {
       modifiers |= word == "cmd" || word == "ctrl" ? kCtrl
                    : word == "shift"               ? kShift
                    : word == "alt"                 ? kCtrl | kAlt
+                   : word == "winalt"              ? kAlt | kAltKey
                                                    : 0;
     }
     g_steps.push_back({[=] {
@@ -1877,8 +2138,10 @@ LRESULT CALLBACK WatchZoom(int code, WPARAM wparam, LPARAM lparam) {
 
 extern "C" {
 
-void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar)) {
+void drive_watch_menus(bool (*menus)(void* ui_view, const char* title, bool bar),
+                       bool (*dialog)(const char* label)) {
   g_menus = menus;
+  g_dialog = dialog;
 }
 
 void drive_start(void) {
@@ -1890,6 +2153,7 @@ void drive_start(void) {
   g_driver = CreateWindowExW(0, window_class.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                              nullptr, window_class.hInstance, nullptr);
   SetWindowsHookExW(WH_GETMESSAGE, DropRealPointer, nullptr, GetCurrentThreadId());
+  host_drive_drags(DriveDrag);
   SetWindowsHookExW(WH_CBT, WatchKeyboard, nullptr, GetCurrentThreadId());
   SetWindowsHookExW(WH_CALLWNDPROCRET, WatchZoom, nullptr, GetCurrentThreadId());
   HWND driver = g_driver;

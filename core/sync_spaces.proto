@@ -1,5 +1,5 @@
 // What ILO_SPACE's specifics hold, in their one bytes field (engine/patches/ours/
-// chromium-sync-spaces-type.patch): one of the user's Spaces, or a pinned tab or folder in one, by
+// chromium-sync-ilo-types.patch): one of the user's Spaces, or a pinned tab or folder in one, by
 // its node (space.h). Each is an entity of its own, so a rename, a move or a delete sends only what
 // changed. A Space's Today tabs stay on the device.
 

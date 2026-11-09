@@ -16,8 +16,8 @@ use super::{
     Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
     NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
     NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
-    TILE_HOVERED, TOOLS_FADE, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD,
-    URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    TILE_HOVERED, TOOLS_FADE, Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
+    URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -143,6 +143,18 @@ impl Shell {
                     .on_mouse_up(MouseButton::Left, cx.listener(release))
                     .on_mouse_up_out(MouseButton::Left, cx.listener(release))
             })
+            // Reload's lists its kinds of reload, right-clicked, also while it's stop (menus.rs).
+            .when(
+                matches!(command, Command::Reload | Command::Stop),
+                |button| {
+                    button.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.reload_menu(event.position, cx)
+                        }),
+                    )
+                },
+            )
             .when(enabled && lists, |button| {
                 button.on_mouse_down(
                     MouseButton::Right,
@@ -289,6 +301,12 @@ impl Shell {
             Command::ToggleSidebar => Some("Hide Sidebar"),
             Command::ViewLibrary => Some("View Library"),
             Command::ViewDownloads => Some("View Downloads"),
+            // A translated page's mark opens the card that takes it back, so it says what it shows.
+            Command::TranslatePage
+                if self.translations.get(&self.field_tab()) == Some(&Translation::Translated) =>
+            {
+                Some("Translated")
+            }
             _ => (BAR_COMMANDS.iter())
                 .find(|&&(_, each, _)| each == command)
                 .map(|&(name, ..)| name),
@@ -573,6 +591,55 @@ impl Shell {
                         .text_color(self.palette.glyph(NAV)),
                 )
         });
+        // While Battery Saver is on, its leaf, before the tools and in that place while they're
+        // gone, so it says so whether or not the pointer's over the sidebar. A press shows its
+        // toast again, with Turn Off (battery.rs).
+        let slots = if self.page(self.field_tab()).developer_mode {
+            3.
+        } else {
+            2.
+        };
+        let leaf_end = end + slots * TOOL_PITCH;
+        let leaf = self.battery_saver.map(|_| {
+            let drawn = self.battery_leaf_drawn.clone();
+            let frame = canvas(
+                move |bounds, _, _| {
+                    if drawn.replace(Some(bounds)) != Some(bounds) {
+                        let (origin, size) = (bounds.origin, bounds.size);
+                        // check.sh reads this line.
+                        log!(
+                            "browser: battery saver leaf at {} {} {} {}",
+                            f32::from(origin.x),
+                            f32::from(origin.y),
+                            f32::from(size.width),
+                            f32::from(size.height),
+                        );
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full();
+            self.field_tool("battery-saver", leaf_end)
+                .opacity(1.)
+                .when(self.a11y, |button| button.button_named("Battery Saver"))
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.show_battery_notice(cx);
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("icons/leaf.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.accent),
+                )
+                .child(frame)
+        });
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -587,6 +654,9 @@ impl Shell {
                 .ml(px(KEY_GAP - KEY_REACH))
                 .p(px(KEY_REACH))
                 .when(self.a11y, |button| button.button_named("Passwords"))
+                // It lights under the pointer as the field's other buttons do (#2112).
+                .rounded(px(NAV_RADIUS))
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |shell, _, _, cx| {
@@ -603,11 +673,17 @@ impl Shell {
                         .child(key_frame(self.button_frames.clone())),
                 )
         });
+        // A page in another language offers to translate it, after the key (translate.rs).
+        let translate = self.translate_mark(cx);
         let text_end = match tools {
             true if devtools.is_some() => end + 2. * TOOL_PITCH + URL_BUTTON_SIZE,
             true => end + TOOL_PITCH + URL_BUTTON_SIZE,
             false if actions.is_empty() => URL_FIELD_TEXT_X - PLATE_INSET,
             false => URL_BUTTON_INSET + buttons_width,
+        };
+        let text_end = match leaf {
+            Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
+            None => text_end,
         };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
@@ -650,6 +726,8 @@ impl Shell {
             )
             .children(engine)
             .children(key)
+            .children(translate)
+            .children(leaf)
             .children(devtools)
             .children(copy)
             .children(site_controls)

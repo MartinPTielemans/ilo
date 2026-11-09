@@ -28,6 +28,7 @@ class SiteControls : public PageInfoUI, public content::WebContentsObserver {
   static void Close();
   static void SetPermission(bc_id tab, int type, int value);
   static void Reset(bc_id tab);
+  static void RemoveDevice(bc_id tab, size_t index);
   static void SetAdBlocking(bc_id tab, bool on);
   static void PictureInPicture(bc_id tab);
   static void ShowCertificate(bc_id tab);
@@ -75,6 +76,8 @@ class SiteControls : public PageInfoUI, public content::WebContentsObserver {
   // Null for a file or a browser page, which Chrome's page info shows no permissions for.
   std::unique_ptr<PageInfo> page_info_;
   PermissionInfoList permissions_;
+  // The devices the site was given, as Chrome's page info lists them.
+  ChosenObjectInfoList devices_;
   // The page's URL, Chromium's or the system page's.
   GURL url_;
   std::string site_;

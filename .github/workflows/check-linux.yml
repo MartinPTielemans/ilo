@@ -1,11 +1,14 @@
 # The browser on Linux, run and checked by app/check.sh (AGENTS.md, Verifying) under Xvfb and
-# openbox, on X11, or by hand in a headless sway session on its Xwayland, then in that session on
-# Wayland, and by app/check/drops.sh under Wayland, on the Linux engine built from this commit's
+# openbox, on X11, or by hand in a headless sway session on its Xwayland, or under Xvfb and KWin,
+# whose blur shows under the overlays (#2134), then in sway's session on Wayland, and by
+# app/check/drops.sh under Wayland, on the Linux engine built from this commit's
 # core: the safety net for what the Mac and Linux share. It runs on main each night and by hand,
 # which the integrator does on main after each merge train (#871), on GitHub's hosted runners: never
-# a pull request, and never the self-hosted runner, which builds the engine. It never builds an engine: it takes the newest engine-linux release in this commit's
-# history (engine/fetch.sh), and a commit whose core/public/browser_core.h no published engine has
-# fails, saying so, as nothing can run it, and is checked the night after one is. Every run in
+# a pull request, and never the self-hosted runner, which builds the engine. It never builds an
+# engine: it takes the newest engine-linux release in this commit's history (engine/fetch.sh), and a
+# commit whose core/public/browser_core.h no published engine has fails, saying so, as nothing can
+# run it, and is checked the night after one is. Each session's runs are a job of their own, split
+# into shards when they're long, side by side, and the check job gathers them: every run in
 # app/check/ shows in X11's summary: passed, failed, or skipped and why, with the lines a run that
 # passed skipped; Wayland's lists those it did. A failure on main opens an issue, which the next run
 # that passes closes (.github/scripts/main-check.sh).
@@ -22,10 +25,10 @@ on:
         default: ''
       session:
         description: >-
-          Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, then on Wayland with
-          no runs named, or on Wayland alone
+          Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, or under Xvfb and KWin,
+          which blurs, then on Wayland with no runs named, or on Wayland alone
         type: choice
-        options: [xvfb, sway, wayland]
+        options: [xvfb, sway, kwin, wayland]
         default: xvfb
 
 concurrency:
@@ -37,9 +40,29 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The runs that pass on X11 so far.
+  LINUX_RUNS: >-
+    tabs window find agents spaces crash profiles private blank quit mcp appearance access history
+    load preview import adblock adblock-lists passkeys onboarding links relaunch split
+    extensions capture popup pinned about windows dialogs trouble cards passwords updates
+    restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
+    sync-extensions little devices pair notifications calls battery battery-os idle handback
+    webrtc tab-drag count ranking everyday
+  # The runs that pass on Wayland so far, in the headless sway session.
+  WAYLAND_RUNS: >-
+    load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
+    favorites cards extensions adblock adblock-lists private little capture passwords preview
+    access dialogs crash import quit onboarding passkeys appearance about sync sync-account
+    devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+  # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
+  # skipped even when named.
+  LINUX_SKIPS: |
+    keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
+
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
-  # no run has checked yet; a dispatched one always does.
+  # no run has checked yet; a dispatched one always does. And the legs that check it.
   gate:
     if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
     runs-on: ubuntu-24.04
@@ -49,45 +72,82 @@ jobs:
       actions: read
     outputs:
       check: ${{ github.event_name != 'schedule' || steps.seen.outputs.seen != 'true' }}
+      legs: ${{ steps.plan.outputs.legs }}
+      all: ${{ steps.plan.outputs.all }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/scripts
       - id: seen
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/main-check.sh seen
+      # A leg for each session's runs, in check.sh's order, those that apply to Linux. The full set
+      # of a session is dealt round its shards, so each takes about 13 min of runs (42210352224's
+      # 40 min on X11 and 20 on Wayland, after a 7 min build). One leg does drops.sh and ime.sh.
+      - id: plan
+        env:
+          RUNS: ${{ inputs.runs }}
+          SESSION: ${{ inputs.session || 'xvfb' }}
+        run: |
+          # check.sh's own list, the runs it does with no names and the ones it does only when named.
+          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' app/check.sh | tr '\n' ' ')
+          # X11's runs, then Wayland's, unless runs are named or Wayland's alone are asked for.
+          case $SESSION in
+          wayland) sessions=wayland ;;
+          *) sessions=$SESSION; [ -n "$RUNS" ] || sessions="$SESSION wayland" ;;
+          esac
+          legs=
+          for session in $sessions; do
+            passing=$LINUX_RUNS
+            [ "$session" != wayland ] || passing=$WAYLAND_RUNS
+            case $RUNS in
+            '') runs=$passing ;;
+            all) runs=$all ;;
+            *) runs=$RUNS ;;
+            esac
+            todo=
+            for run in $all; do
+              case " $runs " in *" $run "*) ;; *) continue ;; esac
+              ! printf '%s\n' "$LINUX_SKIPS" | grep -q "^$run: " || continue
+              todo="$todo $run"
+            done
+            of=1
+            case $RUNS in ''|all) of=3; [ "$session" != wayland ] || of=2 ;; esac
+            for shard in $(seq "$of"); do
+              mine= i=0
+              for run in $todo; do
+                [ $((i % of + 1)) != "$shard" ] || mine="$mine $run"
+                i=$((i + 1))
+              done
+              legs="$legs$(jq -cn --arg session "$session" --argjson shard "$shard" --argjson of "$of" \
+                --arg runs "${mine# }" '{$session, $shard, $of, $runs}'),"
+            done
+          done
+          case $RUNS in ''|all|*drops*|*ime*) legs="$legs"'{"session":"ime","shard":1,"of":1,"runs":""},' ;; esac
+          echo "legs=[${legs%,}]" | tee -a "$GITHUB_OUTPUT"
+          echo "all=$all" >> "$GITHUB_OUTPUT"
 
-  check:
+  shards:
     needs: gate
     if: needs.gate.outputs.check == 'true'
-    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
+    name: check ${{ matrix.session }}${{ matrix.of > 1 && format(' {0}/{1}', matrix.shard, matrix.of) || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.gate.outputs.legs) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # A shard of the full set takes about 20 min; runs named, such as "all", may take far longer.
+    timeout-minutes: 180
     permissions:
       contents: read
       # A re-run reads the run's earlier attempts (main-check.sh rerun).
       actions: read
+    # Every leg finds the same engine, or none.
     outputs:
       found: ${{ steps.engine.outputs.found }}
+      why: ${{ steps.engine.outputs.why }}
     defaults:
       run:
         working-directory: app
-    env:
-      # The runs that pass on X11 so far.
-      LINUX_RUNS: >-
-        tabs window find agents spaces crash profiles private quit mcp appearance access history
-        load preview import adblock adblock-lists passkeys onboarding links relaunch split
-        extensions capture popup pinned about windows dialogs trouble cards passwords updates
-        restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices little
-        devices handback
-      # The runs that pass on Wayland so far, in the headless sway session.
-      WAYLAND_RUNS: tabs private updates
-      # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
-      # skipped even when named.
-      LINUX_SKIPS: |
-        keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -100,8 +160,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ../.github/scripts/main-check.sh rerun
 
-      # A run with no engine checks nothing, so it fails rather than pass, and the night after takes
-      # it as not checked (main-check.sh seen), as the Mac's does (#1563).
+      # With no engine the leg checks nothing and passes; the check job fails, saying why, once.
       - id: engine
         name: Engine
         run: |
@@ -111,11 +170,8 @@ jobs:
           case $status in
           0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
           2)
-            why=$(tail -1 "$RUNNER_TEMP/fetch.log")
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::error::No Linux engine fits this commit: nothing was checked. $why"
-            printf 'Failed: no Linux engine fits this commit: nothing was checked.\n\n%s\n' "$why" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo "why=$(tail -1 "$RUNNER_TEMP/fetch.log")" >> "$GITHUB_OUTPUT"
             ;;
           *) exit "$status" ;;
           esac
@@ -127,19 +183,25 @@ jobs:
       # calls `convert`, and records it with ffmpeg (tools/window-record.sh). sway, grim and Xwayland
       # run the headless sessions (tools/headless.sh), and wl-clipboard's wl-paste reads their
       # clipboard (check/lib.sh's clipboard_holds). The access run reads the app's tree over
-      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the mcp run's
+      # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the notifications and mcp runs'
       # notification server is python3-gi's, on a bus of its own. check/ime.sh types through
       # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
       # allows them, and the sandbox stays on.
+      # The packages come from the Actions cache, and from the mirror only on a miss (#1969), in
+      # each leg.
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev
+            libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1
+            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland
+            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
+
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get update -q
-          sudo apt-get install -yq libclang-dev libfontconfig-dev libwayland-dev \
-            libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1 \
-            libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland \
-            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
           rustup update stable --no-self-update
           mkdir -p "$RUNNER_TEMP/bin"
           # ImageMagick 6 has a tool for each of 7's magick subcommands, such as headless.sh's
@@ -149,13 +211,25 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # KWin's session, the only one whose compositor blurs (check.sh's BROWSER_XVFB=kwin), which
+      # xprop sees is ready and dbus-run-session gives its bus.
+      - if: ${{ steps.engine.outputs.found == 'true' && matrix.session == 'kwin' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: kwin-x11 x11-utils dbus-bin
+
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
       # portal and permission store, which only it needs.
-      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) }}
-        run: sudo apt-get install -yq flatpak flatpak-builder ostree xdg-desktop-portal
+      - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) && contains(format(' {0} ', matrix.runs), ' updates ') }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -169,19 +243,30 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
-      # The sync-account and sync-devices runs sign in to an ilo-server of their own, on SQLite
-      # with a throwaway account, never the hosted one: built from the server's repo at the commit
-      # ilo's sync was last checked against.
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
+      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
+      # at the commit ilo's sync was last checked against, in the leg that has them.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -192,101 +277,81 @@ jobs:
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
 
-      # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
+      # which stays plugged in for the job: in the leg that has it.
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' devices ') }}
+        run: |
+          sudo modprobe uhid
+          sudo setsid nohup python3 check/uhid.py > "$RUNNER_TEMP/uhid.log" 2>&1 &
+          for _ in $(seq 100); do
+            grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log" && break
+            sleep 0.1
+          done
+          cat "$RUNNER_TEMP/uhid.log"
+          grep -q '^/dev/hidraw' "$RUNNER_TEMP/uhid.log"
+          echo "BROWSER_CHECK_HID=ilo check HID" >> "$GITHUB_ENV"
+
+      # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check. A
+      # run's result goes in the leg's results for the check job, which fails on it: the leg fails
+      # only when it couldn't finish.
       - name: Runs
-        if: ${{ steps.engine.outputs.found == 'true' }}
+        if: ${{ steps.engine.outputs.found == 'true' && matrix.session != 'ime' }}
         env:
-          RUNS: ${{ inputs.runs }}
-          SESSION: ${{ inputs.session || 'xvfb' }}
+          SESSION: ${{ matrix.session }}
+          RUNS: ${{ matrix.runs }}
+          RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
         run: |
           out=$RUNNER_TEMP/check
-          mkdir -p "$out"
+          mkdir -p "$out" "$(dirname "$RESULTS")"
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
-          # check.sh's own list, the runs it does with no names and the ones it does only when named.
-          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' check.sh | tr '\n' ' ')
-          # X11's runs, then Wayland's, unless runs are named or Wayland's alone are asked for.
+          where=
           case $SESSION in
-          wayland) sessions=wayland ;;
-          *) sessions=$SESSION; [ -n "$RUNS" ] || sessions="$SESSION wayland" ;;
+          xvfb) export BROWSER_XVFB=1 ;;
+          kwin) export BROWSER_XVFB=kwin ;;
+          wayland) export BROWSER_WAYLAND=1; where=wayland/ ;;
           esac
-          failed=0
-          for session in $sessions; do
-            unset BROWSER_XVFB BROWSER_WAYLAND
-            where=
-            passing=$LINUX_RUNS
-            case $session in
-            xvfb) export BROWSER_XVFB=1; title="Under Xvfb and openbox, on X11." ;;
-            sway) title="In a headless sway session, on its Xwayland." ;;
-            wayland)
-              export BROWSER_WAYLAND=1
-              where=wayland/
-              passing=$WAYLAND_RUNS
-              title="In a headless sway session, on Wayland. The runs not listed aren't driven there yet."
-              ;;
-            esac
-            dir=$out/$where
-            mkdir -p "$dir"
-            case $RUNS in
-            '') runs=$passing ;;
-            all) runs=$all ;;
-            *) runs=$RUNS ;;
-            esac
-            {
-              echo "$title"
-              echo
-              echo "| Run | Result |"
-              echo "|---|---|"
-            } >> "$GITHUB_STEP_SUMMARY"
-            for run in $all; do
-              why=$(printf '%s\n' "$LINUX_SKIPS" | sed -n "s/^$run: //p")
-              if [ -n "$why" ]; then
-                [ "$session" != wayland ] || continue
-                echo "| $run | not for Linux: $why |" | tee -a "$GITHUB_STEP_SUMMARY"
-                continue
-              fi
-              case " $runs " in
-              *" $run "*)
-                start=$SECONDS
-                status=0
-                # The updates run builds a Flatpak first.
-                limit=20m
-                [ "$run" != updates ] || limit=45m
-                timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
-                [ ! -d build/check ] || mv build/check "$dir/$run"
-                pkill -9 -f "$PWD/build/Browser/" || true
-                # A run that passes may have skipped steps, or all of itself, such as when the app
-                # wasn't the active one.
-                skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
-                if [ "$status" = 0 ]; then
-                  result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
-                else
-                  result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|' '/')"
-                  failed=1
-                  echo "::error::The $run run failed on $session. Its log: $where$run.log in the artifact."
-                fi
-                ;;
-              *)
-                [ "$session" != wayland ] || continue
-                result="skipped: not in the runs Linux passes yet"
-                ;;
-              esac
-              echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
-            done
-            echo >> "$GITHUB_STEP_SUMMARY"
+          dir=$out/$where
+          mkdir -p "$dir"
+          for run in $RUNS; do
+            start=$SECONDS
+            status=0
+            # The updates run builds a Flatpak first.
+            limit=20m
+            [ "$run" != updates ] || limit=45m
+            timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
+            [ ! -d build/check ] || mv build/check "$dir/$run"
+            pkill -9 -f "$PWD/build/Browser/" || true
+            # A run that passes may have skipped steps, or all of itself, such as when the app
+            # wasn't the active one.
+            skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
+            if [ "$status" = 0 ]; then
+              result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
+            else
+              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
+              echo "::warning::The $run run failed on $SESSION. Its log: $where$run.log in the artifact."
+            fi
+            printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
+            echo "| $run | $result |"
           done
-          exit "$failed"
 
       # Drags from other apps under Wayland, which check.sh's driver, X11's, can't make.
-      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'drops')) }}
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && matrix.session == 'ime' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'drops')) }}
         env:
+          RESULTS: ${{ runner.temp }}/results/ime-1.tsv
           LANG: en_US.UTF-8
         run: |
           out=$RUNNER_TEMP/check
-          mkdir -p "$out"
+          mkdir -p "$out" "$(dirname "$RESULTS")"
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
           status=0
@@ -295,21 +360,20 @@ jobs:
           pkill -9 -f "$PWD/build/Browser/" || true
           result=passed
           if [ "$status" != 0 ]; then
-            result="failed ($status): $(grep -m1 '^FAIL' "$out/drops.log" | cut -c7- | tr '|' '/')"
-            echo "::error::Drops under Wayland failed. Its log: drops.log in the artifact."
+            result="failed ($status): $(grep -m1 '^FAIL' "$out/drops.log" | cut -c7- | tr '|\t' '/ ')"
+            echo "::warning::Drops under Wayland failed. Its log: drops.log in the artifact."
           fi
-          printf '\nUnder Wayland, in a headless sway session: check/drops.sh %s.\n' "$result" |
-            tee -a "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+          printf 'drops\t%s\n' "$result" | tee -a "$RESULTS"
 
       # Typing through an input method, fcitx5, on Wayland and on sway's Xwayland, which check.sh's
       # driver, typing plain keys, can't.
-      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'ime')) }}
+      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && matrix.session == 'ime' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'ime')) }}
         env:
+          RESULTS: ${{ runner.temp }}/results/ime-1.tsv
           LANG: en_US.UTF-8
         run: |
           out=$RUNNER_TEMP/check
-          mkdir -p "$out"
+          mkdir -p "$out" "$(dirname "$RESULTS")"
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
           status=0
@@ -318,25 +382,201 @@ jobs:
           pkill -9 -f "$PWD/build/Browser/" || true
           result=passed
           if [ "$status" != 0 ]; then
-            result="failed ($status): $(grep -m1 '^FAIL' "$out/ime.log" | cut -c6- | tr '|' '/')"
-            echo "::error::Input methods failed. Its log: ime.log in the artifact."
+            result="failed ($status): $(grep -m1 '^FAIL' "$out/ime.log" | cut -c6- | tr '|\t' '/ ')"
+            echo "::warning::Input methods failed. Its log: ime.log in the artifact."
           fi
-          printf '\nOn Wayland and Xwayland, in headless sway sessions with fcitx5: check/ime.sh %s.\n' \
-            "$result" | tee -a "$GITHUB_STEP_SUMMARY"
-          exit "$status"
+          printf 'ime\t%s\n' "$result" | tee -a "$RESULTS"
+
+      # The check job puts the legs' files back together as one check-linux artifact.
+      - if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-linux-${{ matrix.session }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/check
+          if-no-files-found: ignore
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: check-linux
-          path: ${{ runner.temp }}/check
+          name: results-${{ matrix.session }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/results
           if-no-files-found: ignore
+
+  # The verdict, from the legs' results: the summary, the errors and the artifact a single job had,
+  # under its name, which main-check.sh's seen and rerun read.
+  check:
+    needs: [gate, shards]
+    if: ${{ always() && needs.gate.outputs.check == 'true' }}
+    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
+    name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'kwin' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # A re-run reads the run's earlier attempts (main-check.sh rerun).
+      actions: read
+    outputs:
+      found: ${{ steps.engine.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - if: ${{ github.run_attempt != '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/main-check.sh rerun
+
+      # A run with no engine checks nothing, so it fails rather than pass, and the night after takes
+      # it as not checked (main-check.sh seen), as the Mac's does (#1563).
+      - id: engine
+        name: Engine
+        env:
+          FOUND: ${{ needs.shards.outputs.found }}
+          WHY: ${{ needs.shards.outputs.why }}
+        run: |
+          case $FOUND in
+          true) echo "found=true" >> "$GITHUB_OUTPUT" ;;
+          false)
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::error::No Linux engine fits this commit: nothing was checked. $WHY"
+            printf 'Failed: no Linux engine fits this commit: nothing was checked.\n\n%s\n' "$WHY" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+            ;;
+          *)
+            echo "::error::No leg got as far as finding the engine: nothing was checked. Their jobs say why."
+            exit 1
+            ;;
+          esac
+
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: results-*
+          path: ${{ runner.temp }}/results
+          merge-multiple: true
+
+      - name: Runs
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        env:
+          LEGS: ${{ needs.gate.outputs.legs }}
+          ALL: ${{ needs.gate.outputs.all }}
+          RUNS: ${{ inputs.runs }}
+          RESULTS: ${{ runner.temp }}/results
+        run: |
+          failed=0
+          # What the results of session $1's leg with run $2 say of it, or that the leg didn't finish.
+          result() {
+            leg=$(printf '%s' "$LEGS" | jq -r --arg s "$1" --arg r "$2" 'first(.[] | select(.session == $s
+              and ($s == "ime" or ((" " + .runs + " ") | contains(" " + $r + " "))))) | "\(.shard) \(.of)"')
+            set -- "$1" "$2" ${leg:-1 1}
+            said=$(awk -F '\t' -v run="$2" '$1 == run { said = $2 } END { print said }' "$RESULTS/$1-$3.tsv" 2> /dev/null)
+            if [ -n "$said" ]; then
+              echo "$said"
+              return
+            fi
+            name="check $1"
+            [ "$4" = 1 ] || name="$name $3/$4"
+            echo "not run: $name didn't finish"
+          }
+          # A run with no result fails the check, with an error once for its leg.
+          unfinished=
+          unfinished() {
+            failed=1
+            leg=${1#not run: }
+            leg=${leg% didn*}
+            case "$unfinished |" in
+            *"| $leg |"*) ;;
+            *)
+              unfinished="$unfinished | $leg"
+              echo "::error::$leg didn't finish, so some of its runs weren't checked. Its job says why."
+              ;;
+            esac
+          }
+          sessions=$(printf '%s' "$LEGS" | jq -r '[.[].session | select(. != "ime")] | reduce .[] as $s ([]; if index([$s]) then . else . + [$s] end) | .[]')
+          for session in $sessions; do
+            where=
+            case $session in
+            xvfb) title="Under Xvfb and openbox, on X11." ;;
+            sway) title="In a headless sway session, on its Xwayland." ;;
+            kwin) title="Under Xvfb and KWin, which blurs, on X11." ;;
+            wayland)
+              where=wayland/
+              title="In a headless sway session, on Wayland. The runs not listed aren't driven there yet."
+              ;;
+            esac
+            {
+              echo "$title"
+              echo
+              echo "| Run | Result |"
+              echo "|---|---|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            for run in $ALL; do
+              why=$(printf '%s\n' "$LINUX_SKIPS" | sed -n "s/^$run: //p")
+              if [ -n "$why" ]; then
+                [ "$session" != wayland ] || continue
+                echo "| $run | not for Linux: $why |" | tee -a "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+              if printf '%s' "$LEGS" | jq -e --arg s "$session" --arg r "$run" \
+                'any(.[]; .session == $s and ((" " + .runs + " ") | contains(" " + $r + " ")))' > /dev/null; then
+                result=$(result "$session" "$run")
+                case $result in
+                passed*) ;;
+                failed*) failed=1; echo "::error::The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
+                *) unfinished "$result" ;;
+                esac
+              else
+                [ "$session" != wayland ] || continue
+                result="skipped: not in the runs Linux passes yet"
+              fi
+              echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+            echo >> "$GITHUB_STEP_SUMMARY"
+          done
+          if printf '%s' "$LEGS" | jq -e 'any(.[]; .session == "ime")' > /dev/null; then
+            case $RUNS in
+            ''|all|*drops*)
+              result=$(result ime drops)
+              case $result in
+              passed) ;;
+              failed*) failed=1; echo "::error::Drops under Wayland failed. Its log: drops.log in the artifact." ;;
+              *) unfinished "$result" ;;
+              esac
+              printf '\nUnder Wayland, in a headless sway session: check/drops.sh %s.\n' "$result" |
+                tee -a "$GITHUB_STEP_SUMMARY"
+              ;;
+            esac
+            case $RUNS in
+            ''|all|*ime*)
+              result=$(result ime ime)
+              case $result in
+              passed) ;;
+              failed*) failed=1; echo "::error::Input methods failed. Its log: ime.log in the artifact." ;;
+              *) unfinished "$result" ;;
+              esac
+              printf '\nOn Wayland and Xwayland, in headless sway sessions with fcitx5: check/ime.sh %s.\n' \
+                "$result" | tee -a "$GITHUB_STEP_SUMMARY"
+              ;;
+            esac
+          fi
+          exit "$failed"
+
+      # The legs' files, together as one job's were: X11's at the top, Wayland's in wayland/.
+      - if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        uses: actions/upload-artifact/merge@v4
+        continue-on-error: true
+        with:
+          name: check-linux
+          pattern: check-linux-*
+          delete-merged: true
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
   report:
     needs: [gate, check]
-    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'wayland' }}
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

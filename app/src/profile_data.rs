@@ -23,6 +23,47 @@ pub(crate) unsafe extern "C" fn history_added(_: *mut c_void, profile: bc::bc_id
     update_app_later(move |cx| import_host::history_added(added, cx));
 }
 
+/// The user deleted pages from the profile's history, and the command bar forgets what it learned
+/// of them. The pages aren't logged: they're the user's.
+pub(crate) unsafe extern "C" fn history_deleted(
+    _: *mut c_void,
+    profile: bc::bc_id,
+    all: bool,
+    begin: i64,
+    end: i64,
+    urls: *const *const c_char,
+    count: usize,
+) {
+    let urls = match count {
+        0 => &[][..],
+        count => unsafe { std::slice::from_raw_parts(urls, count) },
+    };
+    let urls: Vec<String> = (urls.iter())
+        .map(|&url| {
+            unsafe { CStr::from_ptr(url) }
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    // check.sh reads this line.
+    match all {
+        true => log!("browser: history deleted all from profile {profile}"),
+        false => log!(
+            "browser: history deleted {} urls from profile {profile}",
+            urls.len()
+        ),
+    }
+    let deleted = match all {
+        true => browser::shell::HistoryDeleted::All,
+        false => browser::shell::HistoryDeleted::Some {
+            begin: begin.max(0) as u64,
+            end: end.max(0) as u64,
+            urls,
+        },
+    };
+    update_app_later(move |cx| browser::shell::history_deleted(profile, deleted, cx));
+}
+
 pub(crate) unsafe extern "C" fn addresses_added(_: *mut c_void, profile: bc::bc_id, added: usize) {
     // check.sh waits for this line.
     log!("browser: addresses added {added} to profile {profile}");
@@ -118,12 +159,24 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
         default_server: state.default_server,
         email: core_text(state.email),
         code: core_text(state.code),
+        settings: state.settings,
+        extensions: state.extensions,
     };
     if CX.with_borrow(Option::is_none) {
         SYNC_STATE.set(Some(state));
         return;
     }
     update_app_later(move |cx| settings::sync_changed(state, cx));
+}
+
+/// Settings came from the account's other devices, and the core has them: what the app keeps of
+/// them follows, and Settings shows them. Before the app runs there's nothing to follow, as its
+/// windows read them as they open.
+pub(crate) unsafe extern "C" fn settings_synced(_: *mut c_void) {
+    update_app_later(|cx| {
+        little_windows_followed(cx);
+        settings::refresh(cx);
+    });
 }
 
 /// Another device asks to be added to the account: the dialog asks over the front window, or

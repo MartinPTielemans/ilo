@@ -5,12 +5,12 @@
 //! History and addresses are added whole, and the core skips the pages and addresses it has
 //! (bc_profile_add_history, bc_profile_add_addresses).
 
-use super::found::{Address, Found, FromProfile, Node, Page, Tab};
-use crate::link_rules::{Condition, Rule};
+use super::found::{Address, Destination, Found, FromProfile, Node, Page, Split, Tab};
+use crate::link_rules::{Condition, FRONT, LITTLE, Rule};
 use crate::theme::Theme;
 
 /// What the browser has, as far as an import needs to know.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Existing {
     /// The profiles, by id and name, the one the browser started with first.
     pub profiles: Vec<(u64, String)>,
@@ -20,6 +20,20 @@ pub struct Existing {
     pub favorites: Vec<(u64, String)>,
     /// The link rules, in order.
     pub link_rules: Vec<Rule>,
+    /// Where everything else opens, as `link_rules::Rules` holds it.
+    pub link_otherwise: u64,
+}
+
+impl Default for Existing {
+    fn default() -> Existing {
+        Existing {
+            profiles: Vec::new(),
+            spaces: Vec::new(),
+            favorites: Vec::new(),
+            link_rules: Vec::new(),
+            link_otherwise: LITTLE,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +77,8 @@ pub struct Plan {
     pub addresses: Vec<(ProfileRef, Vec<Address>)>,
     /// Link rules to add after the user's, in order.
     pub link_rules: Vec<PlannedRule>,
+    /// Where everything else is to open, if the import changes it.
+    pub link_otherwise: Option<SpaceRef>,
 }
 
 /// A link rule to add, to a Space that's here or one the plan makes.
@@ -73,12 +89,14 @@ pub struct PlannedRule {
     pub space: SpaceRef,
 }
 
-/// A Space a link rule goes to.
+/// Where a link rule goes: a Space, or in place of one, Little ilo or the Space in front.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SpaceRef {
     Existing(u64),
     /// The plan's `spaces` at this index.
     Planned(usize),
+    Little,
+    Front,
 }
 
 /// How much a plan brings in.
@@ -94,7 +112,7 @@ pub struct Counts {
     pub pages: usize,
     /// Addresses, which may be here already.
     pub addresses: usize,
-    /// Link rules, which aren't here already.
+    /// Link rules, which aren't here already, and where everything else opens if it changes.
     pub link_rules: usize,
 }
 
@@ -122,6 +140,8 @@ pub enum Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Add {
     Tab(Tab),
+    /// A split view of its tabs not here yet, two or more.
+    Split(Split),
     Folder {
         existing: Option<u64>,
         name: String,
@@ -137,6 +157,7 @@ impl Plan {
             && self.history.is_empty()
             && self.addresses.is_empty()
             && self.link_rules.is_empty()
+            && self.link_otherwise.is_none()
     }
 
     pub fn counts(&self) -> Counts {
@@ -144,6 +165,7 @@ impl Plan {
             adds.iter()
                 .map(|add| match add {
                     Add::Tab(_) => 1,
+                    Add::Split(split) => split.tabs.len(),
                     Add::Folder { adds, .. } => tabs(adds),
                 })
                 .sum()
@@ -160,7 +182,7 @@ impl Plan {
             favorites: self.favorites.len(),
             pages: self.history.iter().map(|(_, pages)| pages.len()).sum(),
             addresses: (self.addresses.iter()).map(|(_, each)| each.len()).sum(),
-            link_rules: self.link_rules.len(),
+            link_rules: self.link_rules.len() + usize::from(self.link_otherwise.is_some()),
         }
     }
 }
@@ -281,24 +303,13 @@ pub fn plan(found: &Found, names: &[(String, String)], existing: &Existing) -> P
         plan.addresses.push((profile, addresses.clone()));
     }
     for rule in &found.link_rules {
-        let Some(&space) = went.get(rule.space) else {
+        let Some(space) = place(rule.to, &went, &plan.spaces) else {
             continue;
-        };
-        // A Space the plan only adds to is here already, and may have the rule.
-        let space = match space {
-            SpaceRef::Planned(at) => match plan.spaces[at].into {
-                Target::Existing(id) => SpaceRef::Existing(id),
-                Target::New { .. } => space,
-            },
-            here => here,
         };
         let same =
             |condition: Condition, text: &str| condition == rule.condition && text == rule.text;
-        let here = match space {
-            SpaceRef::Existing(id) => (existing.link_rules.iter())
-                .any(|each| each.space == id && same(each.condition, &each.text)),
-            SpaceRef::Planned(_) => false,
-        };
+        let here = (existing.link_rules.iter())
+            .any(|each| Some(each.space) == id(space) && same(each.condition, &each.text));
         let planned = (plan.link_rules.iter())
             .any(|each| each.space == space && same(each.condition, &each.text));
         if !here && !planned {
@@ -309,7 +320,41 @@ pub fn plan(found: &Found, names: &[(String, String)], existing: &Existing) -> P
             });
         }
     }
+    // Only over ours' default, so a Space the user picked for everything else stays theirs.
+    if existing.link_otherwise == LITTLE {
+        plan.link_otherwise = (found.link_otherwise)
+            .and_then(|to| place(to, &went, &plan.spaces))
+            .filter(|place| *place != SpaceRef::Little);
+    }
     plan
+}
+
+/// Where `to` goes, by `went`, where each found Space goes among the plan's `spaces`: a Space the
+/// plan only adds to is here already, and may have the rule. None for a found Space that doesn't
+/// come.
+fn place(to: Destination, went: &[SpaceRef], spaces: &[SpacePlan]) -> Option<SpaceRef> {
+    Some(match to {
+        Destination::Little => SpaceRef::Little,
+        Destination::Front => SpaceRef::Front,
+        Destination::Space(at) => match *went.get(at)? {
+            SpaceRef::Planned(at) => match spaces[at].into {
+                Target::Existing(id) => SpaceRef::Existing(id),
+                Target::New { .. } => SpaceRef::Planned(at),
+            },
+            here => here,
+        },
+    })
+}
+
+/// The id a rule to `place` has here, as `link_rules::Rule` holds it; none for a Space the plan
+/// makes.
+fn id(place: SpaceRef) -> Option<u64> {
+    match place {
+        SpaceRef::Existing(id) => Some(id),
+        SpaceRef::Planned(_) => None,
+        SpaceRef::Little => Some(LITTLE),
+        SpaceRef::Front => Some(FRONT),
+    }
 }
 
 /// Adds to `adds` what of `nodes` isn't among `rows`, the rows already in that place.
@@ -320,11 +365,27 @@ fn add(nodes: &[Node], rows: &[Row], adds: &mut Vec<Add>) {
                 let here = rows
                     .iter()
                     .any(|row| matches!(row, Row::Tab(url) if *url == tab.url));
-                let planned = adds
-                    .iter()
-                    .any(|each| matches!(each, Add::Tab(each) if each.url == tab.url));
-                if !here && !planned {
+                if !here && !lists(adds, &tab.url) {
                     adds.push(Add::Tab(tab.clone()));
+                }
+            }
+            // Its tabs that aren't in this place yet make it, as a tab's would come; one alone
+            // comes as a tab.
+            Node::Split(split) => {
+                let new = |tab: &&Tab| {
+                    !rows
+                        .iter()
+                        .any(|row| matches!(row, Row::Tab(url) if *url == tab.url))
+                        && !lists(adds, &tab.url)
+                };
+                let tabs: Vec<Tab> = split.tabs.iter().filter(new).cloned().collect();
+                match &tabs[..] {
+                    [] => {}
+                    [tab] => adds.push(Add::Tab(tab.clone())),
+                    _ => adds.push(Add::Split(Split {
+                        tabs,
+                        ..split.clone()
+                    })),
                 }
             }
             Node::Folder { name, children } => {
@@ -371,7 +432,17 @@ fn has(rows: &[Row], url: &str) -> bool {
 fn planning(adds: &[Add], url: &str) -> bool {
     adds.iter().any(|add| match add {
         Add::Tab(tab) => tab.url == url,
+        Add::Split(split) => split.tabs.iter().any(|tab| tab.url == url),
         Add::Folder { adds, .. } => planning(adds, url),
+    })
+}
+
+/// Whether `adds` has a tab at `url` in its own place, not in a folder: a tab's or a split's.
+fn lists(adds: &[Add], url: &str) -> bool {
+    adds.iter().any(|add| match add {
+        Add::Tab(tab) => tab.url == url,
+        Add::Split(split) => split.tabs.iter().any(|tab| tab.url == url),
+        Add::Folder { .. } => false,
     })
 }
 
@@ -380,11 +451,13 @@ fn merge(adds: &mut Vec<Add>, more: Vec<Add>) {
     for each in more {
         match each {
             Add::Tab(tab) => {
-                if !adds
-                    .iter()
-                    .any(|add| matches!(add, Add::Tab(each) if each.url == tab.url))
-                {
+                if !lists(adds, &tab.url) {
                     adds.push(Add::Tab(tab));
+                }
+            }
+            Add::Split(split) => {
+                if !split.tabs.iter().any(|tab| lists(adds, &tab.url)) {
+                    adds.push(Add::Split(split));
                 }
             }
             Add::Folder {

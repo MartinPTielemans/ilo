@@ -151,6 +151,16 @@ fn command_o_moves_the_page_to_its_space_in_the_main_window(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn it_turns_its_pages_developer_mode_off_and_on(cx: &mut TestAppContext) {
+    let (shell, host) = little(cx, "https://example.com/");
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.offers(Command::ToggleDeveloperMode))
+    });
+    run(&shell, cx, Command::ToggleDeveloperMode, "command bar");
+    assert_eq!(host.take(), ["developer mode 10 true"]);
+}
+
+#[gpui::test]
 fn open_in_main_window_is_little_ilos_alone(cx: &mut TestAppContext) {
     let host = Rc::new(Recorder::default());
     let main = main_window(cx, &host);
@@ -941,4 +951,54 @@ fn its_pinned_extensions_end_its_bars_title(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let (shown, overflow) = shell.read_with(cx, |shell, _| shell.shown_actions());
     assert!(overflow && shown < 40, "{shown} shown, overflow {overflow}");
+}
+
+/// With Little ilo off in Settings › Features: ⌥⌘N and the command bar's New Little ilo Window
+/// open nothing and aren't offered, File has none, and ⌥⌘-click on a Today tab's row is a click.
+/// On again, all of it comes back.
+#[gpui::test]
+fn off_nothing_offers_or_opens_a_little_window(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let main = main_window(cx, &host);
+    main.update(cx, |shell, cx| {
+        shell.set_tabs(
+            1,
+            Vec::new(),
+            vec![5, 6],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_selected(5, cx);
+        shell.set_little_windows(false, cx);
+    });
+    host.take();
+    main.read_with(cx, |shell, cx| {
+        assert!(!shell.offers(Command::NewLittleWindow));
+        assert!(
+            shell.menu_bar(cx).little_off,
+            "File still has New Little ilo Window"
+        );
+        assert_eq!(
+            shell.bar_name("New Little ilo Window", Command::NewLittleWindow, cx),
+            None
+        );
+    });
+    run(&main, cx, Command::NewLittleWindow, "key");
+    let alt_cmd = option_command(cx);
+    assert!(
+        !press_row(&main, 6, alt_cmd, cx),
+        "⌥⌘-click opened Little ilo while it's off"
+    );
+    assert!(
+        !host.take().iter().any(|call| call.contains("little")),
+        "something asked for a Little ilo window while it's off"
+    );
+    main.update(cx, |shell, cx| shell.set_little_windows(true, cx));
+    run(&main, cx, Command::NewLittleWindow, "key");
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("new little window 1")
+    );
+    assert!(main.read_with(cx, |shell, cx| !shell.menu_bar(cx).little_off));
 }

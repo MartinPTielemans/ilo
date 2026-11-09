@@ -114,7 +114,7 @@ impl Shell {
     /// docked sidebar, of a regular window.
     fn library_beside(&self, space: u64) -> bool {
         let first = self.spaces.first().is_some_and(|first| first.id == space);
-        first && !self.sidebar_hidden && !self.page_fullscreen && !self.private
+        first && !self.sidebar_hidden && !self.page_fullscreen && !self.one_space()
     }
 
     /// How far out a swipe has taken the Library (`library_out`), while it moves the Library.
@@ -652,6 +652,7 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         };
         ids.iter().map(space).collect()
     }

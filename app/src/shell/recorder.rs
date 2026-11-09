@@ -77,6 +77,8 @@ pub(super) struct Recorder {
     pub(super) checked_for_updates: Cell<usize>,
     /// The import finds no browser on the machine.
     pub(super) no_browsers: Cell<bool>,
+    /// A field of the page has the keyboard, as `show_autofill` answers.
+    pub(super) field_focused: Cell<bool>,
     /// The browser the import reads and adds to, when a test gives one.
     pub(super) import: RefCell<Option<std::rc::Rc<dyn crate::import::Host>>>,
     /// The window is full screen, as Linux's window manager says, for `window_full_screen`.
@@ -120,6 +122,8 @@ pub(super) struct Recorder {
     /// Whether Show Space Header last kept a lone unnamed Space's name row, or Hide Space Header
     /// hid it.
     pub(super) lone_header: Cell<Option<bool>>,
+    /// Portrait Mode can put a page on the desktop's picture, as the Mac's host can.
+    pub(super) desktop_picture: Cell<bool>,
     /// The share services it lists for any page.
     pub(super) share_services: RefCell<Vec<SharedString>>,
     /// The system has a share sheet of its own.
@@ -136,6 +140,8 @@ pub(super) struct Recorder {
     pub(super) dialog_busy: Cell<bool>,
     /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
     pub(super) warn_profiles: Cell<bool>,
+    /// Who shares the favorites, as `favorites_scope` answers.
+    pub(super) favorites_scope: Cell<super::FavoritesScope>,
     /// Each time the shell opened the Site Controls: the tab, and where they hang from.
     pub(super) site_controls: RefCell<Vec<(u64, crate::site_controls::Place)>>,
     /// The ids of the extensions the Site Controls were given to list, each time.
@@ -157,8 +163,10 @@ pub(super) struct Recorder {
     /// How many times Site Search Settings opened.
     pub(super) site_search_settings: Cell<usize>,
     pub(super) clear_browsing_data: Cell<usize>,
-    /// Each profile's command bar picks, as the file keeps them.
-    pub(super) bar_picks: RefCell<HashMap<u64, String>>,
+    /// Each profile's folder, which the test makes.
+    pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
+    /// Each profile's Library › Agents past tasks, as the file keeps them.
+    pub(super) agent_history: RefCell<HashMap<u64, String>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -168,17 +176,23 @@ pub(super) struct Recorder {
     /// What moved the pages, in order: "layout" for the page's frame, "shares" for a split's, and
     /// "moving" and "still" for what the shell told the core about the motion.
     pub(super) page_events: RefCell<Vec<&'static str>>,
+    /// Each scale the pages were given to draw at.
+    pub(super) page_scales: RefCell<Vec<f32>>,
     /// Where each tooltip it was asked for hangs from, in order.
     pub(super) anchors: RefCell<Vec<crate::tooltip::Anchor>>,
     /// The last hover card the shell asked for, for a test to press its buttons.
     pub(super) card: RefCell<Option<crate::hover_card::Rest>>,
     /// The folder preview asked for last, whose choice a test makes.
     pub(super) folder_preview: RefCell<Option<crate::folder_preview::Rest>>,
+    /// When a window last showed each tab, for `last_seen`, which a test sets.
+    pub(super) seen: RefCell<HashMap<u64, f64>>,
     /// Where the shell last put the link target's plate, in the window.
     pub(super) link_frame: Cell<Option<Bounds<Pixels>>>,
     /// What the shell did to tabs, folders and Spaces that ⌘Z puts back, in order, such as
     /// `close 5` and `reopen 5 as 1001`.
     edits: RefCell<Vec<String>>,
+    /// The removals from history the core no longer keeps, as after ten more.
+    pub(super) lost_removals: RefCell<Vec<u64>>,
     /// The id the next tab or folder it makes gets.
     made: Cell<u64>,
     /// The URL each pinned tab or favorite goes back to, and the name each tab was given.
@@ -368,6 +382,11 @@ impl Browser for Recorder {
         self.moves.set(self.moves.get() + 1);
     }
 
+    fn move_split_to_favorites(&self, tab: u64, index: usize, _: &mut App) {
+        self.edit(format!("favorite split {tab} {index}"));
+        self.moves.set(self.moves.get() + 1);
+    }
+
     fn move_tab(&self, tab: u64, pinned: bool, folder: u64, index: usize, _: &mut App) {
         self.edit(format!("move {tab} {pinned} {folder} {index}"));
         self.moves.set(self.moves.get() + 1);
@@ -424,6 +443,10 @@ impl Browser for Recorder {
         self.record(format!("pinned open {space} {open}"))
     }
 
+    fn battery_saver_off_for_now(&self, _: &mut App) {
+        self.record("battery saver off for now".into())
+    }
+
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
         self.edit(format!("move folder {folder} {to} {index}"));
         self.moves.set(self.moves.get() + 1);
@@ -441,6 +464,14 @@ impl Browser for Recorder {
 
     fn set_split_stacked(&self, tab: u64, stacked: bool, _: &mut App) {
         self.record(format!("split stacked {tab} {stacked}"))
+    }
+
+    fn set_split_name(&self, tab: u64, name: &str, _: &mut App) {
+        self.edit(format!("split name {tab} {name}"))
+    }
+
+    fn set_split_icon(&self, tab: u64, icon: &str, _: &mut App) {
+        self.edit(format!("split icon {tab} {icon}"))
     }
 
     fn set_split_shares(&self, tab: u64, shares: Option<&[f64]>, _: &mut App) {
@@ -508,6 +539,33 @@ impl Browser for Recorder {
         self.record(format!("cast to {tab} {id}"));
     }
 
+    fn choose_device(&self, tab: u64, id: SharedString, _: &mut App) {
+        self.record(format!("choose device {tab} {id}"));
+    }
+
+    fn cancel_chooser(&self, tab: u64, _: &mut App) {
+        self.record(format!("cancel chooser {tab}"));
+    }
+
+    fn scan_devices(&self, tab: u64, _: &mut App) {
+        self.record(format!("scan devices {tab}"));
+    }
+
+    fn device_settings(&self, tab: u64, _: &mut App) {
+        self.record(format!("device settings {tab}"));
+    }
+
+    fn pair(&self, tab: u64, pin: Option<SharedString>, _: &mut App) {
+        match pin {
+            Some(pin) => self.record(format!("pair {tab} {pin}")),
+            None => self.record(format!("pair {tab}")),
+        }
+    }
+
+    fn cancel_pair(&self, tab: u64, _: &mut App) {
+        self.record(format!("cancel pair {tab}"));
+    }
+
     fn clear(&self, _: &mut App) -> u64 {
         let id = self.core.ticket();
         self.edit(format!("clear as {id}"));
@@ -555,6 +613,20 @@ impl Browser for Recorder {
     ) {
         let (x, y) = (f32::from(link.x), f32::from(link.y));
         self.record(format!("open preview over {over} {url} from {x},{y}"));
+    }
+
+    fn open_archived_preview(
+        &self,
+        over: u64,
+        archived: u64,
+        url: SharedString,
+        _: Point<Pixels>,
+        _: (Bounds<Pixels>, f32),
+        _: &mut App,
+    ) {
+        self.record(format!(
+            "open archived {archived} in preview over {over} {url}"
+        ));
     }
 
     fn link_previews(&self) -> bool {
@@ -607,7 +679,25 @@ impl Browser for Recorder {
         removals.remove(at).1
     }
 
-    fn restore_archived(&self, _: u64, _: &mut App) {}
+    fn undo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        let kept = !self.lost_removals.borrow().contains(&removal);
+        if kept {
+            self.edit(format!("put back removal {removal}"));
+        }
+        kept
+    }
+
+    fn redo_remove_suggestion(&self, removal: u64, _: &mut App) -> bool {
+        let kept = !self.lost_removals.borrow().contains(&removal);
+        if kept {
+            self.edit(format!("remove again removal {removal}"));
+        }
+        kept
+    }
+
+    fn restore_archived(&self, archived: u64, _: &mut App) {
+        self.record(format!("restore archived {archived}"))
+    }
 
     fn remove_archived(&self, archived: u64, _: &mut App) -> u64 {
         let id = self.core.removed(1);
@@ -623,7 +713,9 @@ impl Browser for Recorder {
 
     fn act_on_download(&self, _: u64, _: DownloadAction, _: &mut App) {}
 
-    fn clear_downloads(&self, _: &mut App) {}
+    fn clear_downloads(&self, private: Option<u64>, _: &mut App) {
+        self.record(format!("clear downloads {private:?}"));
+    }
 
     fn download_icon(&self, _: u64, _: &mut App) {}
 
@@ -678,6 +770,10 @@ impl Browser for Recorder {
         Default::default()
     }
 
+    fn last_seen(&self, tab: u64) -> f64 {
+        self.seen.borrow().get(&tab).copied().unwrap_or_default()
+    }
+
     fn go_back(&self, tab: u64, _: &mut App) {
         self.record(format!("back {tab}"))
     }
@@ -709,6 +805,10 @@ impl Browser for Recorder {
     }
 
     fn clear_site(&self, _: u64, _: bool, _: &mut App) {}
+
+    fn clear_site_data(&self, tab: u64, _: &mut App) {
+        self.record(format!("clear site data {tab}"))
+    }
 
     fn set_developer_mode(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("developer mode {tab} {on}"))
@@ -767,6 +867,41 @@ impl Browser for Recorder {
 
     fn show_offer(&self, tab: u64) {
         self.record(format!("show offer {tab}"))
+    }
+
+    fn translation_target(&self) -> Option<SharedString> {
+        Some("en".into())
+    }
+
+    /// English, and Dutch, as a user who reads both.
+    fn reads_language(&self, language: &str) -> bool {
+        matches!(language, "en" | "nl")
+    }
+
+    fn language_name(&self, language: &str) -> SharedString {
+        match language {
+            "es" => "Spanish".into(),
+            "en" => "English".into(),
+            "nl" => "Dutch".into(),
+            other => SharedString::from(other.to_owned()),
+        }
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        let languages: Vec<&str> = languages.iter().map(AsRef::as_ref).collect();
+        self.record(format!("always translated {}", languages.join(",")))
+    }
+
+    fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
+        self.record(format!("translate {tab} {from} {to}"))
+    }
+
+    fn use_original(&self, tab: u64, _: &mut App) {
+        self.record(format!("use original {tab}"))
+    }
+
+    fn translation_settings(&self, _: &mut App) {
+        self.record("translation settings".into())
     }
 
     fn answer_page_dialog(&self, tab: u64, id: u64, reply: PageReply, _: &mut App) {
@@ -901,16 +1036,20 @@ impl Browser for Recorder {
             .set(self.clear_browsing_data.get() + 1);
     }
 
-    fn bar_picks(&self, profile: u64) -> String {
-        self.bar_picks
+    fn profile_folder(&self, profile: u64) -> Option<std::path::PathBuf> {
+        self.profile_folders.borrow().get(&profile).cloned()
+    }
+
+    fn agent_history(&self, profile: u64) -> String {
+        self.agent_history
             .borrow()
             .get(&profile)
             .cloned()
             .unwrap_or_default()
     }
 
-    fn set_bar_picks(&self, profile: u64, text: &str) {
-        self.bar_picks
+    fn set_agent_history(&self, profile: u64, text: &str) {
+        self.agent_history
             .borrow_mut()
             .insert(profile, text.to_string());
     }
@@ -968,6 +1107,10 @@ impl Browser for Recorder {
         true
     }
 
+    fn move_space(&self, space: u64, after: u64, _: &mut App) {
+        self.edit(format!("move space {space} after {after}"));
+    }
+
     fn set_space_color(&self, space: u64, color: Option<u32>, _: &mut App) {
         self.edit(format!("color {space} {color:?}"));
         let color = color.map_or("none".to_string(), |color| format!("{color:06x}"));
@@ -1021,6 +1164,10 @@ impl Browser for Recorder {
     }
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
+
+    fn favorites_scope(&self, _: &mut App) -> super::FavoritesScope {
+        self.favorites_scope.get()
+    }
 
     fn context_menu(
         &self,
@@ -1108,6 +1255,10 @@ impl Browser for Recorder {
         self.page_events
             .borrow_mut()
             .push(if moving { "moving" } else { "still" });
+    }
+
+    fn set_page_scale(&self, scale: f32, _: &mut App) {
+        self.page_scales.borrow_mut().push(scale);
     }
 
     fn set_pane_corner(&self, _: f32, _: f32, _: f32, _: &mut App) {}
@@ -1407,6 +1558,7 @@ impl Browser for Recorder {
         frame: Bounds<Pixels>,
         _: f32,
         full_page: bool,
+        press: Option<Point<Pixels>>,
         _: bool,
         look: crate::menu::Look,
         _: &mut App,
@@ -1415,9 +1567,31 @@ impl Browser for Recorder {
         let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
         let what = if full_page { "full page" } else { "portion" };
         let tone = if look.light { "light" } else { "dark" };
+        let from = press.map(|at| format!(" from {} {}", f32::from(at.x), f32::from(at.y)));
+        let from = from.unwrap_or_default();
         self.record(format!(
-            "capture {what} {tab} at {x} {y} {width} {height} {tone}"
+            "capture {what} {tab} at {x} {y} {width} {height} {tone}{from}"
         ));
+    }
+
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        _: &mut App,
+    ) {
+        let (x, y) = (f32::from(frame.origin.x), f32::from(frame.origin.y));
+        let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
+        let background = background.name();
+        self.record(format!(
+            "capture portrait {tab} at {x} {y} {width} {height} {radius} on {background}"
+        ));
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        self.desktop_picture.get()
     }
 
     fn page_picture(&self, tab: u64, request: u64, cx: &mut App) {
@@ -1446,6 +1620,14 @@ impl Browser for Recorder {
 
     fn passwords(&self, space: u64, _: &mut App) {
         self.record(format!("passwords {space}"));
+    }
+
+    fn show_autofill(&self, tab: u64, logins: bool) -> bool {
+        self.record(format!(
+            "autofill {tab} {}",
+            if logins { "logins" } else { "field" }
+        ));
+        self.field_focused.get()
     }
 
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
@@ -1551,11 +1733,24 @@ impl Browser for Recorder {
         ))
     }
 
+    /// The window's top left at 100, 50 on the screen.
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        Some(gpui::point(at.x + 100., at.y + 50.))
+    }
+
     fn tab_window(&self, tab: u64) -> u64 {
         self.tab_windows.borrow().get(&tab).copied().unwrap_or(0)
     }
 
     fn new_private_window(&self, _: &mut App) {}
+
+    fn new_blank_window(&self, _: &mut App) {
+        self.record("new blank window".into())
+    }
+
+    fn move_out_of_blank(&self, tab: u64, space: u64, _: &mut App) {
+        self.record(format!("move {tab} out of blank to {space}"))
+    }
 
     fn new_little_window(&self, home: u64, _: &mut App) {
         self.record(format!("new little window {home}"))
@@ -1614,6 +1809,14 @@ impl crate::account::Host for Account {
         self.calls.borrow_mut().push("start over".into());
     }
 
+    fn activity(&self) -> crate::account::Activity {
+        crate::account::Activity::default()
+    }
+
+    fn delete_account(&self) {
+        self.calls.borrow_mut().push("delete account".into());
+    }
+
     fn request_pairing(&self) {
         self.calls.borrow_mut().push("request pairing".into());
     }
@@ -1624,6 +1827,12 @@ impl crate::account::Host for Account {
 
     fn remove_device(&self, id: &str) {
         self.calls.borrow_mut().push(format!("remove {id}"));
+    }
+
+    fn choose(&self, what: crate::account::Choice, on: bool) {
+        self.calls
+            .borrow_mut()
+            .push(format!("choose {what:?} {on}"));
     }
 
     fn copy_secret(&self, _: &str, _: Duration, _: &mut App) {

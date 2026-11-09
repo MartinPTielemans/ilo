@@ -3,13 +3,15 @@
 # captures the screen where its largest window is, overlays over it included. Its log (stderr) goes
 # beside the capture, and the program goes when it ends. -Moving lets that many pixels keep
 # changing, such as a blinking caret. On a desktop someone uses, the capture holds whatever covers
-# the window, so it's for CI only.
-# Usage: window-capture.ps1 <output.png> <ready> <program> [-Moving <n>]
+# the window, so it's for CI only. With -Point, the capture is taken again with the pointer at the
+# window's point that the first log line matching it ends in, as parity.sh's --then does on Linux.
+# Usage: window-capture.ps1 <output.png> <ready> <program> [-Moving <n>] [-Point <pattern>]
 param(
   [Parameter(Mandatory)] [string] $Out,
   [Parameter(Mandatory)] [string] $Ready,
   [Parameter(Mandatory)] [string] $Program,
-  [int] $Moving = 0
+  [int] $Moving = 0,
+  [string] $Point = ''
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
@@ -24,6 +26,7 @@ public static class Capture {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc each, IntPtr data);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   delegate bool EnumProc(IntPtr window, IntPtr data);
   [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
 
@@ -113,6 +116,19 @@ try {
     Start-Sleep -Milliseconds 200
   }
   if (-not $taken) { throw 'The picture never stood still.' }
+  if ($Point) {
+    # The window's points, in pixels at the scale it's drawn at, as it's 1280 points wide.
+    $words = -split (Select-String -Path $log -Pattern $Point | Select-Object -First 1).Line
+    $scale = $area.Width / 1280
+    $x = $area.X + [int]([double]$words[-2] * $scale)
+    $y = $area.Y + [int]([double]$words[-1] * $scale)
+    [Capture]::SetCursorPos($x - 1, $y) | Out-Null
+    Start-Sleep -Milliseconds 300
+    [Capture]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 1500
+    $now = [Capture]::Screen($area)
+    $now.Save($Out, [Drawing.Imaging.ImageFormat]::Png)
+  }
   $Out
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }

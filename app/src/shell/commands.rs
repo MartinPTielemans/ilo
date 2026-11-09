@@ -7,8 +7,8 @@ use std::{
 };
 
 use gpui::{
-    Action, App, Context, Global, Image, KeyBinding, MenuItem, SharedString, WeakEntity, actions,
-    point,
+    Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
+    WeakEntity, actions, point,
 };
 
 use crate::build_info::{self, BuildInfo};
@@ -25,7 +25,7 @@ use super::{
     panes::pane_frames,
     sidebar_keys,
     swap::{CHECK, LINK},
-    trace, user_keys,
+    trace, translate, user_keys,
 };
 
 /// A browser command, from a key or the sidebar.
@@ -40,6 +40,8 @@ pub enum Command {
     NewPrivateWindow,
     /// Opens a Little ilo window, Arc's Little Arc, for the user's Space shown.
     NewLittleWindow,
+    /// Opens a Blank Window, Arc's: one list of tabs that aren't kept or shown in other windows.
+    NewBlankWindow,
     /// A Little ilo window's ⌘O: its page goes to the main window, live.
     OpenInMainWindow,
     /// Closes the window, its tabs going to the window in front of the others.
@@ -86,6 +88,13 @@ pub enum Command {
     ResetSpaceTabs,
     /// Mutes the selected tab, or unmutes it.
     ToggleMute,
+    /// Turns Chrome's Battery Saver off until the computer's plugged in, while it's on (#686).
+    TurnOffBatterySaver,
+    /// Translates the page shown into the user's language on the device, where it's in another
+    /// (#671).
+    TranslatePage,
+    /// Puts the translated page's own words back, as Arc's Use Original does.
+    UseOriginal,
     /// Mutes every tab of the window (`true`), or unmutes them all: Arc's Mute All Tabs.
     MuteAll(bool),
     /// Puts the window full screen, or takes it out, as View's Enter Full Screen does.
@@ -116,6 +125,11 @@ pub enum Command {
     CapturePortion,
     /// Captures all of the selected tab's page, beyond its view, and copies it.
     CaptureFullPage,
+    /// Opens Portrait Mode's card for the page the URL field shows, or closes it (portrait.rs).
+    CapturePortrait,
+    /// Portrait Mode on the background kept, without the card, as ⌥ on Site Controls' Capture
+    /// Full Page runs it. Not in the command bar, which has the card.
+    CapturePortraitNow,
     FindNext,
     FindPrevious,
     /// Scrolls the page to its selection.
@@ -185,6 +199,9 @@ pub enum Command {
     /// Pins the tab shown, or the rows chosen, at the bottom of this folder of the Space shown, as
     /// their menu's Add to Folder › does.
     MoveToFolder(u64),
+    /// Runs the action of the extension with this id (`extensions::id_number`) on the tab shown,
+    /// as the Extensions menu does.
+    RunExtension(u128),
     NextSpace,
     PreviousSpace,
     /// Hides the docked sidebar, or shows it.
@@ -198,6 +215,8 @@ pub enum Command {
     ViewDownloads,
     /// Opens the Library on its media, or closes it there.
     ViewMedia,
+    /// Opens the Library on its agents' past tasks, or closes it there.
+    ViewAgents,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -243,6 +262,13 @@ pub enum Command {
     Import,
     /// Opens the Settings window on its Passwords tab, with the Space's profile's logins.
     Passwords,
+    /// Opens Chrome's autofill dropdown at the field of the page that has the keyboard, as a click
+    /// in the field does, or with no field there, Settings › Passwords, as Edit › AutoFill's
+    /// Contact… and Credit Card… do.
+    AutoFill,
+    /// The same, its dropdown with every login the profile has, as Chrome's Select Password and
+    /// Edit › AutoFill › Passwords… do.
+    AutoFillPasswords,
     /// Plays a new profile's first launch again.
     Welcome,
     /// Gives every window this appearance where its Space's theme doesn't choose one, in place of
@@ -271,6 +297,7 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-n", Command::NewWindow, true),
     ("shift-cmd-n", Command::NewPrivateWindow, true),
     ("alt-cmd-n", Command::NewLittleWindow, true),
+    ("ctrl-cmd-n", Command::NewBlankWindow, true),
     ("cmd-o", Command::OpenInMainWindow, false),
     ("shift-cmd-w", Command::CloseWindow, true),
     ("shift-cmd-t", Command::ReopenClosedTab, true),
@@ -455,6 +482,21 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     ),
     ("Mute/Unmute Tab", Command::ToggleMute, &["sound", "audio"]),
     (
+        "Turn Off Battery Saver for Now",
+        Command::TurnOffBatterySaver,
+        &["energy saver", "power"],
+    ),
+    (
+        "Translate Page",
+        Command::TranslatePage,
+        &["translation", "language"],
+    ),
+    (
+        "Use Original",
+        Command::UseOriginal,
+        &["translation", "untranslate", "show original"],
+    ),
+    (
         "Mute All Tabs",
         Command::MuteAll(true),
         &["sound", "audio", "silence"],
@@ -491,6 +533,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "New Little ilo Window",
         Command::NewLittleWindow,
         &["little arc", "small window"],
+    ),
+    (
+        "New Blank Window",
+        Command::NewBlankWindow,
+        &["empty window", "unsaved"],
     ),
     (
         "Open in Main Window",
@@ -575,6 +622,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::CaptureFullPage,
         &["screenshot"],
     ),
+    (
+        "Capture in Portrait Mode",
+        Command::CapturePortrait,
+        &["screenshot", "share"],
+    ),
     ("Save Page As", Command::SavePage, &[]),
     ("Print", Command::Print, &["pdf"]),
     ("View Source", Command::ViewSource, &[]),
@@ -643,6 +695,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "View Media…",
         Command::ViewMedia,
         &["screenshots", "captures"],
+    ),
+    (
+        "View Agents…",
+        Command::ViewAgents,
+        &["agent history", "past tasks"],
     ),
     ("View History", Command::ViewHistory, &[]),
     (
@@ -788,6 +845,7 @@ pub fn bar_commands(typed: &str, cx: &App) -> Vec<BarCommand> {
     });
     let mut named = shell.named_bar_rows();
     named.extend(shell.numbered_bar_row(typed, cx));
+    named.extend(shell.extension_bar_rows());
     with_named_ranked(found, typed, &named, keys, picks)
 }
 
@@ -1084,6 +1142,7 @@ impl Command {
             Command::NewWindow => "new-window",
             Command::NewPrivateWindow => "new-private-window",
             Command::NewLittleWindow => "new-little-window",
+            Command::NewBlankWindow => "new-blank-window",
             Command::OpenInMainWindow => "open-in-main-window",
             Command::CloseWindow => "close-window",
             Command::EditUrl => "edit-url",
@@ -1109,6 +1168,9 @@ impl Command {
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
+            Command::TurnOffBatterySaver => "turn-off-battery-saver",
+            Command::TranslatePage => "translate-page",
+            Command::UseOriginal => "use-original",
             Command::MuteAll(true) => "mute-all-tabs",
             Command::MuteAll(false) => "unmute-all-tabs",
             Command::ToggleFullScreen => "toggle-full-screen",
@@ -1125,6 +1187,8 @@ impl Command {
             Command::Cast => "cast",
             Command::CapturePortion => "capture",
             Command::CaptureFullPage => "capture-full-page",
+            Command::CapturePortrait => "capture-portrait",
+            Command::CapturePortraitNow => "capture-portrait-now",
             Command::FindNext => "find-next",
             Command::FindPrevious => "find-previous",
             Command::JumpToSelection => "jump-to-selection",
@@ -1162,6 +1226,7 @@ impl Command {
             Command::PinToSpace(_) => "pin-to-space",
             Command::OpenFolder(_) => "open-folder",
             Command::MoveToFolder(_) => "move-to-folder",
+            Command::RunExtension(_) => "run-extension",
             Command::NextSpace => "next-space",
             Command::PreviousSpace => "previous-space",
             Command::ToggleSidebar => "toggle-sidebar",
@@ -1170,6 +1235,7 @@ impl Command {
             Command::ClearArchive => "clear-archive",
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
+            Command::ViewAgents => "view-agents",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1195,6 +1261,8 @@ impl Command {
             Command::CheckForUpdates => "check-for-updates",
             Command::Import => "import",
             Command::Passwords => "passwords",
+            Command::AutoFill => "autofill",
+            Command::AutoFillPasswords => "autofill-passwords",
             Command::Welcome => "welcome",
             Command::ReportProblem => "report-problem",
             Command::CopyBuildInfo => "copy-build-info",
@@ -1292,6 +1360,7 @@ pub fn bind_keys(cx: &mut App) {
     extensions::bind(cx);
     agent_bar::bind(cx);
     drm_note::bind(cx);
+    translate::bind(cx);
     sidebar_keys::bind(cx);
 }
 
@@ -1339,7 +1408,7 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return;
         }
         // ⌘T in a Little ilo window opens its command bar on its page, as ⌘L does (Arc): it holds
@@ -1363,9 +1432,12 @@ impl Shell {
         let space = self.spaces.iter().position(|space| space.id == self.space);
         // Next and previous wrap around for tabs, as in Chrome, and stop at the ends for Spaces, as
         // in Arc.
-        // Escape puts back a dragged row, or lets chosen rows go, before it stops the page
+        // Escape puts back a dragged row or dot, or lets chosen rows go, before it stops the page
         // (docs/ux-spec.md › Tab list).
-        if matches!(command, Command::Stop) && (self.cancel_drag(cx) || self.unchoose(cx)) {
+        let put_back = |shell: &mut Self, cx: &mut Context<Self>| {
+            shell.cancel_drag(cx) || shell.cancel_space_drag(cx) || shell.unchoose(cx)
+        };
+        if matches!(command, Command::Stop) && put_back(self, cx) {
             return;
         }
         if self.run_in_task_area(command, from, cx) {
@@ -1442,9 +1514,11 @@ impl Shell {
                         self.close_chosen(cx);
                     } else if self.selected != 0 {
                         // A pinned split's pages all go, and it stays a pinned split, as its −
-                        // does (Arc 1.171).
+                        // does (Arc 1.171), and so do a favorite split's, its tile kept.
                         let tab = self.selected;
-                        let split = self.pinned().contains(&tab) && self.panes(tab).len() > 1;
+                        let kept =
+                            self.pinned().contains(&tab) || self.favorite_split(tab).is_some();
+                        let split = kept && self.panes(tab).len() > 1;
                         self.close_tab(tab, split, cx);
                     } else {
                         self.browser.close_window(cx);
@@ -1454,6 +1528,9 @@ impl Shell {
             }
             Command::NewWindow => return self.browser.new_window(cx),
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
+            // Off in Settings › Features, ⌥⌘N does nothing.
+            Command::NewLittleWindow if !self.little_windows => return,
+            Command::NewBlankWindow => return self.browser.new_blank_window(cx),
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
                 return self.browser.new_little_window(home, cx);
@@ -1516,6 +1593,9 @@ impl Shell {
             }
             Command::CopyUrl if !self.chosen.is_empty() => return self.copy_chosen(cx),
             Command::CopyUrl => return self.copy_url(false, cx),
+            Command::TurnOffBatterySaver => return self.turn_off_battery_saver(cx),
+            Command::TranslatePage => return self.translate_page(cx),
+            Command::UseOriginal => return self.use_original(cx),
             Command::CopyMarkdownLink => return self.copy_url(true, cx),
             Command::PasteUrlAsTab => return self.paste_url_as_tab(cx),
             Command::Share => return self.share_page(cx),
@@ -1564,15 +1644,20 @@ impl Shell {
             Command::AddExtension => return self.browser.add_extension(cx),
             Command::Settings => return self.browser.settings(cx),
             Command::SiteSearchSettings => return self.browser.site_search_settings(cx),
-            Command::ClearBrowsingData => {
-                self.forget_bar_usage(cx);
-                return self.browser.clear_browsing_data(cx);
-            }
+            Command::ClearBrowsingData => return self.browser.clear_browsing_data(cx),
             Command::KeyboardShortcuts => return self.browser.shortcuts(cx),
             Command::About => return self.browser.about(cx),
             Command::CheckForUpdates => return self.browser.check_for_updates(cx),
             Command::Import => return self.browser.import(cx),
             Command::Passwords => return self.browser.passwords(self.space, cx),
+            Command::AutoFill | Command::AutoFillPasswords => {
+                let logins = command == Command::AutoFillPasswords;
+                let shown = self.selected != 0 && self.browser.show_autofill(self.selected, logins);
+                if !shown {
+                    self.browser.passwords(self.space, cx);
+                }
+                return;
+            }
             Command::Welcome => return self.welcome_again(cx),
             Command::ReportProblem => {
                 let url = BuildInfo::here().issue_url(build_info::NEW_ISSUE);
@@ -1647,6 +1732,7 @@ impl Shell {
             Command::ViewArchive => return self.view_section(Section::Archive, cx),
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
+            Command::ViewAgents => return self.view_section(Section::Agents, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -1683,6 +1769,9 @@ impl Shell {
                 };
                 return self.add_to_folder(rows, folder, cx);
             }
+            Command::RunExtension(id) => {
+                return self.run_extension(&super::extensions::id_text(id), cx);
+            }
             Command::NextSpace => return self.show_space_at(space.map(|index| index + 1), cx),
             Command::PreviousSpace => {
                 return self.show_space_at(space.and_then(|index| index.checked_sub(1)), cx);
@@ -1692,6 +1781,8 @@ impl Shell {
             Command::Cast => return self.cast(cx),
             Command::CapturePortion => return self.capture(false, cx),
             Command::CaptureFullPage => return self.capture(true, cx),
+            Command::CapturePortrait => return self.capture_in_portrait_mode(cx),
+            Command::CapturePortraitNow => return self.capture_portrait_now(cx),
             Command::FindNext => return self.browser.find_next(self.selected, true, cx),
             Command::FindPrevious => return self.browser.find_next(self.selected, false, cx),
             Command::JumpToSelection => return self.browser.jump_to_selection(self.selected, cx),
@@ -1991,27 +2082,43 @@ impl Shell {
 
     /// Starts capture mode over the focused page, or with `full_page` captures all of it.
     fn capture(&mut self, full_page: bool, cx: &mut Context<Self>) {
+        self.capture_pane(self.selected, full_page, None, cx);
+    }
+
+    /// Starts capture mode over the page of `tab`, a pane of the tab shown, dragging from `press`
+    /// in it for a ⇧⌘-drag on the page (Arc's), else choosing; or with `full_page` captures all of
+    /// it. Returns whether `tab`'s page shows here.
+    pub fn capture_pane(
+        &mut self,
+        tab: u64,
+        full_page: bool,
+        press: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((pane, radius)) = self.pane_frame(tab) else {
+            return false;
+        };
+        let (look, library) = (self.menu_look(), !self.private);
+        self.browser
+            .capture(tab, pane, radius, full_page, press, library, look, cx);
+        true
+    }
+
+    /// Where `tab`'s page is in the window, a pane of the tab shown, and its corners' radius; none
+    /// if it isn't shown here.
+    pub(super) fn pane_frame(&self, tab: u64) -> Option<(Bounds<Pixels>, f32)> {
         if self.selected == 0 {
-            return;
+            return None;
         }
         let (frame, radius) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
-        let focused = panes
-            .iter()
-            .position(|&pane| pane == self.selected)
-            .unwrap_or(0);
+        let index = panes.iter().position(|&pane| pane == tab);
+        let index = index.or((tab == self.selected).then_some(0))?;
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[focused];
-        let look = self.menu_look();
-        self.browser.capture(
-            self.selected,
-            pane,
+        Some((
+            pane_frames(frame, panes.len(), stacked, &shares)[index],
             radius,
-            full_page,
-            !self.private,
-            look,
-            cx,
-        );
+        ))
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page
@@ -2024,7 +2131,7 @@ impl Shell {
 
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
-        if self.private && !private_runs(command) {
+        if self.one_space() && !private_runs(command) {
             return false;
         }
         if self.little.is_some() && !little_runs(command) {
@@ -2090,6 +2197,8 @@ impl Shell {
                 self.selected != 0 && !favorite && !self.sidebar_hidden
             }
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
+            Command::TurnOffBatterySaver => self.battery_saver.is_some(),
+            Command::TranslatePage | Command::UseOriginal => self.offers_translation(command),
             Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
             // As the menus' New Profile: only an empty Space changes profile.
             Command::ChangeProfile(None) => {
@@ -2103,13 +2212,14 @@ impl Shell {
             Command::PreviousSpace => space.is_some_and(|index| index > 0),
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
+            Command::NewLittleWindow => self.little_windows,
             Command::NewFolder
             | Command::PasteUrlAsTab
             | Command::SearchTabs
             | Command::ReopenClosedTab
             | Command::NewWindow
             | Command::NewPrivateWindow
-            | Command::NewLittleWindow
+            | Command::NewBlankWindow
             | Command::CloseWindow
             | Command::ToggleSidebar
             | Command::NewSpace
@@ -2121,6 +2231,7 @@ impl Shell {
             | Command::ClearArchive
             | Command::ViewDownloads
             | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ManageExtensions
             | Command::AddExtension
             | Command::ViewHistory
@@ -2131,6 +2242,8 @@ impl Shell {
             | Command::About
             | Command::Import
             | Command::Passwords
+            | Command::AutoFill
+            | Command::AutoFillPasswords
             | Command::Welcome
             | Command::Appearance(_)
             | Command::RecordTrace
@@ -2167,7 +2280,12 @@ impl Shell {
 
     /// What the command bar calls `command`, listed as `name`, if it offers it now: a toggle's row
     /// says what it would do.
-    fn bar_name(&self, name: &'static str, command: Command, cx: &App) -> Option<&'static str> {
+    pub(super) fn bar_name(
+        &self,
+        name: &'static str,
+        command: Command,
+        cx: &App,
+    ) -> Option<&'static str> {
         if !self.offers(command) {
             return None;
         }
@@ -2216,7 +2334,7 @@ impl Shell {
     /// theirs, as their menu's, for the Spaces it lists and the folders. A private window has one
     /// Space and no folders.
     pub(super) fn named_bar_rows(&self) -> Vec<NamedRow> {
-        if self.private {
+        if self.one_space() {
             return Vec::new();
         }
         let chosen = !self.chosen.is_empty();
@@ -2297,7 +2415,8 @@ pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
 /// or shows another Space, and none of what the regular windows keep: the closed tabs, the
-/// Library, the history.
+/// Library's Spaces and archived tabs, the history. Its Library has its own session's downloads
+/// and their media (#669).
 pub(super) fn private_runs(command: Command) -> bool {
     !matches!(
         command,
@@ -2326,11 +2445,9 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::MoveToFolder(_)
             | Command::NextSpace
             | Command::PreviousSpace
-            | Command::ViewLibrary
             | Command::ViewArchive
             | Command::ClearArchive
-            | Command::ViewDownloads
-            | Command::ViewMedia
+            | Command::ViewAgents
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData

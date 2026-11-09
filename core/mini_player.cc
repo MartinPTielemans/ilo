@@ -5,10 +5,21 @@
 #include <optional>
 
 #include "base/logging.h"
+#include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
+#include "base/scoped_observation.h"
+#include "base/values.h"
 #include "browser_core/hooks.h"
+#include "browser_core/mini_player_place.h"
+#include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
@@ -21,6 +32,7 @@
 #include "ui/gfx/geometry/vector2d_f.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_observer.h"
 
 #if BUILDFLAG(IS_LINUX)
 #include "browser_core/platform/linux/wayland.h"
@@ -43,6 +55,100 @@ constexpr float kNotchScale = 1.1f;
 // Where the left button went down in the window, off its controls, until it's dragged far enough to
 // move the window, or let go.
 std::optional<gfx::Point> g_pressed;
+
+// The Mini Player Chrome made last, as it makes one for each video floated.
+base::WeakPtr<views::Widget> g_made;
+
+// Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
+// that let it go asked whether it had (MiniPlayerHasKeyboard).
+class KeyboardWatch : public views::WidgetObserver {
+ public:
+  void Watch(views::Widget* widget) {
+    observation_.Reset();
+    observation_.Observe(widget);
+  }
+
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
+    if (active) {
+      Window::MiniPlayerTookKeyboard();
+    }
+  }
+
+  void OnWidgetDestroying(views::Widget* widget) override { observation_.Reset(); }
+
+ private:
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{this};
+};
+
+KeyboardWatch& Watching() {
+  static base::NoDestructor<KeyboardWatch> watch;
+  return *watch;
+}
+
+// Where the last Mini Player was left, for the next, across launches as Arc's LastPiPPosition:
+// app-wide, in local state, so every profile's and a private window's share it.
+constexpr char kLeftPref[] = "browser_core.mini_player_left";
+
+void RegisterPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterDictionaryPref(kLeftPref);
+}
+
+std::optional<gfx::Rect> LastLeft() {
+  const base::DictValue& left = g_browser_process->local_state()->GetDict(kLeftPref);
+  const std::optional<int> x = left.FindInt("x");
+  const std::optional<int> y = left.FindInt("y");
+  const std::optional<int> width = left.FindInt("width");
+  const std::optional<int> height = left.FindInt("height");
+  if (!x || !y || !width || !height || *width <= 0 || *height <= 0) {
+    return std::nullopt;
+  }
+  return gfx::Rect(*x, *y, *width, *height);
+}
+
+// Where |window| goes, given Chrome's |bounds| for it at its present place.
+gfx::Rect Placed(VideoOverlayWindowViews* window,
+                 const gfx::Rect& bounds,
+                 bool shown,
+                 const gfx::Rect& work_area) {
+  if (g_made.get() != window) {
+    g_made = window->GetWeakPtr();
+    Watching().Watch(window);
+  }
+  gfx::Rect placed = bounds;
+  // Chrome hides a tab's Mini Player and shows the same window when the tab floats a video again,
+  // so one showing again, hidden yet, goes by the rule as a new one does.
+  if (shown && window->IsVisible()) {
+    // Kept on its screen as a move keeps it, where Chrome would keep it a margin from its corner.
+    placed.AdjustToFit(work_area);
+    return placed;
+  }
+  const std::optional<gfx::Rect> left = LastLeft();
+  // A kept place's screen, or the nearest, if the screens changed since.
+  const gfx::Rect on =
+      left ? display::Screen::Get()->GetDisplayMatching(*left).work_area() : work_area;
+  placed = FirstMiniPlayerPlace(bounds.size(), left, on);
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player placed at " << placed.x() << " " << placed.y() << " "
+             << placed.width() << " " << placed.height() << " on " << on.x() << " " << on.y()
+             << " " << on.width() << " " << on.height();
+  return placed;
+}
+
+void Left(VideoOverlayWindowViews* window) {
+  // One closed before it showed was never anywhere.
+  if (!window->IsVisible()) {
+    return;
+  }
+  const gfx::Rect left = window->GetWindowBoundsInScreen();
+  g_browser_process->local_state()->SetDict(kLeftPref, base::DictValue()
+                                                           .Set("x", left.x())
+                                                           .Set("y", left.y())
+                                                           .Set("width", left.width())
+                                                           .Set("height", left.height()));
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player left at " << left.x() << " " << left.y() << " "
+             << left.width() << " " << left.height();
+}
 
 // Puts |window| at |bounds|, moved onto the display it's mostly on.
 void Place(VideoOverlayWindowViews* window, gfx::Rect bounds) {
@@ -156,6 +262,26 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
 
 void SetUpMiniPlayer() {
   g_browser_core_mini_player_event = &OnEvent;
+  g_browser_core_mini_player_place = &Placed;
+  g_browser_core_mini_player_left = &Left;
+  g_browser_core_register_local_state = &RegisterPrefs;
+}
+
+bool MiniPlayerHasKeyboard() {
+  return g_made && g_made->IsVisible() && g_made->IsActive();
+}
+
+void CameBackTo(Window& window) {
+  PictureInPictureWindowManager* manager = PictureInPictureWindowManager::GetInstance();
+  content::WebContents* contents = manager->GetWebContents();
+  if (!manager->IsInPictureInPicture() || !contents || manager->GetChildWebContents() ||
+      Window::Showing(Tab::IdOf(contents)) != &window) {
+    return;
+  }
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player back in its tab";
+  // Not while the window's activation is being told.
+  PictureInPictureWindowManager::ExitPictureInPictureSoon();
 }
 
 }  // namespace browser_core

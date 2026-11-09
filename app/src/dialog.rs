@@ -87,6 +87,9 @@ use crate::tokens::text;
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
 pub(crate) const MOVE: f32 = 0.275;
 const FADE_IN: f32 = 0.135;
+/// Linux gives the browser window the keyboard back as the dialog starts leaving, and the Mac and
+/// Windows once it has hidden: a page's question is answered then.
+const PAGE_ANSWERED_AS_IT_LEAVES: bool = cfg!(target_os = "linux");
 const DROP: f32 = 32.;
 
 /// What a dialog asks.
@@ -178,8 +181,9 @@ pub trait Host {
     fn show(&self, window: Option<u64>, over: Option<Bounds<Pixels>>);
     /// Hides it, and the browser window gets the keyboard back.
     fn hide(&self);
-    /// Holds the keys typed from now, while the dialog leaves with the keyboard still its own, so
-    /// none is lost to it (host_hold_keys).
+    /// The dialog was answered and leaves, so no key typed from now may be lost to it: Linux gives
+    /// the browser window the keyboard back at once (overlays::dialog_leaving), and the Mac and
+    /// Windows hold the keys until it has hidden (host_hold_keys).
     fn hold_keys(&self) {}
     /// Gives the keys held to the window with the keyboard, the browser window once it's hidden
     /// (host_release_held_keys).
@@ -950,6 +954,19 @@ impl Dialog {
                 )
             }
             None => (None, None),
+        };
+        // On Linux the page has the keyboard back as the dialog starts leaving (Host::hold_keys),
+        // and Chromium drops its keys until its question is answered, so it's answered then: ⌘L
+        // typed right after Esc opens the command bar (#1711, #1963). After this update, as the
+        // core's answer can come back to the dialog.
+        let answered = match answered {
+            Some((answered, reply))
+                if PAGE_ANSWERED_AS_IT_LEAVES && asked.source == Source::Page =>
+            {
+                cx.defer(move |cx| answered(reply, cx));
+                None
+            }
+            answered => answered,
         };
         asked._leave = Some(cx.spawn(async move |dialog, cx| {
             cx.background_executor()

@@ -18,8 +18,8 @@ use gpui::{
 };
 
 use super::{
-    CARD_RADIUS, Command, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space,
-    SpaceEntry, TITLE, Theme,
+    Command, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space, SpaceEntry, TITLE,
+    Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     card,
     conversation::{page_chip, page_chip_keyed},
@@ -152,6 +152,7 @@ impl Shell {
                             splits: Vec::new(),
                             folders: Folders::default(),
                             shown: 0,
+                            peeked: Vec::new(),
                         }
                     }
                 }
@@ -709,6 +710,7 @@ impl Shell {
             }
             Command::NewWindow
             | Command::NewPrivateWindow
+            | Command::NewBlankWindow
             | Command::NewLittleWindow
             | Command::ToggleSidebar
             | Command::RecordTrace
@@ -805,7 +807,7 @@ impl Shell {
                 .left_0()
                 .top_0()
                 .size_full()
-                .rounded(px(CARD_RADIUS))
+                .rounded(px(self.card_radius()))
                 .overflow_hidden()
                 .child(area.view.clone());
             layer = layer.child(
@@ -845,13 +847,13 @@ impl Shell {
                     .top(ring.top())
                     .w(ring.size.width)
                     .h(ring.size.height)
-                    .rounded(px(CARD_RADIUS + RING))
+                    .rounded(px(self.card_radius() + RING))
                     .border(px(RING))
                     .border_color(rgb(COLOR)),
             );
         }
         if in_place {
-            layer = layer.child(card(place, self.palette.page));
+            layer = layer.child(card(place, self.card_radius(), self.palette.page));
         } else {
             layer = layer.child(self.task_page_picture(page, between(page.thumb, place, zoom), cx));
         }
@@ -870,7 +872,7 @@ impl Shell {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let radius = px(CARD_RADIUS);
+        let radius = px(self.card_radius());
         let picture = page.picture.clone().map(|picture| {
             canvas(
                 |_, _, _| {},

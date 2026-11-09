@@ -5,17 +5,17 @@
 //! The Site Controls cast their shadow from a window under them (shadows.rs), which scales and
 //! fades with the frames they draw of their motion.
 //!
-//! The pointer over Capture is the crosshair while it would be the camera on the Mac.
+//! The pointer over Capture is ilo's camera, as on the Mac, which GPUI shows in the crosshair's
+//! place over its window (`gpui_linux::set_overlay_cursor`); the crosshair where it can't.
 //!
-//! shortcut: no blur under the Site Controls, and no camera: a crosshair is a cursor both X11's
-//! cursor themes and Wayland's cursor shapes name, as a picture would need one of each.
+//! shortcut: no blur under the Site Controls.
 
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
 };
 
-use gpui::{Bounds, CursorStyle, Pixels, point, px, size};
+use gpui::{App, Bounds, CursorStyle, DevicePixels, Pixels, SvgSize, point, px, size};
 
 use crate::{bc, overlays, shadows};
 
@@ -117,7 +117,7 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
         }
         shadows::show(SITE_CONTROLS, ui_view, bounds, 0.);
     }
-    gpui_linux::show_overlay(view, ui_view, bounds, px(0.), true, left_popover);
+    crate::overlays::show_over(view, ui_view, bounds, px(0.), true, left_popover);
     true
 }
 
@@ -334,8 +334,50 @@ fn camera() {
     };
     let style = CAMERA.get().then_some(CursorStyle::Crosshair);
     crate::update_app_later(move |cx| {
-        overlays::update_window(view, cx, |window, cx| window.set_cursor_override(style, cx));
+        overlays::update_window(view, cx, |window, cx| {
+            let picture = camera_picture(window.scale_factor(), cx);
+            gpui_linux::set_overlay_cursor(view, CursorStyle::Crosshair, picture);
+            window.set_cursor_override(style, cx);
+        });
     });
+}
+
+// Lucide's camera (https://github.com/lucide-icons/lucide, commit
+// 7faf87628a1ad6175975bc595344337ce14a7db4), ISC License; see NOTICE. Drawn as the Mac's is
+// (mac/host.mm): a light line a point wide, over a dark fill, with a dark edge either side so it
+// shows on any page.
+const CAMERA_BODY: &str = "M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9\
+    a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904\
+    A2 2 0 0 1 10.004 4z";
+
+/// The camera pointer, 24 points square at `scale`, with its hot spot in the middle as the Mac's.
+fn camera_picture(scale: f32, cx: &App) -> Option<gpui_linux::CursorPicture> {
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" \
+         viewBox=\"0 0 24 24\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\
+         <path d=\"{CAMERA_BODY}\" fill=\"rgb(30,41,48)\" stroke=\"rgba(0,0,0,0.6)\" \
+         stroke-width=\"3\"/>\
+         <circle cx=\"12\" cy=\"13\" r=\"3\" fill=\"none\" stroke=\"rgba(0,0,0,0.6)\" \
+         stroke-width=\"3.5\"/>\
+         <path d=\"{CAMERA_BODY}\" fill=\"none\" stroke=\"rgb(215,215,215)\" stroke-width=\"1\"/>\
+         <circle cx=\"12\" cy=\"13\" r=\"3\" fill=\"none\" stroke=\"white\" \
+         stroke-width=\"1.5\"/></svg>"
+    );
+    let renderer = cx.svg_renderer();
+    let parsed = renderer.parse_svg(svg.as_bytes()).ok()?;
+    let side = (24. * scale).round().max(1.) as u32;
+    let pixels = DevicePixels(side as i32);
+    let drawn = (renderer.render_parsed(&parsed, SvgSize::ExactSize(size(pixels, pixels)))).ok()?;
+    let mut rgba = drawn.as_bytes(0)?.to_vec();
+    // GPUI's are BGRA.
+    rgba.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+    Some(gpui_linux::CursorPicture {
+        width: side,
+        height: side,
+        rgba,
+        hot: (side / 2, side / 2),
+        scale,
+    })
 }
 
 #[unsafe(no_mangle)]

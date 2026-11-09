@@ -193,7 +193,7 @@ impl Step {
             // Its button only while signed out; the view's own buttons are the step's after.
             Step::Account => (
                 "Your Spaces on every computer.",
-                "Spaces, bookmarks, passwords and open tabs sync encrypted end to end, and \
+                "Spaces, bookmarks and passwords sync encrypted end to end, and \
                  Settings has it too.",
                 "Sign In",
             ),
@@ -742,7 +742,8 @@ impl Shell {
             // check.sh waits for this line.
             log!("browser: onboarding done");
             // In: the first Space with the command bar up, as ⌘T has it, once this frame is drawn.
-            if ended && self.selected == 0 {
+            // Not for a quit, whose closing window can draw the frame the fade ends in.
+            if ended && self.selected == 0 && !super::quit_gone_ahead() {
                 self.in_hint = true;
                 cx.defer_in(window, |shell, _, cx| {
                     shell.run(Command::NewTab, "onboarding", cx)

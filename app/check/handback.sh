@@ -134,7 +134,7 @@ trap 'cleanup; forget_standin' EXIT
 rm -f "$out/handback-local.port"
 mkfifo "$out/handback-local.port"
 python3 -I -u -c '
-import http.server, sys
+import http.server, socketserver, sys
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(sys.argv[1], "a", encoding="utf-8") as log:
@@ -146,7 +146,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b"handed back")
     def log_message(self, *_):
         pass
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
 sys.stdout.buffer.write(b"%d\n" % server.server_address[1])
 sys.stdout.close()
 server.serve_forever()
@@ -177,9 +178,10 @@ fetch("http://127.0.0.1:%s/handback?code=local")
 rm -f "$out/handback-tls.port"
 mkfifo "$out/handback-tls.port"
 python3 -I -u -c '
-import functools, http.server, ssl, sys
+import functools, http.server, socketserver, ssl, sys
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+# TCPServer, as site.sh binds: HTTPServer looks 127.0.0.1 up by name, 35 s on the hosted Mac.
+server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain(sys.argv[2], sys.argv[3])
 server.socket = tls.wrap_socket(server.socket, server_side=True)
@@ -354,6 +356,13 @@ by_scheme() {
     record "$1" "$2" "tab $asked's dialog settled with no Open drawn"
     close_little "$1"
     return 0
+  fi
+  # A Little ilo window's sign-in pop-up opens as a window of its own (#1919), whose dialog is
+  # there: the driver clicks in it.
+  popup_window=$(sed -n "s/^browser: little window [0-9]* popup $asked in window \([0-9]*\) at .*/\1/p" "$log" |
+    tail -1)
+  if [ -n "$popup_window" ]; then
+    send window "$(grep '^browser: window opened ' "$log" | grep -n " $popup_window\$" | cut -d: -f1)"
   fi
   send click $confirm
   if ! seen "^browser: page $asked dialog answered accept\$" 5; then

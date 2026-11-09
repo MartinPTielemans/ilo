@@ -265,7 +265,8 @@ void host_centered(double width, double height, double* x, double* y) {
 // screen out twice, for it and then for the browser window. Chromium's window goes on screen as the
 // core opens it instead.
 void host_show_launch_window(const char* profile_dir, double x, double y, double width, double height,
-                             bool maximized) {}
+                             bool maximized, double picture_width, double picture_height,
+                             double foot_top) {}
 
 void host_close_launch_window(void) {}
 
@@ -385,6 +386,9 @@ void host_add_dock_items(int (*little)(void), void (*chosen)(int item)) {}
 
 void host_set_little_status_item(void (*clicked)(void)) {}
 
+// The launcher's action is the .desktop file's, which the package writes.
+void host_set_little_task(const char* title, const char* arguments) {}
+
 // The app reports each browser window GPUI's window in it hears become active (host_window_active).
 void host_watch_key_window(void (*changed)(void* ui_view)) {
   g_key_window_changed = changed;
@@ -473,6 +477,11 @@ size_t host_paste(char* text, size_t capacity) {
 }
 
 void host_copy_png(const uint8_t* png, size_t size) {}
+
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
 
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {}
 

@@ -1099,6 +1099,53 @@ fn the_archives_delete_and_clear_are_undone_and_done_again(cx: &mut TestAppConte
     assert_eq!(host.take_edits(), ["archive clear as 9004"]);
 }
 
+/// A page or search the command bar took out of history is the window's step, Remove from
+/// History: ⌘Z puts it back and ⇧⌘Z takes it out again. The bar's field, which has no undo of its
+/// own, steps only a removal, so ⌘Z there never undoes something out of sight under the bar.
+#[gpui::test]
+fn a_removal_from_history_is_undone_and_done_again(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![10, 11]);
+    let in_bar = |shell: &Entity<Shell>, undoing: bool, cx: &mut TestAppContext| {
+        shell.update(cx, |shell, cx| shell.step_suggestion_removal(undoing, cx))
+    };
+    shell.update(cx, |shell, cx| shell.suggestion_removed(7, cx));
+    assert_eq!(titles(&shell, cx), (Some("Remove from History"), None));
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["put back removal 7"]);
+    assert_eq!(titles(&shell, cx), (None, Some("Remove from History")));
+    assert!(redo(&shell, cx));
+    assert_eq!(host.take_edits(), ["remove again removal 7"]);
+    assert!(in_bar(&shell, true, cx));
+    assert!(in_bar(&shell, false, cx));
+    assert_eq!(
+        host.take_edits(),
+        ["put back removal 7", "remove again removal 7"]
+    );
+
+    // With a closed tab next, the bar's ⌘Z does nothing, and the window's reopens it.
+    shell.update(cx, |shell, cx| shell.close_tab(11, false, cx));
+    report(&shell, cx, Vec::new(), vec![10]);
+    host.take_edits();
+    assert!(!in_bar(&shell, true, cx));
+    assert_eq!(host.take_edits(), Vec::<String>::new());
+
+    // One the core no longer keeps is dropped, and the bar goes no further than the removals.
+    shell.update(cx, |shell, cx| shell.suggestion_removed(8, cx));
+    host.lost_removals.borrow_mut().push(8);
+    assert!(!in_bar(&shell, true, cx));
+    assert_eq!(host.take_edits(), Vec::<String>::new());
+    assert_eq!(titles(&shell, cx).0, Some("Close Tab"));
+    assert!(undo(&shell, cx));
+    assert_eq!(host.take_edits(), ["reopen 11 as 1001"]);
+
+    // Nothing is kept for a removal that took nothing out, so the redo stays.
+    shell.update(cx, |shell, cx| shell.suggestion_removed(0, cx));
+    assert_eq!(
+        titles(&shell, cx),
+        (Some("Remove from History"), Some("Close Tab"))
+    );
+}
+
 fn archived(id: u64) -> Archived {
     Archived {
         id,
@@ -1744,4 +1791,135 @@ fn the_command_bar_moves_a_chosen_folder_to_another_space(cx: &mut TestAppContex
     });
     assert!(undo(&shell, cx));
     assert_eq!(host.take_edits(), ["space folder 5 1", "move folder 5 0 1"]);
+}
+
+/// The Space menu's Export “One” into Folder lists the user's Spaces, One's own and the other
+/// profile's dimmed, and Two makes One a folder at the bottom of Two's pinned tabs: its pinned
+/// tabs and folders in it in order, its Today tab at the top of Two's Today, Two shown, and One
+/// gone. One ⌘Z puts every row back and deletes the folder, and ⇧⌘Z exports it again (#1400).
+#[gpui::test]
+fn a_space_exported_into_a_folder_comes_back_whole_with_one_undo(cx: &mut TestAppContext) {
+    let (shell, host) = window(cx, vec![4, 5, 6, 7, 8], vec![9], reading(), Vec::new());
+    let one = |shell: &Entity<Shell>, cx: &mut TestAppContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_spaces(
+                vec![
+                    (1, "One".into(), None, 1, "🌱".into(), "".into(), "".into()),
+                    (2, "Two".into(), None, 1, "".into(), "".into(), "".into()),
+                    (3, "Three".into(), None, 2, "".into(), "".into(), "".into()),
+                ],
+                cx,
+            );
+            shell.set_tabs(1, vec![4, 5, 6, 7, 8], vec![9], Vec::new(), reading(), cx);
+        })
+    };
+    one(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(2, vec![10], vec![11], Vec::new(), Folders::default(), cx)
+    });
+    let at = gpui::point(gpui::px(100.), gpui::px(40.));
+    shell.update(cx, |shell, cx| shell.space_menu(1, at, cx));
+    let entries = host.entries.borrow().clone();
+    let export = (entries.iter())
+        .position(|entry| entry.title.as_ref() == "Export “One” into Folder")
+        .expect("no Export “One” into Folder in the Space's menu");
+    let targets: Vec<(String, bool)> = (entries.iter())
+        .filter(|entry| entry.parent == Some(export))
+        .map(|entry| (entry.title.to_string(), entry.enabled))
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            ("One".to_string(), false),
+            ("Two".to_string(), true),
+            ("Three".to_string(), false)
+        ]
+    );
+    host.take_edits();
+    cx.update(|cx| host.choose("Two", cx));
+    let max = usize::MAX;
+    let exported = [
+        format!("folder 1001 2 One 0 {max}"),
+        "folder icon 1001 🌱".to_string(),
+        "space folder 5 2".to_string(),
+        "move folder 5 1001 0".to_string(),
+        "space 4 2".to_string(),
+        "move 4 true 1001 0".to_string(),
+        "space 9 2".to_string(),
+        "move 9 false 0 0".to_string(),
+        "delete space 1".to_string(),
+    ];
+    assert_eq!(host.take_edits(), exported);
+    assert_eq!(host.shown.borrow().last(), Some(&2), "Two isn't shown");
+    assert_eq!(
+        host.undo_toasts.borrow().as_slice(),
+        ["Space Exported into Folder"]
+    );
+    assert_eq!(titles(&shell, cx).0, Some("Export into Folder"));
+
+    // The core's report: One gone, and Two with the folder and the Today tab.
+    let mut folders = reading();
+    folders.folders.insert(1001, ("One".into(), true));
+    folders.parents.extend([(4, 1001), (5, 1001)]);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (2, "Two".into(), None, 1, "".into(), "".into(), "".into()),
+                (3, "Three".into(), None, 2, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        );
+        shell.set_space(2, cx);
+        shell.set_tabs(
+            2,
+            vec![10, 1001, 4, 5, 6, 7, 8],
+            vec![9, 11],
+            Vec::new(),
+            folders,
+            cx,
+        );
+    });
+
+    assert!(undo(&shell, cx));
+    assert_eq!(
+        host.take_edits(),
+        [
+            "undo delete space 1",
+            "space 4 1",
+            "move 4 true 0 0",
+            "space 9 1",
+            "move 9 false 0 0",
+            "space folder 5 1",
+            "move folder 5 0 1",
+            "delete folder 1001",
+        ]
+    );
+    assert_eq!(titles(&shell, cx).1, Some("Export into Folder"));
+
+    // Back as it was, ⇧⌘Z does it again, into a new folder.
+    one(&shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_space(1, cx);
+        shell.set_tabs(2, vec![10], vec![11], Vec::new(), Folders::default(), cx)
+    });
+    assert!(redo(&shell, cx));
+    let again: Vec<String> = (exported.iter())
+        .map(|edit| edit.replace("1001", "1002"))
+        .collect();
+    assert_eq!(host.take_edits(), again);
+}
+
+/// With no other Space of its profile to take it, the Space's menu has no Export into Folder.
+#[gpui::test]
+fn a_space_with_nowhere_to_go_offers_no_export_into_folder(cx: &mut TestAppContext) {
+    let (shell, host) = plain(cx, vec![9]);
+    let at = gpui::point(gpui::px(100.), gpui::px(40.));
+    shell.update(cx, |shell, cx| shell.space_menu(3, at, cx));
+    let entries = host.entries.borrow().clone();
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.title.starts_with("Export “")),
+        "Three, the only Space of its profile, offered Export into Folder"
+    );
 }

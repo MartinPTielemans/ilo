@@ -103,11 +103,17 @@ pub(crate) fn menus(
         menu(env!("APP_NAME"), app),
         menu(
             "File",
-            vec![
-                item("New Tab…", Command::NewTab),
-                item("New Window", Command::NewWindow),
-                item("New Little ilo Window", Command::NewLittleWindow),
+            [
+                Some(item("New Tab…", Command::NewTab)),
+                Some(item("New Window", Command::NewWindow)),
+                // Not with Little ilo off in Settings › Features.
+                (!bar.little_off).then(|| item("New Little ilo Window", Command::NewLittleWindow)),
+            ]
+            .into_iter()
+            .flatten()
+            .chain([
                 item("New Incognito Window", Command::NewPrivateWindow),
+                item("Blank Window", Command::NewBlankWindow),
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
@@ -118,9 +124,11 @@ pub(crate) fn menus(
                 item("Share…", Command::Share),
                 item("Capture…", Command::CapturePortion),
                 item("Capture Full Page", Command::CaptureFullPage),
+                item("Capture in Portrait Mode", Command::CapturePortrait),
                 item("Save Page As", Command::SavePage),
                 item("Print", Command::Print),
-            ],
+            ])
+            .collect(),
         ),
         menu(
             "Edit",
@@ -148,6 +156,16 @@ pub(crate) fn menus(
                         item("Find Next", Command::FindNext),
                         item("Find Previous", Command::FindPrevious),
                         item("Jump to Selection", Command::JumpToSelection),
+                    ],
+                )),
+                // Where AppKit puts the system's, which ilo's replaces (platform/mac/host.mm).
+                MenuItem::separator(),
+                MenuItem::submenu(menu(
+                    "AutoFill",
+                    vec![
+                        item("Contact…", Command::AutoFill),
+                        item("Passwords…", Command::AutoFillPasswords),
+                        item("Credit Card…", Command::AutoFill),
                     ],
                 )),
             ],
@@ -282,6 +300,7 @@ pub(crate) fn menus(
                 item("Open Library…", Command::ViewLibrary),
                 item("View Downloads…", Command::ViewDownloads),
                 item("View Media…", Command::ViewMedia),
+                item("View Agents…", Command::ViewAgents),
             ],
         ),
         menu(

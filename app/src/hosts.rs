@@ -64,7 +64,15 @@ impl dialog::Host for DialogHost {
     }
 
     fn hold_keys(&self) {
-        unsafe { platform::host_hold_keys() };
+        // On Linux the browser window has the keyboard back at once, as the dialog draws its
+        // leaving, so nothing waits (overlays::dialog_leaving). The Mac and Windows hold the keys
+        // until it has hidden.
+        #[cfg(target_os = "linux")]
+        crate::overlays::dialog_leaving();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_hold_keys()
+        };
     }
 
     fn give_held_keys(&self) {
@@ -141,6 +149,10 @@ impl site_controls::Host for SiteControlsHost {
 
     fn reset_permissions(&self, tab: u64) {
         unsafe { bc::bc_tab_reset_site_permissions(tab) };
+    }
+
+    fn remove_device(&self, tab: u64, index: usize) {
+        unsafe { bc::bc_tab_remove_site_device(tab, index) };
     }
 
     fn set_system_engine(&self, tab: u64, on: bool) {
@@ -449,14 +461,23 @@ pub(crate) extern "C" fn icon_picker_dismissed() {
 pub(crate) struct FolderPreviewHost;
 
 impl folder_preview::Host for FolderPreviewHost {
-    fn show(&self, window: u64, left: f32, top: f32, height: f32) {
+    fn show(&self, window: u64, left: f32, top: f32, height: f32, from: f32) {
         let Some(view) = ui_view_of(window) else {
             return;
         };
         let (left, top, width) = (left.into(), top.into(), folder_preview::WIDTH.into());
+        let (grow, fade) = (folder_preview::IN, folder_preview::OUT);
+        // At its height before it shows, so it grows from the middle of its left edge.
         unsafe {
-            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
             platform::host_set_overlay_height(FOLDER_PREVIEW, height.into());
+            platform::host_set_overlay_growth(FOLDER_PREVIEW, 0., (height / 2.).into());
+            platform::host_set_overlay_motion(
+                FOLDER_PREVIEW,
+                from.into(),
+                grow.as_secs_f64(),
+                fade.as_secs_f64(),
+            );
+            platform::host_show_overlay(FOLDER_PREVIEW, view, false, left, top, width);
         }
     }
 

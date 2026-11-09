@@ -3,9 +3,20 @@
 //! holds, Hand Back, which gives it back. ⌘↩ is Take Over or Hand Back, and ⌘. Stop while the
 //! agent is at work, with focus in the page too. The strip is the task area's (task_area.rs).
 
+#[cfg(target_os = "linux")]
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
+
 use gpui::{App, Context, SharedString};
 
-use super::{Shell, commands::keystroke_label, extensions::keystroke_text};
+use super::{
+    Shell,
+    commands::{Command, keystroke_label},
+    extensions::keystroke_text,
+    keys::user_keys,
+};
 use crate::agents::Status;
 
 /// What the bar shows.
@@ -40,6 +51,29 @@ impl Bar {
 /// would lose its work.
 const STOP_KEY: &str = "cmd-.";
 
+/// How soon after ⌘↩ handed a page back from it the UI's ⌘↩ is the same press: GPUI reads it from
+/// the same display in the same turn.
+#[cfg(target_os = "linux")]
+const SAME_PRESS_WITHIN: Duration = Duration::from_millis(500);
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    /// When ⌘↩ last handed back a page it was kept from (`run_agent_page_key`). Under Wayland GPUI
+    /// gets every key the page gets too, after the app has answered it, and by then Hand Back has
+    /// given the UI the keyboard, where that press would run Back to Pinned URL as well.
+    static HANDED_BACK_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Whether `keystroke`, the UI's, is GPUI's copy of the press that just handed a page back. Any
+/// key the UI gets ends the wait for it, as it's the next after that press.
+#[cfg(target_os = "linux")]
+fn same_press_as_hand_back(keystroke: &str, cx: &App) -> bool {
+    HANDED_BACK_AT
+        .take()
+        .is_some_and(|at| at.elapsed() < SAME_PRESS_WITHIN)
+        && user_keys(cx).command_for(keystroke, false) == Some(Command::BackToPinnedUrl)
+}
+
 /// ⌘. for Stop while the UI has the keyboard, before it's Stop Loading. The page hands it over
 /// before it sees it (`run_agent_key`).
 pub(super) fn bind(cx: &mut App) {
@@ -51,6 +85,11 @@ pub(super) fn bind(cx: &mut App) {
             return;
         };
         let keystroke = keystroke_text(&event.keystroke);
+        #[cfg(target_os = "linux")]
+        if same_press_as_hand_back(&keystroke, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if shell
             .update(cx, |shell, cx| shell.run_agent_key(&keystroke, cx))
             .unwrap_or(false)
@@ -73,6 +112,27 @@ impl Shell {
             return false;
         };
         self.browser.stop_agent(agent, cx);
+        true
+    }
+
+    /// As `run_agent_key`, for a key the agent's page would get first: also Take Over's and Hand
+    /// Back's key (⌘↩, Back to Pinned URL's), which a form in the page would otherwise take as its
+    /// own, such as a comment box's Send. Not from the UI's keys, where the command bar's and the
+    /// link preview's ⌘↩ are theirs.
+    pub fn run_agent_page_key(&mut self, keystroke: &str, cx: &mut Context<Self>) -> bool {
+        if self.run_agent_key(keystroke, cx) {
+            return true;
+        }
+        if self.agent_bar().is_none()
+            || user_keys(cx).command_for(keystroke, false) != Some(Command::BackToPinnedUrl)
+        {
+            return false;
+        }
+        #[cfg(target_os = "linux")]
+        if matches!(self.agent_bar(), Some(Bar::Held { .. })) {
+            HANDED_BACK_AT.set(Some(Instant::now()));
+        }
+        self.agent_bar_primary(cx);
         true
     }
 

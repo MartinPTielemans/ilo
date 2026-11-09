@@ -33,20 +33,28 @@ mod agent_pointer;
 mod agent_question;
 mod assets;
 #[cfg(test)]
+mod autofill_tests;
+#[cfg(test)]
 mod bar_commands_tests;
 mod bar_usage;
 #[cfg(test)]
 mod bar_usage_tests;
+mod battery;
 mod beside;
+#[cfg(test)]
+mod blank_tests;
 mod browser;
 mod card_strip;
 mod cast;
+mod chooser;
 mod chosen;
 mod clean_link;
 #[cfg(test)]
 mod close_tab;
 mod commands;
 mod conversation;
+#[cfg(test)]
+mod corner_tests;
 mod display_face;
 #[cfg(test)]
 mod dock_dot;
@@ -69,7 +77,9 @@ mod header;
 mod help_tests;
 mod history;
 mod hover_cards;
+mod into_folder;
 mod keys;
+mod launch_room;
 mod library;
 mod link;
 #[cfg(test)]
@@ -89,8 +99,12 @@ mod onboarding;
 mod page_dialog;
 mod page_menu;
 mod page_motion;
+mod pair;
 mod panes;
 mod permission;
+mod portrait;
+#[cfg(test)]
+mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;
@@ -109,6 +123,7 @@ mod sidebar;
 mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
+mod space_order;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
@@ -116,16 +131,19 @@ mod task_area;
 mod themes;
 mod tile_theme;
 mod trace;
+mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
 
 pub use assets::Assets;
-pub use bar_usage::{forget_bar_usage, picked_in_bar};
+pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
+pub use battery::PAUSED;
 pub use browser::{
     Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
+pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
 use clean_link::clean_link;
 use commands::ShellHandle;
 pub use commands::{
@@ -148,18 +166,22 @@ pub use keys::{
     Holder, OFF_THE_MAC, Refused, SecondPress, UserKeys, change_keys, page_keystroke, rebindable,
     recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
 };
+pub(crate) use library::bytes;
 pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
+pub use menus::profile_goes_with;
 pub use menus::{MenuEntry, new_profile_name, profile_kept};
 pub use page_dialog::{DialogKind, PageDialog, PageReply, ShownPageDialog};
 pub use page_menu::{PageMenuItem, made_up as made_up_page_menu};
+pub use pair::{Pair, PairKind};
 pub use panes::page_frame;
 use panes::pane_frames;
 pub use permission::{Answer, Question};
 pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
+pub use portrait::PortraitBackground;
 use recent_downloads::RecentDownloads;
 pub use recent_downloads::{FilePreview, HOVER_ALL};
 pub use rows::LoneSpaceHeader;
@@ -171,6 +193,7 @@ use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
+pub use translate::{AlwaysTranslated, Translation};
 pub use trouble::{NOT_RESPONDING, RELOAD, WAIT};
 use undo::{Edit, What};
 
@@ -178,6 +201,65 @@ pub use crate::tokens::shell::CARD_INSET;
 pub use crate::tokens::shell::CARD_RADIUS;
 pub use crate::tokens::shell::SIDEBAR_WIDTH;
 use crate::tokens::shell::SPLIT_GAP;
+
+/// The radius of the card's corners and the page's in a window whose own corner is `window`, or 0
+/// where it's square: concentric with it, so the frame between them is as thick round the curve as
+/// along the sides, and never under 0 where the frame is wider than the window's curve (Windows
+/// 11's). A square corner has no curve to follow, and the card keeps ilo's own, so a Mac window
+/// going full screen keeps its card as it was.
+pub fn card_radius(window: f32) -> f32 {
+    match window > 0. {
+        true => (window - CARD_INSET).max(0.),
+        false => CARD_RADIUS,
+    }
+}
+
+/// The radius of the corners the OS gives a browser window that isn't maximized or full screen, or
+/// 0 where they're square.
+pub fn window_radius() -> f32 {
+    use crate::tokens::shell as tokens;
+    #[cfg(target_os = "macos")]
+    return tokens::WINDOW_RADIUS_MAC;
+    #[cfg(target_os = "windows")]
+    return match windows_11() {
+        true => tokens::WINDOW_RADIUS_WINDOWS,
+        false => 0.,
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return tokens::WINDOW_RADIUS_LINUX;
+}
+
+/// Whether this is Windows 11, build 22000 on, which rounds a window's corners, as the registry
+/// says (the window captures in tools/window-screenshot.sh read it there too).
+#[cfg(target_os = "windows")]
+fn windows_11() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let build = *BUILD.get_or_init(|| {
+        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let folder = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        let name = wide("CurrentBuildNumber");
+        let mut text = [0u16; 16];
+        let mut size = std::mem::size_of_val(&text) as u32;
+        let read = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                folder.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                text.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        let text = String::from_utf16_lossy(&text[..(size as usize / 2).min(text.len())]);
+        match read {
+            0 => text.trim_end_matches('\0').parse().unwrap_or(0),
+            _ => 0,
+        }
+    });
+    build >= 22000
+}
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;
@@ -243,6 +325,9 @@ const TURN_TITLE_FADE: f32 = 0.5;
 // critically damped, neither overshooting, as Arc's (docs/ux-spec.md › Motion: Folder open and
 // Folder close).
 const FOLD_OPEN: f32 = 0.2;
+/// A tab shown in a closed folder slides in under it over 0.15 s, as Arc 1.171's does (outside
+/// measurement, #1405); its curve, the folder's opening ease-out, is ours.
+const PEEK_IN: f32 = 0.15;
 const FOLD_CLOSE_OMEGA: f32 = 25.;
 // The edge under the favorites fades in once the list scrolls past its top and out back there, and
 // the one at its foot while rows are hidden under it, as long as Arc's take, on Dia's Scroll edge
@@ -396,6 +481,8 @@ const DELETED_TIME: Duration = Duration::from_secs(5);
 use crate::tokens::shell::FOOTER_HEIGHT;
 use crate::tokens::shell::PLUS_INSET;
 use crate::tokens::shell::SPACE_CLEAR;
+use crate::tokens::shell::SPACE_DRAGGED;
+use crate::tokens::shell::SPACE_DROP_LINE;
 use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_LEAST;
 use crate::tokens::shell::SPACE_PITCH;
@@ -593,6 +680,9 @@ struct Space {
     folders: Folders,
     /// The tab it shows, or showed last.
     shown: u64,
+    /// Tabs shown in closed folders before, which stay listed there after another tab shows,
+    /// until a click on their folder closes it for good, as Arc keeps them, per window (#1405).
+    peeked: Vec<u64>,
 }
 
 impl Space {
@@ -611,8 +701,9 @@ impl Space {
     fn pinned_rows(&self, collapsed: bool) -> impl Iterator<Item = u64> + '_ {
         let shown = self.panes(self.shown)[0];
         let folded = move |row| collapsed || self.holders(row).any(|folder| !self.is_open(folder));
+        let listed = move |row| row == shown || (!collapsed && self.peeked.contains(&row));
         (self.pinned.iter().copied())
-            .filter(move |&row| !self.later(row) && (row == shown || !folded(row)))
+            .filter(move |&row| !self.later(row) && (listed(row) || !folded(row)))
     }
 
     /// Whether `tab` is in a split after its first, which stands for the split's row.
@@ -659,6 +750,71 @@ impl Space {
 
     fn depth(&self, row: u64) -> usize {
         self.holders(row).count()
+    }
+
+    /// How far in `row` is drawn: by the folders it's in, but the tab shown inside closed folders,
+    /// which is listed one under the outermost of them, the folders between staying hidden, as
+    /// Arc's is (#1405).
+    fn listed_depth(&self, row: u64) -> usize {
+        match self
+            .holders(row)
+            .filter(|&folder| !self.is_open(folder))
+            .last()
+        {
+            Some(outer) => self.depth(outer) + 1,
+            None => self.depth(row),
+        }
+    }
+
+    /// Each closed folder that lists a tab, the one shown or one peeked, with folders hidden
+    /// between them, which it marks with three dots on its glyph, as Arc's does (#1405), and the
+    /// tab.
+    fn dotted(&self) -> Vec<(u64, u64)> {
+        let shown = self.panes(self.shown)[0];
+        std::iter::once(shown)
+            .chain(self.peeked.iter().copied())
+            .filter_map(|tab| {
+                let outer = self.outer_closed(tab)?;
+                (self.depth(tab) > self.depth(outer) + 1).then_some((outer, tab))
+            })
+            .collect()
+    }
+
+    /// Whether `folder` has its dots (`dotted`).
+    fn elides(&self, folder: u64) -> bool {
+        self.dotted().iter().any(|&(dotted, _)| dotted == folder)
+    }
+
+    /// The outermost closed folder `row` is in, if any.
+    fn outer_closed(&self, row: u64) -> Option<u64> {
+        self.holders(row)
+            .filter(|&folder| !self.is_open(folder))
+            .last()
+    }
+
+    /// Keeps the tab shown listed in its closed folders as `next` shows, as Arc does, and lets go
+    /// of those no closed folder holds now.
+    fn keep_peek(&mut self, next: u64) {
+        let (shown, next) = (self.panes(self.shown)[0], self.panes(next)[0]);
+        let mut peeked: Vec<u64> = (self.peeked.iter().copied())
+            .filter(|&tab| tab != shown && tab != next && self.outer_closed(tab).is_some())
+            .collect();
+        if let Some(outer) = self.outer_closed(shown).filter(|_| shown != next) {
+            // check.sh reads this line.
+            log!("browser: folder {outer} keeps {shown}");
+            peeked.push(shown);
+        }
+        self.peeked = peeked;
+    }
+
+    /// Lets go of the tabs kept listed in `folder`, and says whether there were any.
+    fn drop_peeks(&mut self, folder: u64) -> bool {
+        let before = self.peeked.len();
+        let peeked = std::mem::take(&mut self.peeked);
+        self.peeked = (peeked.into_iter())
+            .filter(|&tab| !self.holders(tab).any(|holder| holder == folder))
+            .collect();
+        self.peeked.len() != before
     }
 
     /// Whether `shown` and its split are all of its Today tabs, so Clear has nothing else to close
@@ -733,6 +889,8 @@ struct SpaceForm {
 enum Naming {
     Space(u64),
     Tab(u64),
+    /// The split view a tab is in, in its row in place of its pages' titles.
+    Split(u64),
     /// A pinned tab's pinned URL, in its row in place of its title.
     PinnedUrl(u64),
     Folder(u64),
@@ -744,7 +902,7 @@ impl Naming {
     /// The tab whose row the field is in, if it's a tab's.
     fn tab(self) -> Option<u64> {
         match self {
-            Naming::Tab(tab) | Naming::PinnedUrl(tab) => Some(tab),
+            Naming::Tab(tab) | Naming::Split(tab) | Naming::PinnedUrl(tab) => Some(tab),
             Naming::Space(_) | Naming::Folder(_) | Naming::Profile(_) => None,
         }
     }
@@ -790,12 +948,14 @@ struct Opened {
     /// Whether whole rows fade in, else only a new tab's plate.
     whole: bool,
     start: Instant,
+    /// The row spring's, or a tab shown in a closed folder's slide in (Curve::Peek).
+    curve: Curve,
 }
 
 impl Opened {
     /// How far they've faded in, or None once they have.
     fn done(&self) -> Option<f32> {
-        row_spring(self.start.elapsed().as_secs_f32())
+        self.curve.at(self.start.elapsed().as_secs_f32())
     }
 }
 
@@ -823,6 +983,8 @@ enum Curve {
     Room,
     /// Making room as a folder opens, or closing it up as it closes (Folder open, Folder close).
     Fold { open: bool },
+    /// A tab shown in a closed folder sliding in under it, and the rows making room (#1405).
+    Peek,
 }
 
 impl Curve {
@@ -835,6 +997,7 @@ impl Curve {
                 (t < FOLD_OPEN).then(|| cubic_bezier(0., 0., 0.58, 1., t / FOLD_OPEN))
             }
             Curve::Fold { open: false } => critically_damped(t, FOLD_CLOSE_OMEGA),
+            Curve::Peek => (t < PEEK_IN).then(|| cubic_bezier(0., 0., 0.58, 1., t / PEEK_IN)),
         }
     }
 }
@@ -1063,12 +1226,18 @@ pub struct Shell {
     focus_renaming: bool,
     /// The pinned tabs and folders changed and haven't been drawn since.
     outline_changed: bool,
+    /// The folders last drawn with their dots and the tab each lists, for check.sh.
+    dots_drawn: Vec<(u64, u64)>,
     /// The favorites the shown Space shows over its own tabs, left to right.
     favorites: Vec<u64>,
     /// Every favorite, and each one's holder: the Space it belongs to under Each Space, else the
     /// profile whose tab it is. The ids come from one counter, so a Space's never is a profile's.
     all_favorites: Vec<u64>,
     favorite_holders: HashMap<u64, u64>,
+    /// The favorites that are split views, each one favorite, its first tab's tile, and the tab of
+    /// each focused last, by its first, which showing it shows focused in any Space.
+    favorite_splits: Vec<Split>,
+    favorite_focus: HashMap<u64, u64>,
     /// The profiles, by id and name, the one the browser started with first.
     profiles: Vec<(u64, SharedString)>,
     /// The tabs of every Space, and the favorites.
@@ -1243,6 +1412,12 @@ pub struct Shell {
     window_drag: Option<drag::WindowDrag>,
     /// A drag just ended, so the release isn't a click on the row.
     dragged: bool,
+    /// A Space's dot or card dragged along the switcher or the Library, the dots and cards gliding
+    /// to their places after the Spaces' order changed, and where the one let go was along its
+    /// row, which glides from there.
+    space_drag: Option<space_order::SpaceDrag>,
+    space_slides: space_order::SpaceSlides,
+    space_landing: Option<(space_order::Along, u64, f32)>,
     /// Escape put a dragged tab back, and the frame that shows it all put back isn't drawn yet.
     putting_back: bool,
     swipe: Option<Swipe>,
@@ -1385,6 +1560,10 @@ pub struct Shell {
     page_color: Option<u32>,
     /// The window over the page that draws the drop targets and the agent's pointer shows.
     drop_targets_shown: bool,
+    /// The pages' scale, smaller under a tab or a link dragged over them, and the one the core
+    /// was last given.
+    content_scale: split_targets::ContentScale,
+    content_scale_told: f32,
     /// The agent's pointer at an element in the page, while it acts there.
     agent_pointer: Option<agent_pointer::AgentPointer>,
     /// A link dragged over the page, and its targets.
@@ -1476,6 +1655,16 @@ pub struct Shell {
     question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The tab whose question's card shows, and its moment on screen before Block and Allow work.
     question_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What the tabs' pages ask for a device (chooser.rs), kept as the questions are.
+    choosers: HashMap<u64, chooser::Asked>,
+    chooser_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose chooser shows, and its moment on screen before a click grants.
+    chooser_settling: RefCell<Option<(u64, crate::settling::Settling)>>,
+    /// What devices the tabs' pages pair with ask (pair.rs), kept as the choosers are.
+    pairs: HashMap<u64, pair::Pairing>,
+    pair_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The PIN field takes the keyboard once it's drawn.
+    pair_wants_keyboard: bool,
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -1492,6 +1681,8 @@ pub struct Shell {
     /// The tasks in the Archive, the last to leave the foot first, which Archived Tabs lists among
     /// the tabs.
     archived_tasks: Vec<crate::agents::task::ArchivedTask>,
+    /// Library › Agents' past tasks of the window's profile, as read when it shows them.
+    agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
@@ -1531,6 +1722,26 @@ pub struct Shell {
     drm_notes: HashMap<u64, SharedString>,
     /// The tabs' keys, for those whose page the password manager has something for.
     keys: HashMap<u64, Key>,
+    /// The language each tab's page declares, for those Chrome has found one for, and how the
+    /// translation of each one the user asked to translate goes (translate.rs).
+    page_languages: HashMap<u64, SharedString>,
+    translations: HashMap<u64, Translation>,
+    /// The tab whose translation card is open, and where the card and the URL field's mark were
+    /// drawn last, which the log says when it changes.
+    translate_card: Option<u64>,
+    translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
+    /// card and its swatches were drawn last (portrait.rs).
+    portrait_card: Option<(u64, crate::capture::portrait::Background)>,
+    portrait_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    portrait_swatches_drawn: [Rc<Cell<Option<Bounds<Pixels>>>>; portrait::SWATCHES],
+    /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
+    battery_saver: Option<i32>,
+    /// Where its leaf was drawn last, which the log says when it changes.
+    battery_leaf_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tabs whose pages Chrome froze, as Battery Saver does those busy out of sight.
+    frozen: HashSet<u64>,
     /// Where the note's card was drawn last, which the log says when it changes.
     drm_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The card of each tab whose page died while this window showed it, until it loads again.
@@ -1558,6 +1769,9 @@ pub struct Shell {
     /// watches that draw the window again once either changes.
     system_tone: Tone,
     app_appearance: Appearance,
+    /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
+    /// offers or opens a Little ilo window.
+    little_windows: bool,
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
@@ -1598,6 +1812,10 @@ pub struct Shell {
     card_move: Option<Subscription>,
     /// A private window's: its one Space is its own, unsaved, in an off-the-record session.
     private: bool,
+    /// A Blank Window's: its one Space is its own, unsaved, in the user's profile.
+    blank: bool,
+    /// The user's Spaces a Blank Window's tab can move to, by id, name and profile.
+    blank_targets: Vec<(u64, SharedString, u64)>,
     /// A Little ilo window's (Arc's Little Arc): its one Space is its own, holding its page.
     little: Option<little::Little>,
 }
@@ -1622,8 +1840,11 @@ impl Shell {
             renaming: None,
             focus_renaming: false,
             outline_changed: false,
+            dots_drawn: Vec::new(),
             favorites: Vec::new(),
             all_favorites: Vec::new(),
+            favorite_splits: Vec::new(),
+            favorite_focus: HashMap::new(),
             favorite_holders: HashMap::new(),
             profiles: Vec::new(),
             tabs: HashMap::new(),
@@ -1701,6 +1922,9 @@ impl Shell {
             drag: None,
             window_drag: None,
             dragged: false,
+            space_drag: None,
+            space_slides: HashMap::new(),
+            space_landing: None,
             putting_back: false,
             swipe: None,
             settle: None,
@@ -1766,6 +1990,8 @@ impl Shell {
             focus_color: None,
             page_color: None,
             drop_targets_shown: false,
+            content_scale: Default::default(),
+            content_scale_told: 1.,
             agent_pointer: None,
             link_over: None,
             pane_corner: (0., 0., 0.),
@@ -1812,6 +2038,12 @@ impl Shell {
             circle_exit: None,
             questions: HashMap::new(),
             question_drawn: Rc::default(),
+            choosers: HashMap::new(),
+            chooser_drawn: Rc::default(),
+            chooser_settling: RefCell::default(),
+            pairs: HashMap::new(),
+            pair_drawn: Rc::default(),
+            pair_wants_keyboard: false,
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
@@ -1821,6 +2053,7 @@ impl Shell {
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
+            agent_history: Vec::new(),
             show_restored: None,
             talk: None,
             focus_talk: false,
@@ -1843,6 +2076,17 @@ impl Shell {
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
+            page_languages: HashMap::new(),
+            translations: HashMap::new(),
+            translate_card: None,
+            translate_card_drawn: Rc::default(),
+            portrait_card: None,
+            portrait_card_drawn: Rc::default(),
+            portrait_swatches_drawn: Default::default(),
+            translate_mark_drawn: Rc::default(),
+            battery_saver: None,
+            battery_leaf_drawn: Rc::default(),
+            frozen: HashSet::new(),
             drm_drawn: Rc::default(),
             crash_cards: HashMap::new(),
             crash_drawn: Rc::default(),
@@ -1865,6 +2109,7 @@ impl Shell {
             palettes: RefCell::default(),
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
+            little_windows: true,
             lone_header: false,
             forced_tone: None,
             window_active: true,
@@ -1874,6 +2119,8 @@ impl Shell {
             window_light: None,
             capture_look: None,
             private: false,
+            blank: false,
+            blank_targets: Vec::new(),
             little: None,
         }
     }
@@ -1904,6 +2151,7 @@ impl Shell {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         }];
         shell
     }
@@ -1917,6 +2165,52 @@ impl Shell {
     /// Whether this is a private window's shell.
     pub fn private(&self) -> bool {
         self.private
+    }
+
+    /// A Blank Window's shell (⌃⌘N, Arc's): one Space of its own, `space` in `profile`, unsaved
+    /// and in no other window, named for what it is, with the square glyph before its name; its
+    /// tabs are Today's alone, and it has no favorites, Space switcher or Library, as a private
+    /// window has none, but the look and the extensions of any window of its profile.
+    pub fn blank_window(
+        browser: Rc<dyn Browser>,
+        space: u64,
+        profile: u64,
+        from: Option<&Entity<Shell>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut shell = Self::new(browser, cx);
+        shell.blank = true;
+        // The user's Spaces for Move to, which the core told the window it came from, and tells
+        // this one only as they change.
+        if let Some(from) = from {
+            shell.blank_targets = (from.read(cx).spaces.iter())
+                .filter(|each| each.agent.is_empty())
+                .map(|each| (each.id, each.name.clone(), each.profile))
+                .collect();
+        }
+        shell.space = space;
+        shell.spaces = vec![Space {
+            id: space,
+            name: BLANK_WINDOW.into(),
+            color: None,
+            theme: None,
+            icon: BLANK_ICON.into(),
+            agent: SharedString::default(),
+            profile,
+            pinned: Vec::new(),
+            today: Vec::new(),
+            splits: Vec::new(),
+            folders: Folders::default(),
+            shown: 0,
+            peeked: Vec::new(),
+        }];
+        shell
+    }
+
+    /// Whether the window shows one Space of its own and no others: a private window or a Blank
+    /// Window. Its tabs are Today's alone and stay in it.
+    pub fn one_space(&self) -> bool {
+        self.private || self.blank
     }
 
     /// A shell for another window, which starts out knowing what `from` heard from the core about
@@ -1937,7 +2231,11 @@ impl Shell {
         shell.profiles = from.profiles.clone();
         shell.archive = from.archive.clone();
         shell.page_favicons = from.page_favicons.clone();
-        shell.downloads = from.downloads.clone();
+        // Only what this window lists: a private window's session's never reach another.
+        shell.downloads = (from.downloads.iter())
+            .filter(|download| from.private == shell.private && shell.lists_download(download))
+            .cloned()
+            .collect();
         shell.download_icons = from.download_icons.clone();
         shell.captures = from.captures.clone();
         shell.download_previews = from.download_previews.clone();
@@ -1947,6 +2245,8 @@ impl Shell {
         shell.questions = from.questions.clone();
         shell.drm_notes = from.drm_notes.clone();
         shell.keys = from.keys.clone();
+        shell.page_languages = from.page_languages.clone();
+        shell.translations = from.translations.clone();
         shell.crash_cards = from
             .crash_cards
             .keys()
@@ -2006,20 +2306,54 @@ impl Shell {
             .map_or_else(|| slots(head, &[], &[]), |space| space.slots(head))
     }
 
-    /// The tabs shown with `tab` in the Space shown, in their order: its split's, else `tab` alone.
+    /// The favorite split holding `tab`, if it's in one.
+    pub(super) fn favorite_split(&self, tab: u64) -> Option<&Split> {
+        (self.favorite_splits.iter()).find(|split| split.tabs.contains(&tab))
+    }
+
+    /// The tabs shown with `tab` in the Space shown, in their order: its split's, a favorite's
+    /// split's too, else `tab` alone.
     fn panes(&self, tab: u64) -> Vec<u64> {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.tabs.clone();
+        }
         self.shown_space()
             .map_or_else(|| vec![tab], |space| space.panes(tab))
     }
 
     /// Whether `tab`'s split view in the Space shown is stacked.
     fn stacked(&self, tab: u64) -> bool {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.stacked;
+        }
         self.shown_space().is_some_and(|space| space.stacked(tab))
+    }
+
+    /// `tab`'s split view in the Space shown.
+    fn split(&self, tab: u64) -> Option<&Split> {
+        let space = self.shown_space()?;
+        space.splits.iter().find(|split| split.tabs.contains(&tab))
     }
 
     /// The tab of `tab`'s split view in the Space shown that took the card, else 0.
     fn expanded(&self, tab: u64) -> u64 {
+        if let Some(split) = self.favorite_split(tab) {
+            return split.expanded;
+        }
         self.shown_space().map_or(0, |space| space.expanded(tab))
+    }
+
+    /// The tab a click on `tab`'s tile shows: the one its split focused last, else `tab`.
+    pub(super) fn favorite_focused(&self, tab: u64) -> u64 {
+        let Some(split) = self.favorite_split(tab) else {
+            return tab;
+        };
+        let lead = split.tabs[0];
+        let focused = self.favorite_focus.get(&lead).copied().unwrap_or(lead);
+        match split.tabs.contains(&focused) {
+            true => focused,
+            false => lead,
+        }
     }
 
     /// The shares of `tab`'s split view in the Space shown, or none while they're even. An
@@ -2036,9 +2370,12 @@ impl Shell {
                 };
                 panes::expanded_shares(panes.len(), focused, f32::from(length))
             }
-            None => self
-                .shown_space()
-                .map_or_else(Vec::new, |space| space.shares(tab)),
+            None => match self.favorite_split(tab) {
+                Some(split) => split.shares.clone(),
+                None => self
+                    .shown_space()
+                    .map_or_else(Vec::new, |space| space.shares(tab)),
+            },
         }
     }
 
@@ -2064,6 +2401,17 @@ impl Shell {
         self.shown_space().map_or(0, |space| space.depth(row))
     }
 
+    /// Whether `folder` of the Space shown has its dots (Space::dotted).
+    fn elides(&self, folder: u64) -> bool {
+        self.shown_space().is_some_and(|space| space.elides(folder))
+    }
+
+    /// How far in `row` is drawn in the Space shown (Space::listed_depth).
+    fn listed_depth(&self, row: u64) -> usize {
+        self.shown_space()
+            .map_or(0, |space| space.listed_depth(row))
+    }
+
     /// What a row says: a folder's name, else the tab's title.
     fn label(&self, row: u64) -> SharedString {
         match self.is_folder(row) {
@@ -2081,6 +2429,10 @@ impl Shell {
 
     /// The tab a row shows: the one of its split shown last, else the first.
     fn row_tab(&self, row: u64) -> u64 {
+        // A favorite split shows focused where it was focused last, in whichever Space.
+        if self.favorite_split(row).is_some() {
+            return self.favorite_focused(row);
+        }
         let panes = self.panes(row);
         self.recent
             .iter()
@@ -2106,7 +2458,7 @@ impl Shell {
         let radius = if self.card_left() == 0. {
             0.
         } else {
-            CARD_RADIUS
+            self.card_radius()
         };
         match self.adding_pane {
             Some(with) => {
@@ -2119,6 +2471,15 @@ impl Shell {
             }
             None => (frame, radius),
         }
+    }
+
+    /// The radius of the card's corners and the page's, which follow the window's own corner while
+    /// the OS rounds it.
+    pub fn card_radius(&self) -> f32 {
+        card_radius(match self.full_screen || self.maximized {
+            true => 0.,
+            false => window_radius(),
+        })
     }
 
     /// Where the page goes as the window's content takes `viewport`, unless it's held where it is
@@ -2140,6 +2501,9 @@ impl Shell {
         if self.page_laid != Some(frame) {
             self.page_laid = Some(frame);
             self.browser.lay_out_page(frame.0, frame.1, cx);
+            if let Some(page) = self.preview_page() {
+                self.browser.preview_page_moved(page, cx);
+            }
             // The card moved, such as with the sidebar, and the plate in its corner with it.
             self.show_link(cx);
         }
@@ -2210,7 +2574,7 @@ impl Shell {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some((page, radius)) = self.page_laid.filter(|_| self.peeks_links_of(tab)) else {
+        let Some((page, radius)) = self.preview_page().filter(|_| self.peeks_links_of(tab)) else {
             return false;
         };
         // check.sh waits for this line.
@@ -2223,6 +2587,20 @@ impl Shell {
     /// Where the page was laid out last, and the radius of its corners.
     pub fn page_laid(&self) -> Option<(Bounds<Pixels>, f32)> {
         self.page_laid
+    }
+
+    /// The part of the page laid out last that the window shows, which a link preview goes over:
+    /// all of it, but while the Library pushes it past the window's right edge, where a preview over
+    /// the whole page would run off the window.
+    pub fn preview_page(&self) -> Option<(Bounds<Pixels>, f32)> {
+        let window = Bounds::new(point(px(0.), px(0.)), self.viewport);
+        self.page_laid.map(|(page, radius)| {
+            let shown = page.intersect(&window);
+            match shown.size.width > px(0.) && shown.size.height > px(0.) {
+                true => (shown, radius),
+                false => (page, radius),
+            }
+        })
     }
 
     /// Where the card's left edge is: past the sidebar, or at the inset once ⌘S has hidden it,
@@ -2248,7 +2626,16 @@ impl Shell {
     /// The Spaces, by id, name, colour, profile, icon and the name of the agent each belongs to,
     /// empty for the user's own, in the switcher's order.
     pub fn set_spaces(&mut self, spaces: Vec<SpaceEntry>, cx: &mut Context<Self>) {
-        if self.private {
+        // A Blank Window keeps the user's Spaces for its tabs' Move to, its way out, and shows its
+        // own alone.
+        if self.blank {
+            self.blank_targets = (spaces.into_iter())
+                .filter(|(.., agent)| agent.is_empty())
+                .map(|(id, name, _, profile, ..)| (id, name, profile))
+                .collect();
+            return;
+        }
+        if self.one_space() {
             return;
         }
         if self.little.is_some() {
@@ -2260,6 +2647,8 @@ impl Shell {
         log!("browser: spaces {}", ids.join(" "));
         let width = self.library_width();
         let filled = !self.spaces.is_empty();
+        let places = self.space_places();
+        let order: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let listed = &mut self.spaces_listed;
         let made: Vec<u64> = spaces
             .iter()
@@ -2298,6 +2687,7 @@ impl Shell {
                         splits: Vec::new(),
                         folders: Folders::default(),
                         shown: 0,
+                        peeked: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -2336,9 +2726,16 @@ impl Shell {
                     splits: std::mem::take(&mut space.splits),
                     folders: std::mem::take(&mut space.folders),
                     shown: space.shown,
+                    peeked: std::mem::take(&mut space.peeked),
                 }
             })
             .collect();
+        // Only the Spaces in both lists say whether the order changed.
+        let now: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
+            of.iter().copied().filter(|id| with.contains(id)).collect()
+        };
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
         self.settle_theme_preview();
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
@@ -2502,6 +2899,16 @@ impl Shell {
             .collect();
         entry.pinned = pinned;
         entry.today = today;
+        for split in &splits {
+            let was = entry
+                .splits
+                .iter()
+                .find(|was| was.tabs.first() == split.tabs.first());
+            if was.map_or(!split.name.is_empty(), |was| was.name != split.name) {
+                // check.sh waits for this line.
+                log!("browser: renamed split {} {}", split.tabs[0], split.name);
+            }
+        }
         entry.splits = splits;
         for (folder, (name, _)) in &folders.folders {
             if entry
@@ -2520,11 +2927,30 @@ impl Shell {
                 log!("browser: iconed folder {folder} {icon}");
             }
         }
-        if space == self.space {
-            self.swaps
-                .folders_changed(&entry.folders, &folders, Instant::now());
+        let dotted = |space: &Space| {
+            space
+                .dotted()
+                .into_iter()
+                .map(|(folder, _)| folder)
+                .collect()
+        };
+        let eliding: Vec<u64> = dotted(entry);
+        let before_folders = std::mem::replace(&mut entry.folders, folders);
+        // A folder opened or closed, from anywhere, lets go of the tabs it kept, so it closes
+        // whole next time.
+        let toggled: Vec<u64> = (entry.folders.folders.iter())
+            .filter(|(id, (_, open))| {
+                (before_folders.folders.get(id)).is_some_and(|(_, was)| was != open)
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        for folder in toggled {
+            entry.drop_peeks(folder);
         }
-        entry.folders = folders;
+        if space == self.space {
+            let eliding = (eliding, dotted(entry));
+            (self.swaps).folders_changed(&before_folders, &entry.folders, eliding, Instant::now());
+        }
         let has_tabs = !entry.pinned.is_empty() || !entry.today.is_empty();
         // After a Clear, the rows left are in their places at once (Arc).
         let cleared = space == self.space && {
@@ -2584,10 +3010,34 @@ impl Shell {
 
     /// Every favorite, left to right, each with its holder: the Space it belongs to under Each
     /// Space (the core's `bc_favorite_space`), else its profile.
-    pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
+    /// The favorites, as set_favorites takes them, with those that are split views and the tab of
+    /// each focused last, by its first.
+    pub fn set_split_favorites(
+        &mut self,
+        favorites: Vec<(u64, u64)>,
+        splits: Vec<Split>,
+        focus: HashMap<u64, u64>,
+        cx: &mut Context<Self>,
+    ) {
         if self.private || self.little.is_some() {
             return;
         }
+        self.favorite_splits = splits;
+        self.favorite_focus = focus;
+        self.set_favorites(favorites, cx);
+    }
+
+    pub fn set_favorites(&mut self, favorites: Vec<(u64, u64)>, cx: &mut Context<Self>) {
+        if self.one_space() || self.little.is_some() {
+            return;
+        }
+        // A favorite split's tabs are favorites still.
+        self.favorite_splits.retain(|split| {
+            split
+                .tabs
+                .iter()
+                .all(|tab| favorites.iter().any(|f| f.0 == *tab))
+        });
         let tiles = self.drawn();
         self.all_favorites = favorites.iter().map(|&(tab, _)| tab).collect();
         self.favorite_holders = favorites.into_iter().collect();
@@ -2623,6 +3073,14 @@ impl Shell {
         // check.sh reads these lines.
         let ids: Vec<String> = self.favorites.iter().map(u64::to_string).collect();
         log!("browser: favorites {}", ids.join(" "));
+        let splits: Vec<String> = (self.favorites.iter())
+            .filter_map(|&tab| self.favorite_split(tab))
+            .map(|split| {
+                let tabs: Vec<String> = split.tabs.iter().map(u64::to_string).collect();
+                tabs.join("+")
+            })
+            .collect();
+        log!("browser: favorite splits {}", splits.join(" "));
     }
 
     /// What the shell knew of a closed tab goes with it. The core reports a tab in its new place
@@ -2702,6 +3160,11 @@ impl Shell {
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.task_tab_shown(tab, cx) {
             return;
+        }
+        // The page of a favorite split focused now is the one it shows focused next, in any Space,
+        // as the core keeps it.
+        if let Some(lead) = self.favorite_split(tab).map(|split| split.tabs[0]) {
+            self.favorite_focus.insert(lead, tab);
         }
         // A Space's switch can report a tab, even none, before the Space itself (#1332), so only a
         // tab's switch ends here.
@@ -2834,12 +3297,14 @@ impl Shell {
         // Only a closed folder changes the rows, and a tab switch has nothing more to do.
         if !space.folders.folders.values().any(|&(_, open)| !open) {
             space.shown = tab;
+            space.peeked.clear();
             return;
         }
         let before = space.slots(head);
+        space.keep_peek(tab);
         space.shown = tab;
         if space.slots(head) != before {
-            self.move_rows(before, Curve::Slide, cx);
+            self.move_rows(before, Curve::Peek, cx);
         }
     }
 
@@ -3463,6 +3928,31 @@ impl Shell {
         .size_full()
     }
 
+    /// The pointer moving or pressing in the reveal's window, which shows the row under it again,
+    /// as `hover_listener` does in the browser window's, which draws no sidebar while it's hidden.
+    fn reveal_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = shell.clone();
+                window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+                let pressed = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        pressed.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
     /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
     /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
@@ -3613,6 +4103,14 @@ impl Render for Shell {
             });
             log!("browser: outline {outline}");
         }
+        // check.sh reads this line, as the folder's dots are drawn.
+        let dots = self.shown_space().map_or_else(Vec::new, Space::dotted);
+        if dots != self.dots_drawn {
+            for (folder, tab) in dots.iter().filter(|dot| !self.dots_drawn.contains(dot)) {
+                log!("browser: folder {folder} dots over {tab}");
+            }
+            self.dots_drawn = dots;
+        }
         // As the outline's, so a click on Clear, which shows only under the pointer, finds it.
         if std::mem::take(&mut self.hover_changed) {
             log!("browser: sidebar hovered {}", self.sidebar_hovered as u8);
@@ -3662,6 +4160,7 @@ impl Render for Shell {
             window.focus(&form.name.focus_handle(cx), cx);
         }
         self.focus_talk(window, cx);
+        self.focus_pair(window, cx);
         // A new folder's field is drawn once the browser reports the folder, and blurs if focused
         // before.
         let drawn = self
@@ -3753,13 +4252,19 @@ impl Render for Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
-        self.step_scroll_edge(window, cx);
+        // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
+        // and the two of different sizes measuring it in turn each asked the other for a frame.
+        if !self.sidebar_hidden || self.sidebar_motion.is_some() {
+            self.step_scroll_edge(window, cx);
+        }
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
+        self.step_content_scale(window, cx);
         let drop_targets = self
             .drag
             .as_ref()
@@ -3961,6 +4466,15 @@ impl Shell {
     /// being added, its card is there, empty.
     fn cards(&self) -> Vec<gpui::Div> {
         let (frame, _) = self.page_frame(self.viewport);
+        // At the pages' scale, as a tab or a link over them draws them smaller.
+        let (scale, radius) = (self.content_scale.now(), self.card_radius());
+        let card = |bounds, fill| {
+            card(
+                split_targets::scaled_about(bounds, frame.center(), scale),
+                radius,
+                fill,
+            )
+        };
         let panes = self.panes(self.selected);
         let glow = BoxShadow {
             color: Hsla::from(self.palette.accent).opacity(FOCUS_GLOW_ALPHA),
@@ -4050,6 +4564,10 @@ impl Shell {
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
+                    .children(self.translate_card(cx))
+                    .children(self.portrait_card(cx))
+                    .children(self.chooser_card(cx))
+                    .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.agent_question_card(cx))
                     .children(self.task_foot(cx))
@@ -4064,10 +4582,10 @@ impl Shell {
         sidebar
             .children(self.new_space_circle(cx))
             .children(self.recent_download_rows(cx))
-            .children((!self.private).then(|| self.library_button(cx)))
+            .children((!self.blank).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
             .children(self.archive_flights())
-            .children((!self.private).then(|| self.plus_button(cx)))
+            .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.switcher(cx))
             .child(self.press_listener())
             .children(self.paging_frame(started))
@@ -4172,14 +4690,16 @@ impl Shell {
     fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
-            let row = row_box().pl(px(PLATE_INSET + space.depth(tab) as f32 * FOLDER_INDENT));
+            let depth = space.listed_depth(tab);
+            let row = row_box().pl(px(PLATE_INSET + depth as f32 * FOLDER_INDENT));
             if let Some((name, open)) = space.folders.folders.get(&tab) {
                 let name = title(&self.palette, name.clone(), false).pr(px(TITLE_END_INSET));
-                return row.child(plate(folder_icon(&self.palette, *open), name));
+                let elided = space.elides(tab);
+                return row.child(plate(folder_icon(&self.palette, *open, elided), name));
             }
             let panes = space.panes(tab);
             if panes.len() > 1 {
-                let width = self.segment_width(space.depth(tab), panes.len());
+                let width = self.segment_width(depth, panes.len());
                 let segments = panes.iter().map(|&pane| {
                     self.segment(&self.palette, pane, width, pane == tab, pane == selected)
                 });
@@ -4222,7 +4742,7 @@ impl Shell {
             .flex_col()
             .when(room > 0., |page| page.child(div().flex_none().h(px(room))))
             .child(
-                name_box(&self.palette, icon.is_some())
+                name_box(&self.palette, icon.is_some(), false)
                     .children(icon)
                     .child(div().truncate().child(space.name.clone())),
             )
@@ -4408,6 +4928,7 @@ impl Shell {
         self.step_drag_shape(window, cx);
         self.step_held_row(window);
         self.step_held_nav(window);
+        self.step_space_slides(window);
         self.step_form_going(cx);
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
@@ -4456,6 +4977,7 @@ impl Shell {
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
+            .child(self.reveal_listener(cx))
             .into_any_element();
         self.breath.arm(cx);
         panel
@@ -4598,15 +5120,15 @@ fn packed(color: Hsla) -> u32 {
     channel(color.r) << 16 | channel(color.g) << 8 | channel(color.b)
 }
 
-/// A card at `bounds` in the window, of `fill`.
-fn card(bounds: Bounds<Pixels>, fill: Rgba) -> gpui::Div {
+/// A card at `bounds` in the window with corners of `radius`, of `fill`.
+fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
     div()
         .absolute()
         .left(bounds.left())
         .top(bounds.top())
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .rounded(px(CARD_RADIUS))
+        .rounded(px(radius))
         .bg(fill)
 }
 
@@ -4711,14 +5233,20 @@ fn row_box() -> gpui::Div {
 }
 
 /// The row with the Space's name, over its tabs, with room before the name for the Space's icon if
-/// it has one.
-fn name_box(palette: &Palette, icon: bool) -> gpui::Div {
+/// it has one. A Blank Window's name, `on_titles`, starts on the tab titles' column, where a
+/// Space's starts 2 before them (Arc).
+fn name_box(palette: &Palette, icon: bool, on_titles: bool) -> gpui::Div {
+    let x = match (on_titles, icon) {
+        (true, _) => FAVICON_X + FAVICON_SIZE + TITLE_GAP,
+        (false, true) => NAME_X,
+        (false, false) => ICONLESS_NAME_X,
+    };
     div()
         .flex_none()
         .h(px(NAME_HEIGHT))
         .flex()
         .items_center()
-        .pl(px(if icon { NAME_X } else { ICONLESS_NAME_X }))
+        .pl(px(x))
         .pr(px(FAVICON_X))
         .text_size(px(text::BODY))
         .font_weight(FontWeight::SEMIBOLD)
@@ -4902,9 +5430,9 @@ fn plate(icon: impl IntoElement, label: impl IntoElement) -> gpui::Div {
 }
 
 /// A folder's icon, open or closed.
-fn folder_icon(palette: &Palette, open: bool) -> AnyElement {
+fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
     svg()
-        .path(swap::folder_glyph(open))
+        .path(swap::folder_glyph(open, elided))
         .size(px(FAVICON_DRAWN))
         .text_color(palette.text(SECONDARY))
         .into_any_element()
@@ -4913,7 +5441,11 @@ fn folder_icon(palette: &Palette, open: bool) -> AnyElement {
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
     match favicon {
-        Some(favicon) => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
+        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
+            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
+            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
+        },
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))
@@ -5066,6 +5598,20 @@ fn file_name(url: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+thread_local! {
+    static QUIT_GONE_AHEAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The browser's quit has gone ahead (quitting.rs), and its windows are going: from now on nothing
+/// opens over one, as on Wayland a surface made on a window going ends the connection.
+pub fn quit_goes_ahead() {
+    QUIT_GONE_AHEAD.set(true);
+}
+
+pub fn quit_gone_ahead() -> bool {
+    QUIT_GONE_AHEAD.get()
+}
+
 /// The `file:` URL of the file at `path`, with what a URL can't hold escaped, and a Windows path's
 /// drive and backslashes as Chromium reads them.
 pub fn file_url(path: &str) -> String {
@@ -5204,6 +5750,7 @@ mod tests {
             splits: Vec::new(),
             folders: Folders::default(),
             shown: 0,
+            peeked: Vec::new(),
         }
     }
 
@@ -5303,7 +5850,18 @@ mod tests {
             );
         }
         assert_eq!(along(Curve::Fold { open: true }, 200.), 1.);
+        // A tab shown in a closed folder is in at 0.15 s, Arc 1.171's (#1405), never past.
+        let peek: Vec<f32> = (0..=200).map(|ms| along(Curve::Peek, ms as f32)).collect();
+        assert!(
+            peek.windows(2)
+                .all(|pair| pair[0] <= pair[1] && pair[1] <= 1.)
+        );
+        assert!(peek[149] < 1. && peek[150] == 1.);
         assert!(1. - along(Curve::Fold { open: false }, 280.) < 0.01);
         assert!(1. - along(Curve::Room, 280.) < 0.01);
     }
 }
+
+/// A Blank Window's Space's name, and its icon: the square glyph, in the name's ink, before it.
+pub(super) const BLANK_WINDOW: &str = "Blank Window";
+pub(super) const BLANK_ICON: &str = "glyph:square";

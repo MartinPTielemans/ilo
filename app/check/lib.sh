@@ -36,6 +36,10 @@ swatch_y=380
 swatch_x() { echo "$1" | awk '{ print 13 + 60.5 + 29.5 * $1 }'; }
 # Its profiles, in the one the check starts with, for a Space with tabs and an empty one.
 profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile (disabled)")
+# A Space menu's Export “name” into Folder ›, a Space an item, wherever a run doesn't check it
+# itself, as Spaces come and go (spaces checks it). It goes in a menu's line before Export as
+# Markdown…, through cased.
+into='\(Export “[^”]*” into Folder › [^,]*, \)*'
 empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Profile")
 # The product's name, which the app's menus and alerts use, and the dev build's id.
 app_name=$(cat branding/name)
@@ -60,10 +64,19 @@ cleanup() {
   [ -z "${helper:-}" ] || kill "$helper" 2>/dev/null || true
   [ -z "${ilo_server:-}" ] || kill "$ilo_server" 2>/dev/null || true
   [ -z "${tls:-}" ] || kill "$tls" 2>/dev/null || true
-  # The other copies of the app a run started, as sync-devices' devices.
-  [ -z "${others:-}" ] || kill $others 2>/dev/null || true
+  # The other copies of the app a run started, as sync-devices' devices: on Windows by taskkill, as
+  # the app is below, since Git Bash's kill leaves a crash report from each (#1017).
+  if [ -n "${others:-}" ] && windows; then
+    for other in $others; do
+      taskkill //F //T //PID "$(cat "/proc/$other/winpid" 2>/dev/null)" > /dev/null 2>&1 || true
+    done
+  elif [ -n "${others:-}" ]; then
+    kill $others 2>/dev/null || true
+  fi
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
+  # A run's own way back, named in run_undo, such as policies' taking its policies off the system.
+  [ -z "${run_undo:-}" ] || $run_undo || true
   # A run's temp dir, such as the updates run's with its key.
   [ -z "${scratch:-}" ] || rm -rf "$scratch"
   # A check VM that a run turned light or dark goes back to the appearance it had.
@@ -107,6 +120,12 @@ fail() {
 gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
+}
+# Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
+# step that needs a core change: an engine built before it skips the step, saying so.
+engine_has() {
+  local commit
+  commit=$(../engine/fetch.sh commit 2> /dev/null) && git diff --quiet "$commit" -- "$@"
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.
 await() {
@@ -224,6 +243,17 @@ quit_app() {
     osascript -e "tell application id \"$app_id\" to quit"
   fi
 }
+# Ends the session as the system does at a logout or restart. The Mac and Linux send SIGTERM, which
+# Chromium takes for the session ending. Windows asks the app's windows and then tells them it ends
+# (app-windows.py end-session, #1990): Git Bash's kill would end the app's children first, and then
+# the app from a thread of its own, which no sign-out does.
+end_session() {
+  if windows; then
+    python3 -I check/app-windows.py end-session "$(cat "/proc/$pid/winpid")"
+  else
+    kill -TERM "$pid"
+  fi
+}
 # The app's own process: the one started, or in the Flatpak, where that's flatpak's, the browser
 # process in its sandbox, as the host numbers it, the chrome process that isn't a helper.
 app_pid() {
@@ -287,6 +317,19 @@ skip_on_sway_xwayland() {
   quit
   echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
   exit 0
+}
+# Under Xvfb and KWin (check.sh's BROWSER_XVFB=kwin), whether a window that shows asks KWin to blur
+# under it within 2 s, as an overlay does once its motion ends at rest (#2134). Elsewhere, false.
+kwin_blurs() {
+  [ "${BROWSER_XVFB:-}" = kwin ] || return 1
+  for _ in $(seq 20); do
+    for window in $(xwininfo -root -children | awk '$1 ~ /^0x/ { print $1 }'); do
+      xwininfo -id "$window" | grep -q 'Map State: IsViewable' || continue
+      xprop -id "$window" _KDE_NET_WM_BLUR_BEHIND_REGION | grep -q ' = [0-9]' && return 0
+    done
+    sleep 0.1
+  done
+  return 1
 }
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
@@ -375,6 +418,25 @@ drawn_after() {
     sleep 0.1
   done
   return 1
+}
+# Sets at to where Settings drew its control $1, as drawn does, in the card's sight: between its
+# held title and its fade, where the card shows a row whole ("browser: settings card shows <top> to
+# <bottom>"). One drawn past them, as a section with more rows than the window's height puts at its
+# foot, is under the card's edge, where a press lands on nothing, so the card scrolls it into
+# sight first, from its middle, and at is where the frame after that draws it (#1950). Returns 1
+# if it never drew it.
+in_sight() {
+  at=$(drawn "$1") || return 1
+  sight=$(grep '^browser: settings card shows ' "$log" | tail -1 | cut -d' ' -f5-)
+  [ -n "$sight" ] || return 0
+  top=${sight%% to *}
+  bottom=${sight##* to }
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  # Past it by its row's half, 24, and a little more.
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
@@ -550,6 +612,24 @@ switch() {
 # under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
 row() {
   echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+}
+# The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
+# from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+cpu() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
+      -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+      n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
 }
 # Switch times in milliseconds, one a line, as "median <m> ms, max <x> ms, <n> switches".
 summary() {
