@@ -30,9 +30,10 @@ shows you the issue before posting it.
 ## Vouching
 
 [.github/VOUCHED.td](.github/VOUCHED.td) lists the people ilo trusts, using
-[vouch](https://github.com/mitchellh/vouch). On every PR, a check labels its author
+[vouch](https://github.com/mitchellh/vouch). On a PR from a fork, a check labels its author
 `vouch:trusted` (in the list, or a collaborator with write access), `vouch:unvouched`, or
-`vouch:denounced`. A comment of `/recheck-vouch` on the PR labels it again.
+`vouch:denounced`. A PR from a branch here is a collaborator's, so it goes unlabelled. A comment of
+`/recheck-vouch` on any PR labels it.
 
 The label is context for triage, not a gate: every PR is triaged alike. A denounced author's PRs
 and issues are closed without review.
