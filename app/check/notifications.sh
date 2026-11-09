@@ -135,7 +135,10 @@ PY
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
       [ "$each" = "“${app_name}”" ] || fail "macOS asked whether $each may notify, not $app_name"
-    done <<< "$asked"
+    # A here-document: sh doesn't parse bash's <<<, and a pipe's loop would fail only its subshell.
+    done <<EOF
+$asked
+EOF
     echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
   # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
