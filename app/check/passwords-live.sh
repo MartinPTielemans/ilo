@@ -25,9 +25,9 @@ focused() {
   done
   grep '^cdp: focus ' "$cdp_log" | tail -1 | cut -d' ' -f3-
 }
-# A click on the page's heading, at its top left, away from the ribbon at its top right, then tab
-# to the username field, wherever the site lays it out.
-send click 400 60
+# A click in the content's card, above its heading and under the site's header bar, which is all a
+# link home, then tab to the username field, wherever the site lays it out.
+send click 700 130
 if [ "$active" != 1 ]; then
   exec 3>&- 5>&-
   quit
