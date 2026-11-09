@@ -29,15 +29,20 @@ engine() {
   done <<< "$tags"
   [ -n "$found" ] && echo "$found"
 }
-# Whether the $1 engine at commit $2 has $2's core and engine.
+# Whether the $1 engine at commit $2 has $2's core and engine, to the compiler: comments in the
+# core's C++ don't count (core-same.sh, #2195), as they don't for the nights that build engines.
 fits() {
   local built
-  built=$(engine "$1" "$2") && git diff --quiet "$built" "$2" -- core engine
+  built=$(engine "$1" "$2") && tools/core-same.sh "$built" "$2" core engine
 }
 
 mac=$(engine mac HEAD) || { echo "No Mac engine in $repo was built from main's history." >&2; exit 1; }
-# The first commit since the Mac engine's that changed core/ or engine/, which it doesn't have.
-changed=$(git rev-list --first-parent --reverse "$mac..HEAD" -- core engine | head -n 1)
+# The first commit since the Mac engine's whose core/ or engine/ isn't the engine's, which it
+# doesn't have.
+changed=
+for each in $(git rev-list --first-parent --reverse "$mac..HEAD" -- core engine); do
+  tools/core-same.sh "$mac" "$each" core engine 2> /dev/null || { changed=$each; break; }
+done
 if [ -n "$changed" ]; then
   commit=$(git rev-parse "$changed^")
   echo "The Mac engine (${mac:0:12}) is from before ${changed:0:12}, which changed core/ or" \

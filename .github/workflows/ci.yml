@@ -45,7 +45,13 @@ jobs:
           sparse-checkout: |
             .github/scripts/ci-changes.cjs
             .github/actions/ci-changes/
+            tools/core-same.sh
+            tools/core-same-test.sh
+            core/public/browser_core.h
           sparse-checkout-cone-mode: false
+
+      # The comparison detect uses, and the engines use, proven on the core's header first.
+      - run: tools/core-same-test.sh
 
       - id: detect
         uses: ./.github/actions/ci-changes
