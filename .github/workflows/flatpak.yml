@@ -149,8 +149,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -170,6 +172,12 @@ jobs:
           (cd .deps/ilo-server && cargo build --release --locked)
           XDG_RUNTIME_DIR=$(mktemp -d) ILO_SERVER=$PWD/.deps/ilo-server/target/release/ilo-server \
             BROWSER_FLATPAK=1 BROWSER_XVFB=1 dbus-run-session -- ./check.sh sync-account
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() && steps.server.outcome == 'success' }}

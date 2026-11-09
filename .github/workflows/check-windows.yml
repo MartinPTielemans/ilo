@@ -269,8 +269,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -294,6 +296,12 @@ jobs:
           echo "ILO_SERVER=$PWD/target/release/ilo-server.exe" >> "$GITHUB_ENV"
           # Its DLLs, for the server to start.
           cygpath -w "$ssl/bin" >> "$GITHUB_PATH"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
