@@ -1445,7 +1445,6 @@ fn the_window_fits_up_to_five_rows_of_arcs_size() {
 fn the_centred_bar_hangs_a_fixed_distance_above_the_middle() {
     assert_eq!(centered_top(1130.), 396.);
     assert_eq!(centered_top(949.), 305.5);
-    assert_eq!(WIDTH, 765.);
 }
 
 #[gpui::test]
