@@ -202,42 +202,19 @@ send window 2
 # The same link again, with the regular window in front, brings that Little ilo window back.
 send window 1
 expect "^browser: key window $window\$" "the regular window didn't come to the front"
-# Under Wayland the link comes as from another app the user clicked it in: with an activation token
-# for that click in its window, check/drag's, which sway brings an open window forward for. Before
-# sway 1.10, one from its exec, as the run's other launches have, only marks an open window urgent.
+# Under Wayland the link comes as from another app the user clicked it in, with the token for that
+# click (other_app_click), which sway brings an open window forward for.
+link_token=
 if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-  cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
-    fail "check/drag didn't build"
-  rm -f "$out/clicked-in"
-  mkfifo "$out/clicked-in"
-  target/release/drag 1280x800 window < "$out/clicked-in" > "$out/clicked.log" 2>&1 &
-  clicked=$!
-  exec 4> "$out/clicked-in"
-  # Waits for the line $1 from check/drag, failing with $2.
-  clicked_says() {
-    for _ in $(seq 100); do
-      grep -q "$1" "$out/clicked.log" && return 0
-      sleep 0.05
-    done
-    fail "$2: $(tr '\n' ' ' < "$out/clicked.log")"
-  }
-  clicked_says '^drag: ready$' "check/drag's window didn't show"
-  swaymsg '[app_id=ilo-drag] move absolute position 1220 740' > /dev/null
-  printf '%s\n' 'move 1244 764' press release >&4
-  clicked_says '^drag: pressed$' "the click in check/drag's window didn't reach it"
-  echo token >&4
-  clicked_says '^drag: token ' "check/drag got no activation token for its click"
-  link_token=$(sed -n 's/^drag: token //p' "$out/clicked.log")
+  other_app_click
+  link_token=$other_app_token
 fi
 send_link "${site}?ext"
 expect_late "^browser: link from another app ${site}?ext: little window $little again\$" \
   "the same link again didn't bring its Little ilo window back: $(grep '^browser: link' "$log" | tail -1)"
 expect "^browser: key window $little\$" "the link's Little ilo window didn't come to the front"
-if [ -n "${clicked:-}" ]; then
-  exec 4>&-
-  wait "$clicked" || true
-  link_token=
-fi
+other_app_closes
+link_token=
 [ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
   fail "the same link again opened a second Little ilo window"
 send window 2
