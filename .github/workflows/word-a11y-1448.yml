@@ -1,0 +1,201 @@
+# Temporary, for #1448, never for main: Word for the web's Accessibility Mode in the released ilo
+# on GitHub's hosted Mac, with a throwaway profile and no sign-in, on Microsoft's public viewer.
+# Once with the page's accessibility tree on, as while an agent reads it, and once without.
+name: Word accessibility mode repro
+
+on:
+  push:
+    branches: [fix/word-accessibility-mode-1448]
+    paths: [.github/workflows/word-a11y-1448.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      URL: https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fcalibre-ebook.com%2Fdownloads%2Fdemos%2Fdemo.docx
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App
+        run: |
+          swift .github/scripts/display-mode.swift 1920 1080 || true
+          gh release download -R MartinPTielemans/ilo -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          gh release view -R MartinPTielemans/ilo --json tagName -q .tagName
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          mkdir -p "$RUNNER_TEMP/apps"
+          ditto "$RUNNER_TEMP/mnt/ilo.app" "$RUNNER_TEMP/apps/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+
+      # Screen capture and Accessibility for the job's processes and the app, as check-mac.yml grants.
+      - name: Grants
+        run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          paths="$(find -L "$RUNNER_TEMP/apps" -path '*/Contents/MacOS/*' -type f -perm -u+x)"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in /*) paths="$paths
+          $path" ;; esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            for service in kTCCServiceScreenCapture kTCCServiceAccessibility; do
+              sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+                auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+                VALUES ('$service', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            done
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      - name: Cases
+        run: |
+          set +e
+          out=$RUNNER_TEMP/out
+          mkdir -p "$out"
+          cat > "$RUNNER_TEMP/ax.swift" <<'SWIFT'
+          // ax <pid> on | find <text> | has <text> | window
+          import ApplicationServices
+          import CoreGraphics
+          import Foundation
+          let args = CommandLine.arguments
+          let pid = pid_t(args[1])!
+          let app = AXUIElementCreateApplication(pid)
+          func attr(_ e: AXUIElement, _ n: String) -> AnyObject? {
+            var v: AnyObject?
+            return AXUIElementCopyAttributeValue(e, n as CFString, &v) == .success ? v : nil
+          }
+          func text(_ e: AXUIElement) -> String {
+            ["AXTitle", "AXDescription", "AXValue"].compactMap { attr(e, $0) as? String }
+              .filter { !$0.isEmpty }.joined(separator: " | ")
+          }
+          func find(_ needle: String) -> AXUIElement? {
+            var queue: [(AXUIElement, Int)] = [(app, 0)]
+            var seen = 0
+            while !queue.isEmpty && seen < 40000 {
+              let (e, depth) = queue.removeFirst()
+              seen += 1
+              if text(e).contains(needle) { return e }
+              if depth < 80, let kids = attr(e, "AXChildren") as? [AXUIElement] {
+                queue += kids.map { ($0, depth + 1) }
+              }
+            }
+            return nil
+          }
+          switch args[2] {
+          case "on":
+            AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            print("ax: accessibility on")
+          case "window":
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+            for w in list where (w[kCGWindowOwnerPID as String] as? Int32) == pid
+              && (w[kCGWindowLayer as String] as? Int) == 0 {
+              let b = w[kCGWindowBounds as String] as! [String: Any]
+              print((b["X"] as! NSNumber).intValue, (b["Y"] as! NSNumber).intValue)
+              break
+            }
+          default:
+            let needle = args[3]
+            for _ in 0..<30 {
+              if let e = find(needle) {
+                if args[2] == "has" { print("ax: has \"\(needle)\": \(text(e).prefix(80))"); exit(0) }
+                var p = CGPoint.zero, s = CGSize.zero
+                AXValueGetValue(attr(e, "AXPosition") as! AXValue, .cgPoint, &p)
+                AXValueGetValue(attr(e, "AXSize") as! AXValue, .cgSize, &s)
+                print(Int(p.x + s.width / 2), Int(p.y + s.height / 2))
+                exit(0)
+              }
+              if args[2] == "has" { break }
+              sleep(1)
+            }
+            if args[2] == "has" { print("ax: no \"\(needle)\"") }
+            exit(1)
+          }
+          SWIFT
+          swiftc -O "$RUNNER_TEMP/ax.swift" -o "$RUNNER_TEMP/ax"
+          ax() { "$RUNNER_TEMP/ax" "$pid" "$@"; }
+          stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
+          has() { grep -q " $1" "$log"; }
+          wait_for() {
+            local i
+            for i in $(seq $(($2 * 10))); do
+              has "$1" && return 0
+              kill -0 "$pid" 2> /dev/null || return 1
+              sleep 0.1
+            done
+            return 1
+          }
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            wait_for "browser: drive $step done" 30 || echo "driver didn't finish $*"
+          }
+          shot() { tools/window-screenshot.sh "$pid" "$out/$name-$1.png" 2> /dev/null || echo "no capture $1"; }
+          app=$RUNNER_TEMP/apps/ilo.app
+          exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          # Case $1, with the accessibility tree on when $1 is "ax".
+          run_case() {
+            name=$1
+            log=$out/$name.log
+            : > "$log"
+            fifo=$RUNNER_TEMP/drive-$name
+            rm -f "$fifo"; mkfifo "$fifo"
+            profile=$RUNNER_TEMP/profile-$name
+            rm -rf "$profile"; mkdir -p "$profile"
+            security delete-generic-password -s 'ilo Safe Storage' > /dev/null 2>&1 || true
+            step=0
+            (BROWSER_DRIVE=1 BROWSER_URL="$URL" BROWSER_PROFILE_DIR="$profile" "$exe" < "$fifo" 2>&1 |
+              stamp >> "$log") &
+            exec 3> "$fifo"
+            for _ in $(seq 100); do pid=$(pgrep -n -f "^$exe" || true); [ -n "$pid" ] && break; sleep 0.1; done
+            wait_for 'browser: loaded' 90 || echo "$name: the page didn't load"
+            sleep 15
+            send state
+            shot 0-loaded
+            [ "$name" = ax ] && ax on
+            for n in 1 2 3; do
+              if [ "$name" = ax ]; then
+                at=$(ax find "Accessibility Mode") || { echo "$name $n: no Accessibility Mode button"; shot "$n-nobutton"; continue; }
+                set -- $at
+                set -- $1 $2 $(ax window)
+                at="$(($1 - $3)) $(($2 - $4))"
+                echo "$at" > "$out/button"
+              else
+                at=$(cat "$out/button" 2> /dev/null) || { echo "$name: no button place from the ax case"; break; }
+              fi
+              echo "$name $n: click Accessibility Mode at $at"
+              send click $at
+              sleep 4; shot "$n-a-4s"
+              sleep 11; shot "$n-b-15s"
+              if [ "$name" = ax ]; then
+                ax has "ran into a problem" || true
+                ax has "Exit Accessibility Mode" || true
+              fi
+              send key r cmd
+              sleep 15
+            done
+            exec 3>&-
+            kill "$pid" 2> /dev/null || true
+            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
+            pkill -9 -f "$RUNNER_TEMP/apps/" || true
+            sleep 2
+          }
+          run_case ax
+          run_case plain
+          grep -hE 'browser: (loaded|drive [0-9]+:|title)|crash|FATAL' "$out"/*.log | cut -c1-220 | tail -60
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: word-a11y
+          path: ${{ runner.temp }}/out
