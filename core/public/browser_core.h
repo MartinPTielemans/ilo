@@ -2863,6 +2863,12 @@ BC_EXPORT bool bc_profile_import_passwords(bc_id profile, const char* path);
 // Edit › Find › Jump to Selection does. Does nothing if it has neither.
 BC_EXPORT void bc_tab_jump_to_selection(bc_id tab);
 
+// Copies up to |capacity| bytes of the text selected in the tab's page into |text|, UTF-8 and
+// ending in a NUL, and returns its length without it: 0 with nothing selected. For Copy URL as
+// Quote (⌃⇧⌘C), which the user asks for; a password field's selection is never given, as Chromium
+// keeps it from the browser.
+BC_EXPORT size_t bc_tab_selection(bc_id tab, char* text, size_t capacity);
+
 // Pins the tab in its Space at the page it's at, at the bottom of the pinned tabs, or unpins it to
 // the top of the Today tabs, with the rest of its split view. Then space_changed and
 // tab_state_changed.
