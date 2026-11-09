@@ -357,9 +357,8 @@ fn restore_spaces(window: bc::bc_id, shell: WindowHandle<Shell>, cx: &mut App) -
             shell
                 .update(cx, |shell, _, cx| {
                     shell.set_welcome(cx);
-                    if onboarding.as_deref() != Some("skip") {
-                        shell.start_onboarding(onboarding.as_deref(), cx);
-                    }
+                    // Proof only (#455): the launch as it was before the onboarding.
+                    let _ = onboarding;
                 })
                 .ok();
         }
