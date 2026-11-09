@@ -14,6 +14,7 @@ exec 3> "$out/drive"
 await_load
 await '^browser: title [0-9]* ready$' || fail "the test page didn't draw"
 await '^browser: window opened [0-9]' || fail "the app didn't say which window opened"
+fail "quarantine proof: blank fails here on purpose, on fix/2197-check-quarantine-2 only (#2197)"
 main=$(grep -m1 '^browser: window opened ' "$log" | cut -d' ' -f4)
 home=$(space)
 send click $page_point
