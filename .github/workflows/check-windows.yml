@@ -180,6 +180,19 @@ jobs:
           Add-Type -AssemblyName System.Windows.Forms
           "Screen: " + [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
+      # The notification area showing every icon, rather than keeping new ones in its overflow, so
+      # the little run's copy of it shows ilo's as a user who's dragged it out sees it. Explorer
+      # reads the setting as it starts, and starts again by itself when it's ended.
+      - shell: pwsh
+        run: |
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer' -Name EnableAutoTray -Value 0 -Type DWord
+          $old = @(Get-Process explorer -ErrorAction SilentlyContinue | ForEach-Object Id)
+          Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+          $started = { @(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $old -notcontains $_.Id }).Count -gt 0 }
+          for ($i = 0; $i -lt 100 -and -not (& $started); $i++) { Start-Sleep -Milliseconds 100 }
+          if (-not (& $started)) { Start-Process explorer.exe }
+          "Explorer: " + (Get-Process explorer | ForEach-Object Id)
+
       # Microsoft's Japanese IME, one of the user's input methods, for the runs that compose with it
       # (the driver's ime ja), which look for it in the user's language list. Language.Basic is the
       # capability that has it, about 100 s from Windows Update; Server 2022 has no Install-Language.
