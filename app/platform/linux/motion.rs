@@ -84,6 +84,16 @@ impl Motion {
 thread_local! {
     /// The motion each window's view was last given, and when it started.
     static MOVING: RefCell<Vec<(usize, Motion, Instant)>> = const { RefCell::new(Vec::new()) };
+    /// The views whose windows blur what's behind them at rest (`blur`).
+    static BLURRED: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The window of `view` blurs what's behind it, as the Mac's material does, while it shows at its
+/// full size and opacity: the compositor blurs under the window's whole shape at full strength, which
+/// would show around a card still growing, shrinking or fading in it.
+pub(crate) fn blur(view: *mut c_void) {
+    BLURRED.with_borrow_mut(|all| all.push(view as usize));
+    gpui_linux::set_overlay_blur(view, true);
 }
 
 /// How the window of `view` shows now, after any motion: as it draws if it never had one.
@@ -126,10 +136,28 @@ pub(crate) fn start(view: *mut c_void, mut motion: Motion) {
     if !gpui_linux::overlays_blend() {
         motion.opacity = Track::at(1.);
     }
+    let started = Instant::now();
     MOVING.with_borrow_mut(|moving| {
         moving.retain(|(each, ..)| *each != view as usize);
-        moving.push((view as usize, motion, Instant::now()));
+        moving.push((view as usize, motion, started));
     });
+    if BLURRED.with_borrow(|all| all.contains(&(view as usize))) {
+        let rests = motion.scale.to == 1. && motion.opacity.to == 1.;
+        let moving = motion.look(0.).moving;
+        gpui_linux::set_overlay_blur(view, rests && !moving);
+        if rests && moving {
+            let seconds = motion.scale.seconds.max(motion.opacity.seconds);
+            after(seconds, move || {
+                // Unless another motion started since.
+                let same = MOVING.with_borrow(|moving| {
+                    (moving.iter()).any(|&(each, _, at)| each == view as usize && at == started)
+                });
+                if same {
+                    gpui_linux::set_overlay_blur(view, true);
+                }
+            });
+        }
+    }
     crate::update_app_later(move |cx| {
         crate::overlays::update_window(view, cx, |window, _| window.refresh());
     });

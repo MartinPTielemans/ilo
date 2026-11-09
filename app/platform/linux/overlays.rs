@@ -7,7 +7,8 @@
 //! from their arrows, the theme picker shrinks back to it, and the folder preview grows a little
 //! and fades, as on the Mac, drawn by GPUI (motion.rs).
 //!
-//! shortcut: no blur under them.
+//! They blur what's behind them at rest, as on the Mac, where the compositor can: KWin on X11
+//! (motion::blur). Under Wayland none can, as each is a subsurface of the browser window.
 
 use std::{
     cell::{Cell, RefCell},
@@ -173,6 +174,7 @@ pub extern "C" fn host_add_overlay(
     });
     shadows::attach(overlay, view);
     motion::attach(view);
+    motion::blur(view);
 }
 
 #[unsafe(no_mangle)]
