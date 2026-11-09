@@ -8,9 +8,10 @@
 # once. On the Mac the banner is macOS's own, which check/banner.mm presses through the accessibility
 # API as a click does, after Allow on the banner asking whether the app may notify. It does so only
 # in a check VM with System Integrity Protection off, where check-mac.yml grants the run
-# Accessibility, and never on a Mac in use, whose banners aren't the run's to press. Windows shows a
-# toast only for an installed copy (mcp.sh), so it skips: the click's way to the tab is Chromium's
-# content layer's on every platform.
+# Accessibility, and never on a Mac in use, whose banners aren't the run's to press. On Windows a
+# click on a toast comes as a launch with the toast's id, which notification_helper.exe runs and
+# Chrome hands to the browser running, as in links.sh (#1426). Windows shows a toast only for an
+# installed copy, which the run's isn't, so the run sends that launch for the click.
 
 notify=
 if [ "$(uname)" = Darwin ]; then
@@ -41,8 +42,8 @@ if [ "$(uname)" = Darwin ]; then
     fi
     notify=mac
   fi
-elif [ "$(uname)" != Linux ]; then
-  echo "skip: notifications, as Windows shows a toast only for an installed copy."
+elif windows; then
+  notify=windows
 elif ! command -v dbus-daemon > /dev/null ||
   ! python3 -I -c 'from gi.repository import Gio' 2> /dev/null; then
   echo "skip: notifications, which needs dbus-daemon and python3-gi for its notification server."
@@ -72,12 +73,13 @@ document.onvisibilitychange = () => {
 </script>' > "$out/site/notify.html"
   # The site may notify, in the profile, before the app reads it, and not after the run.
   site_notifications() {
-    python3 -I - "$profile_dir/Default/Preferences" "${site%/},*" "$1" << 'PY' || fail "the profile's notifications for the site couldn't be set"
+    MSYS2_ARG_CONV_EXCL='*' python3 -I - "$(native_path "$profile_dir/Default/Preferences")" \
+      "${site%/},*" "$1" << 'PY' || fail "the profile's notifications for the site couldn't be set"
 import json, os, sys
 path, pattern, allow = sys.argv[1], sys.argv[2], sys.argv[3] == "allow"
 prefs = {}
 if os.path.exists(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         prefs = json.load(f)
 sites = prefs.setdefault("profile", {}).setdefault("content_settings", {})
 sites = sites.setdefault("exceptions", {}).setdefault("notifications", {})
@@ -86,7 +88,7 @@ if allow:
 else:
     sites.pop(pattern, None)
 os.makedirs(os.path.dirname(path), exist_ok=True)
-with open(path, "w") as f:
+with open(path, "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 PY
   }
@@ -141,10 +143,11 @@ $asked
 EOF
     echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
-  # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
-  # presses macOS's banner. One that's gone to Notification Center's list sits in a stack with the
-  # app's others, where the first press only spreads the stack out, and the page hears nothing
-  # (#2159), so the run presses again while the page hasn't said it was clicked.
+  # Clicks notification $1: the server sends its click, as a desktop's does, on Windows the run
+  # sends the toast's launch, or on the Mac it presses macOS's banner. One that's gone to
+  # Notification Center's list sits in a stack with the app's others, where the first press only
+  # spreads the stack out, and the page hears nothing (#2159), so the run presses again while the
+  # page hasn't said it was clicked.
   click() {
     if [ "$notify" = linux ]; then
       # Under Wayland the server sends the click's activation token first, as a desktop's does,
@@ -156,6 +159,15 @@ EOF
         token=$other_app_token
       fi
       echo "click $id $token" >&6
+      return
+    fi
+    if [ "$notify" = windows ]; then
+      # The toast's id: a click, on a page's notification, the profile's, the app's name, not
+      # private, the site, and the notification, which Chrome names by the site and its tag. Its |
+      # and # are the id's own, which Git Bash would take a path list of.
+      MSYS2_ARG_CONV_EXCL='*' "$app/chrome.exe" "--user-data-dir=$(cygpath -w "$profile_dir")" \
+        "--notification-launch-id=0|1|Default|$(cat branding/name)|0|$site|n#${site%/}#check $1" \
+        < /dev/null >> "$notes" 2>&1 || true
       return
     fi
     for press in 1 2 3; do
@@ -193,8 +205,13 @@ EOF
   }
 
   rm -f "$saved" "$launch_frame"
-  env ${session:+DBUS_SESSION_BUS_ADDRESS=$session} BROWSER_DRIVE=1 BROWSER_URL="${site}notify.html" \
-    "$browser" < "$out/drive" > "$log" 2>&1 &
+  # Without env, which can't run Windows' $browser, a function.
+  if [ -n "$session" ]; then
+    DBUS_SESSION_BUS_ADDRESS=$session BROWSER_DRIVE=1 BROWSER_URL="${site}notify.html" \
+      "$browser" < "$out/drive" > "$log" 2>&1 &
+  else
+    BROWSER_DRIVE=1 BROWSER_URL="${site}notify.html" "$browser" < "$out/drive" > "$log" 2>&1 &
+  fi
   pid=$!
   exec 3> "$out/drive"
   await_load
@@ -267,7 +284,12 @@ EOF
     exec 3>&- 6>&-
     other_app_closes
     quit
-    echo "ok: a click on a site's notification, which $([ "$notify" = mac ] && echo "macOS's banner" || echo "the desktop's notification server") sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
+    case $notify in
+      mac) notifier="macOS's banner" ;;
+      windows) notifier="Windows' toast, as a launch with its id," ;;
+      *) notifier="the desktop's notification server" ;;
+    esac
+    echo "ok: a click on a site's notification, which $notifier sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
   fi
   site_notifications take-back
   kill $buses 2> /dev/null || true
