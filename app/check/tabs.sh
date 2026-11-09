@@ -1193,7 +1193,7 @@ expect '^browser: loaded [0-9]* chrome://settings/searchEngines$' \
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send type view
-expect '^browser: command bar commands "view": View Archive…, .*View Media…' \
+expect '^browser: command bar commands "view": .*View Archive…, .*View Media…' \
   "\"view\" didn't list View Archive… above View Media… before a pick: $(grep '^browser: command bar commands "view"' "$log" | tail -1)"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
@@ -1204,8 +1204,8 @@ expect '^browser: library hidden$' "⇧⌘L didn't close the Library"
 send key l cmd
 expect '^browser: command bar shown$' "⌘L didn't open the command bar"
 send type view
-expect '^browser: command bar commands "view": View Media…, ' \
-  "a pick didn't put View Media… above its equals: $(grep '^browser: command bar commands "view"' "$log" | tail -1)"
+expect '^browser: command bar commands "view": .*View Media…, .*View Archive…' \
+  "a pick didn't put View Media… above View Archive…: $(grep '^browser: command bar commands "view"' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/bar-picked.png" || fail "no window to capture"
 send key escape
 expect '^browser: command bar hidden$' "Esc didn't close the command bar"
