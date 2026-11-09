@@ -62,9 +62,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <deque>
 #include <functional>
 #include <map>
@@ -2112,6 +2114,22 @@ LRESULT CALLBACK WatchKeyboard(int code, WPARAM wparam, LPARAM lparam) {
                                  : FocusName(hwnd, GetAncestor(hwnd, GA_ROOT));
     fprintf(stderr, "browser: drive: %s %s\n", code == HCBT_ACTIVATE ? "activates" : "focuses",
             name.c_str());
+    // [DEBUG-2178] Who moved it, as module+offset, for llvm-symbolizer with the engine's PDBs.
+    void* frames[48];
+    const USHORT count = CaptureStackBackTrace(0, 48, frames, nullptr);
+    for (USHORT i = 0; i < count; i++) {
+      HMODULE module = nullptr;
+      wchar_t path[MAX_PATH] = L"?";
+      if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                             static_cast<LPCWSTR>(frames[i]), &module)) {
+        GetModuleFileNameW(module, path, MAX_PATH);
+      }
+      const wchar_t* base = wcsrchr(path, L'\\');
+      fprintf(stderr, "[DEBUG-2178] frame %u %ls+0x%llx\n", i, base ? base + 1 : path,
+              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(frames[i]) -
+                                              reinterpret_cast<uintptr_t>(module)));
+    }
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
