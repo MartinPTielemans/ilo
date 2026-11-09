@@ -43,7 +43,7 @@ index 16d451f008..bb3d226cf2 100644
          Ok(PreparedWebGraphics { context, surface })
      }
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index a148a4ccfb..939cdca8ea 100644
+index a148a4ccfb..c1195f8f6f 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -178,12 +178,72 @@ enum InstanceData {
@@ -237,7 +237,20 @@ index a148a4ccfb..939cdca8ea 100644
              uses_webgl_instance_data,
          );
          let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-@@ -2411,109 +2530,117 @@ impl WgpuHeadlessRenderer {
+@@ -1428,7 +1547,11 @@ impl WgpuRendererCore {
+         );
+ 
+         self.atlas.before_frame();
+-        self.ensure_intermediate_textures(size);
++        // Only for a frame with paths, as a window that draws none would hold a texture of its
++        // size, and with MSAA one of four times it, for nothing.
++        if !scene.paths.is_empty() {
++            self.ensure_intermediate_textures(size);
++        }
+ 
+         let gamma_params = GammaParams {
+             gamma_ratios: self.rendering_params.gamma_ratios,
+@@ -2411,109 +2534,117 @@ impl WgpuHeadlessRenderer {
              .render_target
              .as_ref()
              .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;

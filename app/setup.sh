@@ -14,7 +14,7 @@ if [ ! -d .deps/zed ]; then
     https://github.com/zed-industries/zed .deps/zed
   git -C .deps/zed checkout -q "$ZED_REV"
 fi
-PATCHED="crates/gpui crates/gpui_macos crates/gpui_windows crates/gpui_linux crates/gpui_wgpu"
+PATCHED="crates/gpui crates/gpui_macos crates/gpui_apple crates/gpui_windows crates/gpui_linux crates/gpui_wgpu"
 # The files a patch adds go too; `git add -N` them to see them in a regenerated patch.
 git -C .deps/zed reset -q -- $PATCHED
 git -C .deps/zed checkout -q -- $PATCHED
@@ -28,10 +28,11 @@ fi
 # and loop, gpui's scales what's painted, lets the tests stand in for an assistive app, adds the
 # Edit menu's Paste and Match Style and caps a window's frame rate only while the app isn't the
 # active one, and gpui_wgpu's draws with Vulkan alone on Linux and builds its pipelines once for
-# all windows.
+# all windows. gpui_apple's, gpui_windows's and gpui_wgpu's make a window's path textures only once
+# it draws a path.
 git -C .deps/zed apply "$PWD/patches/gpui-macos-embedded.patch" "$PWD/patches/gpui-windows-embedded.patch" \
   "$PWD/patches/gpui-linux-embedded.patch" "$PWD/patches/gpui-scale.patch" \
-  "$PWD/patches/gpui-wgpu-vulkan.patch"
+  "$PWD/patches/gpui-wgpu-vulkan.patch" "$PWD/patches/gpui-apple-paths.patch"
 
 # GPUI's accessibility adapters for the Mac and for AT-SPI, at the versions Cargo.lock has, with
 # what upstream lacks: VoiceOver's menu action and a folder's open state, and AT-SPI's expanded
