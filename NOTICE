@@ -20,10 +20,10 @@ b36b283021c48f1712714b8a0e2ad6ffb578920b.
 
 Lucide (https://github.com/lucide-icons/lucide), ISC License, some icons MIT License
 Used in app/assets/icons/: activity, app-window, archive, arrow-down-to-line, arrow-down,
-arrow-left-right, arrow-left, arrow-right, arrow-up, asterisk, bandage, bed, bell, bluetooth,
-book-open, bookmark, brush-cleaning, cable, calendar-days, camera, check, chevron-down, chevron-up,
-chevrons-up-down, circle-alert, circle-fading-arrow-up, circle-question-mark, circle, clipboard,
-clock, cloud, cloudy, code, columns-2, command, compass, cookie, copy, corner-down-left,
+arrow-left-right, arrow-left, arrow-right, arrow-up-right, arrow-up, asterisk, bandage, bed, bell,
+bluetooth, book-open, bookmark, brush-cleaning, cable, calendar-days, camera, check, chevron-down,
+chevron-up, chevrons-up-down, circle-alert, circle-fading-arrow-up, circle-question-mark, circle,
+clipboard, clock, cloud, cloudy, code, columns-2, command, compass, cookie, copy, corner-down-left,
 credit-card, database, download, dumbbell, egg, eighth-note, ellipsis, external-link, eye, file,
 flag, flame, fold-vertical, folder-open, folder-plus, folder, gallery-vertical-end, gamepad-2, gift,
 glasses, globe, grid-2x2, grip, hand, heart, image, inbox, info, key-round, keyboard, layers, leaf,
@@ -58,11 +58,11 @@ lose their fill; folder-ellipsis is folder with three dots of ours in it.
   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-  archive, arrow-down, arrow-left, arrow-right, arrow-up, check, chevron-down, chevron-up, circle,
-  clipboard, clock, code, command, compass, corner-down-left, database, download, external-link,
-  folder-plus, globe, link, lock, maximize, minus, moon, panel-left, pencil, plus, printer,
-  rotate-cw, save, search, share, square, terminal, trash, triangle, type, user, volume-2, volume-x,
-  x, zoom-in and zoom-out are derived from Feather:
+  archive, arrow-down, arrow-left, arrow-right, arrow-up-right, arrow-up, check, chevron-down,
+  chevron-up, circle, clipboard, clock, code, command, compass, corner-down-left, database,
+  download, external-link, folder-plus, globe, link, lock, maximize, minus, moon, panel-left,
+  pencil, plus, printer, rotate-cw, save, search, share, square, terminal, trash, triangle, type,
+  user, volume-2, volume-x, x, zoom-in and zoom-out are derived from Feather:
 
   The MIT License (MIT)
 

@@ -7,7 +7,7 @@ use std::{
 };
 
 use gpui::{
-    Action, App, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
+    Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
     WeakEntity, actions, point,
 };
 
@@ -125,6 +125,11 @@ pub enum Command {
     CapturePortion,
     /// Captures all of the selected tab's page, beyond its view, and copies it.
     CaptureFullPage,
+    /// Opens Portrait Mode's card for the page the URL field shows, or closes it (portrait.rs).
+    CapturePortrait,
+    /// Portrait Mode on the background kept, without the card, as ⌥ on Site Controls' Capture
+    /// Full Page runs it. Not in the command bar, which has the card.
+    CapturePortraitNow,
     FindNext,
     FindPrevious,
     /// Scrolls the page to its selection.
@@ -622,6 +627,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "Capture Full Page",
         Command::CaptureFullPage,
         &["screenshot"],
+    ),
+    (
+        "Capture in Portrait Mode",
+        Command::CapturePortrait,
+        &["screenshot", "share"],
     ),
     ("Save Page As", Command::SavePage, &[]),
     ("Print", Command::Print, &["pdf"]),
@@ -1190,6 +1200,8 @@ impl Command {
             Command::Cast => "cast",
             Command::CapturePortion => "capture",
             Command::CaptureFullPage => "capture-full-page",
+            Command::CapturePortrait => "capture-portrait",
+            Command::CapturePortraitNow => "capture-portrait-now",
             Command::FindNext => "find-next",
             Command::FindPrevious => "find-previous",
             Command::JumpToSelection => "jump-to-selection",
@@ -1788,6 +1800,8 @@ impl Shell {
             Command::Cast => return self.cast(cx),
             Command::CapturePortion => return self.capture(false, cx),
             Command::CaptureFullPage => return self.capture(true, cx),
+            Command::CapturePortrait => return self.capture_in_portrait_mode(cx),
+            Command::CapturePortraitNow => return self.capture_portrait_now(cx),
             Command::FindNext => return self.browser.find_next(self.selected, true, cx),
             Command::FindPrevious => return self.browser.find_next(self.selected, false, cx),
             Command::JumpToSelection => return self.browser.jump_to_selection(self.selected, cx),
@@ -2100,21 +2114,30 @@ impl Shell {
         press: Option<Point<Pixels>>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.selected == 0 {
-            return false;
-        }
-        let (frame, radius) = self.page_frame(self.viewport);
-        let panes = self.panes(self.selected);
-        let index = panes.iter().position(|&pane| pane == tab);
-        let Some(index) = index.or((tab == self.selected).then_some(0)) else {
+        let Some((pane, radius)) = self.pane_frame(tab) else {
             return false;
         };
-        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[index];
         let (look, library) = (self.menu_look(), !self.private);
         self.browser
             .capture(tab, pane, radius, full_page, press, library, look, cx);
         true
+    }
+
+    /// Where `tab`'s page is in the window, a pane of the tab shown, and its corners' radius; none
+    /// if it isn't shown here.
+    pub(super) fn pane_frame(&self, tab: u64) -> Option<(Bounds<Pixels>, f32)> {
+        if self.selected == 0 {
+            return None;
+        }
+        let (frame, radius) = self.page_frame(self.viewport);
+        let panes = self.panes(self.selected);
+        let index = panes.iter().position(|&pane| pane == tab);
+        let index = index.or((tab == self.selected).then_some(0))?;
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        Some((
+            pane_frames(frame, panes.len(), stacked, &shares)[index],
+            radius,
+        ))
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page

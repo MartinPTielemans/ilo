@@ -1094,7 +1094,9 @@ impl SiteControls {
         self.host.run(run, tab, cx);
     }
 
-    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, cx: &mut Context<Self>) {
+    /// Runs `tile`. ⌥ on Capture Full Page captures in Portrait Mode on the background kept, as
+    /// Arc's ⌥-click on its Portrait Mode skips the panel.
+    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, alt: bool, cx: &mut Context<Self>) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
@@ -1102,6 +1104,9 @@ impl SiteControls {
         let run = match tile.run {
             TileRun::Share => Run::Share(open.in_window(frame)),
             TileRun::Command(Command::NewBoost) if boosted => Run::Command(Command::EditBoost),
+            TileRun::Command(Command::CaptureFullPage) if alt => {
+                Run::Command(Command::CapturePortraitNow)
+            }
             TileRun::Command(command) => Run::Command(command),
         };
         self.run(tile.name, run, cx);
@@ -1553,7 +1558,7 @@ impl SiteControls {
         match stop {
             Stop::Tile(name) => {
                 if let Some(&tile) = TILES.iter().find(|tile| tile.name == name) {
-                    self.run_tile(tile, frame, cx);
+                    self.run_tile(tile, frame, false, cx);
                 }
             }
             Stop::Extension(id) => {
@@ -1657,7 +1662,9 @@ impl SiteControls {
             .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip(tile.label.into(), frame, *hovered, cx)
             }))
-            .on_click(cx.listener(move |panel, _, _, cx| panel.run_tile(tile, frame, cx)))
+            .on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
+                panel.run_tile(tile, frame, event.modifiers().alt, cx)
+            }))
             .child(
                 div()
                     .id("state")

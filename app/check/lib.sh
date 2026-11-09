@@ -64,8 +64,15 @@ cleanup() {
   [ -z "${helper:-}" ] || kill "$helper" 2>/dev/null || true
   [ -z "${ilo_server:-}" ] || kill "$ilo_server" 2>/dev/null || true
   [ -z "${tls:-}" ] || kill "$tls" 2>/dev/null || true
-  # The other copies of the app a run started, as sync-devices' devices.
-  [ -z "${others:-}" ] || kill $others 2>/dev/null || true
+  # The other copies of the app a run started, as sync-devices' devices: on Windows by taskkill, as
+  # the app is below, since Git Bash's kill leaves a crash report from each (#1017).
+  if [ -n "${others:-}" ] && windows; then
+    for other in $others; do
+      taskkill //F //T //PID "$(cat "/proc/$other/winpid" 2>/dev/null)" > /dev/null 2>&1 || true
+    done
+  elif [ -n "${others:-}" ]; then
+    kill $others 2>/dev/null || true
+  fi
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
   # A run's own way back, named in run_undo, such as policies' taking its policies off the system.

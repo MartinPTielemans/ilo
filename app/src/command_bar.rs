@@ -378,6 +378,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
+        Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
         Command::Print => "icons/printer.svg",
         Command::ViewSource => "icons/code.svg",

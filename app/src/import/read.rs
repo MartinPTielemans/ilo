@@ -153,6 +153,7 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
         keep_arc(&mut sidebar, picked);
         found.spaces = sidebar.spaces;
         found.link_rules = sidebar.link_rules;
+        found.link_otherwise = sidebar.link_otherwise;
         if wants(Kind::Favorites) {
             found.favorites = sidebar.favorites;
         }
@@ -267,6 +268,7 @@ fn keep_arc(found: &mut Found, picked: &[Kind]) {
     }
     if !spaces {
         found.link_rules.clear();
+        found.link_otherwise = None;
         found.spaces.retain(|space| !space.today.is_empty());
     }
 }
@@ -307,7 +309,7 @@ pub fn tally(found: &Found, source: &Source) -> Tally {
         }
     }
     let mut tally = Tally {
-        link_rules: found.link_rules.len(),
+        link_rules: found.link_rules.len() + usize::from(found.link_otherwise.is_some()),
         favorites: found.favorites.iter().map(|(_, tabs)| tabs.len()).sum(),
         pages: found.history.iter().map(|(_, pages)| pages.len()).sum(),
         addresses: found.addresses.iter().map(|(_, each)| each.len()).sum(),
