@@ -1203,6 +1203,14 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
             let (x, y) = in_driven_point(&mut words)?;
             motion(x, y)
         })(),
+        // sway's pointer is the display's, so X11's warp is move here, and with no point it stays.
+        "warp" => (|| {
+            let mut words = words.peekable();
+            words.peek()?;
+            let (x, y) = in_driven_point(&mut words)?;
+            motion(x, y)
+        })()
+        .or(Some(())),
         // A page, Chromium's, scrolls a notch of the wheel an event, down for content moving up, as
         // drive.rs's does. GPUI's windows scroll by the points asked, as the Mac's trackpad events
         // do, with two fingers on the touchpad, where a notch moves three lines.

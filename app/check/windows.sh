@@ -545,11 +545,16 @@ send window 1
 
 # Linux's desktop file's New window and New incognito window launch ilo again with Chrome's
 # --new-window and --incognito, as Windows' jump list does: the running browser opens a window as
-# ⌘N or ⇧⌘N would, from the regular window in front (#669).
-if [ "$(uname)" = Linux ]; then
+# ⌘N or ⇧⌘N would, from the regular window in front (#669). The driver can't open Explorer's jump
+# list, so on Windows the run makes the launches its tasks make, once ilo has set it, on an engine
+# built with core/main_delegate.cc as it is here.
+if windows && engine_has ../core/main_delegate.cc; then
+  await '^browser: jump list set$' || fail "ilo didn't set the jump list's New window and New incognito window"
+fi
+if [ "$(uname)" = Linux ] || { windows && engine_has ../core/main_delegate.cc; }; then
   for launch in "--new-window window new-window 0" "--incognito private\ window new-private-window 1"; do
     eval "set -- $launch"
-    "$browser" "$1" >> "$out/new-window-launch.log" 2>&1 ||
+    ("$browser" "$1" < /dev/null) >> "$out/new-window-launch.log" 2>&1 ||
       fail "the second launch with $1 failed: $(tail -1 "$out/new-window-launch.log")"
     expect_late "^browser: launched again for a new window, private $4\$" \
       "the running browser didn't hear the launch with $1 ask for a window"
@@ -567,7 +572,7 @@ if [ "$(uname)" = Linux ]; then
     send window 1
   done
 else
-  echo "skip: a launch asking for a new window: the Mac's Dock has the items, and Windows' jump list waits for the header batch's engine."
+  echo "skip: a launch asking for a new window: the Mac's Dock has the items, which little checks, and on Windows the engine isn't built with this core/main_delegate.cc."
 fi
 
 # ⌘N from a window full screen of its own opens one that goes full screen too, then opens its command

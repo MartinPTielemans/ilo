@@ -474,8 +474,10 @@ impl Shell {
     }
 
     /// The pointer let go of a tab over the page: over a target, it joins the page shown in a split
-    /// view on that side and shows there, and anywhere else it goes back to its row. Returns
-    /// whether it was over the page.
+    /// view on that side and shows there, and anywhere else it opens in a window of its own, as big
+    /// as this one and centred on the pointer, where the picture of a window was (Dia). A private or
+    /// Little ilo window's tab, which no other window takes, goes back to its row. Returns whether
+    /// it was over the page.
     pub(super) fn drop_over_page(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = &self.drag else {
             return false;
@@ -484,14 +486,24 @@ impl Shell {
             return false;
         };
         let (tab, with, edge, back) = (drag.tab, over.with, over.edge(), over.back());
+        let pointer = point(f32::from(over.pointer.x), f32::from(over.pointer.y));
         let alone = self.panes(with).len() == 1;
+        let own = self.private || self.little.is_some();
         // The release that ends the drag isn't a click.
         self.dragged = true;
         self.settle_drag(cx);
         match edge {
             // A page alone has every target, and the top and bottom ones stack its new split.
             Some(edge) => self.join_split(tab, with, edge.first(), alone && edge.stacked(), cx),
-            None => self.show_back(back, cx),
+            None if own => self.show_back(back, cx),
+            None => {
+                let at = self.browser.screen_point(pointer);
+                let size = self.viewport;
+                let middle = point(f32::from(size.width) / 2., f32::from(size.height) / 2.);
+                // check.sh waits for this line.
+                log!("browser: tab {tab} let go off the targets");
+                self.browser.tab_to_new_window(tab, at, middle, cx);
+            }
         }
         cx.notify();
         true
@@ -1018,8 +1030,9 @@ mod tests {
 
     /// A tab its press showed in place of the page alone, dragged out over the page: the page it
     /// would join shows under the targets, whether or not the core has shown the tab yet, and the
-    /// tab shows again once they go, back over the sidebar or let go off them. Let go on one, it
-    /// joins the page shown under them (#1467).
+    /// tab shows again once they go back over the sidebar. Let go on one, it joins the page shown
+    /// under them (#1467); let go off them, it opens in a window of its own centred on the pointer,
+    /// and the page under the targets stays.
     #[gpui::test]
     fn the_page_under_the_targets_is_the_one_the_tab_joins(cx: &mut TestAppContext) {
         let (shell, host, card) = shown_alone(cx);
@@ -1066,9 +1079,11 @@ mod tests {
             "the press's switch under way showed the tab"
         );
         shell.update(cx, |shell, cx| shell.drop_row(cx));
+        // The recorder's window is at 100, 50 on the screen, and 1200 by 800.
+        let (x, y) = (f32::from(middle.x) + 100., f32::from(middle.y) + 50.);
         assert_eq!(
             host.take(),
-            ["select 12", "focus page"],
+            [format!("new window for 12 at {x} {y}, held at 600 400")],
             "let go off the targets"
         );
         assert!(host.take_edits().is_empty());
@@ -1082,6 +1097,20 @@ mod tests {
             ["select 11", "focus page"],
             "escape over the targets"
         );
+    }
+
+    /// In a private window, whose tabs no other window takes, a tab let go off the targets goes
+    /// back to its row.
+    #[gpui::test]
+    fn a_private_windows_tab_let_go_off_the_targets_stays(cx: &mut TestAppContext) {
+        let (shell, host, card) = shown_alone(cx);
+        shell.update(cx, |shell, _| shell.private = true);
+        press_to_drag(&shell, cx, 11, true);
+        let middle = card.center();
+        drag_to(&shell, cx, f32::from(middle.x), f32::from(middle.y));
+        host.take();
+        shell.update(cx, |shell, cx| shell.drop_row(cx));
+        assert_eq!(host.take(), ["select 11", "focus page"]);
     }
 
     /// A tab dragged over the page draws the pages at Arc's 0.92 of their size about the card's
