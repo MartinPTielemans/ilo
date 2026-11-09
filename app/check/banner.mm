@@ -210,6 +210,19 @@ int main(int argc, const char* argv[]) {
           printf("pressed %s with %s: %s\n", AllText(found, 0).UTF8String,
                  [action componentsSeparatedByString:@"\n"][0].UTF8String,
                  error ? [@(error) stringValue].UTF8String : "done");
+          // What else it offers, by name: in the list, a press can open it or only expand it.
+          NSMutableArray* offers = [NSMutableArray array];
+          for (NSString* each in Actions(found)) {
+            [offers addObject:[each componentsSeparatedByString:@"\n"][0]];
+          }
+          printf("banner: %s %s offers %s\n", listed ? "in the list," : "on screen,",
+                 Attribute(found, kAXRoleAttribute).UTF8String ?: "?",
+                 [offers componentsJoinedByString:@", "].UTF8String);
+          if (listed) {
+            usleep(1000000);
+            printf("banner: a second on, the list %s it\n",
+                   Find(center, text, 0) ? "still holds" : "no longer holds");
+          }
           return error ? 1 : 0;
         }
       }
