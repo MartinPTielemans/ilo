@@ -752,7 +752,7 @@ cat > "$crx/source/manifest.json" << 'EOF'
 EOF
 [ "$(pack_crx)" = "$installed" ] || fail "the second version's .crx isn't the same extension"
 send click $page_point
-send key x
+send key y
 expect '^browser: dialog shown .*"Check Install"' "the second version didn't ask with the browser's dialog"
 grep "^browser: extension question $installed asks " "$log" | tail -1 | grep -q 'example.com' ||
   fail "the second version's question didn't list its new site: $(grep 'extension question' "$log" | tail -1)"
