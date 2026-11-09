@@ -31,6 +31,18 @@ glyph = 14.0
 # The menu keeps this far inside the page, where what's chosen reaches its edge (ours).
 margin = 8.0
 
+[capture.portrait]
+# Portrait Mode's picture (#673), ours, as Arc's sizes weren't recorded: the page at its window's
+# corners, this far inside the picture's edge, over a shadow this far down, this soft and this dark.
+margin = 56.0
+shadow-y = 12.0
+shadow-blur = 40.0
+shadow = 0.3
+# The card's backgrounds, in rows: each a swatch this big, ringed in the accent when it's chosen.
+swatch = 18.0
+swatch-gap = 6.0
+swatch-ring = 2.0
+
 [capture.markup]
 # Edit's marks on what's chosen (#673), ours, as Arc's markup wasn't recorded: a stroke this wide
 # with round ends, an arrow's head this long each side, and the colours offered, first chosen.

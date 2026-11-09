@@ -102,6 +102,7 @@ mod page_motion;
 mod pair;
 mod panes;
 mod permission;
+mod portrait;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -180,6 +181,7 @@ use panes::pane_frames;
 pub use permission::{Answer, Question};
 pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
+pub use portrait::PortraitBackground;
 use recent_downloads::RecentDownloads;
 pub use recent_downloads::{FilePreview, HOVER_ALL};
 pub use rows::LoneSpaceHeader;
@@ -1729,6 +1731,11 @@ pub struct Shell {
     translate_card: Option<u64>,
     translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
+    /// card and its swatches were drawn last (portrait.rs).
+    portrait_card: Option<(u64, crate::capture::portrait::Background)>,
+    portrait_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    portrait_swatches_drawn: [Rc<Cell<Option<Bounds<Pixels>>>>; portrait::SWATCHES],
     /// Chrome's Battery Saver, on at the battery's percent, or off (battery.rs).
     battery_saver: Option<i32>,
     /// Where its leaf was drawn last, which the log says when it changes.
@@ -2073,6 +2080,9 @@ impl Shell {
             translations: HashMap::new(),
             translate_card: None,
             translate_card_drawn: Rc::default(),
+            portrait_card: None,
+            portrait_card_drawn: Rc::default(),
+            portrait_swatches_drawn: Default::default(),
             translate_mark_drawn: Rc::default(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
@@ -4526,6 +4536,7 @@ impl Shell {
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
                     .children(self.translate_card(cx))
+                    .children(self.portrait_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))

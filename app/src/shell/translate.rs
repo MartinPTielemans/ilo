@@ -66,7 +66,9 @@ pub(super) fn bind(cx: &mut gpui::App) {
         let shell = super::commands::key_shell(cx);
         let closed = shell.and_then(|shell| {
             shell
-                .update(cx, |shell, cx| shell.close_translate_card(cx))
+                .update(cx, |shell, cx| {
+                    shell.close_translate_card(cx) || shell.close_portrait_card(cx)
+                })
                 .ok()
         });
         if !closed.unwrap_or(false) {

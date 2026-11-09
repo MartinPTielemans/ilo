@@ -334,7 +334,10 @@ expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (
 send choose "$(cased 'In Each Space')"
 expect "^browser: favorites scope In Each Space\$" "choosing In Each Space in Settings didn't set it"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "switch haptics")
+  # Under the card's edge where the screen is short, below Battery Saver's row: in_sight scrolls
+  # it up.
+  in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
+  send clickkey $at
   expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
 fi
 send key w cmd
@@ -730,7 +733,8 @@ expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces, 
 send choose "$(cased "In Each Profile's Spaces")"
 expect "^browser: favorites scope In Each Profile's Spaces\$" "choosing Each Profile's Spaces didn't set it"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "switch haptics")
+  in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
+  send clickkey $at
   expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
 fi
 # The driver's done for a click that closes its window can be lost with the window, as it always
