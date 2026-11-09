@@ -1340,6 +1340,7 @@ Each motion Arc has, with where its measure is, or the take that records it. "On
 | Spaces | The pull past the last Space, and the Create a Space form | Motion › New Space pull, Space form leave | done |
 | Spaces | Past the first Space, the Library | Motion › Library recede | done |
 | Spaces | ⌘Z bringing a deleted Space back | — (ours: the switch's slide) | 2 |
+| Spaces | A Space dragged along the switcher, and a Library card by its handle | — (ours: Row motion) | 2 |
 | Spaces | Renaming a Space, and picking its colour, icon and profile | — | 2 |
 | Command bar | ⌘T open and Esc | one frame | done |
 | Command bar | The first suggestions as a character is typed | 33–42 ms, one frame | done |
@@ -1365,18 +1366,18 @@ Each motion Arc has, with where its measure is, or the take that records it. "On
 
 **The takes**
 
-1. **Sidebar motion.** Record each sidebar motion above. Screenshot the sidebar at its narrowest and widest, and a row held pressed.
-2. **Spaces.** Make a second Space in another colour. Record ⌃1 and ⌃2 and clicks on the switcher, both ways; that Space deleted, then ⌘Z; a Space renamed, then its colour, icon and profile picked. Screenshot the switcher with 2 and 5 Spaces (5 don't fit at Arc's pitch), with an icon and without, and the menu the footer's + opens. Answer: do the favorites follow the Space or the profile? (Ours is a setting meanwhile; the default is the profile.)
+1. **Sidebar motion.** Record each sidebar motion above. Screenshot the sidebar at its narrowest and widest, a row held pressed, and the tooltip of each header and footer button.
+2. **Spaces.** Make a second Space in another colour. Record ⌃1 and ⌃2 and clicks on the switcher, both ways; that Space deleted, then ⌘Z; a Space renamed, then its colour, icon and profile picked; the second Space's dot dragged first and back, and the same with its Library card. Screenshot the switcher with 2 and 5 Spaces (5 don't fit at Arc's pitch), with an icon and without, and the menu the footer's + opens. Answer: do the favorites follow the Space or the profile? (Ours is a setting meanwhile; the default is the profile.)
 3. **Command bar.** Record the two command bar motions above. Screenshot the command list with nothing typed and with a few letters, and ⌘T over a page. Answer: does the row under the pointer light up while the keyboard selection is on another?
 4. **Split view.** Record each split motion above. Screenshot 3 and 4 panes, side by side and stacked, and an unfocused pane. Answer: how many panes at most?
 5. **Library.** Record the archive's Filter, a row's hover and its menu. Screenshot each.
-6. **Toasts and pop-ups.** Record ⇧⌘C, ⌘+ then ⌘0, and ⌘W on a Today tab.
+6. **Toasts and pop-ups.** Record ⇧⌘C, ⌘+ then ⌘0, and ⌘W on a Today tab. With the sidebar hidden, open one tab, then two at once, and screenshot each toast.
 7. **Downloads.** Record a download from a local test page, to its end. Screenshot the footer after it, and the Downloads list.
-8. **Peek and Little Arc.** Record Peek from a favorite's link: opened, closed, opened and expanded. Record Little Arc from a link the session hands Arc: ⌘O, then a second link and ⌘W. Screenshot Peek at rest. Screenshot Settings › Links with an Air Traffic Control rule being made, each of its menus open, then hand Arc a link the rule matches and one it doesn't, and record where each lands. Little Arc opens on the main display, the external monitor.
+8. **Peek and Little Arc.** Record Peek from a favorite's link: opened, closed, opened and expanded. Record Little Arc from a link the session hands Arc: ⌘O, then a second link and ⌘W. Screenshot Peek and Little Arc at rest, Little Arc in light and dark. Screenshot Settings › Links with an Air Traffic Control rule being made, each of its menus open, then hand Arc a link the rule matches and one it doesn't, and record where each lands. Little Arc opens on the main display, the external monitor.
 9. **Window.** Record ⌘N, full screen in and out, and closing a window with tabs.
 10. **Profiles, extensions, passwords.** Record a profile made for a new Space (the sitting's first step). Screenshot profile settings and an incognito window. Install a throwaway Web Store extension and screenshot its install prompt, its pinned icon, Site Controls and its removal; record its popup opening and closing. On a local fake login, record Arc's offer to save the password, and click Never.
 11. **Still images.** Screenshot:
-    - the right-click menu of a pinned tab, and Settings' Archive Today tabs after and Share favorites menus open;
+    - the right-click menu of a pinned tab and of three Today tabs chosen with ⌘-click, and Settings' Archive Today tabs after and Share favorites menus open;
     - a tab playing audio, and one with a long title;
     - a pinned tab a link took away from its URL, at rest and hovered, and record what takes it back;
     - favorites, 2, 5 and 8 of them, at the default width, 8 at the narrowest and widest, and selected with colourful, one-colour and white icons.
