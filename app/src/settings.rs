@@ -251,6 +251,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Share", Keys::Of(Command::Share)),
             ("Capture", Keys::Of(Command::CapturePortion)),
             ("Capture Full Page", Keys::Of(Command::CaptureFullPage)),
+            (
+                "Capture in Portrait Mode",
+                Keys::Of(Command::CapturePortrait),
+            ),
             ("Save Page As", Keys::Of(Command::SavePage)),
             ("Print", Keys::Of(Command::Print)),
             (
@@ -4859,6 +4863,25 @@ pub fn read_lone_header(cx: &mut App) {
 pub fn save_lone_header(kept: bool) {
     if let Err(error) = std::fs::write(lone_header_path(), if kept { "shown" } else { "hidden" }) {
         log!("couldn't save the space header: {error}");
+    }
+}
+
+/// Where Portrait Mode's background is kept, beside View › Appearance's choice.
+fn portrait_background_path() -> String {
+    format!("{}/Portrait Background", crate::profile_dir())
+}
+
+/// Reads the background Portrait Mode last captured on, if it's kept.
+pub fn read_portrait_background(cx: &mut App) {
+    let text = std::fs::read_to_string(portrait_background_path()).unwrap_or_default();
+    if let Some(background) = crate::capture::portrait::Background::parse(&text) {
+        cx.set_global(shell::PortraitBackground(background));
+    }
+}
+
+pub fn save_portrait_background(background: crate::capture::portrait::Background) {
+    if let Err(error) = std::fs::write(portrait_background_path(), background.name()) {
+        log!("couldn't save portrait mode's background: {error}");
     }
 }
 

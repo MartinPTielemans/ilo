@@ -124,6 +124,7 @@ pub(crate) fn menus(
                 item("Share…", Command::Share),
                 item("Capture…", Command::CapturePortion),
                 item("Capture Full Page", Command::CaptureFullPage),
+                item("Capture in Portrait Mode", Command::CapturePortrait),
                 item("Save Page As", Command::SavePage),
                 item("Print", Command::Print),
             ])

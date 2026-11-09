@@ -478,6 +478,11 @@ size_t host_paste(char* text, size_t capacity) {
 
 void host_copy_png(const uint8_t* png, size_t size) {}
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
+
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {}
 
 // No system share menu on Linux: capture copies instead, and says so (capture.rs).

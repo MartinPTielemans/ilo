@@ -469,7 +469,7 @@ fn knob_x(intensity: f32) -> f32 {
 /// The intensity for the knob's middle at `x` in the card.
 /// What an assistive app calls the swatch of `color`: its hue's name, or for one with little
 /// colour, how light it is, a bluish grey being slate.
-fn swatch_name(color: u32) -> &'static str {
+pub(crate) fn swatch_name(color: u32) -> &'static str {
     let [r, g, b] = [16, 8, 0].map(|shift| ((color >> shift) & 0xff) as f32 / 255.);
     let (max, min) = (r.max(g).max(b), r.min(g).min(b));
     let chroma = max - min;
