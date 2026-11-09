@@ -170,8 +170,9 @@ expect "^browser: page $c share instead 1\$" "the other tab wasn't offered to sh
 # Chrome shows the tab a page starts sharing, unless the page asks it not to, once, up to a second
 # later, and whichever tab is shared by then. So it does before the share moves, or it shows the
 # other tab under the call's "e" (#1166). It does only while the window sharing is the active one,
-# so the Mac's window losing the keyboard as the share starts, as to the window macOS shows for a
-# moment after a capture (#968), leaves the tab where it is, as Chrome does (#2148).
+# as the page has the share, which on the Mac its dialog for what to share, gone at once under the
+# check's choice, takes the keyboard from until it's closed: a window that has it back only once
+# the page has the share keeps the tab where it is, as Chrome's would (#2148).
 shared_at=$step
 for _ in $(seq 100); do
   logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at" && break
@@ -179,9 +180,16 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 if ! logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at"; then
-  logged '^browser: window resigned key$' "$shared_at" || fail "Chrome didn't show the tab shared"
-  echo "skip: Chrome showing the tab shared: the window lost the keyboard as the share started" \
-    "(#968), and Chrome shows it only while its window has it."
+  # The window's keyboard and the page's share, in the order they came.
+  order=$(sed -n "/^browser: drive $shared_at: /,\$p" "$log" |
+    grep -E "^browser: (window (resigned|became) key|title $a sharing)\$" | tr '\n' ';')
+  case "$order" in
+    *"title $a sharing;"*"window became key;"*|*"window resigned key;browser: title $a sharing;")
+      echo "skip: Chrome showing the tab shared: the window had the keyboard back from the" \
+        "share's dialog only after the page had the share, so Chrome found it inactive (#2148):" \
+        "$order" ;;
+    *) fail "Chrome didn't show the tab shared: $order" ;;
+  esac
 fi
 ../tools/window-screenshot.sh "$pid" "$out/media-sharing.png" || fail "no window to capture"
 
