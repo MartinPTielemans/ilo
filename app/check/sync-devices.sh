@@ -45,26 +45,9 @@ new_space() {
   send type "$1"
   send key return
 }
-# What the clipboard holds, the X server's or Windows': its text, or with formats the formats it
-# holds.
-clipboard() {
-  if windows; then
-    python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true
-  else
-    timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true
-  fi
-}
 # The format that marks what clipboard managers are to skip (#641).
 hint=x-kde-passwordManagerHint
 ! windows || hint=ExcludeClipboardContentFromMonitorProcessing
-# The device's first browser window in front with the keyboard, as a click on it gives it. On
-# Windows the driver's window activates a window within its own copy alone, so the copy's window
-# takes the foreground from the others' too.
-forward() {
-  send window 1
-  ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
-    fail "$on's window couldn't take the foreground"
-}
 others=
 
 # A's list ends with none once B removes the login A saves, so A starts with none: the check's

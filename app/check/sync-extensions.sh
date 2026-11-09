@@ -4,15 +4,17 @@
 # sync's Settings and Extensions on, and turns Little ilo off. B recovers with A's words and takes
 # both by itself: Little ilo's setting, and the extension, which it installs from the store. B
 # turns Settings off, and the core takes it. It needs the network and Google's store, so it runs
-# only when named: ./check.sh sync-extensions. Linux's under Xvfb alone so far, as sync-devices.
+# only when named: ./check.sh sync-extensions. On Linux under Xvfb, on Windows, where each copy's
+# window takes the foreground from the other's as the run drives it, as sync-devices' do, and on the
+# Mac, where each copy activates itself as it starts.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-extensions. It needs ILO_SERVER, an ilo-server built from its repo," \
     "to sign in to."
   return 0
 fi
-if [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
-  echo "skip: sync-extensions. It runs under Xvfb on Linux so far," \
+if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
+  echo "skip: sync-extensions. On Linux it runs under Xvfb so far," \
     "where xdotool and xclip reach it."
   return 0
 fi
@@ -48,7 +50,7 @@ settings_keyboard
 send clickkey $(drawn "sync copy")
 words=
 for _ in $(seq 30); do
-  words=$(timeout 5 xclip -selection clipboard -o 2>/dev/null || true)
+  words=$(clipboard)
   [ "$(echo "$words" | wc -w)" = 24 ] && break
   sleep 0.1
 done
@@ -64,6 +66,7 @@ send clickkey $(drawn "switch little windows")
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off on A"
 
 start b "$PWD/$out/sync-extensions-b" 6
+! windows || forward
 listed && fail "B had the store's extension before it signed in"
 open_sign_in
 sign_in
@@ -108,7 +111,9 @@ done
 
 device b
 exec 3>&-
-kill -INT "$pid"
+# On the Mac quit_app asks by the app's bundle id, which A's copy shares, so B takes SIGINT there,
+# as on Linux.
+if windows; then quit_app; else kill -INT "$pid"; fi
 wait "$pid" || fail "B exited with status $?"
 exec 6>&-
 others=
