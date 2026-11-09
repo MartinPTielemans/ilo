@@ -103,17 +103,14 @@ check_ungoogled() {
 # a later run on a kept tree takes out, newest first, the patches from the first one that changed
 # or left the series, and applies the series again from there. A patch already in the tree is
 # skipped, so this is safe to run again; one that neither applies cleanly nor is in the tree has
-# drifted from it. Takes the tree's path, then "mac" for the Mac's tree: the series' mac/ section is
-# the Mac's alone, and every other tree leaves it out. In the Mac's bash 3.2, which has no mapfile
-# and calls an empty array unbound.
+# drifted from it. Takes the tree's path, then "mac" for the Mac's tree (series_for). In the Mac's
+# bash 3.2, which has no mapfile and calls an empty array unbound.
 apply_series() {
-  local src=$1 platform=${2:-} kept=$1/.browser_core-series name patch first=0 i
+  local src=$1 platform=${2:-} kept=$1/.browser_core-series name patch first=0 i list
   local -a names=() applied=()
   ln -sfn "$(dirname "$engine")/core" "$src/browser_core"
-  while read -r name; do
-    [ "${name%%/*}" != mac ] || [ "$platform" = mac ] || continue
-    names+=("$name")
-  done < <(grep -v -e '^#' -e '^$' "$engine/series")
+  list=$(series_for "$(sed -n 's/^MAJOR=//p' "$src/chrome/VERSION")" "$platform") || exit 1
+  while read -r name; do [ -z "$name" ] || names+=("$name"); done <<<"$list"
   if [ -f "$kept/series" ]; then
     while read -r name; do applied+=("$name"); done <"$kept/series"
   elif ! series_fits "$src" "${names[@]}"; then
@@ -146,6 +143,24 @@ apply_series() {
     cp "$patch" "$kept/$name"
     echo "$name" >>"$kept/series"
   done
+}
+
+# The series' patches for a tree on a Chromium major, in order. The mac/ section is the Mac's alone,
+# for "mac". A line ending in "<N" or ">=N" is for a tree before Chromium N, or from it: the two
+# versions of a patch whose context differs across a major, while the platforms' pins straddle it.
+series_for() {
+  local major=$1 platform=${2:-} name when
+  [ -n "$major" ] || { echo "series: no Chromium major for the tree" >&2 && return 1; }
+  while read -r name when; do
+    [ "${name%%/*}" != mac ] || [ "$platform" = mac ] || continue
+    case $when in
+      '') ;;
+      '<'*) [ "$major" -lt "${when#<}" ] || continue ;;
+      '>='*) [ "$major" -ge "${when#>=}" ] || continue ;;
+      *) echo "series: $name ends in $when, which is neither <N nor >=N" >&2 && return 1 ;;
+    esac
+    echo "$name"
+  done < <(grep -v -e '^#' -e '^$' "$engine/series")
 }
 
 # Whether each of the series, in order, applies to the tree or is in it already, tried on a copy

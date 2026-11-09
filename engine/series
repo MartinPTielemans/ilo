@@ -1,5 +1,6 @@
 # Applied in order after ungoogled-chromium's own series. One patch per line, relative to engine/patches/.
 # Sections: upstream/ (Chromium backports), helium/ (picks), ardia/ (picks), ours/, mac/ (the Mac's alone).
+# A line ending in <N or >=N is for trees before Chromium N, or from it (series_for in tree.sh).
 upstream/chromium-xkb-no-state-guard.patch
 upstream/chromium-rust-std-prebuilt-libs.patch
 ardia/chromium-component-updater-security-only.patch
@@ -67,7 +68,8 @@ ours/chromium-core-page-bubbles.patch
 ours/chromium-core-notification-click.patch
 ours/chromium-battery-saver-sampled-power.patch
 ours/chromium-policy-windows-key.patch
-ours/chromium-core-clear-history-element.patch
+ours/chromium-core-clear-history-element.patch <157
+ours/chromium-core-clear-history-element-157.patch >=157
 ours/chromium-freezing-measure-on-battery-saver.patch
 ours/chromium-no-page-resource-monitor.patch
 ours/chromium-private-downloads-save.patch
