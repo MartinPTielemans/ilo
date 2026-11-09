@@ -40,7 +40,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 use xkbcommon::xkb;
 
-use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, settings_window};
+use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, reveal_window, settings_window};
 
 /// The modifiers, as drive.rs's X states hold them, which are the xkb masks of the keymap the
 /// driver's keyboard has.
@@ -520,7 +520,8 @@ fn focused_settings(nodes: &[Node]) -> Option<Node> {
 fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pixels>)> {
     let (ui_view, bounds) = (overlays::placed(view))
         .or_else(|| panels::placed(view))
-        .or_else(|| floats::placed(view))?;
+        .or_else(|| floats::placed(view))
+        .or_else(|| reveal_window::placed(view))?;
     let id = WINDOWS
         .with_borrow(|windows| windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id))?;
     Some((id, bounds))
