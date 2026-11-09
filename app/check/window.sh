@@ -390,8 +390,18 @@ await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
 send resize 1200 700
 expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
 ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+# Under Wayland the UI lays out the new size before the window shows a frame at it, and until it
+# does, sway's own grey, 63 63 63, fills the rest of the width sway gave it, so it's captured again.
+captures=1
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  while [ "$(pixel "$out/resize-gap.png" 0.97 0.5)" = "63 63 63" ] && [ $captures -lt 100 ]; do
+    ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+    captures=$((captures + 1))
+  done
+fi
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
 set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
+[ "$captures" = 1 ] || set -- "$@" "in capture $captures"
 if [ "$1" -ge 170 ] && [ "$2" -ge 50 ] && [ "$2" -le 130 ] && [ "$3" -le 60 ]; then
   gap="the space gap.html hadn't drawn yet showed its orange, $*"
 elif [ "$3" -ge 170 ] && [ "$1" -le 60 ]; then
