@@ -19,7 +19,9 @@ message SpaceEntity {
     TODAY = 3;
   }
 
-  // Its node's id, a lowercase UUID, which is also its client tag.
+  // Its node's id, a lowercase UUID, which is also its client tag. A Today tab's has "today:"
+  // before it, so ilo 0.1.13 and older, which take TODAY for SPACE, drop it rather than making a
+  // Space of it.
   optional string id = 1;
   optional Kind kind = 2;
   // A pinned tab's, folder's or Today tab's Space's id.

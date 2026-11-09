@@ -14,6 +14,7 @@
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -69,6 +70,22 @@ std::string Key(const base::Uuid& id) {
   return id.AsLowercaseString();
 }
 
+// Before a Today tab's node id in its entity's id and client tag. ilo 0.1.13 and older take a kind
+// they don't know for SPACE, proto2's default, so they'd make a Space of each Today tab and write
+// it back as one over every device's copy. Their Parse takes only a bare lowercase UUID, so they
+// drop these instead (#2108).
+constexpr char kTodayPrefix[] = "today:";
+
+std::string TodayKey(const base::Uuid& id) {
+  return kTodayPrefix + Key(id);
+}
+
+// The node id in |key|, an entity's id: a Today tab's after its prefix, which Index() goes by, as
+// a tab keeps its node as it's pinned or unpinned.
+std::string NodeKey(const std::string& key) {
+  return base::StartsWith(key, kTodayPrefix) ? key.substr(sizeof(kTodayPrefix) - 1) : key;
+}
+
 std::string Bytes(const syncer::UniquePosition& position) {
   std::string bytes;
   position.SerializeToString(&bytes);
@@ -85,7 +102,8 @@ std::optional<Entity> Parse(const syncer::EntityData& data) {
   Entity entity;
   if (!data.specifics.has_ilo_space() ||
       !entity.ParseFromString(data.specifics.ilo_space().entity()) ||
-      !base::Uuid::ParseLowercase(entity.id()).is_valid()) {
+      base::StartsWith(entity.id(), kTodayPrefix) != (entity.kind() == Entity::TODAY) ||
+      !base::Uuid::ParseLowercase(NodeKey(entity.id())).is_valid()) {
     return std::nullopt;
   }
   return entity;
@@ -187,7 +205,7 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       if (!node || !node->id.is_valid() || !tab) {
         continue;
       }
-      const std::string key = Key(node->id);
+      const std::string key = TodayKey(node->id);
       auto was = known.find(key);
       const GURL url = tab->Url();
       if (!Syncs(url)) {
@@ -518,9 +536,17 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   // Makes the sidebar match what came from the account: |put| new or changed, |deleted| gone.
   void Apply(std::vector<Entity> put, const std::vector<std::string>& deleted) {
     std::map<std::string, Local> index = Index();
+    // A tab pinned or unpinned on another device is deleted under the one id and put under the
+    // other, so it moves rather than going: with the put in this batch, or the row here already the
+    // other kind, as the put came first.
+    std::set<std::string> putting;
+    for (const Entity& entity : put) {
+      putting.insert(NodeKey(entity.id()));
+    }
     for (const std::string& key : deleted) {
-      auto it = index.find(key);
-      if (it == index.end()) {
+      auto it = index.find(NodeKey(key));
+      if (it == index.end() || (it->second.row && putting.contains(it->first)) ||
+          (it->second.row && IsToday(*it->second.space, it->second.row) != (key != NodeKey(key)))) {
         continue;
       }
       Remove(it->second);
@@ -603,8 +629,9 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   }
 
   void Put(const Entity& entity, const std::map<std::string, Local>& index) {
-    const Space::Node node{base::Uuid::ParseLowercase(entity.id()), PositionOf(entity)};
-    auto here = index.find(entity.id());
+    const std::string node_key = NodeKey(entity.id());
+    const Space::Node node{base::Uuid::ParseLowercase(node_key), PositionOf(entity)};
+    auto here = index.find(node_key);
     if (entity.kind() == Entity::SPACE) {
       Space* space = here != index.end() ? here->second.space : nullptr;
       if (!space) {
@@ -626,7 +653,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         IsToday(*here->second.space, here->second.row)) {
       Window::MoveToSpace(here->second.row, space->id());
       const std::map<std::string, Local> moved = Index();
-      if (auto now = moved.find(entity.id()); now != moved.end() && now->second.space == space) {
+      if (auto now = moved.find(node_key); now != moved.end() && now->second.space == space) {
         PutToday(entity, space, now->second.row);
         return;
       }
@@ -695,7 +722,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   // another device navigated goes there without its page too, unless a window here shows it, which
   // keeps its page; and its last showing is the account's if that's later than here.
   void PutToday(const Entity& entity, Space* space, bc_id row) {
-    const Space::Node node{base::Uuid::ParseLowercase(entity.id()), PositionOf(entity)};
+    const Space::Node node{base::Uuid::ParseLowercase(NodeKey(entity.id())), PositionOf(entity)};
     const GURL url(entity.url());
     const std::u16string title = base::UTF8ToUTF16(entity.title());
     // Where its place puts it among the Today tabs, without it.
