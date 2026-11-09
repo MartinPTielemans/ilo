@@ -694,14 +694,14 @@ if [ "$(uname)" = Darwin ]; then
     for _ in $(seq 50); do
       [ "$active" = 0 ] && break
       sleep 0.1
-      send screen
+      send state
     done
     [ "$active" = 0 ] || fail "the hidden app stayed the active one"
     send hide
     for _ in $(seq 50); do
       [ "$active" = 1 ] && break
       sleep 0.1
-      send screen
+      send state
     done
     [ "$active" = 1 ] || fail "the app shown again didn't become the active one"
   }
