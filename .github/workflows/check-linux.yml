@@ -55,10 +55,13 @@ env:
     favorites cards extensions adblock adblock-lists private little capture passwords preview
     access dialogs crash import quit onboarding passkeys appearance about sync sync-account
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
+    scripting: AppleScript is the Mac's alone
+    filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
