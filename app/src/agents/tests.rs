@@ -683,7 +683,8 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
 }
 
 /// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468),
-/// muted, as an agent's tabs are until the user unmutes or keeps one (#1080).
+/// muted, as an agent's tabs are until the user unmutes or keeps one, and so are the tabs its page
+/// opens there (#1080).
 #[gpui::test]
 fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
@@ -710,6 +711,18 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
         *browser.muted.borrow(),
         [(30, true)],
         "the agent's tab opened with sound"
+    );
+    // A tab its page opens, beside it in its Space, is as quiet; one a user's page opens isn't.
+    (browser.tabs.borrow_mut()).push((31, 2, "Pop-up", "https://example.com/pop"));
+    (browser.tabs.borrow_mut()).push((32, 1, "Mine", "https://example.com/mine"));
+    agents.update(cx, |agents, cx| {
+        agents.tab_opened(31, 30, cx);
+        agents.tab_opened(32, 10, cx);
+    });
+    assert_eq!(
+        *browser.muted.borrow(),
+        [(30, true), (31, true)],
+        "a tab the agent's page opened had sound, or the user's was muted"
     );
     let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
         .recv()
@@ -1582,9 +1595,9 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
         json!({ "tab": 20, "ref": "e1" }),
         cx,
     );
-    agents.update(cx, |agents, _| {
-        agents.tab_opened(26, 20);
-        agents.tab_opened(27, 10);
+    agents.update(cx, |agents, cx| {
+        agents.tab_opened(26, 20, cx);
+        agents.tab_opened(27, 10, cx);
     });
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
     let said = clicked.text.split("\n\n").next().unwrap();
