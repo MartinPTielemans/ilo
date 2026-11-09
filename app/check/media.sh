@@ -169,10 +169,10 @@ expect "^browser: page $b camera 0 microphone 0 sharing 0 shared 1\$" \
 expect "^browser: page $c share instead 1\$" "the other tab wasn't offered to share instead"
 # Chrome shows the tab a page starts sharing, unless the page asks it not to, once, up to a second
 # later, and whichever tab is shared by then. So it does before the share moves, or it shows the
-# other tab under the call's "e" (#1166). It does only while the window sharing is the active one,
-# as the page has the share, which on the Mac its dialog for what to share, gone at once under the
-# check's choice, takes the keyboard from until it's closed: a window that has it back only once
-# the page has the share keeps the tab where it is, as Chrome's would (#2148).
+# other tab under the call's "e" (#1166). It decides as the share starts, and only while the window
+# sharing is the active one. On the Mac the dialog for what to share, closed at once under the
+# check's choice, has the keyboard until it's gone, so a window that has it back only after the
+# share started keeps the tab where it is, as Chrome's own would (#2148).
 shared_at=$step
 for _ in $(seq 100); do
   logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at" && break
@@ -180,14 +180,17 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 if ! logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at"; then
-  # The window's keyboard and the page's share, in the order they came.
+  # The window's keyboard and the share's start, in the order they came.
+  started="page $a camera 1 microphone 1 sharing 1 shared 0"
   order=$(sed -n "/^browser: drive $shared_at: /,\$p" "$log" |
-    grep -E "^browser: (window (resigned|became) key|title $a sharing)\$" | tr '\n' ';')
+    grep -E "^browser: (window (resigned|became) key|$started)\$" | tr '\n' ';')
   case "$order" in
-    *"title $a sharing;"*"window became key;"*|*"window resigned key;browser: title $a sharing;")
+    *"$started;"*"window became key;"*|*"window resigned key;browser: $started;")
       echo "skip: Chrome showing the tab shared: the window had the keyboard back from the" \
-        "share's dialog only after the page had the share, so Chrome found it inactive (#2148):" \
-        "$order" ;;
+        "share's dialog only after the share started, so Chrome found it inactive (#2148):" \
+        "$order"
+      # Shown as Chrome would have, so the rest goes as it does then.
+      shown "$b" ;;
     *) fail "Chrome didn't show the tab shared: $order" ;;
   esac
 fi
