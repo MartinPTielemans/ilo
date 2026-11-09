@@ -16,10 +16,27 @@ index 16866cfc35..659fa75c23 100644
          .spawn(async move {
              // Let Windows manage enabling and activating the owner. Overlapping
 diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
-index 4ad4cc77b3..44d7b2ce80 100644
+index 4ad4cc77b3..48291220e4 100644
 --- a/crates/gpui_windows/src/direct_manipulation.rs
 +++ b/crates/gpui_windows/src/direct_manipulation.rs
-@@ -142,6 +142,9 @@ struct DirectManipulationEventHandler {
+@@ -105,7 +105,15 @@ impl DirectManipulationHandler {
+         }
+     }
+ 
+-    pub fn update(&self) {
++    /// Whether a touchpad gesture or its inertia is under way, whose updates come only as the
++    /// window draws, so the window keeps asking for frames until it settles.
++    pub fn is_active(&self) -> bool {
++        unsafe { self.viewport.GetStatus() }.is_ok_and(|status| {
++            status == DIRECTMANIPULATION_RUNNING || status == DIRECTMANIPULATION_INERTIA
++        })
++    }
++
++        pub fn update(&self) {
+         unsafe {
+             self.update_manager.Update(None).log_err();
+         }
+@@ -142,6 +150,9 @@ struct DirectManipulationEventHandler {
      last_x_offset: Cell<f32>,
      last_y_offset: Cell<f32>,
      scroll_phase: Cell<TouchPhase>,
@@ -29,7 +46,7 @@ index 4ad4cc77b3..44d7b2ce80 100644
      pending_events: Rc<RefCell<Vec<PlatformInput>>>,
  }
  
-@@ -159,6 +162,7 @@ impl DirectManipulationEventHandler {
+@@ -159,6 +170,7 @@ impl DirectManipulationEventHandler {
              last_x_offset: Cell::new(0.0),
              last_y_offset: Cell::new(0.0),
              scroll_phase: Cell::new(TouchPhase::Started),
@@ -37,7 +54,7 @@ index 4ad4cc77b3..44d7b2ce80 100644
              pending_events,
          }
      }
-@@ -166,7 +170,10 @@ impl DirectManipulationEventHandler {
+@@ -166,7 +178,10 @@ impl DirectManipulationEventHandler {
      fn end_gesture(&self) {
          let position = self.mouse_position();
          let modifiers = current_modifiers();
@@ -48,7 +65,7 @@ index 4ad4cc77b3..44d7b2ce80 100644
              GestureKind::Scroll => {
                  self.pending_events
                      .borrow_mut()
-@@ -220,6 +227,17 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+@@ -220,6 +235,17 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
              self.end_gesture();
          }
  
@@ -270,7 +287,7 @@ index 98a13f304c..6cfbd572ae 100644
  
  #[inline]
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 08f91bd626..a9f41be3fa 100644
+index 08f91bd626..cb0838e0bb 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -103,13 +103,14 @@ impl WindowsWindowInner {
@@ -524,7 +541,39 @@ index 08f91bd626..a9f41be3fa 100644
          self.start_tracking_mouse(handle, TME_LEAVE | TME_NONCLIENT);
          self.restore_cursor_after_hide();
  
-@@ -1823,3 +1980,70 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1335,6 +1492,8 @@ impl WindowsWindowInner {
+ 
+     fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
+         self.state.direct_manipulation.on_pointer_hit_test(wparam);
++        // The gesture's updates come only as the window draws.
++        self.state.frame_want.wake();
+         None
+     }
+ 
+@@ -1347,16 +1506,20 @@ impl WindowsWindowInner {
+             }
+             // Validate the region so a nested message pump doesn't keep
+             // re-dispatching WM_PAINT for the still-invalid region in a busy
+-            // loop until the in-progress draw unwinds. The vsync thread
+-            // re-invalidates every window on each vsync (see
++            // loop until the in-progress draw unwinds. Asking the vsync thread
++            // for a frame has it re-invalidate the window (see
+             // `begin_vsync_thread`), so the deferred frame still gets drawn,
+             // at most one vsync late.
++            self.state.frame_want.wake();
+             unsafe { ValidateRect(Some(handle), None).ok().log_err() };
+             return Some(0);
+         };
+         let mut request_frame = self.state.callbacks.request_frame.take()?;
+ 
+         self.state.direct_manipulation.update();
++        if self.state.direct_manipulation.is_active() {
++            self.state.frame_want.wake();
++        }
+ 
+         let events = self.state.direct_manipulation.drain_events();
+         if !events.is_empty() {
+@@ -1823,3 +1986,70 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }
@@ -730,10 +779,18 @@ index 8164bc1564..ed7d01d6c4 100644
      #[test]
      fn test_keyboard_mapper() {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 095e009e23..53f98b9031 100644
+index 095e009e23..b1932b27fb 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
-@@ -372,10 +372,17 @@ impl WindowsPlatform {
+@@ -42,6 +42,7 @@ use gpui::*;
+ struct TrackedWindow {
+     handle: SafeHwnd,
+     frame_signal: Arc<PlatformFrameSignal>,
++    frame_want: Arc<FrameWant>,
+ }
+ 
+ impl TrackedWindow {
+@@ -372,10 +373,17 @@ impl WindowsPlatform {
          if active_window_hwnd.is_invalid() {
              return None;
          }
@@ -753,7 +810,67 @@ index 095e009e23..53f98b9031 100644
              .map(|hwnd| hwnd.as_raw())
      }
  
-@@ -587,6 +594,11 @@ impl Platform for WindowsPlatform {
+@@ -422,7 +430,7 @@ impl WindowsPlatform {
+         if let Some(stop) = self.vsync_stop.borrow_mut().take() {
+             // Not joined: the thread can be sending this thread a message. It exits after its
+             // next vsync, and drops its reference to the devices then.
+-            stop.store(true, Ordering::Release);
++            stop_vsync(&stop);
+         }
+         if let Some(text_system) = &self.direct_write_text_system {
+             text_system.release_gpu();
+@@ -449,8 +457,25 @@ impl WindowsPlatform {
+         std::thread::Builder::new()
+             .name("VSyncProvider".to_owned())
+             .spawn(move || {
++                // Before its first look at the windows, so a window that asks for a frame
++                // either finds this to wake or is seen wanting one.
++                *VSYNC_THREAD.lock().unwrap() = Some(std::thread::current());
+                 let vsync_provider = VSyncProvider::new();
+                 loop {
++                    if stop.load(Ordering::Acquire) {
++                        break;
++                    }
++                    let Some(windows) = all_windows.upgrade() else {
++                        break;
++                    };
++                    // Asleep while no window wants a frame. A window that asks unparks this
++                    // after saying so, so a request between this check and the park isn't lost.
++                    let wanted = windows.read().iter().any(|window| window.frame_want.wanted());
++                    drop(windows);
++                    if !wanted {
++                        std::thread::park();
++                        continue;
++                    }
+                     let signal_source = vsync_provider.wait_for_vsync();
+                     let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
+                     if stop.load(Ordering::Acquire) {
+@@ -473,6 +498,9 @@ impl WindowsPlatform {
+                         break;
+                     };
+                     for hwnd in all_windows.read().iter() {
++                        if !hwnd.frame_want.wanted() {
++                            continue;
++                        }
+                         unsafe {
+                             if let Some(signal_at) = signal_at {
+                                 if IsWindowVisible(hwnd.as_raw()).as_bool()
+@@ -495,6 +523,14 @@ impl WindowsPlatform {
+     }
+ }
+ 
++/// Stops the vsync thread, which may be parked waiting for a window to want a frame.
++fn stop_vsync(stop: &AtomicBool) {
++    stop.store(true, Ordering::Release);
++    if let Some(thread) = VSYNC_THREAD.lock().unwrap().take() {
++        thread.unpark();
++    }
++}
++
+ fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
+     // `Start-Process` accepts a single native command line, so quote each argument according to
+     // the Windows argv parsing rules before passing the complete string through the environment.
+@@ -587,6 +623,11 @@ impl Platform for WindowsPlatform {
          }
          on_finish_launching();
  
@@ -765,7 +882,7 @@ index 095e009e23..53f98b9031 100644
          let mut msg = MSG::default();
          unsafe {
              while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-@@ -748,6 +760,14 @@ impl Platform for WindowsPlatform {
+@@ -748,6 +789,14 @@ impl Platform for WindowsPlatform {
              .map(|inner| inner.handle)
      }
  
@@ -780,7 +897,24 @@ index 095e009e23..53f98b9031 100644
      fn open_window(
          &self,
          handle: AnyWindowHandle,
-@@ -1637,10 +1657,43 @@ fn file_save_dialog(
+@@ -761,6 +810,7 @@ impl Platform for WindowsPlatform {
+         self.raw_window_handles.write().push(TrackedWindow {
+             handle: handle.into(),
+             frame_signal: window.state.frame_signal.clone(),
++            frame_want: window.state.frame_want.clone(),
+         });
+ 
+         Ok(Box::new(window))
+@@ -1409,7 +1459,7 @@ impl WindowsPlatformInner {
+ impl Drop for WindowsPlatform {
+     fn drop(&mut self) {
+         if let Some(stop) = self.vsync_stop.borrow_mut().take() {
+-            stop.store(true, Ordering::Release);
++            stop_vsync(&stop);
+         }
+         unsafe {
+             if let Some(notification) = self.suspend_resume_notification.borrow_mut().take() {
+@@ -1637,10 +1687,43 @@ fn file_save_dialog(
  
  fn load_icon() -> Result<HICON> {
      let module = unsafe { GetModuleHandleW(None).context("unable to get module handle")? };
@@ -825,7 +959,7 @@ index 095e009e23..53f98b9031 100644
              IMAGE_ICON,
              0,
              0,
-@@ -1980,3 +2033,12 @@ mod tests {
+@@ -1980,3 +2063,12 @@ mod tests {
          );
      }
  }
@@ -838,8 +972,86 @@ index 095e009e23..53f98b9031 100644
 +pub fn embed() {
 +    EMBEDDED.store(true, std::sync::atomic::Ordering::Relaxed);
 +}
+diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
+index 5121c41b61..3d7c019c33 100644
+--- a/crates/gpui_windows/src/vsync.rs
++++ b/crates/gpui_windows/src/vsync.rs
+@@ -1,5 +1,9 @@
+ use std::{
+-    sync::LazyLock,
++    sync::{
++        LazyLock, Mutex,
++        atomic::{AtomicU64, Ordering},
++    },
++    thread::Thread,
+     time::{Duration, Instant},
+ };
+ 
+@@ -23,6 +27,45 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
+ const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
+ const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
+ 
++/// How long a window keeps getting frames after it last asked for one. Every input that draws asks
++/// again, so this only bridges a stream's gaps and the frame after it, as on the Mac.
++const FRAME_RUN_ON: Duration = Duration::from_millis(200);
++
++static FRAME_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
++
++/// The vsync thread, which parks while no window wants a frame.
++pub(crate) static VSYNC_THREAD: Mutex<Option<Thread>> = Mutex::new(None);
++
++/// When a window last asked for a frame. GPUI asks through `frame_waker` whenever the window turns
++/// dirty or wants another frame, so an idle window never wakes the vsync thread, nor the app's main
++/// thread with a paint, at the display's rate.
++pub(crate) struct FrameWant {
++    /// Milliseconds after `FRAME_EPOCH`, plus one so that 0 means never.
++    at: AtomicU64,
++}
++
++impl FrameWant {
++    pub(crate) fn new() -> Self {
++        Self {
++            at: AtomicU64::new(0),
++        }
++    }
++
++    pub(crate) fn wake(&self) {
++        self.at
++            .store(FRAME_EPOCH.elapsed().as_millis() as u64 + 1, Ordering::Release);
++        if let Some(thread) = VSYNC_THREAD.lock().unwrap().as_ref() {
++            thread.unpark();
++        }
++    }
++
++    pub(crate) fn wanted(&self) -> bool {
++        let at = self.at.load(Ordering::Acquire);
++        at != 0
++            && FRAME_EPOCH.elapsed().as_millis() as u64 + 1 - at <= FRAME_RUN_ON.as_millis() as u64
++    }
++}
++
+ pub(crate) struct VSyncProvider {
+     interval: Duration,
+     f: Box<dyn Fn() -> bool>,
+@@ -88,6 +131,16 @@ fn retrieve_duration(counts: u64, ticks_per_second: u64) -> Duration {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_window_wants_frames_only_for_a_while_after_it_asks() {
++        let want = FrameWant::new();
++        assert!(!want.wanted());
++        want.wake();
++        assert!(want.wanted());
++        std::thread::sleep(FRAME_RUN_ON + Duration::from_millis(20));
++        assert!(!want.wanted());
++    }
++
+     #[test]
+     fn successful_compositor_wait_reports_native_callback() {
+         let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..d5afb55ac8 100644
+index c467101fc8..be358bd26e 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -861,7 +1073,23 @@ index c467101fc8..d5afb55ac8 100644
  pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
  
  impl std::ops::Deref for WindowsWindow {
-@@ -489,7 +501,19 @@ impl WindowsWindow {
+@@ -55,6 +67,7 @@ pub struct WindowsWindowState {
+ 
+     pub callbacks: Callbacks,
+     pub frame_signal: Arc<PlatformFrameSignal>,
++    pub frame_want: Arc<FrameWant>,
+     pub input_handler: Cell<Option<PlatformInputHandler>>,
+     pub ime_enabled: Cell<bool>,
+     pub pending_surrogate: Cell<Option<u16>>,
+@@ -170,6 +183,7 @@ impl WindowsWindowState {
+             min_size,
+             callbacks,
+             frame_signal: Arc::new(PlatformFrameSignal::new()),
++            frame_want: Arc::new(FrameWant::new()),
+             input_handler: Cell::new(input_handler),
+             ime_enabled: Cell::new(true),
+             pending_surrogate: Cell::new(pending_surrogate),
+@@ -489,7 +503,19 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -882,7 +1110,7 @@ index c467101fc8..d5afb55ac8 100644
              (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
          } else {
              let mut dwstyle = WS_SYSMENU;
-@@ -510,6 +534,11 @@ impl WindowsWindow {
+@@ -510,6 +536,11 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -894,7 +1122,7 @@ index c467101fc8..d5afb55ac8 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -528,9 +557,9 @@ impl WindowsWindow {
+@@ -528,9 +559,9 @@ impl WindowsWindow {
              handle,
              hide_title_bar,
              display,
@@ -907,7 +1135,7 @@ index c467101fc8..d5afb55ac8 100644
              min_size: params.window_min_size,
              executor,
              current_cursor,
-@@ -546,16 +575,25 @@ impl WindowsWindow {
+@@ -546,16 +577,25 @@ impl WindowsWindow {
              draw_coordinator,
              parent_hwnd,
          };
@@ -937,7 +1165,7 @@ index c467101fc8..d5afb55ac8 100644
                  parent_hwnd,
                  None,
                  Some(hinstance.into()),
-@@ -569,6 +607,14 @@ impl WindowsWindow {
+@@ -569,6 +609,14 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -952,7 +1180,7 @@ index c467101fc8..d5afb55ac8 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +628,11 @@ impl WindowsWindow {
+@@ -582,6 +630,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -964,7 +1192,7 @@ index c467101fc8..d5afb55ac8 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +674,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +676,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -974,7 +1202,7 @@ index c467101fc8..d5afb55ac8 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -924,7 +976,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -924,7 +978,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -988,7 +1216,23 @@ index c467101fc8..d5afb55ac8 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -1041,7 +1098,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1027,14 @@ impl PlatformWindow for WindowsWindow {
+         self.state.is_fullscreen()
+     }
+ 
+-    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
++    // GPUI calls this whenever it has something to draw, so the vsync thread repaints only the
++    // windows that do, and sleeps while none does.
++    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
++        let want = self.0.state.frame_want.clone();
++        Some(Rc::new(move || want.wake()))
++    }
++
++        fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+         self.state.callbacks.request_frame.set(Some(callback));
+     }
+ 
+@@ -1041,7 +1107,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  
