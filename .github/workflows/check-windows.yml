@@ -108,7 +108,7 @@ jobs:
         private blank links capture spaces pinned profiles devices pair history appearance adblock-live find
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
         battery-os adblock adblock-lists battery calls cards count everyday extensions favorites hosts
-        idle media policies popup preview ranking switch-frames translate webrtc windows
+        idle media notifications policies popup preview ranking switch-frames translate webrtc windows
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
