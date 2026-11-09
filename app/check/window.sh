@@ -1066,20 +1066,21 @@ toggle page shown "⌘S from the page after ⌥"
 # A shortcut the page hands back hides the row under the pointer until it moves, and the sidebar
 # out, by the edge or by ⌥, hears that move in its own window, so its row under the pointer shows
 # its hover (#2133). While it rests out, the browser takes about the CPU it takes docked: the two
-# windows drawing the sidebar's list each asked the other for a frame, on and on.
+# windows drawing the sidebar's list each asked the other for a frame, on and on, which took about
+# 0.65 s of CPU in 4 s on GitHub's hosted Mac, against 0.1 s once fixed.
 # hover_out <what>: the pointer on the first tab's row of the sidebar out draws its hover.
 hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# rest_cpu: $rest, the CPU in seconds the browser's processes take in 2 s with the pointer still,
+# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
 # below the rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1
   local from
   from=$(cpu)
-  sleep 2
+  sleep 4
   set -- $from $(cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
@@ -1093,9 +1094,9 @@ hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
 rest_cpu
 out_cpu=$rest
-echo "window: at rest for 2 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
-awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.5) }' &&
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 2 s, against ${docked_cpu} s docked"
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
+awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
 send key s cmd
@@ -1108,7 +1109,10 @@ expect '^browser: reveal by option$' "⌥ after ⌘S from the page didn't bring 
 expect '^browser: reveal shown$' "⌥ after ⌘S from the page didn't bring the sidebar's panel out"
 hover_out "the sidebar out by ⌥"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-option-hover.png" || fail "no window to capture"
+# ⌘S docks the panel in one update, under the pointer, so the layout waits for the frame that
+# draws it and says the pointer is over it: on Linux the driver's layout can come before it.
 send key s cmd
+expect '^browser: sidebar hovered 1$' "⌘S from the page didn't dock the sidebar out by ⌥ under the pointer"
 toggle page shown "⌘S from the page with the sidebar out by ⌥"
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
