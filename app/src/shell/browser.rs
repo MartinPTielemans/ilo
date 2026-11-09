@@ -761,6 +761,21 @@ pub trait Browser {
         look: crate::menu::Look,
         cx: &mut App,
     );
+    /// Captures `tab`'s page, at `frame` in the window with corners of `radius`, in Portrait Mode
+    /// on `background` and copies it, and keeps `background` for the next launch.
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        cx: &mut App,
+    );
+    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
+    /// reads.
+    fn desktop_picture_offered(&self) -> bool {
+        false
+    }
     /// The window's menus' `look` changed: capture mode over `tab`, if it's on, takes it, as it
     /// took the look it started in from `capture`.
     fn capture_look(&self, _tab: u64, _look: crate::menu::Look, _cx: &mut App) {}
