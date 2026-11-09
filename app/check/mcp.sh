@@ -105,7 +105,8 @@ fi
 # With motion, as the run clicks Stop while a step's shimmer draws, which a system that reduces
 # motion has none of, as GitHub's hosted Windows runner does (main.rs, set_reduce_motion).
 BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
-  "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
+  "$browser" --load-extension="$(app_path "$extension")" --enable-logging=stderr \
+  --vmodule=window_views=1,desktop_native_widget_aura=1,focus_controller=1 < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
