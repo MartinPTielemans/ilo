@@ -5,28 +5,38 @@
 name: UI on Windows
 
 on:
-  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  # Main alone: a branch runs this at queue:ready, below (#2199). An engine release's tag, pushed
+  # with the owner's token, starts nothing here.
   push:
-    branches: ['**']
+    branches: [main]
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
+  # A pull request as it's labelled queue:ready, and each push to it after; a fork's on each push.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
-  # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
+  # A branch's head before its pull request is ready, such as a lane's Windows code.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A branch's newer push cancels its older run. Main's runs, and pull requests', each get a group of
-# their own, so none is cancelled, or replaced while it waits.
+# A pull request's newer push cancels its older run, as does a branch's newer dispatch. Main's runs
+# each get a group of their own, so none is cancelled, or replaced while it waits. So does a run
+# another label started, which skips its job: in the pull request's group it would cancel the run
+# in progress, which the merge queue reads as a failure (#1506).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.label && github.event.label.name != 'queue:ready' && github.run_id || github.event.pull_request.number || github.ref != 'refs/heads/main' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   test:
-    # A pull request from a branch here already ran on its push, or on a dispatch on its head.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    # 10.9 minutes of a Windows runner, so a pull request from a branch here runs it once it's
+    # labelled queue:ready, not at each push before (#2199).
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'queue:ready') ||
+      (github.event.action != 'labeled' && (contains(github.event.pull_request.labels.*.name, 'queue:ready') ||
+        github.event.pull_request.head.repo.full_name != github.repository))
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:

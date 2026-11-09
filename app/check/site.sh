@@ -5,7 +5,7 @@
 # file as another, "s" one that takes longer than the run to come, "v" a two-second video,
 # check/clip.mp4, and "k" opens the cookie page,
 # once a check, as later runs type in it too. A click in its top right 480 by 140 points puts
-# "corner" in the title. "x" and "z" each open check.crx, an extension the
+# "corner" in the title. "x", "z" and "y" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
 # ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
@@ -45,7 +45,7 @@ printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
 <textarea id=text style="position:fixed;left:0;bottom:0;width:100%;height:60px"></textarea>
 <a id=d download href="notes.txt"></a><a id=s download href="slow.bin"></a>
 <a id=q download="trash.txt" href="notes.txt"></a><a id=v download href="clip.mp4"></a>
-<a id=k href="clear.html"></a><a id=x href="check.crx"></a><a id=z href="check.crx?again"></a>
+<a id=k href="clear.html"></a><a id=x href="check.crx"></a><a id=z href="check.crx?again"></a><a id=y href="check.crx?update"></a>
 <a href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
 <a href="notes.txt" style="position:fixed;left:100px;top:100px;width:200px;height:40px"></a>
 <script>

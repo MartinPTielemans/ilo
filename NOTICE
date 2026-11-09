@@ -89,7 +89,7 @@ lose their fill; folder-ellipsis is folder with three dots of ours in it.
 T3 Code (https://github.com/pingdotgg/t3code), MIT License
 Used in CONTRIBUTING.md, .github/pull_request_template.md, .github/VOUCHED.td,
 .github/ISSUE_TEMPLATE/bug_report.yml and via-triage.yml, .github/triage/PLAYBOOK.md,
-.github/workflows/pr-vouch.yml, pr-size.yml, labels.yml, stale-needs-more-info.yml,
+.github/workflows/pr-vouch.yml, labels.yml, stale-needs-more-info.yml,
 agent-context-budget.yml and ci.yml, .github/actions/ci-changes/action.yml and
 .github/scripts/ci-changes.cjs; at commit 570d4b03eef879bd60be3d74444046858c94dacd.
 

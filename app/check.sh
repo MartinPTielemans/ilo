@@ -6,7 +6,8 @@
 #   split favorites cards extensions adblock adblock-lists windows private blank little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
-#   notifications calls battery battery-os policies hosts idle handback webrtc count translate boosts
+#   notifications calls battery battery-os policies hosts idle handback webrtc count translate
+#   pictures boosts
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
@@ -105,7 +106,7 @@ runs="$runs split favorites cards extensions adblock adblock-lists windows priva
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate boosts"
+runs="$runs handback webrtc count translate pictures boosts"
 named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in

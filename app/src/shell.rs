@@ -3500,10 +3500,16 @@ impl Shell {
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
         let card_changed = carded(&page) != carded(&entry.page);
+        // A load that finished, or a URL that changed with none under way, as a same-page one does:
+        // the page differs from its picture in the window it left.
+        let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
             self.card_changed(tab, cx);
+        }
+        if page_changed {
+            self.picture_page_changed(tab, cx);
         }
         // An untitled tab is named by its URL.
         if changed && tab == self.selected {

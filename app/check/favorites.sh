@@ -257,6 +257,9 @@ send resize 1000 340
 expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
 # Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
+# The overlay knob holds 0.8 s after the last scroll, less than a still can take to be captured,
+# so the scroll is recorded for a look at the knob (scroller.mp4).
+record scroller 2
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
 if [ $legacy = 1 ]; then
@@ -264,6 +267,7 @@ if [ $legacy = 1 ]; then
 else
   expect '^browser: scroller shown$' "the list scrolled didn't show its knob"
 fi
+recorded
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
 # Near each row's top, as Windows' capture is a row taller than the window.
 edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))

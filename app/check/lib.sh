@@ -894,3 +894,47 @@ brighter() {
   set -- $1 $2
   [ "$1" -ge $(($4 + 8)) ] && [ "$2" -ge $(($5 + 8)) ] && [ "$3" -ge $(($6 + 8)) ]
 }
+# Under Wayland: in $other_app_token, an activation token for a click in another app's window,
+# check/drag's, as an app hands on the one it got for the user's click in it with the link they
+# clicked, or a desktop with a click on a notification. sway brings an open window forward for it,
+# where before sway 1.10 one from its own exec, as a launch gets, only marks the window urgent. The
+# window, the click's, holds the keyboard until other_app_closes.
+other_app_click() {
+  if [ -z "${other_app:-}" ]; then
+    cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
+      fail "check/drag didn't build"
+    rm -f "$out/other-app-in"
+    : > "$out/other-app.log"
+    mkfifo "$out/other-app-in"
+    target/release/drag 1280x800 window < "$out/other-app-in" > "$out/other-app.log" 2>&1 &
+    other_app=$!
+    exec 4> "$out/other-app-in"
+    other_app_says 0 '^drag: ready$' "check/drag's window didn't show"
+    swaymsg '[app_id=ilo-drag] move absolute position 1220 740' > /dev/null
+  fi
+  # In front again, as a window that came forward since is over it.
+  swaymsg '[app_id=ilo-drag] focus' > /dev/null
+  set -- "$(wc -l < "$out/other-app.log")"
+  printf '%s\n' 'move 1244 764' press release >&4
+  other_app_says "$1" '^drag: pressed$' "the click in check/drag's window didn't reach it"
+  set -- "$(wc -l < "$out/other-app.log")"
+  echo token >&4
+  other_app_says "$1" '^drag: token ' "check/drag got no activation token for its click"
+  other_app_token=$(tail -n "+$(($1 + 1))" "$out/other-app.log" | sed -n 's/^drag: token //p')
+}
+# Waits for check/drag's line $2 after its first $1, failing with $3.
+other_app_says() {
+  for _ in $(seq 100); do
+    tail -n "+$(($1 + 1))" "$out/other-app.log" | grep -q "$2" && return 0
+    sleep 0.05
+  done
+  fail "$3: $(tr '\n' ' ' < "$out/other-app.log")"
+}
+# Closes check/drag's window other_app_click opened.
+other_app_closes() {
+  [ -n "${other_app:-}" ] || return 0
+  exec 4>&-
+  wait "$other_app" || true
+  other_app=
+  other_app_token=
+}

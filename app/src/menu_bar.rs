@@ -117,6 +117,15 @@ pub(crate) fn menus(
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
+            ])
+            // Arc's place for it. As Change Profile's, only an empty Space takes a new profile, and
+            // a private window has none.
+            .chain(
+                bar.profiles.as_ref().map(|(_, new)| {
+                    item("New Profile", Command::ChangeProfile(None)).disabled(!new)
+                }),
+            )
+            .chain([
                 MenuItem::separator(),
                 item("Close Window", Command::CloseWindow),
                 item("Archive Tab", Command::CloseTab),
@@ -227,6 +236,7 @@ pub(crate) fn menus(
             "Spaces",
             [
                 item("New Space…", Command::NewSpace),
+                item("Edit Theme…", Command::EditTheme),
                 item("Rename Space", Command::RenameSpace),
             ]
             .into_iter()
