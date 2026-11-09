@@ -404,11 +404,12 @@ pub(crate) fn open_window_as(
     // A later window comes on screen drawn, as the overlays do: AppKit reports a new window
     // visible, which GPUI on the Mac draws only once it has, about 100 ms after it's ordered in,
     // which the window would spend blank (#2141). The first stays under the launch picture until
-    // its own first frame, so it doesn't wait for this one.
+    // its own first frame, so it doesn't wait for this one. Through the window alone, as drawing
+    // renders the shell, which the WindowHandle's update would hold.
     #[cfg(target_os = "macos")]
     let drawn = !first
-        && window
-            .update(cx, |_, window, cx| window.draw_and_present(cx))
+        && cx
+            .update_window(window.into(), |_, window, cx| window.draw_and_present(cx))
             .is_ok();
     #[cfg(not(target_os = "macos"))]
     let drawn = false;
