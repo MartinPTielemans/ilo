@@ -389,6 +389,8 @@ for target in 'link "Open"' 'button "Pop up"'; do
     *) fail "the agent's click on its $target answered: $clicked" ;;
   esac
   call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"
+  # Beside the agent's tab, it's as quiet as the agent's own (#1080).
+  await_log "^browser: page $new_tab audible 0 muted 1\$" "the tab its $target opened has sound"
   grep -q "^browser: selected $new_tab\( in .*\)\{0,1\}\$" "$log" &&
     fail "the tab the agent's $target opened was shown"
   [ "$(today)" = "$user_today" ] || fail "the agent's $target changed the user's Today: $(today)"
