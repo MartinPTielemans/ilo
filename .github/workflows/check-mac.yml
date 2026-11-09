@@ -147,6 +147,39 @@ jobs:
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
+      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
+      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
+      # at the commit check-linux.yml builds, when the runs include one.
+      - id: server
+        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-mac-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app/.deps/ilo-server
+        run: |
+          # The server's passkeys link OpenSSL, which Homebrew has on the runner's image.
+          brew list openssl@3 > /dev/null 2>&1 || brew install openssl@3
+          OPENSSL_DIR=$(brew --prefix openssl@3) cargo build --release --locked
+          echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-mac-882f2736e5a3b228543ae33b821aeeb52f80426d
+
       # macOS asks Screen Recording, Input Monitoring, the camera and the microphone of the process
       # responsible for the app, here the runner's agent that started the job, not of the app: once media's call and
       # tab share reached Chromium's capture, UserNotificationCenter's question took the app's
