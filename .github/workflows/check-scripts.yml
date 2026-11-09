@@ -39,8 +39,9 @@ jobs:
         with:
           persist-credentials: false
 
+      # Every ref reads main's, and main alone saves it (#1969).
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/bash32
           key: bash-3.2.57-ubuntu-24.04
@@ -56,6 +57,12 @@ jobs:
           ./configure --without-bash-malloc --disable-nls -q
           make -j"$(nproc)" -s
           mkdir -p ~/bash32 && cp bash ~/bash32/
+
+      - if: ${{ steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/bash32
+          key: bash-3.2.57-ubuntu-24.04
 
       - name: Parse each script as the Mac would
         run: |

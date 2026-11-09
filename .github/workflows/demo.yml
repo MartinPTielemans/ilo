@@ -50,7 +50,10 @@ jobs:
           version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
           cargo install wasm-bindgen-cli --version "$version" --locked
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         if: ${{ steps.check.outputs.built == 'true' }}
         with:
           path: |
@@ -71,6 +74,15 @@ jobs:
           cp ../LICENSE assets/fonts/OFL.txt assets/fonts/Inter-OFL.txt "$demo/"
           tar czf "$RUNNER_TEMP/ilo-demo.tar.gz" -C "$demo" .
           echo "The site's demo: $(du -h "$demo/ilo_demo_bg.wasm" | cut -f1) of wasm." >> "$GITHUB_STEP_SUMMARY"
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v4
         if: ${{ steps.check.outputs.built == 'true' }}

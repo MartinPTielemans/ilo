@@ -41,7 +41,10 @@ jobs:
 
       - run: rustup update stable --no-self-update
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -57,6 +60,15 @@ jobs:
       - run: cargo build --release --bin mcp-bridge
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
       - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The screens tools/parity.sh captures on Linux, here on the runner's desktop, which GPUI draws
       # on with Direct3D's software adapter. The desktop starts at 1024 by 768, smaller than the

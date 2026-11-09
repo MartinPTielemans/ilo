@@ -30,8 +30,14 @@ jobs:
               ["agents", "5319e7", "Agents, the MCP server, and their permissions."],
               ["via-triage", "c5def5", "Filed by an agent following .github/triage/PLAYBOOK.md."],
               ["needs-triage", "fbca04", "Needs a maintainer's first look."],
-              // Triage.
+              // Triage: the statuses that replace needs-triage, one at a time (CONTRIBUTING.md).
+              ["ready", "c2e0c6", "Triaged and ready for work"],
+              ["needs-repro", "bfd4f2", "Needs a Linux reproduction before work starts"],
+              ["needs-decision", "f9d0c4", "Needs a maintainer decision"],
               ["needs-mac-repro", "fef2c0", "macOS-only, needs a human repro on a Mac."],
+              // Beside a status, for contributors.
+              ["good first issue", "7057ff", "Good for newcomers"],
+              ["help wanted", "008672", "Extra attention is needed"],
               // stale-needs-more-info.yml closes these after 7 quiet days.
               ["needs more info", "d876e3", "Waiting on the reporter for details."],
               // pr-vouch.yml.
