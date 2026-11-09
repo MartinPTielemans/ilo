@@ -11,30 +11,32 @@
 // clickkey, doubleclickkey, rightclickkey, drag, dragkey, press, dragto, release, rightpress,
 // rightdragto, rightrelease, move, key, keydown, keyup, flags, type, insert, scroll, swipe, wheel,
 // resize, resizekey, place, minimize, window, order, layout, state, title, pasteboard, front, menu,
-// menubar, choose, dismiss, agentspace, agentmayact, agentrelease, agentdisconnect, takeback and
-// age, and Windows' own maximize, which the Mac's has no command for, dpi <percent>, which tells
-// the browser window it moved to a display of that scale as Windows does (WM_DPICHANGED), keeping
-// its size in pixels, and placement, which logs the
-// window's maximized state and the frame it un-maximizes to as Windows keeps them; overlays, which
-// lists the windows on screen over the app's browser windows; stack, which lists every app's
-// windows over the driven one, front first; and reshow, which shows those of the UI's that are
-// hidden again, as Windows does. window <n> behind drives a window without bringing it forward, as
-// drive.mm's does.
-// The Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl
-// with Alt, but Ctrl for ⌃Tab, and alt with both; flags' winalt holds Windows' own Alt, its key
-// down and up, for Alt pressed alone. A click's or a drag's are held as a Windows user
-// holds them, cmd with Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are
-// wheel messages with the pixels in their deltas, going the way drive.mm's go, which Chromium
-// scrolls by. Its swipes over GPUI's view are handed to GPUI as Direct Manipulation hands it a
-// precision touchpad's, with their touch and lift. choose works on ilo's menu, ilo's dialog and the
-// alerts host_ask shows, as Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks
-// <path> in the dialog host_save_png shows, as drive.mm's does in the Mac's save panel, logging
-// "browser: save panel answered", or "browser: no save panel" if none shows. tabpicture writes the picture a tab's drag shows for part of the window
-// to a file and logs its size. dragover, dragdrop and dragleave hand a drag from another app, a shell
-// data object carrying what Explorer or a browser would, straight to the drop target Windows would
-// pick, the UI's; one over a page or an overlay, whose targets are Chromium's and GPUI's, logs as
-// unsupported. A drag the app starts, a file's or a tab's, the driver carries the same way, from
-// dragto to release, as Windows' own waits for the real pointer (#1583). ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
+// menubar, choose, dismiss, agentspace, agentopen, agentmayact, agentrelease, agentdisconnect,
+// takeback and age, pip, as Linux's finds Chromium's Picture in Picture window but with hit
+// tests in place of drags, and Windows' own maximize, which the Mac's has no command for,
+// dpi <percent>, which tells the browser window it moved to a display of that scale as Windows does
+// (WM_DPICHANGED), keeping its size in pixels, and placement, which logs the window's maximized
+// state and the frame it un-maximizes to as Windows keeps them; overlays, which lists the windows
+// on screen over the app's browser windows; stack, which lists every app's windows over the driven
+// one, front first; and reshow, which shows those of the UI's that are hidden again, as Windows
+// does. window <n> behind drives a window without bringing it forward, as drive.mm's does. The
+// Mac's modifiers are pressed as the app reads them off the Mac (keys.rs): cmd with Ctrl, ctrl with
+// Alt, but Ctrl for ⌃Tab, and alt with both; a key's winalt holds Windows' own Alt, as the app's
+// own views bind ⌥ off the Mac, and flags' winalt holds it with its key down and up, for Alt
+// pressed alone. A click's or a drag's are held as a Windows user holds them, cmd with
+// Ctrl and alt with Alt. A trackpad's scrolls, and its swipes over a page, are wheel messages with
+// the pixels in their deltas, going the way drive.mm's go, which Chromium scrolls by. Its swipes
+// over GPUI's view are handed to GPUI as Direct Manipulation hands it a precision touchpad's, with
+// their touch and lift. choose works on ilo's menu, ilo's dialog and the alerts host_ask shows, as
+// Linux's driver does, and dismiss on ilo's menu. savepanel <path> picks <path> in the dialog
+// host_save_png shows, as drive.mm's does in the Mac's save panel, logging "browser: save panel
+// answered", or "browser: no save panel" if none shows. tabpicture writes the picture a tab's drag
+// shows for part of the window to a file and logs its size. dragover, dragdrop and dragleave hand a
+// drag from another app, a shell data object carrying what Explorer or a browser would, straight to
+// the drop target Windows would pick: the UI's, or over a page Chromium's; one over an overlay,
+// whose target is GPUI's, logs as unsupported. A drag the app starts, a file's or a tab's, the
+// driver carries the same way, from dragto to release, as Windows' own waits for the real pointer
+// (#1583). ime on types as drive.mm's scripted input method does, in the UI's fields alone, as
 // Linux's driver does. ime ja makes Microsoft's Japanese IME, where it's installed, the UI thread's
 // input method, on in hiragana, and sends the keys typed until ime off without a shortcut's
 // modifiers through Windows' input queue, to the window in front, which must be ilo's, so the IME
@@ -489,10 +491,11 @@ int Modifiers(std::istringstream& words, const std::string& key = "") {
   while (words >> word) {
     cmd = cmd || word == "cmd";
     ctrl = ctrl || word == "ctrl";
-    modifiers |= word == "cmd"     ? kCtrl
-                 : word == "shift" ? kShift
-                 : word == "alt"   ? kCtrl | kAlt
-                                   : 0;
+    modifiers |= word == "cmd"      ? kCtrl
+                 : word == "shift"  ? kShift
+                 : word == "alt"    ? kCtrl | kAlt
+                 : word == "winalt" ? kAlt
+                                    : 0;
   }
   if (ctrl) {
     modifiers |= key == "tab" && !cmd ? kCtrl : kAlt;
@@ -697,6 +700,14 @@ void LogLayout(HWND root) {
       snprintf(part, sizeof part, " radius %.0f", radius);
       line += part;
     }
+  }
+  // The ring the core draws inside a split view's focused page, over the pages, as the Mac's driver
+  // lists its view: from the content's bottom-left corner, as the pages are.
+  bc_rect ring{};
+  if (bc_window_focus_ring(host_browser_window_id(g_driven), &ring)) {
+    snprintf(part, sizeof part, ", BrowserCoreFocusRing %.0f,%.0f %.0fx%.0f", ring.x,
+             height - (ring.y + ring.height), ring.width, ring.height);
+    line += part;
   }
   // Windows' own title bar has the window's buttons.
   line += "\nbrowser: layout buttons hidden hidden hidden";
@@ -986,6 +997,39 @@ int AddImeKey(const std::string& key, int modifiers) {
   return 1;
 }
 
+// Chromium's Picture in Picture window, if one shows: a video's, the Mini Player, or a page's, as a
+// call floats in. Chrome keeps it over the others, the only one of the app's own top-level windows
+// it does but a browser window kept on top; the host's floating windows are owned.
+HWND PictureInPicture() {
+  for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
+    if (Ours(top) && IsWindowVisible(top) && !GetWindow(top, GW_OWNER) &&
+        (GetWindowLongPtrW(top, GWL_EXSTYLE) & WS_EX_TOPMOST) && BrowserIndex(top) < 0 &&
+        ClassOf(top).rfind(L"Chrome_WidgetWin", 0) == 0) {
+      return top;
+    }
+  }
+  return nullptr;
+}
+
+// What Windows' hit test makes of a point, as it decides a press there moves or sizes the window.
+const char* HitName(LRESULT hit) {
+  switch (hit) {
+    case HTCAPTION: return "caption";
+    case HTCLIENT: return "client";
+    case HTLEFT: return "left";
+    case HTRIGHT: return "right";
+    case HTTOP: return "top";
+    case HTBOTTOM: return "bottom";
+    case HTTOPLEFT: return "topleft";
+    case HTTOPRIGHT: return "topright";
+    case HTBOTTOMLEFT: return "bottomleft";
+    case HTBOTTOMRIGHT: return "bottomright";
+    case HTCLOSE: return "close";
+    case HTNOWHERE: return "nowhere";
+    default: return "other";
+  }
+}
+
 bool Unsupported(const std::string& action) {
   fprintf(stderr, "browser: drive: unsupported %s\n", action.c_str());
   return false;
@@ -1082,6 +1126,11 @@ bool DragOver(double x, double y, std::istringstream& words, bool* taken) {
       view = hwnd;
     }
   }
+  // A page's is Chromium's own, which RegisterDragDrop keeps in the property itself, the target
+  // object as this process has it, so the driver hands it the drag as OLE would (#2114).
+  if (view && !drop && IsChromium(view)) {
+    drop = static_cast<IDropTarget*>(GetPropW(view, L"OleDropTargetInterface"));
+  }
   if (view && !drop) {
     fprintf(stderr, "browser: drive: unsupported drag over %s\n", Utf8(ClassOf(view)).c_str());
     return false;
@@ -1101,7 +1150,11 @@ bool DragOver(double x, double y, std::istringstream& words, bool* taken) {
     drop->DragOver(MK_LBUTTON, at, &effect);
   }
   *taken = drop && effect != DROPEFFECT_NONE;
-  fprintf(stderr, "browser: drag over %s %s\n", view ? "HostUIView" : "nothing",
+  // Named as the Mac names the views: a page's, else the UI's.
+  fprintf(stderr, "browser: drag over %s %s\n",
+          !view              ? "nothing"
+          : IsChromium(view) ? "WebContentsViewCocoa"
+                             : "HostUIView",
           *taken ? "taken" : "refused");
   return true;
 }
@@ -1326,6 +1379,37 @@ bool Run(const std::string& line) {
   }
   // The windows the app has over its browser windows that are on screen, by their own visibility:
   // its overlays, its menu and Chromium's bubbles, each owned by its browser window.
+  // pip logs Chromium's Picture in Picture window's frame, "browser: pip at <x> <y> <width>
+  // <height>", or "browser: pip none", as Linux's driver does. pip hit <x> <y>, at points from its
+  // top-left corner, logs "browser: pip hit <part>", what Windows' hit test says is there: caption
+  // for a part a press moves the window by, bottomright for a corner it sizes it from, client for
+  // the page. Windows moves and sizes it with the desktop's pointer, which the driver never moves.
+  if (action == "pip") {
+    HWND pip = PictureInPicture();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+      return true;
+    }
+    RECT rect;
+    GetWindowRect(pip, &rect);
+    const double scale = Scale(pip);
+    std::string step;
+    words >> step;
+    if (step.empty()) {
+      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", rect.left / scale, rect.top / scale,
+              (rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale);
+      return true;
+    }
+    double x, y;
+    if (step != "hit" || !(words >> x >> y)) {
+      return false;
+    }
+    const LONG at_x = rect.left + std::lround(x * scale);
+    const LONG at_y = rect.top + std::lround(y * scale);
+    const LRESULT hit = SendMessageW(pip, WM_NCHITTEST, 0, MAKELPARAM(at_x, at_y));
+    fprintf(stderr, "browser: pip hit %s\n", HitName(hit));
+    return true;
+  }
   if (action == "overlays") {
     std::string shown;
     for (HWND top = GetTopWindow(nullptr); top; top = GetWindow(top, GW_HWNDNEXT)) {
@@ -1729,6 +1813,18 @@ bool Run(const std::string& line) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     return true;
   }
   if (action == "agentmayact") {

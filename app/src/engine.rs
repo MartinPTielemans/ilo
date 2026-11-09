@@ -729,8 +729,16 @@ impl Browser for Engine {
         crate::translate_host::target().map(SharedString::from)
     }
 
+    fn reads_language(&self, language: &str) -> bool {
+        crate::translate_host::reads(language)
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         crate::translate_host::language_name(language).into()
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        crate::translate_host::save_always(languages);
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
@@ -1659,6 +1667,25 @@ impl Browser for Engine {
         );
     }
 
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: capture::portrait::Background,
+        cx: &mut App,
+    ) {
+        settings::save_portrait_background(background);
+        with_overlays(
+            move |cx| capture::portrait(tab, frame, radius, background, cx),
+            cx,
+        );
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
         // The page's whole view, which is the shape it has where it's live; the card fits it.
         unsafe { bc::bc_tab_picture(tab, request, 0, 0) };
@@ -1844,6 +1871,14 @@ impl Browser for Engine {
             log!("browser: window {new} took {tab} from window {id}");
             update_window_in(new, cx, |shell, cx| shell.came_by_window_drag(tab, id, cx));
         });
+    }
+
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        let (mut x, mut y, mut width, mut height) = (0., 0., 0., 0.);
+        unsafe {
+            platform::host_window_frame(self.ui_view, &mut x, &mut y, &mut width, &mut height)
+        }
+        .then(|| gpui::point(x as f32 + at.x, y as f32 + at.y))
     }
 
     fn tab_window(&self, tab: u64) -> u64 {
@@ -2130,9 +2165,17 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
         })
     };
     let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let shown = crate::window_opening::drawn_before_shown();
+    if let Some(shown) = shown {
+        // check.sh reads this line, the new window's time from the key to its first frame, which
+        // came on screen with it, before its overlays were made.
+        let ms = shown.duration_since(asked).as_secs_f64() * 1000.;
+        log!("browser: new window first frame at {ms:.1} ms");
+    }
+    let drawn = shown.is_some();
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
-            shell.open_bar_when_shown(asked, full_screen);
+            shell.open_bar_when_shown(asked, full_screen, drawn);
             cx.notify();
         });
     }

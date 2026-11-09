@@ -95,8 +95,14 @@ sign_in() {
 }
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool, as Settings' window is titled by its tab; the Mac's AppKit
-# gives it, and sway gives it back on Wayland as the sign-in window goes.
+# gives it, and sway gives it back on Wayland as the sign-in window goes. On Windows the device's
+# Settings takes the foreground from another copy's window, as a click on it would (#2114).
 settings_keyboard() {
+  if windows; then
+    python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
+      fail "Settings couldn't have the keyboard again"
+    return 0
+  fi
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"

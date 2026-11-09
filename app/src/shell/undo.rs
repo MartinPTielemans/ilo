@@ -87,7 +87,7 @@ impl What {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Spot {
     /// The Space it's in, or the Space shown for a favorite.
-    space: u64,
+    pub(super) space: u64,
     at: At,
 }
 

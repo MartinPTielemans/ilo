@@ -1184,6 +1184,16 @@ impl Browser for Fake {
     ) {
     }
 
+    fn capture_portrait(
+        &self,
+        _: u64,
+        _: Bounds<Pixels>,
+        _: f32,
+        _: browser::capture::portrait::Background,
+        _: &mut App,
+    ) {
+    }
+
     fn page_picture(&self, _: u64, _: u64, _: &mut App) {}
 
     fn find_next(&self, _: u64, _: bool, _: &mut App) {}
@@ -1220,6 +1230,11 @@ impl Browser for Fake {
             true => format!("task-{space}").into(),
             false => SharedString::default(),
         }
+    }
+
+    // English, for PREVIEW_TRANSLATE's pages to offer translating into.
+    fn translation_target(&self) -> Option<SharedString> {
+        std::env::var_os("PREVIEW_TRANSLATE").map(|_| "en".into())
     }
 
     fn task_picture(&self, _: u64, _: u64, _: &mut App) {}
@@ -2462,6 +2477,13 @@ fn main() {
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
+                    }
+                    // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
+                    // so the URL field offers to translate them.
+                    if let Ok(language) = std::env::var("PREVIEW_TRANSLATE") {
+                        for tab in 0..=TABS.len() as u64 {
+                            shell.set_page_language(tab, &language, cx);
+                        }
                     }
                     if let Some(tasks) = &tasks {
                         let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();

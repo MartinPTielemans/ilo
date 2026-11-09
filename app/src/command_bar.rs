@@ -378,6 +378,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
+        Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
         Command::Print => "icons/printer.svg",
         Command::ViewSource => "icons/code.svg",
@@ -1223,6 +1224,21 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
             log!(
                 "browser: command bar rows for \"{text}\" in {:.1} ms",
                 started.elapsed().as_secs_f64() * 1000.
+            );
+            // check.sh reads this line: the rows as listed, a page's address with its tab if it's
+            // one, a command's name. After the timing, which it doesn't count in.
+            let listed: Vec<String> = bar
+                .rows
+                .iter()
+                .map(|row| match (row.named(), row.tab) {
+                    (true, _) => row.text.to_string(),
+                    (false, 0) => row.url.to_string(),
+                    (false, tab) => format!("{} tab {tab}", row.url),
+                })
+                .collect();
+            log!(
+                "browser: command bar lists \"{text}\": {}",
+                listed.join(", ")
             );
         })
         .ok();

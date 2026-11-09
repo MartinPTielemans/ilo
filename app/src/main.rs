@@ -481,6 +481,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_shortcuts(cx);
         settings::read_appearance(cx);
         settings::read_lone_header(cx);
+        settings::read_portrait_background(cx);
+        translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
@@ -841,7 +843,17 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
         "--disable-stack-profiler".into(),
-        "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval".into(),
+        // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
+        // them: those link the framework at launch, so the kernel binds its constant data clean
+        // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        format!(
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
+            if cfg!(target_os = "macos") {
+                ",AperitifHelpers"
+            } else {
+                ""
+            }
+        ),
     ];
     // Chromium keeps its cookie encryption key in the Keychain. An ad-hoc-signed dev build asking
     // for it gets a password prompt after every build, and every request that uses cookies waits.

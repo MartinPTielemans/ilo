@@ -64,8 +64,15 @@ cleanup() {
   [ -z "${helper:-}" ] || kill "$helper" 2>/dev/null || true
   [ -z "${ilo_server:-}" ] || kill "$ilo_server" 2>/dev/null || true
   [ -z "${tls:-}" ] || kill "$tls" 2>/dev/null || true
-  # The other copies of the app a run started, as sync-devices' devices.
-  [ -z "${others:-}" ] || kill $others 2>/dev/null || true
+  # The other copies of the app a run started, as sync-devices' devices: on Windows by taskkill, as
+  # the app is below, since Git Bash's kill leaves a crash report from each (#1017).
+  if [ -n "${others:-}" ] && windows; then
+    for other in $others; do
+      taskkill //F //T //PID "$(cat "/proc/$other/winpid" 2>/dev/null)" > /dev/null 2>&1 || true
+    done
+  elif [ -n "${others:-}" ]; then
+    kill $others 2>/dev/null || true
+  fi
   # The access run's session and AT-SPI buses.
   [ -z "${buses:-}" ] || kill $buses 2>/dev/null || true
   # A run's own way back, named in run_undo, such as policies' taking its policies off the system.
@@ -310,6 +317,19 @@ skip_on_sway_xwayland() {
   quit
   echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
   exit 0
+}
+# Under Xvfb and KWin (check.sh's BROWSER_XVFB=kwin), whether a window that shows asks KWin to blur
+# under it within 2 s, as an overlay does once its motion ends at rest (#2134). Elsewhere, false.
+kwin_blurs() {
+  [ "${BROWSER_XVFB:-}" = kwin ] || return 1
+  for _ in $(seq 20); do
+    for window in $(xwininfo -root -children | awk '$1 ~ /^0x/ { print $1 }'); do
+      xwininfo -id "$window" | grep -q 'Map State: IsViewable' || continue
+      xprop -id "$window" _KDE_NET_WM_BLUR_BEHIND_REGION | grep -q ' = [0-9]' && return 0
+    done
+    sleep 0.1
+  done
+  return 1
 }
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
@@ -592,6 +612,24 @@ switch() {
 # under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
 row() {
   echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+}
+# The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
+# from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+cpu() {
+  if windows; then
+    powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
+      -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
+  elif [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+      n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
 }
 # Switch times in milliseconds, one a line, as "median <m> ms, max <x> ms, <n> switches".
 summary() {

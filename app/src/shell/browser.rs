@@ -282,10 +282,17 @@ pub trait Browser {
     fn translation_target(&self) -> Option<SharedString> {
         None
     }
+    /// Whether the user reads `language`, a language alone such as "es": one the system prefers,
+    /// which no page is offered translation from.
+    fn reads_language(&self, _language: &str) -> bool {
+        false
+    }
     /// `language`'s name as the user reads it, such as "Spanish" for "es".
     fn language_name(&self, language: &str) -> SharedString {
         SharedString::from(language.to_owned())
     }
+    /// Keeps the languages always translated for the next launch (`AlwaysTranslated`).
+    fn keep_always_translated(&self, _languages: &[SharedString], _cx: &mut App) {}
     /// Translates `tab`'s page from `from` to `to` on the computer, its words never leaving it.
     /// Then Shell::set_translation. The user's alone: agents read pages in their own words.
     fn translate(&self, _tab: u64, _from: &str, _to: &str, _cx: &mut App) {}
@@ -754,6 +761,21 @@ pub trait Browser {
         look: crate::menu::Look,
         cx: &mut App,
     );
+    /// Captures `tab`'s page, at `frame` in the window with corners of `radius`, in Portrait Mode
+    /// on `background` and copies it, and keeps `background` for the next launch.
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        cx: &mut App,
+    );
+    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
+    /// reads.
+    fn desktop_picture_offered(&self) -> bool {
+        false
+    }
     /// The window's menus' `look` changed: capture mode over `tab`, if it's on, takes it, as it
     /// took the look it started in from `capture`.
     fn capture_look(&self, _tab: u64, _look: crate::menu::Look, _cx: &mut App) {}
@@ -864,6 +886,11 @@ pub trait Browser {
         _grab: Point<f32>,
         _cx: &mut App,
     ) {
+    }
+    /// `at` in this window as a point on the screen, in tab_to_new_window's terms, if the window
+    /// has a place there, as a full-screen one hasn't.
+    fn screen_point(&self, _at: Point<f32>) -> Option<Point<f32>> {
+        None
     }
     /// The browser window that shows `tab`'s page, else 0.
     fn tab_window(&self, _tab: u64) -> u64 {

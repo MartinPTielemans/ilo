@@ -1,6 +1,7 @@
 # The browser on Linux, run and checked by app/check.sh (AGENTS.md, Verifying) under Xvfb and
-# openbox, on X11, or by hand in a headless sway session on its Xwayland, then in that session on
-# Wayland, and by app/check/drops.sh under Wayland, on the Linux engine built from this commit's
+# openbox, on X11, or by hand in a headless sway session on its Xwayland, or under Xvfb and KWin,
+# whose blur shows under the overlays (#2134), then in sway's session on Wayland, and by
+# app/check/drops.sh under Wayland, on the Linux engine built from this commit's
 # core: the safety net for what the Mac and Linux share. It runs on main each night and by hand,
 # which the integrator does on main after each merge train (#871), on GitHub's hosted runners: never
 # a pull request, and never the self-hosted runner, which builds the engine. It never builds an
@@ -24,10 +25,10 @@ on:
         default: ''
       session:
         description: >-
-          Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, then on Wayland with
-          no runs named, or on Wayland alone
+          Where check.sh runs the app: on X11 under Xvfb or sway's Xwayland, or under Xvfb and KWin,
+          which blurs, then on Wayland with no runs named, or on Wayland alone
         type: choice
-        options: [xvfb, sway, wayland]
+        options: [xvfb, sway, kwin, wayland]
         default: xvfb
 
 concurrency:
@@ -47,7 +48,7 @@ env:
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
-    webrtc tab-drag count
+    webrtc tab-drag count ranking everyday
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -210,6 +211,13 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/magick"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
+      # KWin's session, the only one whose compositor blurs (check.sh's BROWSER_XVFB=kwin), which
+      # xprop sees is ready and dbus-run-session gives its bus.
+      - if: ${{ steps.engine.outputs.found == 'true' && matrix.session == 'kwin' }}
+        uses: ./.github/actions/apt-install
+        with:
+          packages: kwin-x11 x11-utils dbus-bin
+
       # The updates run builds ilo's Flatpak (tools/flatpak.sh) and updates it through Flatpak's
       # portal and permission store, which only it needs.
       - if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' updates ')) && contains(format(' {0} ', matrix.runs), ' updates ') }}
@@ -217,8 +225,11 @@ jobs:
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -232,6 +243,15 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit ilo's sync was last checked against, in the leg that has them.
@@ -243,8 +263,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -254,6 +276,12 @@ jobs:
         run: |
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
       # which stays plugged in for the job: in the leg that has it.
@@ -289,6 +317,7 @@ jobs:
           where=
           case $SESSION in
           xvfb) export BROWSER_XVFB=1 ;;
+          kwin) export BROWSER_XVFB=kwin ;;
           wayland) export BROWSER_WAYLAND=1; where=wayland/ ;;
           esac
           dir=$out/$where
@@ -379,7 +408,7 @@ jobs:
     needs: [gate, shards]
     if: ${{ always() && needs.gate.outputs.check == 'true' }}
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
+    name: ${{ (inputs.runs != '' || inputs.session == 'sway' || inputs.session == 'kwin' || inputs.session == 'wayland') && 'check (runs asked for)' || 'check' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -471,6 +500,7 @@ jobs:
             case $session in
             xvfb) title="Under Xvfb and openbox, on X11." ;;
             sway) title="In a headless sway session, on its Xwayland." ;;
+            kwin) title="Under Xvfb and KWin, which blurs, on X11." ;;
             wayland)
               where=wayland/
               title="In a headless sway session, on Wayland. The runs not listed aren't driven there yet."
@@ -546,7 +576,7 @@ jobs:
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
   report:
     needs: [gate, check]
-    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'wayland' }}
+    if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && inputs.session != 'sway' && inputs.session != 'kwin' && inputs.session != 'wayland' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

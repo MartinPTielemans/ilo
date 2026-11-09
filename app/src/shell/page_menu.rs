@@ -184,6 +184,10 @@ impl Shell {
             self.browser.close_page_menu(tab, None, cx);
             return;
         }
+        let items = match self.translate_row(tab) {
+            Some(title) => with_translate(items, title),
+            None => items,
+        };
         let commands: Vec<i32> = items.iter().map(|item| item.command).collect();
         // Over the page, so in the window even while the sidebar is hidden.
         self.context_menu_in(
@@ -192,11 +196,58 @@ impl Shell {
             false,
             Box::new(move |chosen, shell, cx| {
                 let command = chosen.and_then(|at| commands.get(at).copied());
+                // The app's own row, which the core knows nothing of.
+                if command == Some(TRANSLATE) {
+                    shell.browser.close_page_menu(tab, None, cx);
+                    shell.run_translate_row(tab, cx);
+                    return;
+                }
                 shell.browser.close_page_menu(tab, command, cx);
             }),
             cx,
         );
     }
+}
+
+/// The command of the page menu's translation row, which the app runs itself: none of the core's,
+/// which are Chrome's ids above 0 and its own just below, as BC_PAGE_MENU_PREVIEW_LINK is.
+const TRANSLATE: i32 = i32::MIN;
+
+/// Chrome's page items, for where the translation row goes.
+const VIEW_SOURCE: i32 = 35002;
+const PRINT: i32 = 35003;
+const CAST: i32 = 35011;
+
+/// `items` with the translation row `title`, where Chrome's and Arc's page menu has Translate:
+/// after Print… and Cast…, before the line over View Page Source. Only a page's menu has those, so
+/// a link's, an image's or a selection's gets none.
+fn with_translate(mut items: Vec<PageMenuItem>, title: SharedString) -> Vec<PageMenuItem> {
+    let top = |command: i32| {
+        (items.iter()).rposition(|item| item.command == command && item.parent.is_none())
+    };
+    if top(VIEW_SOURCE).is_none() {
+        return items;
+    }
+    let Some(after) = top(CAST).or_else(|| top(PRINT)) else {
+        return items;
+    };
+    // The rows after it that point at a row at or past it point one further.
+    for item in &mut items[after + 1..] {
+        if let Some(parent) = item.parent.as_mut().filter(|parent| **parent > after) {
+            *parent += 1;
+        }
+    }
+    items.insert(
+        after + 1,
+        PageMenuItem {
+            command: TRANSLATE,
+            title,
+            parent: None,
+            enabled: true,
+            checked: false,
+        },
+    );
+    items
 }
 
 #[cfg(test)]
@@ -461,5 +512,93 @@ mod tests {
         });
         assert!(host.menus.borrow().is_empty());
         assert_eq!(host.take(), ["page menu 10 closes"]);
+    }
+
+    /// Chrome's menu for a page, as Arc's has it.
+    fn page_menu() -> Vec<PageMenuItem> {
+        vec![
+            row(33000, "Back"),
+            row(33001, "Forward"),
+            row(33002, "Reload"),
+            line(),
+            row(35004, "Save As…"),
+            row(PRINT, "Print…"),
+            row(CAST, "Cast…"),
+            line(),
+            row(VIEW_SOURCE, "View Page Source"),
+            row(50162, "Inspect"),
+        ]
+    }
+
+    /// The translation row goes after Cast…, or Print… without it, and only in a page's menu.
+    #[test]
+    fn the_translation_row_goes_where_arcs_translate_is() {
+        let with = with_translate(page_menu(), "Translate to English".into());
+        assert_eq!(
+            titles(&with),
+            [
+                "Back",
+                "Forward",
+                "Reload",
+                "",
+                "Save As…",
+                "Print…",
+                "Cast…",
+                "Translate to English",
+                "",
+                "View Page Source",
+                "Inspect",
+            ]
+        );
+        let uncast = without(page_menu(), CAST);
+        let with = with_translate(uncast, "Use Original".into());
+        assert_eq!(titles(&with)[5..7], ["Print…", "Use Original"]);
+        // A link's has neither View Page Source nor Print….
+        let link = made_up("link", true);
+        assert_eq!(with_translate(link.clone(), "Use Original".into()), link);
+    }
+
+    /// A submenu after the row still opens under its own row.
+    #[test]
+    fn a_submenu_after_the_translation_row_keeps_its_row() {
+        let mut items = page_menu();
+        items.push(row(6, "Writing Direction"));
+        items.push(PageMenuItem {
+            parent: Some(10),
+            ..row(7, "Default")
+        });
+        let with = with_translate(items, "Use Original".into());
+        assert_eq!(with[11].title.as_ref(), "Writing Direction");
+        assert_eq!(with[12].parent, Some(11));
+    }
+
+    /// A page in a language the user doesn't read has Translate to English in its menu, which
+    /// translates it, and then Use Original, which takes it back.
+    #[gpui::test]
+    fn the_page_menu_translates_and_takes_it_back(cx: &mut TestAppContext) {
+        let (shell, host) = window_showing_tab(cx);
+        let at = point(px(400.), px(300.));
+        shell.update(cx, |shell, cx| {
+            shell.show_page_menu(10, page_menu(), at, cx)
+        });
+        assert!(
+            !host
+                .entries
+                .borrow()
+                .iter()
+                .any(|entry| entry.title.starts_with("Translate"))
+        );
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.set_page_language(10, "es", cx);
+            shell.show_page_menu(10, page_menu(), at, cx)
+        });
+        cx.update(|cx| host.choose("Translate to English", cx));
+        assert_eq!(host.take(), ["page menu 10 closes", "translate 10 es en"]);
+        shell.update(cx, |shell, cx| {
+            shell.show_page_menu(10, page_menu(), at, cx)
+        });
+        cx.update(|cx| host.choose("Use Original", cx));
+        assert_eq!(host.take(), ["page menu 10 closes", "use original 10"]);
     }
 }

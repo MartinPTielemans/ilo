@@ -12,7 +12,7 @@
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
 //! clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
-//! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, scroll, wheel, pageswipe, key,
+//! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
 //! agentopen, agentrelease, agentdisconnect, takeback, age, battery, pair and insert, and Windows' stack.
@@ -2324,6 +2324,29 @@ fn run_command(line: &str) -> Option<()> {
         "move" => {
             let (x, y) = point(&mut words)?;
             motion(target_at(x, y)?, none)
+        }
+        // The display's own pointer, to the point, as a capture with the pointer drawn needs: the
+        // window under it shows its cursor there. Without a point it goes back to the corner.
+        "warp" => {
+            let connection = server()?;
+            let (connection, root) = &*connection;
+            let (x, y) = match point(&mut words) {
+                Some((x, y)) => {
+                    let at = target_in(driven()?.window, x, y)?;
+                    (at.root_x, at.root_y)
+                }
+                None => {
+                    let screen = connection.setup().roots.iter().find(|s| s.root == *root)?;
+                    (
+                        screen.width_in_pixels as i16 - 1,
+                        screen.height_in_pixels as i16 - 1,
+                    )
+                }
+            };
+            connection
+                .warp_pointer(x11rb::NONE, *root, 0, 0, 0, 0, x, y)
+                .ok()?;
+            connection.flush().ok()
         }
         // Each event moves the content up by <dy> points, as drive.mm's trackpad events do.
         // scrollkey scrolls in the window with the keyboard, such as Settings', as clickkey
