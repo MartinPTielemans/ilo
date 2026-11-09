@@ -2573,10 +2573,18 @@ impl Agents {
     }
 
     /// The core put `tab`, which `opener`'s page opened, beside it: if an agent is acting there, in
-    /// its Space, behind, and its action's answer names it (#1470).
-    pub fn tab_opened(&mut self, tab: u64, opener: u64) {
+    /// its Space, behind, and its action's answer names it (#1470). In an agent's Space it's quiet,
+    /// as the agent's own tabs are, until the user wants to hear it (#1080).
+    pub fn tab_opened(&mut self, tab: u64, opener: u64, cx: &App) {
         if let Some(acting) = self.acting.values_mut().find(|acting| acting.tab == opener) {
             acting.opened_tabs.push(tab);
+        }
+        let tasks = &self.tasks.tasks;
+        if tasks
+            .iter()
+            .any(|task| self.browser.space_tab_ids(task.space, cx).contains(&tab))
+        {
+            self.browser.set_muted(tab, true);
         }
     }
 
