@@ -475,9 +475,14 @@ fn on_its_way_to_the_submenu_the_pointer_crosses_other_rows_without_closing_it()
         "the same move again isn't a rest's end"
     );
 
-    menu.rested(now + Duration::from_millis(100));
+    // Measured from the move, as a timer can fire a little early (#2158).
+    assert_eq!(
+        menu.rested(now + Duration::from_millis(320)),
+        Some(Duration::from_millis(10)),
+        "10 ms more to rest"
+    );
     assert_eq!(menu.highlights(), [Some(5), None], "not yet");
-    menu.rested(now + Duration::from_millis(340));
+    assert_eq!(menu.rested(now + Duration::from_millis(330)), None);
     assert_eq!(
         menu.highlights(),
         [Some(10)],

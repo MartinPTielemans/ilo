@@ -684,17 +684,18 @@ impl Tracking {
     }
 
     /// The pointer has rested since its last move: in the safe triangle for SAFE_TIMEOUT, what's
-    /// under it takes the highlight.
-    pub(crate) fn rested(&mut self, now: Instant) {
-        if self
-            .resting
-            .is_some_and(|since| now.duration_since(since) >= SAFE_TIMEOUT)
-        {
-            self.resting = None;
-            if let Some(at) = self.pointer {
-                self.point_at(at);
-            }
+    /// under it takes the highlight. Returns how much longer it has to rest when that's not yet:
+    /// a timer can fire a little early, as Windows' do by up to a clock tick (#2158).
+    pub(crate) fn rested(&mut self, now: Instant) -> Option<Duration> {
+        let rested = now.duration_since(self.resting?);
+        if rested < SAFE_TIMEOUT {
+            return Some(SAFE_TIMEOUT - rested);
         }
+        self.resting = None;
+        if let Some(at) = self.pointer {
+            self.point_at(at);
+        }
+        None
     }
 
     /// A button went down at `at`. Returns whether it's on the menu; outside, it closes it.
@@ -1344,15 +1345,22 @@ impl ContextMenu {
     /// highlight.
     fn wait_for_rest(&mut self, cx: &mut Context<Self>) {
         self._rest = Some(cx.spawn(async move |menu, cx| {
-            cx.background_executor().timer(SAFE_TIMEOUT).await;
-            menu.update(cx, |menu, cx| {
-                if let Some(shown) = menu.shown.as_mut() {
-                    shown.tracking.rested(Instant::now());
-                    menu.changed(cx);
-                    cx.notify();
+            let mut wait = SAFE_TIMEOUT;
+            loop {
+                cx.background_executor().timer(wait).await;
+                let more = menu.update(cx, |menu, cx| {
+                    let more = menu.shown.as_mut()?.tracking.rested(Instant::now());
+                    if more.is_none() {
+                        menu.changed(cx);
+                        cx.notify();
+                    }
+                    more
+                });
+                match more {
+                    Ok(Some(more)) => wait = more,
+                    _ => break,
                 }
-            })
-            .ok();
+            }
         }));
     }
 
