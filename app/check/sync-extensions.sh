@@ -52,10 +52,10 @@ words=
 for _ in $(seq 30); do
   clipboard
   words=$clipped
-  [ "$(echo "$words" | wc -w)" = 24 ] && break
+  [ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] && break
   sleep 0.1
 done
-[ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put A's 24 words on the clipboard"
+[ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] || fail "Copy didn't put A's 24 words on the clipboard"
 send clickkey $(drawn "sync done")
 await 'browser: sync service active$' || fail "A's sync didn't become active"
 await '^browser: account syncs settings true extensions true$' ||
