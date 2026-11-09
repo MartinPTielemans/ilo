@@ -204,9 +204,12 @@
 // active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <sstream>
 #include <string>
@@ -1215,6 +1218,98 @@ bool ChooseModal(NSString* title) {
   return false;
 }
 
+// Spike (#359), never for main: a live, view-only mirror of the page window |from| shows, over
+// the rect window |to|'s picture rests in. A second CALayerHost of the page compositor's CAContext,
+// so the window server draws it from the frames the GPU process already drew, and no process of
+// the browser's works per frame. The core's own spike did the same (spike/live-mirror-359-2).
+NSMutableArray<NSView*>* g_mirrors;
+
+@interface DriveMirror : NSView
+@end
+
+@implementation DriveMirror
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
+}
+@end
+
+// The biggest CALayerHost under |layer|, with the size of the view holding it in |size|.
+CALayer* FindLayerHost(CALayer* layer, NSSize view_size, NSSize* size, CGFloat* area) {
+  CALayer* found = nil;
+  if ([NSStringFromClass(layer.class) isEqual:@"CALayerHost"] &&
+      view_size.width * view_size.height > *area) {
+    *area = view_size.width * view_size.height;
+    *size = view_size;
+    found = layer;
+  }
+  for (CALayer* sublayer in layer.sublayers) {
+    if (CALayer* host = FindLayerHost(sublayer, view_size, size, area)) {
+      found = host;
+    }
+  }
+  return found;
+}
+
+CALayer* FindPageHost(NSView* view, NSSize* size, CGFloat* area) {
+  CALayer* found = view.layer ? FindLayerHost(view.layer, view.bounds.size, size, area) : nil;
+  for (NSView* subview in view.subviews) {
+    if (CALayer* host = FindPageHost(subview, size, area)) {
+      found = host;
+    }
+  }
+  return found;
+}
+
+bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
+  NSSize size = NSZeroSize;
+  CGFloat area = 0;
+  CALayer* host = FindPageHost(from.contentView, &size, &area);
+  if (!host || size.width <= 0 || size.height <= 0) {
+    fprintf(stderr, "browser: mirror found no page compositor\n");
+    return false;
+  }
+  const uint32_t context = [[host valueForKey:@"contextId"] unsignedIntValue];
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  DriveMirror* mirror = [[DriveMirror alloc] init];
+  // Layer-hosting, as Chromium's page view is, so AppKit leaves its layers alone.
+  CALayer* root = [CALayer layer];
+  root.masksToBounds = YES;
+  CALayer* content = [CALayer layer];
+  content.anchorPoint = CGPointZero;
+  content.geometryFlipped = host.superlayer.geometryFlipped;
+  [root addSublayer:content];
+  // The picture's veil (docs/ux-spec.md › Several windows): black 0.12.
+  CALayer* veil = [CALayer layer];
+  veil.backgroundColor = [NSColor colorWithWhite:0 alpha:0.12].CGColor;
+  [root addSublayer:veil];
+  mirror.layer = root;
+  mirror.wantsLayer = YES;
+  NSView* parent = to.contentView;
+  const CGFloat y = parent.isFlipped ? NSMinY(rect) : NSHeight(parent.bounds) - NSMaxY(rect);
+  mirror.frame = NSMakeRect(NSMinX(rect), y, NSWidth(rect), NSHeight(rect));
+  const double scale = std::min(NSWidth(rect) / size.width, NSHeight(rect) / size.height);
+  content.bounds = CGRectMake(0, 0, size.width, size.height);
+  content.position = CGPointZero;
+  content.transform = CATransform3DMakeScale(scale, scale, 1);
+  veil.frame = root.bounds;
+  CALayer* copy = [[NSClassFromString(@"CALayerHost") alloc] init];
+  copy.anchorPoint = CGPointZero;
+  copy.bounds = content.bounds;
+  [copy setValue:@(context) forKey:@"contextId"];
+  [content addSublayer:copy];
+  [parent addSubview:mirror positioned:NSWindowAbove relativeTo:nil];
+  [CATransaction commit];
+  if (!g_mirrors) {
+    g_mirrors = [NSMutableArray array];
+  }
+  [g_mirrors addObject:mirror];
+  fprintf(stderr, "browser: mirror hosts context %u of a %.0fx%.0f page at %.0f %.0f %.0f %.0f\n",
+          context, size.width, size.height, NSMinX(rect), NSMinY(rect), NSWidth(rect),
+          NSHeight(rect));
+  return true;
+}
+
 // Calls |done| once the command's events are posted. Returns false, without calling it, for a
 // command it can't do.
 bool Run(const std::string& line, void (^done)(void)) {
@@ -1222,6 +1317,31 @@ bool Run(const std::string& line, void (^done)(void)) {
   std::istringstream words(line);
   std::string action;
   words >> action;
+  // Spike (#359): mirror <from> <to> <x> <y> <width> <height>, or mirror off.
+  if (action == "mirror") {
+    std::string first;
+    words >> first;
+    if (first == "off") {
+      for (NSView* mirror in g_mirrors) {
+        [mirror removeFromSuperview];
+      }
+      [g_mirrors removeAllObjects];
+      fprintf(stderr, "browser: mirror hidden\n");
+      done();
+      return true;
+    }
+    size_t from = std::strtoul(first.c_str(), nullptr, 10), to;
+    double x, y, width, height;
+    if (!(words >> to >> x >> y >> width >> height) || !from || !to ||
+        !host_browser_window(from - 1) || !host_browser_window(to - 1) ||
+        !Mirror((__bridge NSWindow*)host_browser_window(from - 1),
+                (__bridge NSWindow*)host_browser_window(to - 1),
+                NSMakeRect(x, y, width, height))) {
+      return false;
+    }
+    done();
+    return true;
+  }
   if (action == "window") {
     size_t number;
     if (!(words >> number) || number == 0 || !host_browser_window(number - 1)) {

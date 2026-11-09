@@ -1244,6 +1244,74 @@ HRESULT DriveDrag(IDataObject* data, DWORD, DWORD* effect, POINT* at) {
   return drag.held ? DRAGDROP_S_CANCEL : DRAGDROP_S_DROP;
 }
 
+// Spike (#359), never for main: a live, view-only mirror of the page window |from| shows, over the
+// rect window |to|'s picture rests in, in its points. A DWM thumbnail of the page's part of |from|:
+// DWM draws it from what the window already composed, so no process of the browser's works per
+// frame, as the taskbar's previews do.
+std::vector<HTHUMBNAIL> g_mirrors;
+
+BOOL CALLBACK BiggestPage(HWND child, LPARAM found) {
+  auto* best = reinterpret_cast<std::pair<HWND, LONG>*>(found);
+  RECT rect;
+  if (ClassOf(child) == L"Chrome_RenderWidgetHostHWND" && IsWindowVisible(child) &&
+      GetWindowRect(child, &rect)) {
+    const LONG area = (rect.right - rect.left) * (rect.bottom - rect.top);
+    if (area > best->second) {
+      *best = {child, area};
+    }
+  }
+  return TRUE;
+}
+
+bool Mirror(HWND from, HWND to, double x, double y, double width, double height) {
+  std::pair<HWND, LONG> page{nullptr, 0};
+  EnumChildWindows(from, BiggestPage, reinterpret_cast<LPARAM>(&page));
+  RECT window, view;
+  if (!page.first || !GetWindowRect(from, &window) || !GetWindowRect(page.first, &view)) {
+    fprintf(stderr, "browser: mirror found no page\n");
+    return false;
+  }
+  HTHUMBNAIL thumbnail = nullptr;
+  const HRESULT registered = DwmRegisterThumbnail(to, from, &thumbnail);
+  if (FAILED(registered)) {
+    fprintf(stderr, "browser: mirror couldn't register a thumbnail: 0x%08lx\n", registered);
+    return false;
+  }
+  const RECT source = {view.left - window.left, view.top - window.top, view.right - window.left,
+                       view.bottom - window.top};
+  const double page_width = source.right - source.left, page_height = source.bottom - source.top;
+  // The page's shape, fitted to the picture's rect, which is in |to|'s points from its client area.
+  const double scale = Scale(to);
+  POINT origin = {0, 0};
+  ClientToScreen(to, &origin);
+  RECT frame;
+  GetWindowRect(to, &frame);
+  const double fit = std::min(width * scale / page_width, height * scale / page_height);
+  const double left = origin.x - frame.left + x * scale, top = origin.y - frame.top + y * scale;
+  const RECT destination = {
+      static_cast<LONG>(left), static_cast<LONG>(top),
+      static_cast<LONG>(left + page_width * fit), static_cast<LONG>(top + page_height * fit)};
+  DWM_THUMBNAIL_PROPERTIES properties = {};
+  properties.dwFlags = DWM_TNP_RECTSOURCE | DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE |
+                       DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY;
+  properties.rcSource = source;
+  properties.rcDestination = destination;
+  properties.fVisible = TRUE;
+  // The picture's veil, black 0.12, as the window behind shows through: DWM has no veil of its own.
+  properties.opacity = 224;
+  properties.fSourceClientAreaOnly = FALSE;
+  const HRESULT updated = DwmUpdateThumbnailProperties(thumbnail, &properties);
+  if (FAILED(updated)) {
+    DwmUnregisterThumbnail(thumbnail);
+    fprintf(stderr, "browser: mirror couldn't place its thumbnail: 0x%08lx\n", updated);
+    return false;
+  }
+  g_mirrors.push_back(thumbnail);
+  fprintf(stderr, "browser: mirror thumbnails a %.0fx%.0f page at %.0f %.0f %.0f %.0f\n",
+          page_width, page_height, x, y, width, height);
+  return true;
+}
+
 // Adds the steps of |line|'s command. Returns false for one it can't do.
 bool Run(const std::string& line) {
   std::istringstream words(line);
@@ -1329,6 +1397,24 @@ bool Run(const std::string& line) {
     }
     EndDrag();
     return true;
+  }
+  // Spike (#359): mirror <from> <to> <x> <y> <width> <height>, or mirror off.
+  if (action == "mirror") {
+    std::string first;
+    words >> first;
+    if (first == "off") {
+      for (HTHUMBNAIL thumbnail : g_mirrors) {
+        DwmUnregisterThumbnail(thumbnail);
+      }
+      g_mirrors.clear();
+      fprintf(stderr, "browser: mirror hidden\n");
+      return true;
+    }
+    const size_t from = std::strtoul(first.c_str(), nullptr, 10);
+    size_t to;
+    double x, y, width, height;
+    return words >> to >> x >> y >> width >> height && from && to && Browser(from - 1) &&
+           Browser(to - 1) && Mirror(Browser(from - 1), Browser(to - 1), x, y, width, height);
   }
   if (action == "window") {
     size_t number;

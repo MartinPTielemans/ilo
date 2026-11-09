@@ -345,6 +345,17 @@ impl Shell {
             picture.motion = None;
             // check.sh waits for this line, which says the picture has stopped moving.
             log!("browser: window {id} picture rests");
+            // Spike (#359): where it rests, in points from the window's top-left corner, for the
+            // driver's mirror to cover.
+            if let Some(at) = self.picture_bounds(now) {
+                log!(
+                    "browser: window {id} picture at {:.0} {:.0} {:.0} {:.0}",
+                    f32::from(at.origin.x),
+                    f32::from(at.origin.y),
+                    f32::from(at.size.width),
+                    f32::from(at.size.height)
+                );
+            }
         }
     }
 
