@@ -1030,6 +1030,12 @@ void AppActivating(bool active, DWORD thread) {
       g_resigning_active();
     }
   }
+  // The foreground event says so too, but an out-of-context WinEvent doesn't wake Chromium's
+  // message pump, so an idle browser hears it only at its next message, seconds on. This one,
+  // sent, wakes it.
+  if (!active && !OurThread(thread)) {
+    OtherAppInFront();
+  }
 }
 
 void WatchForeground() {
