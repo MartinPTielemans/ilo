@@ -2,7 +2,9 @@
 # and runs their scriptlets from the page's start, as uBlock Origin does: a site's own rule, and a
 # generic one that isn't a class or an id, hide their elements before the page's first frame, over
 # the page's own !important, and a scriptlet sets a value before the page's first script reads it.
-# Filters for another site do neither there.
+# Filters for another site do neither there. Generic rules that hide by a class or an id hide
+# their elements soon after the page has them, on both sites, as uBlock Origin's do: one in the
+# page, and one the page adds once it has loaded.
 
 # An engine from before the page's rules has no agent to send them to.
 if ! engine_has ../core/ad_block_page_agent.cc ../core/native_ad_block.cc \
@@ -15,6 +17,7 @@ printf '%s' '<title>loading</title>
 <style>.check-ad { display: block !important }</style>
 <div class=check-ad style="height:60px;background:#c33">an ad</div>
 <div data-check-ad style="height:60px;background:#c33">a generic ad</div>
+<div class=check-class-ad style="height:60px;background:#c33">an ad by class</div>
 <script>
 self.checkAdsShown = true;
 const scriptlet = self.checkAdsShown === false ? "ran" : "didn'"'"'t run";
@@ -23,6 +26,23 @@ const shown = (selector) => (hidden(selector) ? "hidden" : "shown");
 requestAnimationFrame(() => setTimeout(() => {
   document.title = "site ad " + shown(".check-ad") + ", generic ad " + shown("[data-check-ad]") +
     ", scriptlet " + scriptlet;
+  const late = document.createElement("div");
+  late.id = "check-late-ad";
+  late.style.cssText = "height:60px;background:#c33";
+  late.textContent = "an ad by id, added late";
+  document.body.append(late);
+  // Reports once both are hidden, or what they are after 10 s.
+  const since = performance.now();
+  const report = () => {
+    const done = hidden(".check-class-ad") && hidden("#check-late-ad");
+    if (!done && performance.now() - since < 10000) {
+      setTimeout(report, 50);
+      return;
+    }
+    document.title = "class ad " + shown(".check-class-ad") + ", late id ad " +
+      shown("#check-late-ad");
+  };
+  report();
 }));
 </script>' > "$out/site/cosmetic.html"
 page="${site}cosmetic.html"
@@ -30,7 +50,8 @@ page="${site}cosmetic.html"
 other="http://localhost:$port/cosmetic.html"
 # EasyList turns generic rules off on 127.0.0.1 and localhost, for uBlock Origin too, so the
 # filters take those exceptions back with $badfilter for the generic rule to apply here.
-filters="$(printf '%s\n' '127.0.0.1##.check-ad' '##[data-check-ad]' \
+filters="$(printf '%s\n' '127.0.0.1##.check-ad' '##[data-check-ad]' '##.check-class-ad' \
+  '###check-late-ad' \
   '127.0.0.1##+js(set, checkAdsShown, false)' \
   '@@://127.0.0.1$generichide,badfilter' '@@://localhost:$generichide,badfilter')"
 # Launches the app at $1 on a new profile, logging to $2, and sets $reported to the page's first
@@ -50,16 +71,23 @@ report_at() {
   tab=$(today | cut -d' ' -f1)
   await "^browser: title $tab site ad " || fail "the page at $1 didn't report"
   reported=$(grep "^browser: title $tab site ad " "$log" | head -1 | cut -d' ' -f4-)
+  await "^browser: title $tab class ad " || fail "the page at $1 didn't report its later ads"
+  later=$(grep "^browser: title $tab class ad " "$log" | head -1 | cut -d' ' -f4-)
 }
 report_at "$page" adblock-cosmetic
 [ "$reported" = "site ad hidden, generic ad hidden, scriptlet ran" ] ||
   fail "the page's filters didn't hide and run from its start: $reported"
+[ "$later" = "class ad hidden, late id ad hidden" ] ||
+  fail "the generic rules by class and id didn't hide: $later"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-cosmetic.png" || fail "no window to capture"
 quit
 report_at "$other" adblock-cosmetic-other
 [ "$reported" = "site ad shown, generic ad hidden, scriptlet didn't run" ] ||
   fail "on another site, the site's filters applied or the generic one didn't: $reported"
+[ "$later" = "class ad hidden, late id ad hidden" ] ||
+  fail "on another site, the generic rules by class and id didn't hide: $later"
 quit
 echo "ok: the browser's own ad blocker hid the site's ad and a generic one from the page's first" \
-  "frame, over its own !important, and ran its scriptlet before the page's first script; on" \
-  "another site, only the generic rule applied. Window: $out/adblock-cosmetic.png"
+  "frame, over its own !important, and ran its scriptlet before the page's first script; it hid" \
+  "an ad by a generic class rule and one the page added later by a generic id rule; on another" \
+  "site, only the generic rules applied. Window: $out/adblock-cosmetic.png"

@@ -16,6 +16,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -241,7 +242,24 @@ class Proxy : public network::mojom::URLLoaderFactory {
 struct Page {
   std::string css;
   std::string script;
+  // Whether the page's generic rules apply, and those of them it doesn't hide, as a JSON array for
+  // ad_block_hide.
+  bool generic = false;
+  std::string exceptions = "[]";
 };
+
+// The rules that hide |selectors|, a JSON array of them, appended to |css|.
+void AppendRules(const base::ListValue& selectors, std::string& css) {
+  for (const base::Value& selector : selectors) {
+    // A rule each, so one the page's engine can't read drops alone, and none that could end its
+    // rule or start a comment over the next.
+    const std::string* text = selector.GetIfString();
+    if (text && text->find_first_of("{}") == std::string::npos &&
+        text->find("/*") == std::string::npos) {
+      base::StrAppend(&css, {*text, "{display:none!important}\n"});
+    }
+  }
+}
 
 // What the app's engine has the page at |url| hide and run, on Sequence().
 Page PageOf(const GURL& url) {
@@ -257,26 +275,64 @@ Page PageOf(const GURL& url) {
     return page;
   }
   if (const base::ListValue* hide = fields->FindList("hide")) {
-    for (const base::Value& selector : *hide) {
-      // A rule each, so one the page's engine can't read drops alone, and none that could end its
-      // rule or start a comment over the next.
-      const std::string* text = selector.GetIfString();
-      if (text && text->find_first_of("{}") == std::string::npos &&
-          text->find("/*") == std::string::npos) {
-        base::StrAppend(&page.css, {*text, "{display:none!important}\n"});
-      }
-    }
+    AppendRules(*hide, page.css);
   }
   if (const std::string* script = fields->FindString("script")) {
     page.script = *script;
   }
+  page.generic = fields->FindBool("generic").value_or(false) && host.ad_block_hide;
+  if (const base::ListValue* exceptions = fields->FindList("exceptions")) {
+    page.exceptions = base::WriteJson(*exceptions).value_or("[]");
+  }
   return page;
 }
 
+// The rules that hide the elements with these |classes| and |ids| on a page whose generic rules
+// don't hide its |exceptions|, on Sequence().
+std::string HideOf(const std::vector<std::string>& classes,
+                   const std::vector<std::string>& ids,
+                   const std::string& exceptions) {
+  std::string css;
+  const bc_host& host = Host();
+  if (!g_on.load(std::memory_order_relaxed) || !host.ad_block_hide) {
+    return css;
+  }
+  const auto json = [](const std::vector<std::string>& names) {
+    base::ListValue list;
+    for (const std::string& name : names) {
+      list.Append(name);
+    }
+    return base::WriteJson(list).value_or("[]");
+  };
+  std::string answer;
+  host.ad_block_hide(host.context, json(classes).c_str(), json(ids).c_str(), exceptions.c_str(),
+                     &Append, &answer);
+  if (std::optional<base::Value> selectors = base::JSONReader::Read(answer, base::JSON_PARSE_RFC);
+      selectors && selectors->is_list()) {
+    AppendRules(selectors->GetList(), css);
+  }
+  return css;
+}
+
+// At most this many of a page's classes, and as many ids, in one ask, each at most this long:
+// more than a page has, so a renderer can't have the engine match without end.
+constexpr size_t kMostNames = 4096;
+constexpr size_t kLongestName = 256;
+
+// |names| as the renderer sent them, but those too long, and no more than kMostNames.
+std::vector<std::string> Bounded(std::vector<std::string> names) {
+  std::erase_if(names, [](const std::string& name) { return name.size() > kLongestName; });
+  if (names.size() > kMostNames) {
+    names.resize(kMostNames);
+  }
+  return names;
+}
+
 // Sends the frame each page of a tab commits in what it hides and runs, as it's ready to commit,
-// so it's there before the page's first script.
+// so it's there before the page's first script, and answers its generic rules by class and id.
 class PageSender : public content::WebContentsObserver,
-                   public content::WebContentsUserData<PageSender> {
+                   public content::WebContentsUserData<PageSender>,
+                   public mojom::AdBlockHide {
  public:
   PageSender(const PageSender&) = delete;
   PageSender& operator=(const PageSender&) = delete;
@@ -293,13 +349,19 @@ class PageSender : public content::WebContentsObserver,
     }
     Page page = std::move(it->second);
     pages_.erase(it);
-    if (page.css.empty() && page.script.empty()) {
+    if (page.css.empty() && page.script.empty() && !page.generic) {
       return;
+    }
+    // The document's own, which goes when the agent drops it for the next document.
+    mojo::PendingRemote<mojom::AdBlockHide> hide;
+    if (page.generic) {
+      hides_.Add(this, hide.InitWithNewPipeAndPassReceiver(), std::move(page.exceptions));
     }
     // On the frame's own channel, as the commit is, so it comes first.
     mojo::AssociatedRemote<mojom::AdBlockPage> agent;
     navigation->GetRenderFrameHost()->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
-    agent->UseForNextDocument(navigation->GetURL().spec(), page.css, page.script);
+    agent->UseForNextDocument(navigation->GetURL().spec(), page.css, page.script,
+                              std::move(hide));
   }
   // One that doesn't commit, such as a download.
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
@@ -313,7 +375,19 @@ class PageSender : public content::WebContentsObserver,
       : content::WebContentsObserver(contents),
         content::WebContentsUserData<PageSender>(*contents) {}
 
+  // mojom::AdBlockHide:
+  void Hide(const std::vector<std::string>& classes,
+            const std::vector<std::string>& ids,
+            HideCallback answer) override {
+    Sequence()->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&HideOf, Bounded(classes), Bounded(ids), hides_.current_context()),
+        std::move(answer));
+  }
+
   std::map<int64_t, Page> pages_;
+  // Each document's, with its page's exceptions.
+  mojo::ReceiverSet<mojom::AdBlockHide, std::string> hides_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
