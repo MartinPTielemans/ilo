@@ -122,8 +122,11 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: rustup update stable --no-self-update
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -134,6 +137,15 @@ jobs:
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # macOS asks Screen Recording, Input Monitoring, the camera and the microphone of the process
       # responsible for the app, here the runner's agent that started the job, not of the app: once media's call and

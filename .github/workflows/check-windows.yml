@@ -145,7 +145,10 @@ jobs:
           Set-Item -Path $maps -Value 'URL:Maps'
           New-ItemProperty -Path $maps -Name 'URL Protocol' -Value '' -Force | Out-Null
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -158,6 +161,15 @@ jobs:
 
       - id: build
         run: ./setup.sh && ./build.sh
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The runner's screen is 1024 by 768, where the app's 1280 by 800 window doesn't fit and the
       # windows the runs place are kept on screen elsewhere. A screen as big as the ones the Mac's
@@ -257,8 +269,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -282,6 +296,12 @@ jobs:
           echo "ILO_SERVER=$PWD/target/release/ilo-server.exe" >> "$GITHUB_ENV"
           # Its DLLs, for the server to start.
           cygpath -w "$ssl/bin" >> "$GITHUB_PATH"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs

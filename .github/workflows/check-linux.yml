@@ -225,8 +225,11 @@ jobs:
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -240,6 +243,15 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit ilo's sync was last checked against, in the leg that has them.
@@ -251,8 +263,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -262,6 +276,12 @@ jobs:
         run: |
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
       # which stays plugged in for the job: in the leg that has it.

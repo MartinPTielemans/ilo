@@ -51,7 +51,10 @@ jobs:
           packages: libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
       - run: rustup update stable --no-self-update
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -73,6 +76,15 @@ jobs:
       # function main.rs builds on the Mac and Windows alone.
       - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The same screens on Wayland and X11, side by side, so text that fits on the Mac but not here
       # shows on every change to the app (tools/parity.sh). It only reports: nothing here fails the
