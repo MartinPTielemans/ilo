@@ -70,6 +70,11 @@
 //                                         once AppKit's screens no longer have it
 //   minimize                              minimizes the window to the Dock, or brings it back
 //   hide                                  hides the app, as ⌘H does, or brings it back
+//   active                                posts the app's became-active notification, as coming
+//                                         back to it from another app does, such as from System
+//                                         Settings, which a run can't do: macOS lets no background
+//                                         process make an app active, and a hidden app on a runner
+//                                         with nothing else in front stays the active one
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -1247,6 +1252,13 @@ bool Run(const std::string& line, void (^done)(void)) {
     } else {
       [driven miniaturize:nil];
     }
+    done();
+    return true;
+  }
+  if (action == "active") {
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:NSApplicationDidBecomeActiveNotification
+                      object:NSApp];
     done();
     return true;
   }
