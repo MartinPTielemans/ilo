@@ -72,14 +72,14 @@ jobs:
 
       # The screens tools/parity.sh captures on Linux, here on the runner's desktop, which GPUI draws
       # on with Direct3D's software adapter. The desktop starts at 1024 by 768, smaller than the
-      # preview's window. It only reports: nothing here fails the job.
+      # preview's window. It only reports: nothing here fails the job. The sheet is ImageMagick's, which
+      # the runner's image has (actions/runner-images, its Windows toolset).
       - name: Capture the parity screens
         continue-on-error: true
         run: |
           powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' ||
             echo "::warning title=Parity captures::The desktop stays at its own size"
-          choco install imagemagick -y --no-progress >/dev/null
-          PATH=$(ls -d /c/Program\ Files/ImageMagick-* | head -1):$PATH
+          command -v magick >/dev/null || echo "::warning title=Parity captures::The image has no ImageMagick, so there's no sheet"
           ../tools/parity.sh target/release/preview.exe ../parity
 
       - uses: actions/upload-artifact@v4
