@@ -1,0 +1,131 @@
+# One measuring run for #2205 part 2, on this branch only: what a hosted macos-26 runner gives the
+# Mac engine's build. Its free disk before and after the cleanup ungoogled-chromium-macos's CI does,
+# how long engine/setup.sh takes, how far one stage's build gets with ninja's progress every 10
+# minutes, the memory it uses, and the tree's size and what it compresses to as the next stage's
+# hand-over. It builds nothing it keeps and uploads only its logs.
+name: Engine on macOS, measured
+
+on:
+  push:
+    branches: [ci/mac-engine-hosted-2205-1]
+    paths: [.github/workflows/engine-mac-measure.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    # macos-15 has Xcode up to 26.3; Chromium 156 builds with the 26.5 SDK (mac_sdk.gni).
+    runs-on: macos-26
+    timeout-minutes: 358
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: echo "start=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+
+      - name: The runner
+        run: |
+          mkdir -p "$RUNNER_TEMP/m"
+          {
+            echo "## Runner"
+            sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+            sw_vers
+            echo "### Disk before"; df -h / /System/Volumes/Data
+          } | tee "$RUNNER_TEMP/m/runner.txt"
+
+      # What ungoogled-chromium-macos's CI removes: the Android SDK, every Xcode but the one, the
+      # simulators. Spotlight off, as it would index the tree.
+      - name: Free disk
+        run: |
+          t=$(date +%s)
+          sudo rm -rf "$ANDROID_HOME"
+          for x in /Applications/Xcode_*.app; do
+            [ "$(readlink -f "$x")" = "$(readlink -f /Applications/Xcode_26.5.app)" ] || sudo rm -rf "$x"
+          done
+          sudo xcode-select --switch /Applications/Xcode_26.5.app
+          xcrun simctl delete all || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches || true
+          sudo mdutil -a -i off || true
+          { echo "### Disk after the cleanup ($(( $(date +%s) - t )) s)"; df -h /System/Volumes/Data; } |
+            tee -a "$RUNNER_TEMP/m/runner.txt"
+
+      - name: Tools
+        run: |
+          t=$(date +%s)
+          brew install -q ninja go esbuild typescript coreutils uv node >/dev/null
+          xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+          echo "tools: $(( $(date +%s) - t )) s" | tee "$RUNNER_TEMP/m/setup.txt"
+
+      - name: engine/setup.sh
+        run: |
+          t=$(date +%s)
+          # GitHub's bash runs with pipefail, so setup.sh's failure fails the step.
+          engine/setup.sh 2>&1 | perl -MPOSIX -pe '$|=1; print strftime("%H:%M:%S ", gmtime)' >"$RUNNER_TEMP/m/setup.log"
+          grep -a ' setup:' "$RUNNER_TEMP/m/setup.log" || true
+          {
+            echo "setup.sh: $(( $(date +%s) - t )) s"
+            du -sh engine/.deps/src engine/.deps/downloads 2>/dev/null
+            df -h /System/Volumes/Data
+          } | tee -a "$RUNNER_TEMP/m/setup.txt"
+
+      # Until 40 minutes before the job's 6 hours, for the measures after. ninja's progress, the
+      # memory and the disk every 10 minutes. BUILD_JOBS as ninja's own default for 3 cores would
+      # give; build.sh's 3 GB a job would give 2.
+      - name: Build one stage
+        env:
+          NINJA_STATUS: '[%f/%t] '
+          BUILD_JOBS: '4'
+        run: |
+          left=$(( start + 320 * 60 - $(date +%s) ))
+          echo "building for $left s" | tee "$RUNNER_TEMP/m/build.txt"
+          (
+            while sleep 600; do
+              {
+                printf '%s ' "$(date -u +%H:%M)"
+                grep -ao '^\[[0-9]*/[0-9]*\]' "$RUNNER_TEMP/m/ninja.log" | tail -1 | tr '\n' ' '
+                sysctl -n vm.swapusage | tr '\n' ' '
+                memory_pressure -Q 2>/dev/null | tail -1 | tr '\n' ' '
+                df -h /System/Volumes/Data | awk 'NR == 2 { print "free " $4 }'
+              } >>"$RUNNER_TEMP/m/progress.txt"
+            done
+          ) &
+          sampler=$!
+          status=0
+          gtimeout -k 5m -s INT "$left" engine/build.sh >"$RUNNER_TEMP/m/ninja.log" 2>&1 || status=$?
+          kill "$sampler" || true
+          {
+            echo "build.sh: exit $status (124 is the stage's end)"
+            grep -ao '^\[[0-9]*/[0-9]*\]' "$RUNNER_TEMP/m/ninja.log" | tail -1
+          } | tee -a "$RUNNER_TEMP/m/build.txt"
+          cat "$RUNNER_TEMP/m/progress.txt"
+          grep -a -m5 -i 'error\|FAILED' "$RUNNER_TEMP/m/ninja.log" || true
+
+      # The hand-over: the tree as a stage would archive it, measured, not kept.
+      - name: Tree and hand-over size
+        if: always()
+        run: |
+          t=$(date +%s)
+          {
+            du -sh engine/.deps/src engine/.deps/src/out/Release 2>/dev/null
+            bytes=$(gtimeout 1500 tar -C engine/.deps -cf - src | zstd -3 -T0 | wc -c) || true
+            echo "zstd -3 of the tree: $bytes bytes in $(( $(date +%s) - t )) s (stopped at 1500 s)"
+            df -h /System/Volumes/Data
+          } | tee "$RUNNER_TEMP/m/tree.txt"
+
+      - name: Summary
+        if: always()
+        run: |
+          for f in runner setup build progress tree; do
+            [ -f "$RUNNER_TEMP/m/$f.txt" ] && { echo "### $f"; echo '```'; cat "$RUNNER_TEMP/m/$f.txt"; echo '```'; }
+          done >>"$GITHUB_STEP_SUMMARY"
+          tail -c 2000000 "$RUNNER_TEMP/m/ninja.log" >"$RUNNER_TEMP/m/ninja-tail.log" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/m/ninja.log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-mac-measure
+          path: ${{ runner.temp }}/m
+          retention-days: 30
