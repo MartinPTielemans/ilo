@@ -58,11 +58,11 @@ class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBl
     if (!next.css.empty()) {
       // As the user's, as uBlock Origin's are, so a page's own !important can't show what it
       // hides.
-      document.InsertStyleSheet(blink::WebString::FromUTF8(next.css), nullptr,
+      document.InsertStyleSheet(blink::WebString::FromUtf8(next.css), nullptr,
                                 blink::WebCssOrigin::kUser);
     }
     if (!next.script.empty()) {
-      frame->ExecuteScript(blink::WebScriptSource(blink::WebString::FromUTF8(next.script)));
+      frame->ExecuteScript(blink::WebScriptSource(blink::WebString::FromUtf8(next.script)));
     }
   }
 
