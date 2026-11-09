@@ -326,26 +326,40 @@ jobs:
           esac
           dir=$out/$where
           mkdir -p "$dir"
+          # Proof for #2223, not for merge: each run ten times, each in a folder of its own.
           for run in $RUNS; do
+           crashes=0 fails=0 first=
+           for n in $(seq 10); do
             start=$SECONDS
             status=0
             # The updates run builds a Flatpak first.
             limit=20m
             [ "$run" != updates ] || limit=45m
-            timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
-            [ ! -d build/check ] || mv build/check "$dir/$run"
+            timeout "$limit" ./check.sh "$run" > "$dir/$run-$n.log" 2>&1 || status=$?
+            [ ! -d build/check ] || mv build/check "$dir/$run-$n"
             pkill -9 -f "$PWD/build/Browser/" || true
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
-            skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
+            skipped=$(grep '^skip: ' "$dir/$run-$n.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
+            dumps=$(find "$dir/$run-$n" -name '*.dmp' 2> /dev/null | xargs -r -n1 basename | tr '\n' ' ' || true)
+            grep -aqE 'exited with status 1[2-5][0-9]|Segmentation fault' "$dir/$run-$n.log" && crashes=$((crashes + 1))
             if [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
-              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
-              echo "::warning::The $run run failed on $SESSION. Its log: $where$run.log in the artifact."
+              fails=$((fails + 1))
+              result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run-$n.log" | cut -c7- | tr '|\t' '/ ')"
+              first=${first:-"$n: $result"}
+              echo "::warning::The $run run $n failed on $SESSION. Its log: $where$run-$n.log in the artifact."
             fi
-            printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
-            echo "| $run | $result |"
+            echo "| $run $n | $result | dumps: ${dumps:-none} |"
+           done
+           if [ "$fails" = 0 ]; then
+             result="passed 10 of 10, $crashes crash lines"
+           else
+             result="failed $fails of 10, $crashes crash lines; first $first"
+           fi
+           printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
+           echo "| $run | $result |"
           done
 
       # Drags from other apps under Wayland, which check.sh's driver, X11's, can't make.
@@ -407,7 +421,7 @@ jobs:
           if [ -f "$RESULTS" ]; then
             while IFS="$(printf '\t')" read -r run result; do
               case $result in failed*) ;; *) continue ;; esac
-              ! find "$out/$where$run" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
+              ! find "$out/$where" -path "*/$run-*" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
             done < "$RESULTS"
           fi
           [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
