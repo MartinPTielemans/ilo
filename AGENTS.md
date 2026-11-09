@@ -45,7 +45,7 @@ The most common defect is a change that works on the path you tested and is miss
 - **Platforms.** Mac ships first, but the core compiles on Linux (`engine/check-linux.sh`) and per-OS code stays in the platform layer. A PR touching it (`app/platform/`, `host.h`) or what the OS draws (window material, overlay corners and shadows, window controls, key routing, IME, scaling) shows before and after on each OS.
 - **Hot paths.** A change to tab switch, new tab, the command bar or launch comes with before-and-after numbers against the performance gate.
 - **The look.** A visual change goes through `app/design/tokens.toml`, and the design file follows with `tools/design-sync.md`.
-- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates `docs/roadmap.md`.
+- **Docs.** A changed decision rewrites `docs/decisions.md`. Parity and roadmap ticks go in a daily ticks PR; name rows on `Parity:`.
 - **Reverse states.** If you added a way in, add the way out and the way to see it. A one-way door is a bug: a permission an agent can be granted needs a revoke and a place where it's listed.
 
 ## Dev
