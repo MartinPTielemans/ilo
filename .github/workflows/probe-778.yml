@@ -1,0 +1,97 @@
+# Whether GitHub's hosted Windows runner can add and remove a display without a driver install
+# (#778): what Windows reports of its adapters, outputs and display paths, and whether any output
+# can be attached. Prints no machine name, address or device instance.
+name: Probe 778
+
+on:
+  push:
+    branches: [fix/windows-virtual-display-778]
+    paths: [.github/workflows/probe-778.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Displays
+        shell: pwsh
+        run: |
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class D {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct DISPLAY_DEVICE {
+              public int cb;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+              public int StateFlags;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+            }
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct DEVMODE {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+              public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+              public short dmLogPixels;
+              public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, r1, r2, dmPanningWidth, dmPanningHeight;
+            }
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern bool EnumDisplayDevices(string device, int i, ref DISPLAY_DEVICE d, int flags);
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern int ChangeDisplaySettingsEx(string device, ref DEVMODE mode, IntPtr hwnd, int flags, IntPtr param);
+            [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+            [DllImport("user32.dll")]
+            public static extern int GetDisplayConfigBufferSizes(int flags, out int paths, out int modes);
+            [DllImport("kernel32.dll")] public static extern int WTSGetActiveConsoleSessionId();
+          }
+          '@
+          "monitors (SM_CMONITORS): $([D]::GetSystemMetrics(80))"
+          foreach ($q in @(@{n='all'; f=1}, @{n='active'; f=2})) {
+            $paths = 0; $modes = 0
+            $r = [D]::GetDisplayConfigBufferSizes($q.f, [ref]$paths, [ref]$modes)
+            "display config, $($q.n) paths: result $r, paths $paths, modes $modes"
+          }
+          $detached = @()
+          for ($i = 0; ; $i++) {
+            $a = New-Object D+DISPLAY_DEVICE; $a.cb = [Runtime.InteropServices.Marshal]::SizeOf($a)
+            if (-not [D]::EnumDisplayDevices($null, $i, [ref]$a, 0)) { break }
+            $attached = ($a.StateFlags -band 1) -ne 0
+            "output $($a.DeviceName): $($a.DeviceString), flags 0x$('{0:x}' -f $a.StateFlags), attached $attached"
+            for ($j = 0; ; $j++) {
+              $m = New-Object D+DISPLAY_DEVICE; $m.cb = $a.cb
+              if (-not [D]::EnumDisplayDevices($a.DeviceName, $j, [ref]$m, 0)) { break }
+              "  monitor $j`: $($m.DeviceString), flags 0x$('{0:x}' -f $m.StateFlags)"
+            }
+            if (-not $attached) { $detached += $a.DeviceName }
+          }
+          # Attaching a detached output is how a second display is added without a driver.
+          foreach ($name in $detached) {
+            $mode = New-Object D+DEVMODE; $mode.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($mode)
+            $mode.dmFields = 0x20 -bor 0x80000 -bor 0x100000; $mode.dmPositionX = 4096
+            $mode.dmPelsWidth = 1024; $mode.dmPelsHeight = 768
+            $r = [D]::ChangeDisplaySettingsEx($name, [ref]$mode, [IntPtr]::Zero, 1, [IntPtr]::Zero)
+            "attach $name`: $r, monitors now $([D]::GetSystemMetrics(80))"
+          }
+          if (-not $detached) { "no detached output to attach" }
+          "session $([Diagnostics.Process]::GetCurrentProcess().SessionId), console session $([D]::WTSGetActiveConsoleSessionId())"
+          "Display and Monitor devices:"
+          Get-PnpDevice -Class Display, Monitor -ErrorAction SilentlyContinue |
+            ForEach-Object { "  $($_.Class): $($_.FriendlyName), $($_.Status)" }
+          "inbox INFs naming IddCx (indirect display):"
+          Select-String -Path "$env:windir\INF\*.inf" -Pattern 'IddCx' -List -ErrorAction SilentlyContinue |
+            ForEach-Object { "  $(Split-Path $_.Path -Leaf)" }
+          "driver store packages naming IddCx:"
+          Get-ChildItem "$env:windir\System32\DriverStore\FileRepository" -Filter *.inf -Recurse -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'IddCx' -List | ForEach-Object { "  $(Split-Path $_.Path -Leaf)" }
