@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -12,14 +15,26 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/values.h"
+#include "browser_core/ad_block_page.mojom.h"
 #include "browser_core/host.h"
 #include "browser_core/public/browser_core.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/navigation_throttle_registry.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/web_contents_user_data.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
@@ -35,6 +50,7 @@
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "url/gurl.h"
 
 namespace browser_core {
@@ -221,6 +237,145 @@ class Proxy : public network::mojom::URLLoaderFactory {
   mojo::Remote<network::mojom::URLLoaderFactory> target_;
 };
 
+// What a page hides and runs from its start (ad_block_page.mojom).
+struct Page {
+  std::string css;
+  std::string script;
+};
+
+// What the app's engine has the page at |url| hide and run, on Sequence().
+Page PageOf(const GURL& url) {
+  Page page;
+  const bc_host& host = Host();
+  if (!g_on.load(std::memory_order_relaxed) || !host.ad_block_page) {
+    return page;
+  }
+  std::string answer;
+  host.ad_block_page(host.context, url.spec().c_str(), &Append, &answer);
+  std::optional<base::DictValue> fields = base::JSONReader::ReadDict(answer, base::JSON_PARSE_RFC);
+  if (!fields) {
+    return page;
+  }
+  if (const base::ListValue* hide = fields->FindList("hide")) {
+    for (const base::Value& selector : *hide) {
+      // A rule each, so one the page's engine can't read drops alone, and none that could end its
+      // rule or start a comment over the next.
+      const std::string* text = selector.GetIfString();
+      if (text && text->find_first_of("{}") == std::string::npos &&
+          text->find("/*") == std::string::npos) {
+        base::StrAppend(&page.css, {*text, "{display:none!important}\n"});
+      }
+    }
+  }
+  if (const std::string* script = fields->FindString("script")) {
+    page.script = *script;
+  }
+  return page;
+}
+
+// Sends the frame each page of a tab commits in what it hides and runs, as it's ready to commit,
+// so it's there before the page's first script.
+class PageSender : public content::WebContentsObserver,
+                   public content::WebContentsUserData<PageSender> {
+ public:
+  PageSender(const PageSender&) = delete;
+  PageSender& operator=(const PageSender&) = delete;
+  ~PageSender() override = default;
+
+  // What the page of the navigation |navigation| hides and runs.
+  void Keep(int64_t navigation, Page page) { pages_[navigation] = std::move(page); }
+
+  // content::WebContentsObserver:
+  void ReadyToCommitNavigation(content::NavigationHandle* navigation) override {
+    auto it = pages_.find(navigation->GetNavigationId());
+    if (it == pages_.end()) {
+      return;
+    }
+    Page page = std::move(it->second);
+    pages_.erase(it);
+    if (page.css.empty() && page.script.empty()) {
+      return;
+    }
+    // On the frame's own channel, as the commit is, so it comes first.
+    mojo::AssociatedRemote<mojom::AdBlockPage> agent;
+    navigation->GetRenderFrameHost()->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
+    agent->UseForNextDocument(navigation->GetURL().spec(), page.css, page.script);
+  }
+  // One that doesn't commit, such as a download.
+  void DidFinishNavigation(content::NavigationHandle* navigation) override {
+    pages_.erase(navigation->GetNavigationId());
+  }
+
+ private:
+  friend class content::WebContentsUserData<PageSender>;
+
+  explicit PageSender(content::WebContents* contents)
+      : content::WebContentsObserver(contents),
+        content::WebContentsUserData<PageSender>(*contents) {}
+
+  std::map<int64_t, Page> pages_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(PageSender);
+
+// Asks the app's engine what the page a navigation loads hides and runs as its request starts, so
+// the answer is in by its response, which waits for it only if it isn't.
+class PageThrottle : public content::NavigationThrottle {
+ public:
+  using content::NavigationThrottle::NavigationThrottle;
+
+  // content::NavigationThrottle:
+  ThrottleCheckResult WillStartRequest() override {
+    Ask();
+    return PROCEED;
+  }
+  ThrottleCheckResult WillRedirectRequest() override {
+    Ask();
+    return PROCEED;
+  }
+  ThrottleCheckResult WillProcessResponse() override {
+    if (!page_) {
+      waiting_ = true;
+      return DEFER;
+    }
+    Keep();
+    return PROCEED;
+  }
+  const char* GetNameForLogging() override { return "browser_core::AdBlockPage"; }
+
+ private:
+  // For the navigation's address now, in place of what was asked for one it redirected from.
+  void Ask() {
+    page_.reset();
+    Sequence()->PostTaskAndReplyWithResult(
+        FROM_HERE, base::BindOnce(&PageOf, navigation_handle()->GetURL()),
+        base::BindOnce(&PageThrottle::Answer, weak_factory_.GetWeakPtr(), ++asked_));
+  }
+  void Answer(int asked, Page page) {
+    if (asked != asked_) {
+      return;
+    }
+    page_ = std::move(page);
+    if (std::exchange(waiting_, false)) {
+      Keep();
+      Resume();
+    }
+  }
+  void Keep() {
+    content::WebContents* contents = navigation_handle()->GetWebContents();
+    PageSender::CreateForWebContents(contents);
+    PageSender::FromWebContents(contents)->Keep(navigation_handle()->GetNavigationId(),
+                                                std::move(*page_));
+  }
+
+  std::optional<Page> page_;
+  int asked_ = 0;
+  bool waiting_ = false;
+  base::WeakPtrFactory<PageThrottle> weak_factory_{this};
+};
+
 }  // namespace
 
 bool NativeAdBlock() {
@@ -251,6 +406,10 @@ void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder) {
   auto [receiver, target] = factory_builder.Append();
   Sequence()->PostTask(FROM_HERE,
                        base::BindOnce(&Proxy::Start, std::move(receiver), std::move(target)));
+}
+
+void AddNativeAdBlockPage(content::NavigationThrottleRegistry& registry) {
+  registry.AddThrottle(std::make_unique<PageThrottle>(registry));
 }
 
 }  // namespace browser_core

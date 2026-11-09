@@ -43,7 +43,8 @@ void SetUpAdBlock();
 bool IsAdBlocker(const std::string& id);
 
 // Holds a page that starts before it's ready in the page's profile, as at launch, until it is, so
-// it blocks from the first page.
+// it blocks from the first page. The browser's own (native_ad_block.h) holds none, and gives the
+// page what it hides and runs from its start.
 void AddAdBlockHold(content::NavigationThrottleRegistry& registry);
 
 // Turns it on or off in every profile loaded, as UserSettings().ad_blocking says, once the

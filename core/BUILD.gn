@@ -15,6 +15,29 @@ mojom("drm_request") {
   generate_blink = true
 }
 
+# What the browser's own ad blocker (#2111) has a frame's next document hide and run, from the
+# browser to the frame's agent.
+mojom("ad_block_page") {
+  sources = [ "ad_block_page.mojom" ]
+}
+
+# The frame's side of it, which Chrome's renderer gives each frame
+# (engine/patches/ours/chromium-core-ad-block-page.patch), so it's apart from the browser's code.
+source_set("ad_block_page_agent") {
+  sources = [
+    "ad_block_page_agent.cc",
+    "ad_block_page_agent.h",
+  ]
+  deps = [
+    ":ad_block_page",
+    "//base",
+    "//content/public/renderer",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public:blink",
+    "//url",
+  ]
+}
+
 # The page a tab shows for a load that failed. Chrome's renderer calls it
 # (engine/patches/ours/chromium-core-error-page.patch), so it's apart from the browser's code.
 source_set("error_page") {
@@ -372,6 +395,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_page",
     ":archive_rule",
     ":drm_request",
     ":mini_player_place",

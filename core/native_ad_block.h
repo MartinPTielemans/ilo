@@ -8,6 +8,10 @@ namespace base {
 class FilePath;
 }  // namespace base
 
+namespace content {
+class NavigationThrottleRegistry;
+}  // namespace content
+
 namespace network {
 class URLLoaderFactoryBuilder;
 }  // namespace network
@@ -37,6 +41,11 @@ void SetNativeAdBlockOn(bool on);
 // Puts it between the requests of the factory |factory_builder| builds and the network, from
 // ContentBrowserClient::WillCreateURLLoaderFactory.
 void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder);
+
+// Gives the page |registry|'s navigation loads what the app's engine hides on it and runs in it
+// from its start, sent to its frame before it commits (ad_block_page.mojom), from
+// ContentBrowserClient::CreateThrottlesForNavigation where ad_block.cc says it blocks.
+void AddNativeAdBlockPage(content::NavigationThrottleRegistry& registry);
 
 }  // namespace browser_core
 

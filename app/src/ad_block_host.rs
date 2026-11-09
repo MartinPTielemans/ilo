@@ -60,9 +60,7 @@ pub(crate) unsafe extern "C" fn ad_block_request(
         return bc::BC_AD_BLOCK_ALLOW as c_int;
     };
     let answer = |code: u32, text: &str| {
-        if let Some(write) = write {
-            unsafe { write(out, text.as_ptr().cast(), text.len()) };
-        }
+        write_out(text, write, out);
         code as c_int
     };
     match ad_block::check(&engine, &text(url), &text(source_url), &text(kind)) {
@@ -71,4 +69,44 @@ pub(crate) unsafe extern "C" fn ad_block_request(
         Verdict::Redirect(stand_in) => answer(bc::BC_AD_BLOCK_REDIRECT, &stand_in),
         Verdict::Rewrite(url) => answer(bc::BC_AD_BLOCK_REWRITE, &url),
     }
+}
+
+/// Writes `answer` with the core's `write`.
+fn write_out(answer: &str, write: bc::bc_writer, out: *mut c_void) {
+    if let Some(write) = write {
+        unsafe { write(out, answer.as_ptr().cast(), answer.len()) };
+    }
+}
+
+pub(crate) unsafe extern "C" fn ad_block_page(
+    _: *mut c_void,
+    url: *const c_char,
+    write: bc::bc_writer,
+    out: *mut c_void,
+) {
+    // With no engine, nothing: the page hides and runs nothing of the blocker's.
+    if let Some(engine) = BLOCKER.engine() {
+        write_out(&ad_block::page(&engine, &text(url)), write, out);
+    }
+}
+
+pub(crate) unsafe extern "C" fn ad_block_hide(
+    _: *mut c_void,
+    classes: *const c_char,
+    ids: *const c_char,
+    exceptions: *const c_char,
+    write: bc::bc_writer,
+    out: *mut c_void,
+) {
+    let Some(engine) = BLOCKER.engine() else {
+        return;
+    };
+    let strings = |json| serde_json::from_str::<Vec<String>>(&text(json)).unwrap_or_default();
+    let answer = ad_block::hide(
+        &engine,
+        &strings(classes),
+        &strings(ids),
+        &strings(exceptions),
+    );
+    write_out(&answer, write, out);
 }

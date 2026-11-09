@@ -703,13 +703,24 @@ bool IsAdBlocker(const std::string& id) {
 }
 
 void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
-  // The browser's own has nothing to wait for: a request waits for it itself, for the moment after
-  // launch it takes to load.
-  if (NativeAdBlock()) {
-    return;
-  }
   content::NavigationHandle& navigation = registry.GetNavigationHandle();
   const GURL& url = navigation.GetURL();
+  // The browser's own has nothing to hold: a request waits for it itself, for the moment after
+  // launch it takes to load. It gives a web page what it hides and runs where it blocks, on the
+  // site of the page the frame is in, as ProxyForAdBlock's requests.
+  if (NativeAdBlock()) {
+    if (!UserSettings().ad_blocking || !url.SchemeIsHTTPOrHTTPS()) {
+      return;
+    }
+    content::RenderFrameHost* parent = navigation.GetParentFrameOrOuterDocument();
+    const GURL page = parent ? parent->GetOutermostMainFrame()->GetLastCommittedURL() : url;
+    Profile* profile =
+        Profile::FromBrowserContext(navigation.GetWebContents()->GetBrowserContext());
+    if (page.SchemeIsHTTPOrHTTPS() && !OffSites(profile->GetOriginalProfile()).MatchesURL(page)) {
+      AddNativeAdBlockPage(registry);
+    }
+    return;
+  }
   content::BrowserContext* context = navigation.GetWebContents()->GetBrowserContext();
   Profile* profile = Profile::FromBrowserContext(context);
   // Only where it filters and will get ready: http(s), in a profile it's loaded and on in, and not

@@ -17,6 +17,8 @@ use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
 
+mod scriptlets;
+
 /// What the engine blocks with, as the core gives it (bc_host's ad_block_use).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Setup {
@@ -68,7 +70,7 @@ fn options(folder: &Path, list: &Path, text: &str) -> ParseOptions {
 }
 
 /// Compiles `setup`'s lists and the user's filters, about 0.25 s for the lists uBlock Origin turns
-/// on, and gives it uBlock Origin's stand-ins. A list that can't be read is left out.
+/// on, and gives it uBlock Origin's stand-ins and scriptlets. A list that can't be read is left out.
 pub fn compile(setup: &Setup) -> Engine {
     let mut set = FilterSet::new(false);
     for list in &setup.lists {
@@ -82,8 +84,15 @@ pub fn compile(setup: &Setup) -> Engine {
     }
     set.add_filter_list(setup.filters.clone(), ParseOptions::default());
     let mut engine = Engine::new_with_filter_set(set);
-    engine.use_resources(stand_ins(&setup.folder));
+    engine.use_resources(resources(&setup.folder));
     engine
+}
+
+/// What filters name in uBlock Origin's `folder`: its stand-ins and its scriptlets.
+fn resources(folder: &Path) -> Vec<Resource> {
+    let mut resources = stand_ins(folder);
+    resources.extend(scriptlets::scriptlets(folder));
+    resources
 }
 
 /// uBlock Origin's stand-ins, the files in its web_accessible_resources its
@@ -158,6 +167,46 @@ pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
     }
 }
 
+/// What the page at `url` hides and runs from the start, as bc_host's ad_block_page writes it: a
+/// JSON object of its "hide" selectors, its "procedural" filters, the "exceptions" to generic
+/// hiding, its scriptlets' "script", and whether "generic" hiding applies.
+pub fn page(engine: &Engine, url: &str) -> String {
+    let resources = engine.url_cosmetic_resources(url);
+    let sorted = |set: std::collections::HashSet<String>| {
+        let mut all: Vec<String> = set.into_iter().collect();
+        all.sort();
+        all
+    };
+    serde_json::json!({
+        "hide": sorted(resources.hide_selectors),
+        "procedural": sorted(resources.procedural_actions),
+        "exceptions": sorted(resources.exceptions),
+        "script": wrapped(&resources.injected_script),
+        "generic": !resources.generichide,
+    })
+    .to_string()
+}
+
+/// The page's scriptlets, `script`, in a scope of their own with the globals they share, as uBlock
+/// Origin runs them, or nothing for none.
+fn wrapped(script: &str) -> String {
+    match script.trim().is_empty() {
+        true => String::new(),
+        false => format!(
+            "(function() {{\n'use strict';\nconst scriptletGlobals = {{}};\n{script}\n}})();\n"
+        ),
+    }
+}
+
+/// The generic selectors that hide the elements with these `classes` and `ids`, but the page's
+/// `exceptions` (page's), as bc_host's ad_block_hide writes them: a JSON array.
+pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[String]) -> String {
+    let exceptions = exceptions.iter().cloned().collect();
+    let mut selectors = engine.hidden_class_id_selectors(classes, ids, &exceptions);
+    selectors.sort();
+    serde_json::Value::from(selectors).to_string()
+}
+
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
 /// a list, the filters or adblock-rust's version names another.
 fn cache_name(setup: &Setup) -> String {
@@ -182,7 +231,7 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
     if let Some(bytes) = file.as_ref().and_then(|file| fs::read(file).ok()) {
         let mut engine = Engine::default();
         if engine.deserialize(&bytes).is_ok() {
-            engine.use_resources(stand_ins(&setup.folder));
+            engine.use_resources(resources(&setup.folder));
             crate::log!(
                 "browser: ad block engine loaded in {} ms",
                 start.elapsed().as_millis()

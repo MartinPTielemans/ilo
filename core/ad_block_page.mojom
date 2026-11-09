@@ -1,0 +1,13 @@
+module browser_core.mojom;
+
+// What the browser's own ad blocker (#2111) hides on a frame's next document and runs in it, from
+// the browser to the frame's agent (ad_block_page_agent.h). The browser sends it as the document is
+// ready to commit, on the frame's own channel, so it arrives before the commit, and the agent
+// applies it as the document starts, before the page's own scripts run. Associated with the frame,
+// so it's ordered with the commit.
+interface AdBlockPage {
+  // For the document at |url|, which the agent checks the one that starts is: |css|, the rules that
+  // hide what the page's filters hide, as the user's style sheet, and |script|, the scriptlets'
+  // code, to run in the page's main world. Either may be empty.
+  UseForNextDocument(string url, string css, string script);
+};

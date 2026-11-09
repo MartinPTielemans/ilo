@@ -48,6 +48,7 @@ ours/chromium-xcode-build-define.patch
 ours/chromium-core-login-dialog.patch
 ours/chromium-core-external-protocol-dialog.patch
 ours/chromium-core-ad-block.patch
+ours/chromium-core-ad-block-page.patch
 ours/chromium-core-split-switch.patch
 ours/chromium-sync-service.patch
 ours/chromium-sync-hooks.patch

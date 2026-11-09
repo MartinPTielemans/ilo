@@ -176,3 +176,49 @@ fn a_request_waits_for_the_engine_asked_for() {
         Verdict::Block
     );
 }
+
+#[test]
+fn a_page_hides_its_own_and_generic_selectors_and_runs_its_scriptlets() {
+    let folder = folder("page");
+    fs::create_dir_all(folder.join("js/resources")).unwrap();
+    fs::write(
+        folder.join("js/resources/set-constant.js"),
+        "import { registerScriptlet } from './base.js';\nfunction setConstant(chain = '', value = '') {\n    \
+         window[chain] = value === 'false' ? false : value;\n}\nregisterScriptlet(setConstant, {\n    \
+         name: 'set-constant.js',\n    aliases: [ 'set.js' ],\n});\n",
+    )
+    .unwrap();
+    let filters = "news.example##.sponsor\nnews.example##+js(set, adsShown, false)\n##.ad-banner\n\
+                   ##.promo\nnews.example#@#.promo\n##[data-ad]\n";
+    let engine = compile(&setup(&folder, filters));
+    let answer: serde_json::Value =
+        serde_json::from_str(&page(&engine, "https://news.example/today")).unwrap();
+    // Its own, and the generic one that isn't a class or an id, which no element's classes find.
+    assert_eq!(answer["hide"], serde_json::json!([".sponsor", "[data-ad]"]));
+    assert_eq!(answer["generic"], true);
+    let script = answer["script"].as_str().unwrap();
+    assert!(script.starts_with("(function() {\n'use strict';\nconst scriptletGlobals = {};\n"));
+    assert!(script.contains("function setConstant(chain = '', value = '') {"));
+    assert!(
+        script.contains("setConstant(\"adsShown\", \"false\")"),
+        "{script}"
+    );
+    // The generic selectors that match its classes, but the one it makes an exception of.
+    let exceptions: Vec<String> = (answer["exceptions"].as_array().unwrap().iter())
+        .map(|each| each.as_str().unwrap().to_string())
+        .collect();
+    let classes = [
+        "ad-banner".to_string(),
+        "promo".to_string(),
+        "story".to_string(),
+    ];
+    assert_eq!(
+        hide(&engine, &classes, &[], &exceptions),
+        r#"[".ad-banner"]"#
+    );
+    // Another site hides only the generic one of them, and runs nothing.
+    let other: serde_json::Value =
+        serde_json::from_str(&page(&engine, "https://other.example/")).unwrap();
+    assert_eq!(other["hide"], serde_json::json!(["[data-ad]"]));
+    assert_eq!(other["script"], "");
+}
