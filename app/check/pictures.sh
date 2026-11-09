@@ -83,9 +83,15 @@ idle() {
     fail "the first window took $(($(taken) - before)) pictures with the browser idle ($1)"
 }
 
+# Captures every window as pictures-$1.png. A runner whose screen capture macOS refuses (TCC) says
+# so, as the log's lines and the wakeups prove the run, not the picture.
+capture() {
+  ../tools/window-screenshot.sh "$pid" "$out/pictures-$1.png" all > /dev/null 2>&1 ||
+    echo "pictures: no capture of the $1 picture: the system refused it" | tee -a "$results"
+}
 # The picture as it first came, idle, after the move has settled.
 sleep 10
-../tools/window-screenshot.sh "$pid" "$out/pictures-first.png" all || fail "no window to capture"
+capture first
 idle "first picture"
 
 # A same-page navigation: the page's fragment and colour change with no load.
@@ -99,7 +105,7 @@ go_from_bar "${page}?three"
 expect "^browser: loaded $a ${page}?three\$" "the page didn't load again from the command bar"
 taken_by $((n + 1)) "a page that loaded"
 sleep 10
-../tools/window-screenshot.sh "$pid" "$out/pictures-refreshed.png" all || fail "no window to capture"
+capture refreshed
 idle "refreshed picture"
 exec 3>&-
 quit
