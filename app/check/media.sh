@@ -158,6 +158,18 @@ expect "^browser: title $a in a call\$" "Allow didn't give the call the camera a
 expect "^browser: page $a camera 1 microphone 1 sharing 0 shared 0\$" \
   "the call's tab didn't show it uses the camera"
 ../tools/window-screenshot.sh "$pid" "$out/media-call.png" || fail "no window to capture"
+if [ "$(uname)" = Darwin ]; then
+  for _ in $(seq 20); do
+    send state
+    [ "$active" = 1 ] || break
+    sleep 0.1
+  done
+  if [ "$active" = 0 ]; then
+    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
+      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
+    fail "ilo lost its activation as the call started (#968): $("$out/alert" 2>&1)"
+  fi
+fi
 
 send click $page_point
 send key s
