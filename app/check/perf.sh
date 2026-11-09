@@ -210,6 +210,37 @@ perf_launch() {
   held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
   quit
 }
+# For #2138 on its proof branch alone: the released ilo's renderer, signed as users get it, with
+# the hardened runtime, beside this build's, which the checks run with the linker's signature.
+perf_released() {
+  d=$perf_dir/released
+  mkdir -p "$d"
+  if ! curl -sSfL -o "$d/ilo.dmg" \
+    https://github.com/MartinPTielemans/ilo/releases/latest/download/ilo-mac-arm64.dmg; then
+    echo "perf: released: no DMG"
+    return 0
+  fi
+  hdiutil attach -nobrowse -readonly -mountpoint "$d/mnt" "$d/ilo.dmg" > /dev/null
+  ditto "$d/mnt/ilo.app" "$d/ilo.app"
+  hdiutil detach "$d/mnt" > /dev/null || true
+  BROWSER_PROFILE_DIR=$d/profile BROWSER_URL="$page?released" "$d/ilo.app/Contents/MacOS/ilo" \
+    > "$d/ilo.log" 2>&1 &
+  released=$!
+  # A fixed wait, as this proof runs once and nothing reads the released app's log lines.
+  sleep 25
+  for r in $(pgrep -f "$d/ilo.app/.*Renderer"); do
+    echo "renderer $r: $(vmmap --summary "$r" 2>&1 | grep -m1 '^Physical footprint:')"
+    vmmap -v "$r" 2>&1 | grep -E '^__DATA_CONST.*Framework$' || true
+  done > "$d/const.txt"
+  helper=$(find "$d/ilo.app" -maxdepth 7 -path '*Helper (Renderer).app' | head -1)
+  codesign -dvv --entitlements - "$helper" >> "$d/const.txt" 2>&1 || true
+  codesign -dvv --entitlements - "$app/Contents/Frameworks/Chromium Framework.framework/Versions/Current/Helpers/Chromium Helper (Renderer).app" >> "$d/const.txt" 2>&1 || true
+  kill "$released" 2> /dev/null || true
+  sleep 3
+  pkill -9 -f "$d/ilo.app" 2> /dev/null || true
+  sed 's/^/perf: released: /' "$d/const.txt" | grep -v "^perf: released: \(Executable\|Identifier\|Format\|CodeDirectory\|Signature size\|Info.plist\|TeamIdentifier\|Sealed\|Internal\|Hash\|CandidateCDHash\)" | head -30
+}
+[ "$(uname)" = Darwin ] && perf_released
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
