@@ -1037,6 +1037,10 @@ void AppendViews(NSMutableString* line, NSView* content, NSView* parent) {
                        NSMinX(frame), NSMinY(frame), NSWidth(frame), NSHeight(frame)];
     if (view.layer.masksToBounds && view.layer.cornerRadius > 0) {
       [line appendFormat:@" radius %.0f", view.layer.cornerRadius];
+      // The core's engine rounds pages on the continuous curve the window's corner has.
+      if ([view.layer.cornerCurve isEqual:kCACornerCurveContinuous]) {
+        [line appendString:@" continuous"];
+      }
     }
   }
 }
