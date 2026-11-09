@@ -1753,6 +1753,27 @@ static void ToActiveSpace(NSWindow* window) {
   });
 }
 
+// Brings Little ilo's |window| of |browser| to the desktop shown, each time it comes on screen:
+// over a full-screen browser window there, as Arc's comes over a full-screen Arc window, or else
+// to that desktop. A window joins another's full-screen desktop only as its auxiliary, as
+// Chromium's SetCanAppearInExistingFullscreenSpaces makes one, which can't go full screen itself;
+// without it, bringing one back over full screen took the user to the desktop it was left on.
+static void ToShownDesktop(Browser* browser, NSWindow* window) {
+  for (auto& each : g_browsers) {
+    if (each.get() != browser && each->window.onActiveSpace &&
+        (each->window.styleMask & NSWindowStyleMaskFullScreen)) {
+      window.collectionBehavior =
+          (window.collectionBehavior & ~(NSWindowCollectionBehaviorPrimary |
+                                         NSWindowCollectionBehaviorFullScreenPrimary)) |
+          NSWindowCollectionBehaviorFullScreenAuxiliary;
+      // check.sh reads this line.
+      fprintf(stderr, "browser: little window over full screen\n");
+      break;
+    }
+  }
+  ToActiveSpace(window);
+}
+
 // The window on screen right behind |window| at the normal level, one with something to see, and
 // its process, as the window server stacks every app's windows.
 static bool WindowBehind(NSWindow* window, CGWindowID* behind, pid_t* owner) {
@@ -1855,22 +1876,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSWindow* window = view.window;
   browser->window = window;
   if (browser->little) {
-    // Over a full-screen browser window on the desktop shown, as Arc's opens over a full-screen Arc
-    // window. A window joins another's full-screen desktop only as its auxiliary, as Chromium's
-    // SetCanAppearInExistingFullscreenSpaces makes one, which can't go full screen itself.
-    for (auto& each : g_browsers) {
-      if (each.get() != browser && each->window.onActiveSpace &&
-          (each->window.styleMask & NSWindowStyleMaskFullScreen)) {
-        window.collectionBehavior =
-            (window.collectionBehavior & ~(NSWindowCollectionBehaviorPrimary |
-                                           NSWindowCollectionBehaviorFullScreenPrimary)) |
-            NSWindowCollectionBehaviorFullScreenAuxiliary;
-        // check.sh reads this line.
-        fprintf(stderr, "browser: little window over full screen\n");
-        break;
-      }
-    }
-    ToActiveSpace(window);
+    ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
     window.animationBehavior = NSWindowAnimationBehaviorNone;
     // Closing it over another app's window, mid-grow too, leaves that app in front (#1692): the
@@ -2173,7 +2179,7 @@ void host_activate(void* ui_view) {
     return;
   }
   if (browser->little) {
-    ToActiveSpace(window);
+    ToShownDesktop(browser, window);
   }
   if (window.miniaturized) {
     [window deminiaturize:nil];
