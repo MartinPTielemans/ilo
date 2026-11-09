@@ -1,12 +1,12 @@
 // macOS's own question in a check VM or a hosted Mac, as "Allow … to find devices on local
 // networks?", which UserNotificationCenter shows over the app and which takes its activation: it
-// finds the alert whose text has TEXT among UserNotificationCenter's windows, through the
-// accessibility API, and presses its button named BUTTON. It waits up to 15 s for it and says
-// "pressed BUTTON on TEXT", never the rest of the alert, which names the process that asked.
-// Without one it says which app is in front and exits 1. With no arguments it waits for any of its
-// alerts and says only what it asks about, from a fixed list of topics, and its buttons. It reads
-// UserNotificationCenter's windows alone, never another app's. The run's process needs
-// Accessibility, which check-mac.yml grants.
+// finds the alert whose text has TEXT, or any with TEXT empty, among UserNotificationCenter's
+// windows, through the accessibility API, and presses its button named BUTTON. It waits up to
+// 15 s for it and says "pressed BUTTON on TEXT", never the rest of the alert, which names the
+// process that asked. Without one it says which app is in front and exits 1. With no arguments it
+// waits for any of its alerts and says only what it asks about, from a fixed list of topics, and
+// its buttons. It reads UserNotificationCenter's windows alone, never another app's. The run's
+// process needs Accessibility, which check-mac.yml grants.
 // Usage: alert [TEXT BUTTON]. Built with clang++ -fobjc-arc -framework Cocoa.
 #import <Cocoa/Cocoa.h>
 
@@ -126,7 +126,8 @@ int main(int argc, char** argv) {
         id application = CFBridgingRelease(AXUIElementCreateApplication(app.processIdentifier));
         for (id window in Children((__bridge AXUIElementRef)application, kAXWindowsAttribute)) {
           NSString* said = AllText((__bridge AXUIElementRef)window, 0);
-          if ([said rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound) {
+          if (text.length &&
+              [said rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound) {
             continue;
           }
           AXUIElementRef button = Button((__bridge AXUIElementRef)window, title, 0);

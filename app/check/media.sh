@@ -9,9 +9,10 @@
 # it and float it in Picture in Picture, whose click shows the tab, and whose × puts it away. A
 # private window's music has a player in that window alone. View › Cast… and the page menu's Cast…
 # open the tab's Cast card, and × closes it; on the Mac the run answers macOS's question for the
-# local network that looking for devices brings. A video's page menu floats it in Picture
-# in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
-# moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
+# local network that looking for devices brings, and any it asks as the call starts. A video's
+# page menu floats it in Picture in Picture, the Mini Player, 10 in from the top right of the
+# screen, which a scroll or a drag moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts
+# back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
 # window, or from another app with a menu open, puts it back in the tab.
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
@@ -19,6 +20,35 @@
 # since the fake question Chromium can put in its place never tells the browser what's captured.
 
 serve
+
+# On the Mac, macOS's own question, which UserNotificationCenter shows over the app with its
+# activation: the user answers it once, and a check VM or a hosted runner, new each time, is asked
+# in the run. If the app isn't the active one within <tenths> of a second, the run says what was
+# asked, from check/alert.mm, which never says the rest, answers Allow as the user would, and has
+# the app's activation back. Usage: answer_macos <tenths> <when>.
+answer_macos() {
+  [ "$(uname)" = Darwin ] || return 0
+  for _ in $(seq "$1"); do
+    send state
+    [ "$active" = 1 ] || break
+    sleep 0.1
+  done
+  [ "$active" = 0 ] || return 0
+  [ -x "$out/alert" ] ||
+    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
+    fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
+  asked=$("$out/alert" 2>&1) || fail "ilo lost its activation $2, to no question: $asked"
+  echo "macOS asked $2, and the run answers Allow: $asked"
+  "$out/alert" "" Allow > "$out/alert.txt" 2>&1 || true
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && break
+    sleep 0.1
+  done
+  [ "$active" = 1 ] ||
+    fail "ilo wasn't the active app after macOS asked $2: $asked; $(cat "$out/alert.txt")"
+}
+
 # "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
 # opens that tab, the same page with ?Shared, whose title is what follows the ?, "p" one titled
 # Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a next
@@ -158,18 +188,8 @@ expect "^browser: title $a in a call\$" "Allow didn't give the call the camera a
 expect "^browser: page $a camera 1 microphone 1 sharing 0 shared 0\$" \
   "the call's tab didn't show it uses the camera"
 ../tools/window-screenshot.sh "$pid" "$out/media-call.png" || fail "no window to capture"
-if [ "$(uname)" = Darwin ]; then
-  for _ in $(seq 20); do
-    send state
-    [ "$active" = 1 ] || break
-    sleep 0.1
-  done
-  if [ "$active" = 0 ]; then
-    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
-      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-    fail "ilo lost its activation as the call started (#968): $("$out/alert" 2>&1)"
-  fi
-fi
+# Now and then a hosted Mac asks as the call starts (#968), before the share's key.
+answer_macos 20 "as the call started"
 
 send click $page_point
 send key s
@@ -595,26 +615,8 @@ send choose "Cast…"
 expect "^browser: cast $b .* devices [0-9]*\$" "the page menu's Cast… didn't open the Cast dialog"
 send menu "Cast…"
 expect "^browser: cast $b closed\$" "View › Cast… again didn't close the Cast dialog"
-if [ "$(uname)" = Darwin ]; then
-  # A Mac that has answered before isn't asked again, and the app keeps its activation.
-  for _ in $(seq 30); do
-    send state
-    [ "$active" = 1 ] || break
-    sleep 0.1
-  done
-  if [ "$active" = 0 ]; then
-    clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
-      fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-    "$out/alert" "local network" Allow > "$out/alert.txt" 2>&1 || true
-    for _ in $(seq 50); do
-      send state
-      [ "$active" = 1 ] && break
-      sleep 0.1
-    done
-    [ "$active" = 1 ] ||
-      fail "ilo wasn't the active app after the Cast card: $(cat "$out/alert.txt")"
-  fi
-fi
+# A Mac that has answered before isn't asked again, and the app keeps its activation.
+answer_macos 30 "after the Cast card"
 
 # A video's page menu has Chrome's Picture in Picture, which floats the video; "x" in the page
 # brings it back. The video plays a canvas's colours, with no sound.
