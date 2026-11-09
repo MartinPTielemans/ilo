@@ -245,6 +245,8 @@ perf_released() {
     sleep 2
   done
   sed 's/^/perf: released: /' "$d/const.txt"
+  # The artifact keeps the logs, not the apps.
+  rm -rf "$d/ilo.dmg" "$d/ilo.app"
 }
 if [ "$(uname)" = Darwin ]; then
   perf_released
