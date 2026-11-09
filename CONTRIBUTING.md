@@ -89,10 +89,9 @@ merge; review does that.
 New issues get `needs-triage`, which a maintainer replaces with one status, never two: `ready`,
 `needs-repro` (waiting on a Linux reproduction), `needs-decision` or `needs-mac-repro` (macOS-only,
 waiting on a Mac reproduction). An issue labeled `needs more info` closes after 7 days without a
-reply. PRs get a `size:` label from their changed lines, tests left out. A PR that makes
-[AGENTS.md](AGENTS.md) and the docs it links to larger fails the agent context check, unless a
-maintainer accepts the growth with the `agent-context-increase` label: every byte there is read by
-every agent on every task.
+reply. A PR that makes [AGENTS.md](AGENTS.md) and the docs it links to larger fails the agent
+context check, unless a maintainer accepts the growth with the `agent-context-increase` label: every
+byte there is read by every agent on every task.
 
 CI runs only the jobs a change touches (`.github/scripts/ci-changes.cjs`), on GitHub's runners.
 
