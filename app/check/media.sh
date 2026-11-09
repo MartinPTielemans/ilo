@@ -169,8 +169,20 @@ expect "^browser: page $b camera 0 microphone 0 sharing 0 shared 1\$" \
 expect "^browser: page $c share instead 1\$" "the other tab wasn't offered to share instead"
 # Chrome shows the tab a page starts sharing, unless the page asks it not to, once, up to a second
 # later, and whichever tab is shared by then. So it does before the share moves, or it shows the
-# other tab under the call's "e" (#1166).
-expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Chrome didn't show the tab shared"
+# other tab under the call's "e" (#1166). It does only while the window sharing is the active one,
+# so the Mac's window losing the keyboard as the share starts, as to the window macOS shows for a
+# moment after a capture (#968), leaves the tab where it is, as Chrome does (#2148).
+shared_at=$step
+for _ in $(seq 100); do
+  logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at" && break
+  exited_without "^browser: selected $b" "Chrome didn't show the tab shared" "$shared_at"
+  sleep 0.1
+done
+if ! logged "^browser: selected $b\( in .*\)\{0,1\}\$" "$shared_at"; then
+  logged '^browser: window resigned key$' "$shared_at" || fail "Chrome didn't show the tab shared"
+  echo "skip: Chrome showing the tab shared: the window lost the keyboard as the share started" \
+    "(#968), and Chrome shows it only while its window has it."
+fi
 ../tools/window-screenshot.sh "$pid" "$out/media-sharing.png" || fail "no window to capture"
 
 # The other tab's menu, from its row, moves the share there.
