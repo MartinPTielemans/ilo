@@ -21,6 +21,10 @@ std::unique_ptr<syncer::DataTypeController> Controller(Profile* profile);
 // Something the session keeps changed (SessionChanged), perhaps a Space, a pinned tab or a folder.
 void Changed();
 
+// Whether this device stopped syncing the Spaces, as a newer ilo on another device wrote them in a
+// form this version can't read whole (sync_spaces_newer.h).
+bool NeedsUpdate();
+
 }  // namespace browser_core::sync_spaces
 
 #endif  // BROWSER_CORE_SYNC_SPACES_H_

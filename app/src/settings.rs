@@ -603,6 +603,7 @@ impl account::Host for CoreAccount {
             bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
             bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
             bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
+            bc::BC_SYNC_TROUBLE_UPDATE => Some(account::Trouble::Update),
             _ => None,
         };
         // check.sh waits for this line.

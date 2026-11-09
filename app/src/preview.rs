@@ -3194,13 +3194,15 @@ impl account::Host for PreviewAccount {
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
     fn choose(&self, _: account::Choice, _: bool) {}
-    // PREVIEW_SYNC=never, unreachable, throttled or stopped shows that line, else synced at 15:04.
+    // PREVIEW_SYNC=never, unreachable, throttled, stopped or update shows that line, else synced at
+    // 15:04.
     fn activity(&self) -> account::Activity {
         let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
         let trouble = match shown.as_str() {
             "unreachable" => Some(account::Trouble::Unreachable),
             "throttled" => Some(account::Trouble::Throttled),
             "stopped" => Some(account::Trouble::Stopped),
+            "update" => Some(account::Trouble::Update),
             _ => None,
         };
         let synced = if shown == "never" { "" } else { "at 15:04" };

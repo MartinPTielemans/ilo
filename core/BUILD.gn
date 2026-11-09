@@ -147,6 +147,16 @@ source_set("space_default") {
   ]
 }
 
+# Whether a newer ilo wrote one of the account's Spaces, apart so browser_core_unittests tests the
+# rule alone.
+source_set("sync_spaces_newer") {
+  sources = [
+    "sync_spaces_newer.cc",
+    "sync_spaces_newer.h",
+  ]
+  public_deps = [ ":sync_spaces_proto" ]
+}
+
 # When auto-archive takes a Today tab, Never too, apart so browser_core_unittests tests the rule
 # alone.
 source_set("archive_rule") {
@@ -380,6 +390,7 @@ source_set("browser_core") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_newer",
     ":window_frames",
     "//base",
     "//base:i18n",
@@ -667,6 +678,7 @@ test("browser_core_unittests") {
     "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "sync_spaces_newer_unittest.cc",
     "window_frames_unittest.cc",
   ]
   deps = [
@@ -681,6 +693,7 @@ test("browser_core_unittests") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_newer",
     ":window_frames",
     "//base",
     "//base/test:run_all_unittests",
