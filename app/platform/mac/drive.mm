@@ -143,8 +143,10 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
-//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
-//                                         "browser: status item shown" or "none", or clicks it
+//   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it,
+//                                         or draws it to a PNG at <path>, logged as "browser:
+//                                         status item captured <w>x<h>"
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -1889,11 +1891,30 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "statusitem") {
     NSStatusBarButton* button = HostLittleStatusButton();
-    if (line.size() > action.size()) {
+    std::string what;
+    words >> what;
+    if (what == "click") {
       if (!button) {
         return false;
       }
       [button performClick:nil];
+    } else if (what == "capture") {
+      // The button draws itself into a picture, as the menu bar shows it: the menu bar's window
+      // isn't one a capture of the app's windows finds, and a capture of the screen would hold
+      // other apps' buttons.
+      std::string path;
+      std::getline(words >> std::ws, path);
+      if (!button || path.empty()) {
+        return false;
+      }
+      NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+      [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+      NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (![png writeToFile:@(path.c_str()) atomically:YES]) {
+        return false;
+      }
+      fprintf(stderr, "browser: status item captured %.0fx%.0f\n", button.bounds.size.width,
+              button.bounds.size.height);
     } else {
       fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
     }
