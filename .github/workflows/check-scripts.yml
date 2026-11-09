@@ -1,5 +1,6 @@
 # On the Mac, app/check.sh and the runs it sources run under /bin/sh, which is bash 3.2.57 in POSIX
-# mode, and a file that starts #!/bin/bash under bash 3.2. Linux's dash and bash 5 take what 3.2
+# mode, and a file that starts #!/bin/bash under bash 3.2. On Linux /bin/sh is dash, which parses
+# no bashisms, such as a here-string, <<<, that bash 3.2 takes (#2074). Bash 5 takes what 3.2
 # can't, so the scripts may hold none of:
 # - bash 4 features: declare -A, ${var,,}, mapfile, |&, ;& and so on;
 # - a process substitution, <( ), outside a #!/bin/bash file;
@@ -64,6 +65,10 @@ jobs:
             [ "$file" = app/check/git-bash.sh ] && continue
             if [ "$(head -n 1 "$file")" = '#!/bin/bash' ]; then mode=; else mode=--posix; fi
             ~/bash32/bash $mode -n "$file" || { echo "::error file=$file::bash 3.2 can't parse it"; status=1; }
+            # check.sh parses what it sources with sh -n first, dash on Linux.
+            if [ -n "$mode" ]; then
+              dash -n "$file" || { echo "::error file=$file::Linux's sh, dash, can't parse it"; status=1; }
+            fi
           done
           # bash 4 features a parse takes but 3.2 fails on when it runs, outside comments.
           if grep -nE '^[^#]*(declare -A|local -A|typeset -A|\<mapfile\>|\<readarray\>|\<coproc\>|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^))' app/check.sh app/check/*.sh; then
