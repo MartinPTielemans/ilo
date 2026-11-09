@@ -686,7 +686,8 @@ if [ "$(uname)" = Linux ]; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): drive.mm has no pip."
+  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): the driver doesn't" \
+    "drag a Picture in Picture window there."
   send click $page_point
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
