@@ -1,20 +1,25 @@
 # The picture of a page in the window it left follows the page's loads, from the core's reports and
 # never on a timer (#359). A still page moves from the first window into a second, and the first
-# window draws its picture. A same-page change in the second window (a click sets its fragment and
-# its colour) and then a new page loaded from the command bar each take the first window's picture
-# again. An idle browser is then measured, in PICTURES_ROUNDS (3) rounds of PICTURES_SECONDS (20)
-# with the picture as it first came and again once those have refreshed it: the CPU and wakeups of
-# the app's processes, with no picture taken while it's idle, and the wakeups after no more than
-# the most of those before, with a quarter and 2 a second for noise. Lines go to
+# window draws its picture. A same-page navigation in the second window (a click pushes a URL and
+# sets its colour) and then the page loaded again from the command bar each take the first window's
+# picture again. The page is the check's site's, as a data: URL's fragment commits no navigation.
+# Settled for 10 s, an idle browser is then measured, in PICTURES_ROUNDS (3) rounds of
+# PICTURES_SECONDS (20), with the picture as it first came and again once those have refreshed it:
+# the CPU and wakeups of the app's processes, with no picture taken while it's idle, and the wakeups
+# after no more than the most of those before, with a quarter and 2 a second for noise. Lines go to
 # build/check/pictures.txt, and the captures show the picture before and after.
 
 seconds="${PICTURES_SECONDS:-20}"
 rounds="${PICTURES_ROUNDS:-3}"
 serve
-# Still, with nothing on a timer. A click sets its fragment, a same-page navigation with no load,
-# and its colour and title. No percent or hash signs: the URL would read them.
-page='data:text/html,<title>one</title><body style="margin:0;height:100vh;background:rgb(40,90,200)"
- onclick="location.hash=`two`;document.body.style.background=`rgb(220,110,40)`;document.title=`two`">'
+# Still, with nothing on a timer. A click pushes ?two, a same-page navigation with no load, and
+# changes its colour and title.
+cat > "$out/site/pictures.html" << 'HTML'
+<title>one</title>
+<body style="margin:0;height:100vh;background:#285ac8"
+  onclick="history.pushState(null, '', '?two'); document.body.style.background = '#dc6e28'; document.title = 'two'">
+HTML
+page="${site}pictures.html"
 log="$out/pictures.log"
 results="$out/pictures.txt"
 : > "$results"
@@ -79,7 +84,7 @@ idle() {
 }
 
 # The picture as it first came, idle, after the move has settled.
-sleep 2
+sleep 10
 ../tools/window-screenshot.sh "$pid" "$out/pictures-first.png" all || fail "no window to capture"
 idle "first picture"
 
@@ -90,10 +95,10 @@ expect "^browser: title $a two\$" "a click on the page didn't change it"
 taken_by $((n + 1)) "a same-page navigation"
 # A new page, loaded.
 n=$(taken)
-go_from_bar "$site"
-expect "^browser: loaded $a $site\$" "the site's page didn't load"
+go_from_bar "${page}?three"
+expect "^browser: loaded $a ${page}?three\$" "the page didn't load again from the command bar"
 taken_by $((n + 1)) "a page that loaded"
-sleep 2
+sleep 10
 ../tools/window-screenshot.sh "$pid" "$out/pictures-refreshed.png" all || fail "no window to capture"
 idle "refreshed picture"
 exec 3>&-
