@@ -148,10 +148,13 @@ EOF
   click() {
     if [ "$notify" = linux ]; then
       # Under Wayland the server sends the click's activation token first, as a desktop's does,
-      # with which the page's window can come forward.
+      # with which the page's window can come forward: one for a click in another app's window,
+      # as the desktop's for a click in its notification is (other_app_click).
       token=
-      [ -z "${WAYLAND_DISPLAY:-}" ] || token=$(sway_token) ||
-        fail "sway gave notification $1's click no activation token: $(cat "$out/swaymsg.log")"
+      if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        other_app_click
+        token=$other_app_token
+      fi
       echo "click $id $token" >&6
       return
     fi
@@ -262,6 +265,7 @@ EOF
       fail "the click didn't bring the page's window in front: $(grep '^browser: key window ' "$log" | tail -1)"
     ../tools/window-screenshot.sh "$pid" "$out/notification-clicked.png" || fail "no window to capture"
     exec 3>&- 6>&-
+    other_app_closes
     quit
     echo "ok: a click on a site's notification, which $([ "$notify" = mac ] && echo "macOS's banner" || echo "the desktop's notification server") sends through Chromium's bridge, shows its tab's Space and the tab in its window, brought in front of another, whether or not the page's handler focuses it, and a page that does switches once. Window: $out/notification-clicked.png"
   fi
