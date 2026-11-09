@@ -217,8 +217,11 @@ jobs:
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -231,6 +234,15 @@ jobs:
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
