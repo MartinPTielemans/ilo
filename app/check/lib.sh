@@ -892,3 +892,18 @@ brighter() {
   set -- $1 $2
   [ "$1" -ge $(($4 + 8)) ] && [ "$2" -ge $(($5 + 8)) ] && [ "$3" -ge $(($6 + 8)) ]
 }
+# Under Wayland a window comes forward only with an activation token, which the desktop gives the
+# app a launch or a click on a notification is for. sway's exec gives its command one: this prints
+# one from it, or fails.
+sway_token() {
+  rm -f "$out/sway-token"
+  printf '%s\n' 'printf %s "$XDG_ACTIVATION_TOKEN" > "$1.part" && mv "$1.part" "$1"' \
+    > "$out/sway-token.sh"
+  swaymsg exec "sh '$PWD/$out/sway-token.sh' '$PWD/$out/sway-token'" > "$out/swaymsg.log" 2>&1 ||
+    return 1
+  for _ in $(seq 100); do
+    [ ! -e "$out/sway-token" ] || break
+    sleep 0.05
+  done
+  [ -s "$out/sway-token" ] && cat "$out/sway-token"
+}

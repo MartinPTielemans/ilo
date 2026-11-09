@@ -147,7 +147,12 @@ EOF
   # (#2159), so the run presses again while the page hasn't said it was clicked.
   click() {
     if [ "$notify" = linux ]; then
-      echo "click $id" >&6
+      # Under Wayland the server sends the click's activation token first, as a desktop's does,
+      # with which the page's window can come forward.
+      token=
+      [ -z "${WAYLAND_DISPLAY:-}" ] || token=$(sway_token) ||
+        fail "sway gave notification $1's click no activation token: $(cat "$out/swaymsg.log")"
+      echo "click $id $token" >&6
       return
     fi
     for press in 1 2 3; do
