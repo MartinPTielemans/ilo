@@ -805,9 +805,13 @@ else
 fi
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
-# unless it's set to something else.
+# unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
+# its windows tile or float, so there's no zoom to see.
 action=$(defaults read -g AppleActionOnDoubleClick 2>/dev/null || echo Maximize)
-if [ "$action" = Maximize ]; then
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  zoom="isn't checked, since sway maximizes no window"
+  echo "skip: a double-click on the header's zoom: sway maximizes no window."
+elif [ "$action" = Maximize ]; then
   send doubleclick 115 24
   expect '^browser: window zoomed 1$' "a double-click on the header didn't zoom the window"
   # On Windows the UI lays out at the maximized size after Windows has zoomed the window, and a
