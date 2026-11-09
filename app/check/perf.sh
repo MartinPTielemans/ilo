@@ -213,7 +213,8 @@ perf_launch() {
 # For #2138 on its proof branch alone: the released ilo's renderer, signed as users get it, with
 # the hardened runtime, beside this build's, which the checks run with the linker's signature.
 perf_released() {
-  d=$perf_dir/released
+  # Absolute, as the profile directory must be for the sandboxed helpers.
+  d=$PWD/$perf_dir/released
   mkdir -p "$d"
   if ! curl -sSfL -o "$d/ilo.dmg" \
     https://github.com/MartinPTielemans/ilo/releases/latest/download/ilo-mac-arm64.dmg; then
