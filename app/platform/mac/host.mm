@@ -2194,8 +2194,10 @@ void host_activate(void* ui_view) {
 void host_set_window_shown(void* ui_view, bool shown) {
   Browser* browser = BrowserWithView(ui_view);
   NSWindow* window = browser ? browser->window : nil;
+  // As it's ordered in, as Show All does before it activates one: a window ordered in outside a
+  // full-screen desktop stays on its own, which activating it then shows.
   if (shown && browser->little) {
-    ToActiveSpace(window);
+    ToShownDesktop(browser, window);
   }
   if (!shown) {
     [window orderOut:nil];
