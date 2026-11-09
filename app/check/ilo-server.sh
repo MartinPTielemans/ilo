@@ -109,15 +109,20 @@ settings_keyboard() {
     fail "Settings couldn't have the keyboard again"
 }
 
-# What the clipboard holds, the X server's, Windows' or the Mac's: its text, or with formats the
-# formats it holds (not the Mac's).
+# Sets clipped to what the clipboard holds, the X server's or Windows': its text, or with formats
+# the formats it holds. On the Mac the driver gives each copy a pasteboard of its own in its place,
+# which nothing else reads, so it's the device's text, as its driver logs it (not the formats). A
+# variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
 clipboard() {
   if windows; then
-    python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true
+    clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
   elif [ "$(uname)" = Darwin ]; then
-    [ -n "${1:-}" ] || pbpaste 2>/dev/null || true
+    clipped=
+    [ -n "${1:-}" ] && return 0
+    send pasteboard
+    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: pasteboard text //p' | tail -1)
   else
-    timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true
+    clipped=$(timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true)
   fi
 }
 # The device's first browser window in front with the keyboard, as a click on it gives it. On
