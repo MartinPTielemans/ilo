@@ -850,6 +850,32 @@ impl Browser for Fake {
                         .collect(),
                     orders,
                     messages,
+                    // A step a minute, on its pages, and one refused.
+                    steps: (0..pages)
+                        .flat_map(|n| {
+                            let at = at - ago - 300 + 60 * n as u64;
+                            let step =
+                                |at, action: &str, refused: &str| browser::agent_history::Step {
+                                    at,
+                                    action: action.into(),
+                                    site: format!("example{n}.com"),
+                                    refused: refused.into(),
+                                };
+                            [
+                                step(at, "open_tab", ""),
+                                step(at + 20, "read_page", ""),
+                                step(at + 40, "click", ""),
+                            ]
+                        })
+                        .chain([browser::agent_history::Step {
+                            at: at - ago - 10,
+                            action: "passwords".into(),
+                            site: String::new(),
+                            refused: "Agents never read passwords, cookies or autofill data."
+                                .into(),
+                        }])
+                        .collect(),
+                    answers: "claude-code".into(),
                 }
             };
         let day = 24 * 60 * 60;
@@ -875,6 +901,17 @@ impl Browser for Fake {
                 0,
             ),
         ])
+    }
+
+    // The made-up agent may always act on the first page's site and never on the second's.
+    fn agent_answers(&self, key: &str, _: &App) -> Vec<(String, bool)> {
+        match key {
+            "claude-code" => vec![
+                ("example0.com".into(), true),
+                ("example1.com".into(), false),
+            ],
+            _ => Vec::new(),
+        }
     }
 
     fn day_starts(&self) -> [f64; 4] {

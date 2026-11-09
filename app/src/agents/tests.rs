@@ -5287,18 +5287,22 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
-    /// At launch the tasks' Spaces a run before left go, and an outside agent's, which a run
-    /// before #1080 showed as a Space of the user's, gives its tabs to the user's Space first.
+    /// At launch the Spaces a crash left, of tasks and of an outside agent, which a run before
+    /// #1080 showed as a Space of the user's, give their tabs to the user's Space, then go (#1080).
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         browser.task_spaces.borrow_mut().extend([100, 101]);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "https://flights.example/", "Flights"));
         agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
         assert_eq!(*browser.deleted.borrow(), vec![100, 101, 2]);
         let spaces: Vec<_> = (browser.tabs.borrow().iter())
             .map(|each| (each.0, each.1))
             .collect();
-        assert_eq!(spaces, [(20, 1), (10, 1)]);
+        assert_eq!(spaces, [(20, 1), (30, 1), (10, 1)]);
     }
 
     #[gpui::test]
@@ -5656,6 +5660,22 @@ mod sessions {
             ("Claude Code", 1, 0, 1)
         );
         assert!(past.ended >= past.started);
+        // With its activity log, for its page there: what it did and where, and the order it was
+        // refused, under its client's answers for good, which its page's Revoke takes (#1080).
+        assert_eq!(past.answers, "claude-code");
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert!(actions.contains(&"snapshot"), "{actions:?}");
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && step.refused.is_empty()),
+            "{:?}",
+            past.steps
+        );
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && !step.refused.is_empty()),
+            "the refused order isn't in its log: {:?}",
+            past.steps
+        );
+        assert!((past.steps.iter()).all(|step| step.at >= past.started && step.at <= past.ended));
         assert!(
             agents
                 .update(cx, |agents, cx| agents.take_ended(cx))

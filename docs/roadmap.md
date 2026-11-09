@@ -42,7 +42,7 @@ Sidebar, Spaces (with the Agent Space kind in the data model), command bar, spli
 
 Peek, Little Arc, link rules (Arc's Air Traffic Control), themes, end-to-end encrypted sync (not iCloud-only), Widevine, passkeys.
 
-Agents (decision 8): the built-in local MCP server, Agent Spaces (their hidden tabs keep running unthrottled, as Chrome keeps a tab it captures), engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server. This can move earlier if it becomes the launch pitch. The core API and data model are built for it from Phase 3 either way.
+Agents (decision 8): the built-in local MCP server, engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server. An agent's work is a session, not a Space of the user's (#1080): its card at the sidebar's foot while it acts, its hidden tabs kept running unthrottled as Chrome keeps a tab it captures, quiet until it needs the user, and filed in Library › Agents when it ends, with its steps and its sites' permissions to revoke. This can move earlier if it becomes the launch pitch. The core API and data model are built for it from Phase 3 either way.
 
 ## Phase 5: Windows, then Linux
 
