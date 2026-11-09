@@ -1,7 +1,7 @@
 # Temporary, for #1444, never for main: what an agent reads of Microsoft's public Word for the web
 # viewer in the released ilo on GitHub's hosted Mac, through ilo's own MCP bridge, with a throwaway
-# profile and no sign-in. It reads the page, has the agent turn on the viewer's accessible reading
-# mode, which shows the document as text, and reads it again.
+# profile and no sign-in. It reads the page, has the agent turn on the viewer's Accessibility Mode,
+# and reads it again.
 name: Word viewer agent read repro
 
 on:
@@ -85,14 +85,17 @@ jobs:
           outline = call("snapshot", tab=tab)
           save("2-snapshot.txt", outline)
           save("3-read_page.txt", call("read_page", tab=tab))
-          ref = re.search(r'(?:link|button) "Accessib[^"]*" \[(e\d+)\]', outline)
+          # The viewer's Accessibility Mode button, as #1448 clicked it. Its "Accessible reading
+          # mode" link is a skip link off the screen until it's focused, which the first pass's click
+          # landed outside the page for.
+          ref = re.search(r'button "Accessibility Mode" \[(e\d+)\]', outline)
           if ref:
               save("4-click.txt", call("click", tab=tab, ref=ref.group(1)))
               time.sleep(20)
               save("5-snapshot.txt", call("snapshot", tab=tab))
               save("6-read_page.txt", call("read_page", tab=tab))
           else:
-              print("no accessible reading mode control in the outline")
+              print("no Accessibility Mode button in the outline")
           shot = call("screenshot", tab=tab)
           if isinstance(shot, dict):
               with open(os.path.join(out, "7-screenshot.png"), "wb") as f:
