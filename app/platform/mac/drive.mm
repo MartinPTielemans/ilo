@@ -10,6 +10,7 @@
 //   doubleclick <x> <y>                   two left clicks, the second with a click count of 2
 //   rightclick <x> <y>                    a right click
 //   middleclick <x> <y>                   a click of the middle button, a mouse's wheel
+//   sideclick <x> <y> back|forward        a click of a mouse's back or forward side button
 //   clickkey <x> <y>                      a left click in the key window, such as the command bar
 //   doubleclickkey <x> <y>                two left clicks in the key window, as doubleclick
 //   rightclickkey <x> <y>                 a right click in the key window
@@ -507,7 +508,8 @@ void PostMouse(NSWindow* window,
                double x,
                double y,
                int count,
-               NSEventModifierFlags flags = 0) {
+               NSEventModifierFlags flags = 0,
+               CGMouseButton other = kCGMouseButtonCenter) {
   Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
@@ -523,7 +525,7 @@ void PostMouse(NSWindow* window,
   if (right || type == NSEventTypeOtherMouseDown || type == NSEventTypeOtherMouseUp) {
     CGEventRef numbered = CGEventCreateCopy(event.CGEvent);
     CGEventSetIntegerValueField(numbered, kCGMouseEventButtonNumber,
-                                right ? kCGMouseButtonRight : kCGMouseButtonCenter);
+                                right ? kCGMouseButtonRight : other);
     event = [NSEvent eventWithCGEvent:numbered];
     CFRelease(numbered);
   }
@@ -1358,6 +1360,22 @@ bool Run(const std::string& line, void (^done)(void)) {
     Convert(window, target, &x, &y);
     PostMouse(target, NSEventTypeRightMouseDown, x, y, 1);
     PostMouse(target, NSEventTypeRightMouseUp, x, y, 1);
+    done();
+    return true;
+  }
+  // A mouse's side buttons are the window server's buttons 3 and 4, which AppKit and GPUI read as
+  // back and forward.
+  if (action == "sideclick") {
+    double x, y;
+    std::string way;
+    if (!(words >> x >> y >> way) || (way != "back" && way != "forward")) {
+      return false;
+    }
+    NSWindow* target = WindowAt(window, x, y);
+    Convert(window, target, &x, &y);
+    const CGMouseButton button = static_cast<CGMouseButton>(way == "back" ? 3 : 4);
+    PostMouse(target, NSEventTypeOtherMouseDown, x, y, 1, 0, button);
+    PostMouse(target, NSEventTypeOtherMouseUp, x, y, 1, 0, button);
     done();
     return true;
   }
