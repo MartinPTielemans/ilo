@@ -36,6 +36,8 @@
 # restarted.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled.
+# Through all it does before the user first looks at its card, the user's Space, tab and focused
+# field stay as the user left them, and the user's next keys go into that field (decision 8).
 
 log="$out/mcp.log"
 step=0
@@ -104,12 +106,31 @@ if [ "$(uname)" = Linux ] && command -v dbus-daemon > /dev/null &&
 fi
 # With motion, as the run clicks Stop while a step's shimmer draws, which a system that reduces
 # motion has none of, as GitHub's hosted Windows runner does (main.rs, set_reduce_motion).
-BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
+# The user's own page: a field over all of it, which says when it takes the keyboard, loses it or is
+# typed in, and names itself once it has drawn. A URL drops its line breaks, so a line that goes on
+# from an attribute starts with a space.
+yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset:0;width:100vw;height:100vh"
+ onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
+ oninput="document.title=`yours typed `+f.value"></textarea>
+<script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
 user_tab=$(today | cut -d' ' -f1)
+await "^browser: title $user_tab yours\$" || fail "the user's page didn't draw"
+# The user clicks into their field before the agent starts; where Browser isn't the active app, the
+# click reaches no field, and the check of their focus below says it skips.
+send click $page_point
+yours_step=
+if [ "$active" = 1 ]; then
+  expect "^browser: title $user_tab yours focused\$" "a click on the user's page didn't focus its field"
+  yours_step=$step
+  yours_key=$key
+  yours_focus=$focus
+  yours_space=$(space)
+fi
 # A socket only the user can open, or on Windows a named pipe only they can.
 case "$(uname -s)" in
   MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
@@ -442,6 +463,24 @@ hand_back_pressed() {
   send key return cmd
   await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
 }
+# Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
+# since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
+# go into the field.
+if [ -n "$yours_step" ]; then
+  send state
+  [ "$(space)" = "$yours_space" ] || fail "the agent's work moved the user to Space $(space)"
+  shown=$(sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep '^browser: selected ' |
+    grep -v "^browser: selected $user_tab\( in .*\)\{0,1\}\$" | head -1)
+  [ -z "$shown" ] || fail "the agent's work showed another tab in the user's window: $shown"
+  [ "$key $focus" = "$yours_key $yours_focus" ] ||
+    fail "the agent's work took the keyboard from $yours_key, on $yours_focus, to $key, on $focus"
+  sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep -q "^browser: title $user_tab yours left\$" &&
+    fail "the user's field lost the keyboard while the agent worked"
+  send type ok
+  expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
+else
+  echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
+fi
 presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
 driven=$active
