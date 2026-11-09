@@ -651,7 +651,7 @@ fi
 # ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
 # System Settings; back in the app without it, it says it's still waiting; with it, coming back
 # reads Safari and its bar, menu and Reading List come in as a Space, with its history, and a
-# second time adds nothing. The driver hides the app and shows it again, which makes it active.
+# second time adds nothing. The driver says the app came back to the front, which a run can't do.
 if [ "$(uname)" = Darwin ]; then
   safari="$home/Library/Safari"
   mkdir -p "$safari"
@@ -686,15 +686,6 @@ if [ "$(uname)" = Darwin ]; then
   chmod 000 "$safari/Bookmarks.plist"
   # Readable again whatever ends the run, or the artifact's upload stops at it.
   trap 'cleanup; chmod 644 "$safari/Bookmarks.plist" 2> /dev/null || true' EXIT
-  # Hides the app, which takes it from the front, and shows it again, which brings it back, with
-  # $hidden the hide's step, which what the app does on coming back is logged after. The driver
-  # does no other command while the app is hidden, as it finds no window then.
-  come_back() {
-    send hide
-    hidden=$step
-    [ "$active" = 0 ] || fail "the hidden app stayed the active one"
-    send hide
-  }
   send menu Import from Other Browsers…
   expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for Safari"
   settings_drew 'Import & Export'
@@ -712,16 +703,17 @@ if [ "$(uname)" = Darwin ]; then
   ../tools/window-screenshot.sh "$pid" "$out/import-safari-access.png" || fail "no window to capture"
   send clickkey $(drawn import-full-disk-access)
   expect '^browser: open full disk access$' "Open System Settings didn't ask for System Settings' list"
-  come_back
+  # Back in the app from System Settings, which the driver stands in for: a run can't take the app
+  # from the front and bring it back, as macOS lets no background process make an app active.
+  send active
   expect '^browser: import from Safari still needs full disk access$' \
-    "back in the app without access, the import didn't say it still waits" "$hidden"
+    "back in the app without access, the import didn't say it still waits"
   ../tools/window-screenshot.sh "$pid" "$out/import-safari-still.png" || fail "no window to capture"
   chmod 644 "$safari/Bookmarks.plist"
   trap cleanup EXIT
-  come_back
-  expect '^browser: import read Safari: ' "back in the app with access, the import didn't read Safari" \
-    "$hidden"
-  expect '^browser: import drawn pick$' "Safari's choices didn't draw once it was read" "$hidden"
+  send active
+  expect '^browser: import read Safari: ' "back in the app with access, the import didn't read Safari"
+  expect '^browser: import drawn pick$' "Safari's choices didn't draw once it was read"
   send clickkey $(drawn import-go)
   expect '^browser: import from Safari: 1 Spaces, 3 pinned tabs, 0 open tabs, 0 favorites, 2 pages, 0 addresses$' \
     "Import didn't plan Safari's bookmarks, Reading List and history"

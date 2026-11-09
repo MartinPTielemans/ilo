@@ -69,8 +69,12 @@
 //   display remove                        pulls it out again, logging "browser: display removed"
 //                                         once AppKit's screens no longer have it
 //   minimize                              minimizes the window to the Dock, or brings it back
-//   hide                                  hides the app, as ⌘H does, or brings it back, done
-//                                         once AppKit has
+//   hide                                  hides the app, as ⌘H does, or brings it back
+//   active                                posts the app's became-active notification, as coming
+//                                         back to it from another app does, such as from System
+//                                         Settings, which a run can't do: macOS lets no background
+//                                         process make an app active, and a hidden app on a runner
+//                                         with nothing else in front stays the active one
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -198,9 +202,11 @@
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
 // and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
-// another Space, and "browser: window resigned key" and "browser: window became key" as the
-// browser window driven loses the keyboard and has it back. A page ignores clicks while the app
-// isn't the active app, and macOS doesn't let a background process make it active.
+// another Space, "browser: window resigned key" and "browser: window became key" as the browser
+// window driven loses the keyboard and has it back, and "browser: app activated <bundle
+// id|unbundled>, windows <level:size...>" as another app becomes the active one. A page ignores
+// clicks while the app isn't the active app, and macOS doesn't let a background process make it
+// active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -310,7 +316,7 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"f12", 111}, {"f10", 109}, {"f6", 97},
+    {":", 41}, {"@", 19}, {"!", 18}, {"f12", 111}, {"f10", 109}, {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
@@ -1249,25 +1255,20 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "active") {
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:NSApplicationDidBecomeActiveNotification
+                      object:NSApp];
+    done();
+    return true;
+  }
   if (action == "hide") {
-    // Done once AppKit has hidden or shown the app, which happens after this returns: a hide
-    // straight after a hide undid it before it took, and the app never left the front.
-    const bool hiding = !NSApp.hidden;
-    NSString* name = hiding ? NSApplicationDidHideNotification : NSApplicationDidUnhideNotification;
-    __block id observer =
-        [NSNotificationCenter.defaultCenter addObserverForName:name
-                                                        object:nil
-                                                         queue:nil
-                                                    usingBlock:^(NSNotification*) {
-                                                      [NSNotificationCenter.defaultCenter
-                                                          removeObserver:observer];
-                                                      done();
-                                                    }];
-    if (hiding) {
-      [NSApp hide:nil];
-    } else {
+    if (NSApp.hidden) {
       [NSApp unhide:nil];
+    } else {
+      [NSApp hide:nil];
     }
+    done();
     return true;
   }
   if (action == "display") {
@@ -2132,6 +2133,35 @@ void drive_start(void) {
                    queue:nil
               usingBlock:^(NSNotification*) {
                 fprintf(stderr, "browser: desktop space changed\n");
+              }];
+  // Another app taking activation mid-run leaves every later key with nowhere to go (#968). Only
+  // the bundle identifier, as an unbundled process's name can name the machine.
+  [NSWorkspace.sharedWorkspace.notificationCenter
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* notification) {
+                NSRunningApplication* app = notification.userInfo[NSWorkspaceApplicationKey];
+                if ([app isEqual:NSRunningApplication.currentApplication]) {
+                  return;
+                }
+                // Its windows on screen, by level and size alone, to tell an alert from a panel.
+                NSMutableString* windows = [NSMutableString string];
+                NSArray* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+                    kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+                for (NSDictionary* info in list) {
+                  if ([info[(id)kCGWindowOwnerPID] intValue] != app.processIdentifier) {
+                    continue;
+                  }
+                  CGRect r;
+                  CGRectMakeWithDictionaryRepresentation(
+                      (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &r);
+                  [windows appendFormat:@" %@:%.0fx%.0f", info[(id)kCGWindowLayer],
+                                        r.size.width, r.size.height];
+                }
+                fprintf(stderr, "browser: app activated %s, windows%s\n",
+                        app.bundleIdentifier ? app.bundleIdentifier.UTF8String : "unbundled",
+                        windows.length ? windows.UTF8String : " none");
               }];
   // Full-screen transitions animate, and end well after the command's done.
   for (NSNotificationName name :
