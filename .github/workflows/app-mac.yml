@@ -42,6 +42,10 @@ jobs:
       # main.rs and the Mac's driver, which the tests don't compile. Checked, as linking needs the
       # engine's framework.
       - run: cargo check --release --bin Browser
+      # What follows decides nothing, so this tree has passed.
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: ci-app_mac
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
