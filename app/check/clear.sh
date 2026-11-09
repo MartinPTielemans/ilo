@@ -447,9 +447,12 @@ expect "^browser: menu bar View: \(Appearance › [^,]*, \)*Hide Sidebar$maybe, 
 send menubar Tabs
 expect "^browser: menu bar Tabs: .*, Pin Tab$maybe, .*, Reveal Tab in Sidebar$maybe, Focus Sidebar, Clear Today" \
   "Tabs doesn't name ⌘D Pin Tab for a Today tab, or lacks Reveal Tab in Sidebar, Focus Sidebar or Clear Today"
+send menubar File
+expect "^browser: menu bar File: .*, Open Command Bar$maybe, New Profile (disabled), Close Window" \
+  "File has no New Profile after Open Command Bar, dimmed while the Space has tabs"
 send menubar Spaces
-expect "^browser: menu bar Spaces: New Space…$maybe, Rename Space$maybe, Change Profile › Default (checked)$maybe, Change Profile › New Profile (disabled), Next Space" \
-  "Spaces has no Change Profile after Rename Space, with the Space's profile checked"
+expect "^browser: menu bar Spaces: New Space…$maybe, Edit Theme…$maybe, Rename Space$maybe, Change Profile › Default (checked)$maybe, Change Profile › New Profile (disabled), Next Space" \
+  "Spaces has no Edit Theme… after New Space…, or Change Profile after Rename Space, with the Space's profile checked"
 send menubar Archive
 expect "^browser: menu bar Archive: .*, View Archive…$maybe, " "Archive has no View Archive…"
 send menubar Window

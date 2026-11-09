@@ -11,7 +11,7 @@
 //! sway's virtual devices, in tools/headless.sh's session alone (drive_wayland.rs).
 //!
 //! The commands are drive.mm's, with what Linux has: click, doubleclick, rightclick, middleclick,
-//! clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
+//! sideclick, clickkey, doubleclickkey, rightclickkey, handclick (X11's own), drag, dragkey, press, dragto,
 //! release, rightpress, rightdragto, rightrelease, dragover, dragdrop, dragleave, move, warp (Linux's), scroll, wheel, pageswipe, key,
 //! keydown, keyup, flags, type, resize, resizekey, place, order, layout, state, title, pasteboard,
 //! front, menu, menubar, choose, dismiss, window, window <n> behind, agentspace, agentmayact,
@@ -2217,6 +2217,17 @@ fn run_command(line: &str) -> Option<()> {
                 click(at, 1, none, true)?;
             }
             Some(())
+        }
+        // sideclick <x> <y> back|forward: a mouse's side button, X's buttons 8 and 9.
+        "sideclick" => {
+            let (x, y) = point(&mut words)?;
+            let at = target_at(x, y)?;
+            let which = match words.next()? {
+                "back" => 8,
+                "forward" => 9,
+                _ => return None,
+            };
+            click(at, which, none, false)
         }
         // handclick <x> <y>: a click there with the display's own pointer, through XTest, as a hand
         // clicks: the host hears the screen's presses (page_presses.rs), which a click sent to a
