@@ -69,7 +69,7 @@ if windows; then
 fi
 rules_file="$(dirname "$saved")/Link rules"
 rm -f "$saved" "$launch_frame" "$rules_file"
-BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
+WAYLAND_DEBUG=client BROWSER_DRIVE=1 BROWSER_URL="$site" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
