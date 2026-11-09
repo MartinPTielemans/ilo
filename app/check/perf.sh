@@ -223,24 +223,33 @@ perf_released() {
   hdiutil attach -nobrowse -readonly -mountpoint "$d/mnt" "$d/ilo.dmg" > /dev/null
   ditto "$d/mnt/ilo.app" "$d/ilo.app"
   hdiutil detach "$d/mnt" > /dev/null || true
-  BROWSER_PROFILE_DIR=$d/profile BROWSER_URL="$page?released" "$d/ilo.app/Contents/MacOS/ilo" \
-    > "$d/ilo.log" 2>&1 &
-  released=$!
-  # A fixed wait, as this proof runs once and nothing reads the released app's log lines.
-  sleep 25
-  for r in $(pgrep -f "$d/ilo.app/.*Renderer"); do
-    echo "renderer $r: $(vmmap --summary "$r" 2>&1 | grep -m1 '^Physical footprint:')"
-    vmmap -v "$r" 2>&1 | grep -E '^__DATA_CONST.*Framework$' || true
-  done > "$d/const.txt"
-  helper=$(find "$d/ilo.app" -maxdepth 7 -path '*Helper (Renderer).app' | head -1)
-  codesign -dvv --entitlements - "$helper" >> "$d/const.txt" 2>&1 || true
-  codesign -dvv --entitlements - "$app/Contents/Frameworks/Chromium Framework.framework/Versions/Current/Helpers/Chromium Helper (Renderer).app" >> "$d/const.txt" 2>&1 || true
-  kill "$released" 2> /dev/null || true
-  sleep 3
-  pkill -9 -f "$d/ilo.app" 2> /dev/null || true
-  sed 's/^/perf: released: /' "$d/const.txt" | grep -v "^perf: released: \(Executable\|Identifier\|Format\|CodeDirectory\|Signature size\|Info.plist\|TeamIdentifier\|Sealed\|Internal\|Hash\|CandidateCDHash\)" | head -30
+  exe=$(plutil -extract CFBundleExecutable raw "$d/ilo.app/Contents/Info.plist")
+  # The released app and this build, each on one page with a profile of its own.
+  for which in released built; do
+    case $which in
+      released) bin="$d/ilo.app/Contents/MacOS/$exe" bundle="$d/ilo.app" ;;
+      built) bin=$browser bundle=$app ;;
+    esac
+    BROWSER_PROFILE_DIR=$d/profile-$which BROWSER_URL="$page?$which" "$bin" > "$d/$which.log" 2>&1 &
+    pid=$!
+    # A fixed wait, as this proof runs once and nothing reads the apps' log lines.
+    sleep 25
+    for r in $(pgrep -f "$bundle/.*Renderer"); do
+      echo "$which renderer $r: $(vmmap --summary "$r" 2>&1 | grep -m1 '^Physical footprint:')"
+      vmmap -v "$r" 2>&1 | grep -E '^__DATA_CONST.*Framework$' | sed "s/^/$which /" || true
+    done >> "$d/const.txt"
+    kill "$pid" 2> /dev/null || true
+    sleep 3
+    pkill -9 -f "$bundle/Contents" 2> /dev/null || true
+    sleep 2
+  done
+  sed 's/^/perf: released: /' "$d/const.txt"
 }
-[ "$(uname)" = Darwin ] && perf_released
+if [ "$(uname)" = Darwin ]; then
+  perf_released
+  # This proof needs nothing more of the run.
+  exit 0
+fi
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
