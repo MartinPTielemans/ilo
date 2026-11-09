@@ -12,6 +12,11 @@ namespace browser_core {
 // (engine/patches/ours/chromium-core-ad-block-page.patch); the agent goes with the frame.
 void CreateAdBlockPageAgent(content::RenderFrame* frame);
 
+// Runs the scriptlets the browser sent for |frame|'s new document, if any. Chrome's renderer calls
+// it where extensions' document_start scripts run, before the page's first script; it isn't done at
+// DidCreateDocumentElement, where Blink forbids script.
+void RunAdBlockScriptsAtDocumentStart(content::RenderFrame* frame);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AD_BLOCK_PAGE_AGENT_H_

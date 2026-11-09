@@ -8,6 +8,7 @@
 #include "browser_core/ad_block_page.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_frame_observer.h"
+#include "content/public/renderer/render_frame_observer_tracker.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
@@ -23,9 +24,13 @@ namespace browser_core {
 
 namespace {
 
-class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBlockPage {
+class AdBlockPageAgent : public content::RenderFrameObserver,
+                         public content::RenderFrameObserverTracker<AdBlockPageAgent>,
+                         public mojom::AdBlockPage {
  public:
-  explicit AdBlockPageAgent(content::RenderFrame* frame) : content::RenderFrameObserver(frame) {
+  explicit AdBlockPageAgent(content::RenderFrame* frame)
+      : content::RenderFrameObserver(frame),
+        content::RenderFrameObserverTracker<AdBlockPageAgent>(frame) {
     frame->GetAssociatedInterfaceRegistry()->AddInterface<mojom::AdBlockPage>(
         base::BindRepeating(&AdBlockPageAgent::Bind, base::Unretained(this)));
   }
@@ -41,8 +46,9 @@ class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBl
   }
 
   // content::RenderFrameObserver:
-  // Where extensions' document_start scripts run: the document's element is there for the style
-  // sheet, and none of the page's scripts has run yet.
+  void DidCreateNewDocument() override { script_.clear(); }
+
+  // The document's element is there for the style sheet, and none of the page's scripts has run.
   void DidCreateDocumentElement() override {
     if (!next_) {
       return;
@@ -61,9 +67,19 @@ class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBl
       document.InsertStyleSheet(blink::WebString::FromUtf8(next.css), nullptr,
                                 blink::WebCssOrigin::kUser);
     }
-    if (!next.script.empty()) {
-      frame->ExecuteScript(blink::WebScriptSource(blink::WebString::FromUtf8(next.script)));
+    // Blink forbids script here, so it waits for RunScriptsAtDocumentStart, next.
+    script_ = std::move(next.script);
+  }
+
+  void RunScriptsAtDocumentStart() {
+    if (script_.empty()) {
+      return;
     }
+    std::string script = std::move(script_);
+    script_.clear();
+    // In the page's own world, as uBlock Origin's are, since they replace what the page sees.
+    render_frame()->GetWebFrame()->ExecuteScript(
+        blink::WebScriptSource(blink::WebString::FromUtf8(script)));
   }
 
   void OnDestruct() override { delete this; }
@@ -81,6 +97,7 @@ class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBl
   }
 
   std::optional<Next> next_;
+  std::string script_;
   mojo::AssociatedReceiverSet<mojom::AdBlockPage> receivers_;
 };
 
@@ -88,6 +105,12 @@ class AdBlockPageAgent : public content::RenderFrameObserver, public mojom::AdBl
 
 void CreateAdBlockPageAgent(content::RenderFrame* frame) {
   new AdBlockPageAgent(frame);
+}
+
+void RunAdBlockScriptsAtDocumentStart(content::RenderFrame* frame) {
+  if (AdBlockPageAgent* agent = AdBlockPageAgent::Get(frame)) {
+    agent->RunScriptsAtDocumentStart();
+  }
 }
 
 }  // namespace browser_core

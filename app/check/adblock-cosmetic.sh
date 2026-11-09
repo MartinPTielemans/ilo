@@ -28,8 +28,11 @@ requestAnimationFrame(() => setTimeout(() => {
 page="${site}cosmetic.html"
 # localhost is another site, where the site's rule and scriptlet don't apply.
 other="http://localhost:$port/cosmetic.html"
+# EasyList turns generic rules off on 127.0.0.1 and localhost, for uBlock Origin too, so the
+# filters take those exceptions back with $badfilter for the generic rule to apply here.
 filters="$(printf '%s\n' '127.0.0.1##.check-ad' '##[data-check-ad]' \
-  '127.0.0.1##+js(set, checkAdsShown, false)')"
+  '127.0.0.1##+js(set, checkAdsShown, false)' \
+  '@@://127.0.0.1$generichide,badfilter' '@@://localhost:$generichide,badfilter')"
 # Launches the app at $1 on a new profile, logging to $2, and sets $reported to the page's first
 # report, from its first frame, so nothing the page showed before the blocker's rules came in
 # passes. No input, so the app needn't be the active one.

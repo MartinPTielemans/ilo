@@ -27,6 +27,10 @@ struct NativeAdBlockList {
 // the browser's and not a profile's. Any thread.
 base::FilePath DownloadedAdBlockList(const std::string& key);
 
+// Whether any of |lists| has no downloaded copy, or one twice as old as it stays current, when
+// uBlock Origin updates its lists at once. Off the UI thread.
+bool AnyNativeAdBlockListLongOutOfDate(const std::vector<NativeAdBlockList>& lists);
+
 // Downloads, one after another, those of |lists| whose copy is older than its update_after, or
 // that has none, trying each address until one answers with a list, and then calls |done| on the
 // UI thread with the keys of the lists it downloaded. A list none of its addresses gives keeps the

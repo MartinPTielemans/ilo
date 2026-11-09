@@ -39,7 +39,8 @@ constexpr net::NetworkTrafficAnnotationTag kLists =
           "downloads its own, so it blocks the trackers and ad servers the lists' authors have "
           "added since the browser was built."
         trigger:
-          "37 s after launch and then weekly, for each list turned on in Settings › Ad blocking "
+          "37 s after launch, or 2 s if a list is twice as old as it stays current, and then "
+          "weekly, for each list turned on in Settings › Ad blocking "
           "whose copy is older than the list says it stays current, a few days, and at once for a "
           "list the user turns on that the browser has no copy of."
         data: "None: a request for a list, with no cookie."
@@ -155,6 +156,18 @@ class Update {
 
 base::FilePath DownloadedAdBlockList(const std::string& key) {
   return Folder().AppendASCII(key + ".txt");
+}
+
+bool AnyNativeAdBlockListLongOutOfDate(const std::vector<NativeAdBlockList>& lists) {
+  const base::Time now = base::Time::Now();
+  for (const NativeAdBlockList& list : lists) {
+    base::File::Info info;
+    if (!base::GetFileInfo(DownloadedAdBlockList(list.key), &info) ||
+        now - info.last_modified >= 2 * list.update_after) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void UpdateNativeAdBlockLists(std::vector<NativeAdBlockList> lists,
