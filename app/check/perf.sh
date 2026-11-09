@@ -27,7 +27,8 @@
 # process of its own, so each time from a key includes one process start, which the run says.
 
 # #2138 proof: on the Mac, a first pass with the classic helpers, on the same runner, before the
-# run with Apéritif's, its rows prefixed "classic:".
+# run with Apéritif's, its rows prefixed "classic:". Both use the one server.
+[ "${perf_pass:-}" = classic ] || serve
 if [ "$(uname)" = Darwin ] && [ -z "${perf_pass:-}" ]; then
   perf_real=$browser
   printf '#!/bin/sh\nexec "%s" "$@" --disable-features=MacAppCodeSignClone,AperitifHelpers\n' \
@@ -43,7 +44,6 @@ if [ "$(uname)" = Darwin ] && [ -z "${perf_pass:-}" ]; then
   sleep 3
   perf_pass=aperitif browser=$perf_real
 fi
-serve
 perf_dir="$out/perf"
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
