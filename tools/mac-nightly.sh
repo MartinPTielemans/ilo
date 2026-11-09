@@ -126,7 +126,8 @@ run)
   main=$(git -C "$work" rev-parse HEAD)
   # The commit of the newest engine-mac release in main's history, in prebuilt.ini's repository.
   released=$("$work/engine/fetch.sh" commit 2>/dev/null || true)
-  if [ -n "$released" ] && git -C "$work" diff --quiet "$released" HEAD -- core engine \
+  # Comments in the core's C++ don't count (core-same.sh, #2195).
+  if [ -n "$released" ] && "$work/tools/core-same.sh" "$released" HEAD core engine \
     ':(exclude)engine/linux' ':(exclude)engine/windows' ':(exclude)*.md'; then
     skip "main (${main:0:12}) has the core and engine of engine-mac-${released:0:12}."
   fi

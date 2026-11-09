@@ -225,9 +225,6 @@ fn main() {
     println!("cargo:rerun-if-changed={}", tokens.display());
 }
 
-/// Why the Mac's engine, which setup.sh links at `link`, can't run with bindings from
-/// `header`, if it can't: engine/build.sh keeps the header it built from beside it. A prebuilt
-/// engine's header was checked by engine/fetch.sh, and Linux and Windows link only those.
 /// The Mac's translator, Apple's Translation, which is Swift's alone (platform/mac/translate.swift):
 /// a static library for the browser, whose objects name the Swift runtime and the framework they
 /// need, which the linker finds in the SDK and the toolchain, the runtime at /usr/lib/swift.
@@ -285,6 +282,11 @@ fn translator_swift(root: &Path) {
     }
 }
 
+/// Why the Mac's engine, which setup.sh links at `link`, can't run with bindings from
+/// `header`, if it can't: engine/build.sh keeps the header it built from beside it. A prebuilt
+/// engine's header was checked by engine/fetch.sh, and Linux and Windows link only those. A header
+/// that differs only in its comments is the same to the compiler, as tools/core-same.sh, which
+/// fetch.sh asks too, says (#2195).
 fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
     let engine = std::fs::canonicalize(link).ok()?;
     // A relinked or rebuilt engine checks again, and one without a record every build until it has.
@@ -298,8 +300,16 @@ fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
     let built = engine.parent()?.join("browser_core.h.built");
     println!("cargo:rerun-if-changed={}", built.display());
     let engine = engine.display();
+    let header_text = std::fs::read(header).ok()?;
     match std::fs::read(&built) {
-        Ok(built) if built == std::fs::read(header).ok()? => None,
+        Ok(built) if built == header_text => None,
+        Ok(built) if same_to_compiler(header, &built, &header_text) => {
+            println!(
+                "cargo:warning=the engine at {engine} was built from a core/public/browser_core.h \
+                 that differs from this checkout's only in comments and spacing, so it fits"
+            );
+            None
+        }
         Ok(_) => Some(format!(
             "the engine at {engine} was built from another core/public/browser_core.h than this \
              checkout's, so the app would call it with shifted functions and layouts. Build it \
@@ -310,6 +320,30 @@ fn engine_mismatch(link: &Path, header: &Path) -> Option<String> {
              from. Run engine/build.sh [dev] to record it."
         )),
     }
+}
+
+/// Whether the headers `a` and `b` are the same to the compiler, by tools/core-same.sh in the
+/// checkout of `header`, core/public/browser_core.h. One it can't run is taken for a difference.
+fn same_to_compiler(header: &Path, a: &[u8], b: &[u8]) -> bool {
+    use std::io::Write;
+    let Some(checkout) = header.ancestors().nth(3) else {
+        return false;
+    };
+    let script = checkout.join("tools/core-same.sh");
+    println!("cargo:rerun-if-changed={}", script.display());
+    let strip = |text: &[u8]| -> Option<Vec<u8>> {
+        let mut child = std::process::Command::new("bash")
+            .arg(&script)
+            .arg("--strip")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        child.stdin.take()?.write_all(text).ok()?;
+        let out = child.wait_with_output().ok()?;
+        out.status.success().then_some(out.stdout)
+    };
+    matches!((strip(a), strip(b)), (Some(a), Some(b)) if a == b)
 }
 
 /// The build number updates are ordered by: the count of commits, as build.sh stamps the Mac's,
