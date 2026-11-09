@@ -143,8 +143,10 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
-//   statusitem [click]                    logs whether the menu bar has Little ilo's button,
-//                                         "browser: status item shown" or "none", or clicks it
+//   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
+//                                         "browser: status item shown" or "none", or clicks it,
+//                                         or draws it to a PNG at <path>, logged as "browser:
+//                                         status item captured <w>x<h>"
 //   openmenu <menu>                       opens the main menu's <menu>, the same menu the menu
 //                                         bar opens, near the window's top left, tracked until
 //                                         dismiss or choose closes it. Commands still come in
@@ -194,9 +196,10 @@
 // command n arrives and "browser: drive <n> done, key <window class>, focus <view class>, active
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
-// and buttons>" as an alert does, and "browser: desktop space changed" once macOS has slid to
-// another Space. A page ignores clicks while the app isn't the active app, and macOS doesn't let a
-// background process make it active.
+// and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
+// another Space, and "browser: window resigned key" and "browser: window became key" as the
+// browser window driven loses the keyboard and has it back. A page ignores clicks while the app
+// isn't the active app, and macOS doesn't let a background process make it active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -1888,11 +1891,30 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "statusitem") {
     NSStatusBarButton* button = HostLittleStatusButton();
-    if (line.size() > action.size()) {
+    std::string what;
+    words >> what;
+    if (what == "click") {
       if (!button) {
         return false;
       }
       [button performClick:nil];
+    } else if (what == "capture") {
+      // The button draws itself into a picture, as the menu bar shows it: the menu bar's window
+      // isn't one a capture of the app's windows finds, and a capture of the screen would hold
+      // other apps' buttons.
+      std::string path;
+      std::getline(words >> std::ws, path);
+      if (!button || path.empty()) {
+        return false;
+      }
+      NSBitmapImageRep* picture = [button bitmapImageRepForCachingDisplayInRect:button.bounds];
+      [button cacheDisplayInRect:button.bounds toBitmapImageRep:picture];
+      NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (![png writeToFile:@(path.c_str()) atomically:YES]) {
+        return false;
+      }
+      fprintf(stderr, "browser: status item captured %.0fx%.0f\n", button.bounds.size.width,
+              button.bounds.size.height);
     } else {
       fprintf(stderr, "browser: status item %s\n", button ? "shown" : "none");
     }
@@ -2126,6 +2148,24 @@ void drive_start(void) {
                 fprintf(stderr, "browser: window on screen %.0fx%.0f, full screen %d\n", size.width,
                         size.height, (window.styleMask & NSWindowStyleMaskFullScreen) != 0);
               }];
+  // The browser window losing the keyboard and having it back between two commands, as to
+  // Chrome's dialog for what a page shares, which the commands' own lines miss: Chrome does what
+  // waits on the window being active, such as showing the tab a page shares, only while it is
+  // (#2148).
+  for (NSNotificationName name :
+       {NSWindowDidResignKeyNotification, NSWindowDidBecomeKeyNotification}) {
+    const char* what =
+        [name isEqualToString:NSWindowDidBecomeKeyNotification] ? "became" : "resigned";
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (notification.object == (__bridge NSWindow*)host_browser_window(g_driven)) {
+                    fprintf(stderr, "browser: window %s key\n", what);
+                  }
+                }];
+  }
   // The same transitions timed, on the uptime clock the core's and the app's lines read: when
   // AppKit starts one, when the window gets its size, and when it ends (above). check.sh reads them.
   for (NSNotificationName name :

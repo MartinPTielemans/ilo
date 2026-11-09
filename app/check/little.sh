@@ -376,6 +376,11 @@ if [ "$(uname)" = Darwin ] || windows; then
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
   expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
+  # Windows' icon is Explorer's to draw, where no capture of ours can take it.
+  if [ "$(uname)" = Darwin ]; then
+    send statusitem capture "$out/little-menu-bar.png"
+    expect '^browser: status item captured ' "the menu bar's button didn't draw itself to capture"
+  fi
   send statusitem click
   expect "^browser: $place opened little window [0-9]*\$" "the $place's button didn't open a Little ilo window"
   little=$(opened)
