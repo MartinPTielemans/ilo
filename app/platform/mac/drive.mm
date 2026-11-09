@@ -194,9 +194,10 @@
 // command n arrives and "browser: drive <n> done, key <window class>, focus <view class>, active
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
-// and buttons>" as an alert does, and "browser: desktop space changed" once macOS has slid to
-// another Space. A page ignores clicks while the app isn't the active app, and macOS doesn't let a
-// background process make it active.
+// and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
+// another Space, and "browser: app activated <bundle id|unbundled>, windows <level:size...>" as
+// another app becomes the active one. A page ignores clicks while the app isn't the active app,
+// and macOS doesn't let a background process make it active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -2097,6 +2098,35 @@ void drive_start(void) {
                    queue:nil
               usingBlock:^(NSNotification*) {
                 fprintf(stderr, "browser: desktop space changed\n");
+              }];
+  // Another app taking activation mid-run leaves every later key with nowhere to go (#968). Only
+  // the bundle identifier, as an unbundled process's name can name the machine.
+  [NSWorkspace.sharedWorkspace.notificationCenter
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification* notification) {
+                NSRunningApplication* app = notification.userInfo[NSWorkspaceApplicationKey];
+                if ([app isEqual:NSRunningApplication.currentApplication]) {
+                  return;
+                }
+                // Its windows on screen, by level and size alone, to tell an alert from a panel.
+                NSMutableString* windows = [NSMutableString string];
+                NSArray* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+                    kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+                for (NSDictionary* info in list) {
+                  if ([info[(id)kCGWindowOwnerPID] intValue] != app.processIdentifier) {
+                    continue;
+                  }
+                  CGRect r;
+                  CGRectMakeWithDictionaryRepresentation(
+                      (__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &r);
+                  [windows appendFormat:@" %@:%.0fx%.0f", info[(id)kCGWindowLayer],
+                                        r.size.width, r.size.height];
+                }
+                fprintf(stderr, "browser: app activated %s, windows%s\n",
+                        app.bundleIdentifier ? app.bundleIdentifier.UTF8String : "unbundled",
+                        windows.length ? windows.UTF8String : " none");
               }];
   // Full-screen transitions animate, and end well after the command's done.
   for (NSNotificationName name :
