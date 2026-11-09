@@ -7,7 +7,7 @@
 
 use std::{cell::RefCell, ffi::c_void};
 
-use gpui::{Bounds, point, px, size};
+use gpui::{Bounds, Pixels, point, px, size};
 
 thread_local! {
     /// Each browser window's UI view, its reveal's view, and whether that shows.
@@ -70,6 +70,18 @@ pub(crate) fn shown() -> Vec<*mut c_void> {
             .map(|&(_, view, _)| view)
             .collect()
     })
+}
+
+/// The browser window's UI view a reveal's `view` shows over, and where in its content, while it
+/// shows, for the Wayland driver's layout, as overlays.rs's own aren't the reveal.
+pub(crate) fn placed(view: *mut c_void) -> Option<(*mut c_void, Bounds<Pixels>)> {
+    let ui_view = REVEALS.with_borrow(|all| {
+        (all.iter())
+            .find(|&&(_, each, shown)| each == view && shown)
+            .map(|&(ui_view, ..)| ui_view)
+    })?;
+    let own = gpui_linux::overlay_size(view)?;
+    Some((ui_view, Bounds::new(point(px(0.), px(0.)), own)))
 }
 
 /// `ui_view`'s window's content changed size: its reveal stays as tall.
