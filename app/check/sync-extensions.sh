@@ -50,7 +50,8 @@ settings_keyboard
 send clickkey $(drawn "sync copy")
 words=
 for _ in $(seq 30); do
-  words=$(clipboard)
+  clipboard
+  words=$clipped
   [ "$(echo "$words" | wc -w)" = 24 ] && break
   sleep 0.1
 done

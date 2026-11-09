@@ -72,13 +72,15 @@ send clickkey $at
 copied_at=$(date +%s)
 words=
 for _ in $(seq 30); do
-  words=$(clipboard)
+  clipboard
+  words=$clipped
   [ "$(echo "$words" | wc -w)" = 24 ] && break
   sleep 0.1
 done
 [ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
-clipboard formats | grep -qx "$hint" ||
-  fail "the copied words aren't marked for clipboard managers to skip: $(clipboard formats | tr '\n' ' ')"
+clipboard formats
+echo "$clipped" | grep -qx "$hint" ||
+  fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
@@ -246,7 +248,8 @@ done
 while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
-[ -z "$(clipboard)" ] || fail "the clipboard still held the words 90 s after A copied them"
+clipboard
+[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do
