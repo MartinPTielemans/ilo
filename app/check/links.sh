@@ -202,7 +202,38 @@ expect "^browser: key window $window\$" "the regular window didn't come to the f
 send_link "${site}?ext"
 expect_late "^browser: link from another app ${site}?ext: little window $little again\$" \
   "the same link again didn't bring its Little ilo window back: $(grep '^browser: link' "$log" | tail -1)"
-expect "^browser: key window $little\$" "the link's Little ilo window didn't come to the front"
+# sway before 1.10 brings a window forward for a token from its own exec, as this run's launches
+# have, only as it maps the window: one already open it marks urgent instead, unless it's in front.
+# There, the Little ilo window marked urgent is sway taking the link's launch's token for it.
+old_sway() {
+  swaymsg -t get_version | python3 -I -c '
+import json, sys
+version = json.load(sys.stdin)
+sys.exit((version["major"], version["minor"]) >= (1, 10))'
+}
+# Whether one of the app's windows, not the one in front, is urgent in sway's tree.
+urgent() {
+  swaymsg -t get_tree | python3 -I -c '
+import json, sys
+def nodes(node):
+    yield node
+    for child in node.get("nodes", []) + node.get("floating_nodes", []):
+        yield from nodes(child)
+ours = [n for n in nodes(json.load(sys.stdin)) if n.get("pid") == int(sys.argv[1])]
+sys.exit(not any(n.get("urgent") and not n.get("focused") for n in ours))' "$pid"
+}
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && old_sway; then
+  for _ in $(seq 100); do
+    ! urgent || break
+    sleep 0.05
+  done
+  urgent || fail "the link's Little ilo window didn't come to the front, nor was it marked urgent"
+  little_front="marked urgent, as sway $(swaymsg -t get_version | python3 -I -c '
+import json, sys
+print(json.load(sys.stdin)["human_readable"])') does for a launch's token for a window already open"
+else
+  expect "^browser: key window $little\$" "the link's Little ilo window didn't come to the front"
+fi
 [ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
   fail "the same link again opened a second Little ilo window"
 send window 2
@@ -705,7 +736,7 @@ fi
 if [ "$driven" = 1 ]; then
   [ -z "$again" ] ||
     echo "ok: a launch with no link while the window is minimized brings it back and to the front."
-  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back, and sent to the Space in front as new tabs in the front window's Space and load there, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is its page whatever the query, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
+  echo "ok: links from another app open once, in Little ilo by default, the same link again bringing its window back${little_front:+, $little_front}, and sent to the Space in front as new tabs in the front window's Space and load there, and in the regular window, brought to the front, over a private one; Settings says the browser isn't the default. Settings › Links starts with the Meet rule, which sends a Meet link to the Space in front and which the trash takes; its rules send a link whose URL holds a rule's text, or is its page whatever the query, to the rule's Space or Little ilo, the first that matches winning, a drag reorders them, everything else goes to the Space picked, the trash takes a rule away and ⌘Z brings it back until Settings closes, and the rules come back with the launch. Windows: $out/links-little.png, $out/links-settings.png, $out/links-rules-meet.png, $out/links-rules-empty.png, $out/links-rules.png, $out/links-rule-back.png"
 else
   echo "ok: a link from another app opens once, in Little ilo by default, and loads there."
   echo "skip: the launch with no link while the window is minimized, the private window, Settings and the link rules. Browser wasn't the active app, so the page ignored the click."
