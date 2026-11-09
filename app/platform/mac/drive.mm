@@ -221,6 +221,16 @@
 #include "../host.h"
 #include "menu_window.h"
 
+// Spike (#359), never for main: the driver's mirror, which clicks go through.
+@interface DriveMirror : NSView
+@end
+
+@implementation DriveMirror
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
+}
+@end
+
 // host.mm's menu bar button for Little ilo, nil while it's off.
 NSStatusBarButton* HostLittleStatusButton();
 
@@ -1223,15 +1233,6 @@ bool ChooseModal(NSString* title) {
 // so the window server draws it from the frames the GPU process already drew, and no process of
 // the browser's works per frame. The core's own spike did the same (spike/live-mirror-359-2).
 NSMutableArray<NSView*>* g_mirrors;
-
-@interface DriveMirror : NSView
-@end
-
-@implementation DriveMirror
-- (NSView*)hitTest:(NSPoint)point {
-  return nil;
-}
-@end
 
 // The biggest CALayerHost under |layer|, with the size of the view holding it in |size|.
 CALayer* FindLayerHost(CALayer* layer, NSSize view_size, NSSize* size, CGFloat* area) {

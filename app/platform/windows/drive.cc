@@ -1286,7 +1286,7 @@ bool Mirror(HWND from, HWND to, double x, double y, double width, double height)
   ClientToScreen(to, &origin);
   RECT frame;
   GetWindowRect(to, &frame);
-  const double fit = std::min(width * scale / page_width, height * scale / page_height);
+  const double fit = (std::min)(width * scale / page_width, height * scale / page_height);
   const double left = origin.x - frame.left + x * scale, top = origin.y - frame.top + y * scale;
   const RECT destination = {
       static_cast<LONG>(left), static_cast<LONG>(top),
