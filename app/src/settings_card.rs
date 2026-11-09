@@ -15,7 +15,7 @@ use crate::tokens::palette::DIALOG_LIGHT;
 use crate::tokens::settings::{
     CARD_RIM, CARD_RING, CARD_SHADOW, FADE, HELD_TITLE, PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
 };
-use crate::tokens::shell::{CARD_INSET, CARD_RADIUS};
+use crate::tokens::shell::CARD_INSET;
 
 #[cfg(test)]
 mod tests;
@@ -239,7 +239,8 @@ impl Card {
             .mr(px(CARD_INSET))
             .mb(px(CARD_INSET))
             .relative()
-            .rounded(px(CARD_RADIUS))
+            // A window of its own, whose corner it follows as the browser window's card does.
+            .rounded(px(crate::shell::card_radius(crate::shell::window_radius())))
             .bg(fill)
             .when(dark, |card| card.border_1().border_color(rgba(CARD_RIM)))
             .when(!dark, |card| {
