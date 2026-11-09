@@ -490,7 +490,7 @@ jobs:
           failure() { # <session> <run> <result> <error>
             if issue=$(sh app/check/quarantine.sh match linux "$2" "$1" "${3#*): }"); then
               result="quarantined, $issue: $3"
-              echo "::warning::${4%.} Quarantined under $issue."
+              echo "::warning::$4 Quarantined under $issue."
             else
               failed=1
               echo "::error::$4"
