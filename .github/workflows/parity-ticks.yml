@@ -1,5 +1,5 @@
-# Fails a pull request that changes a parity row's tick anywhere but a docs/parity-ticks-* branch,
-# the integrator's daily bookkeeping PR: a feature's PR names its rows on its "Parity:" line instead
+# Fails a pull request that changes a parity row's tick anywhere but a docs/parity-ticks-YYYY-MM-DD
+# branch, the integrator's daily bookkeeping PR: a feature's PR names its rows on its "Parity:" line instead
 # (#2204). New rows, and a row's target or source, are the feature's and pass. The roadmap's counts
 # are prose, which this doesn't read.
 name: Parity ticks
@@ -17,7 +17,6 @@ concurrency:
 jobs:
   ticks:
     name: Parity ticks
-    if: ${{ !startsWith(github.head_ref, 'docs/parity-ticks-') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -30,7 +29,12 @@ jobs:
           persist-credentials: false
 
       - name: Rows whose tick changed
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
+          case "$HEAD_REF" in
+            docs/parity-ticks-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) echo "the day's ticks PR"; exit 0 ;;
+          esac
           git diff -U0 HEAD^1 HEAD -- docs/ux-parity/ | python3 -I -c '
           import re, sys
           rows = {}
