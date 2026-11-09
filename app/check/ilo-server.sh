@@ -109,10 +109,11 @@ settings_keyboard() {
     fail "Settings couldn't have the keyboard again"
 }
 
-# Sets clipped to what the clipboard holds, the X server's or Windows': its text, or with formats
-# the formats it holds. On the Mac the driver gives each copy a pasteboard of its own in its place,
-# which nothing else reads, so it's the device's text, as its driver logs it (not the formats). A
-# variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
+# Sets clipped to what the clipboard holds, the X server's, the Wayland session's or Windows': its
+# text, or with formats the formats it holds. On the Mac the driver gives each copy a pasteboard of
+# its own in its place, which nothing else reads, so it's the device's text, as its driver logs it
+# (not the formats). A variable, not output, since the Mac's asks the driver, whose steps a
+# subshell would lose count of.
 clipboard() {
   if windows; then
     clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
@@ -121,14 +122,20 @@ clipboard() {
     [ -n "${1:-}" ] && return 0
     send pasteboard
     clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: pasteboard text //p' | tail -1)
+  elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    clipped=$(timeout 5 wl-paste -n ${1:+-l} 2>/dev/null || true)
   else
     clipped=$(timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true)
   fi
 }
 # The device's first browser window in front with the keyboard, as a click on it gives it. On
 # Windows the driver's window activates a window within its own copy alone, so the copy's window
-# takes the foreground from the others' too.
+# takes the foreground from the others' too. Under Wayland a window comes forward only for the
+# copy sway has focused, so the copy is focused first, as a click in it would.
 forward() {
+  if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    swaymsg "[pid=$pid] focus" > /dev/null || fail "sway couldn't focus $on's window"
+  fi
   send window 1
   ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
     fail "$on's window couldn't take the foreground"
