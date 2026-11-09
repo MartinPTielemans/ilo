@@ -54,8 +54,26 @@ drive() {
 spaces() {
   grep '^browser: spaces ' "$log" | tail -1 | awk '{ print NF - 2 }'
 }
+# An empty list is logged with a space after its name.
 rows() {
-  grep -E "^browser: $1( [0-9]+)*\$" "$log" | tail -1 | cut -s -d' ' -f3-
+  grep -E "^browser: $1( [0-9]+)* ?\$" "$log" | tail -1 | cut -s -d' ' -f3-
+}
+# Whether the device's sync has committed since its Spaces last sent a change: the core's lines
+# carry Chromium's prefix.
+committed() {
+  awk '/browser: sync spaces sent /{ c = 0 } /browser: sync engine Commit Response/{ c = 1 }
+    END { exit !c }' "$log"
+}
+# When the log $2 last had a core line matching $1, by Chromium's prefix, MMDD/HHMMSS.micro, which
+# sorts as text: the copies share the machine's clock.
+stamp() {
+  grep "$1" "$2" | tail -1 | sed -n 's|^\[[0-9]*:[0-9]*:\([0-9]*/[0-9.]*\):.*|\1|p'
+}
+# Whether B has fetched updates since A's last commit.
+fetched() {
+  awk -v a="$(stamp 'browser: sync engine Commit Response' "$a_log")" \
+    -v b="$(stamp 'browser: sync engine GetUpdates Response' "$b_log")" \
+    'BEGIN { exit !(a != "" && b > a) }'
 }
 # Waits up to 30 s for the device's last list of $1 to be $2, failing with $3.
 await_rows() {
@@ -118,12 +136,31 @@ b_today=$(rows today)
 # A Today tab A opens is the account's as "today:" and its id, which B drops.
 serve
 drive a
+sends=$(grep -c 'browser: sync spaces sent ' "$log" || true)
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open A's command bar"
 send insert "${site}login.html?versions"
 send key return
 expect "^browser: loaded [0-9]* ${site}login.html?versions\$" "A's Today tab didn't load"
 tab=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}login.html?versions\$|\1|p" "$log" | tail -1)
+# B fetches the Today tab before A pins it: pinned, it's another entity now, but was the same one,
+# under the same id, before 0.1.14, which the account would have had as a pin alone.
+for _ in $(seq 50); do
+  [ "$(grep -c 'browser: sync spaces sent ' "$log")" -gt "$sends" ] && committed && break
+  sleep 0.1
+done
+[ "$(grep -c 'browser: sync spaces sent ' "$log")" -gt "$sends" ] && committed ||
+  fail "A didn't commit its Today tab to the account"
+drive b
+for _ in $(seq 50); do
+  fetched && break
+  sleep 0.1
+done
+fetched || fail "B fetched nothing after A committed its Today tab"
+[ "$(spaces)" = 1 ] || fail "B, $ILO_OLD, made a Space of A's Today tab: $(spaces) Spaces"
+[ "$(rows today)" = "$b_today" ] ||
+  fail "B's Today tabs changed with A's: $(rows today), from $b_today"
+drive a
 
 # Pinned on A, it's B's pinned tab, which says B has had what A sent before it too.
 send key d cmd
