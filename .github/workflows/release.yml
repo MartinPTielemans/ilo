@@ -697,6 +697,36 @@ jobs:
           name: notes
           path: notes
 
+      # A release never takes a quarantined check as passed silently (#2197): the summary lists the
+      # quarantine at its commit, and a line whose issue the notes don't name is a warning.
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          sparse-checkout: |
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
+      - name: Quarantine
+        run: |
+          {
+            echo "## Quarantined checks"
+            echo
+            echo "These Check runs fail at times at this commit and don't fail it; the notes' Known gaps name them."
+            echo
+            for os in mac windows linux; do
+              sh source/app/check/quarantine.sh list "$os"
+              echo
+            done
+            echo "Drafts for Known gaps:"
+            echo
+            sh source/app/check/quarantine.sh notes
+          } >> "$GITHUB_STEP_SUMMARY"
+          sed -n 's/.*[[:space:]]\(#[0-9][0-9]*\)[[:space:]].*/\1/p' source/app/check/quarantine.mac \
+            source/app/check/quarantine.windows source/app/check/quarantine.linux | sort -u | while read -r issue; do
+            grep -q "$issue\b" notes/notes.md ||
+              echo "::warning::$issue is quarantined in app/check/quarantine.*, and the notes' Known gaps don't name it."
+          done
+
       - run: |
           (cd assets && sha256sum -- ilo-* > SHA256SUMS)
           # The Mac's minimum, LSMinimumSystemVersion in app/build.sh.

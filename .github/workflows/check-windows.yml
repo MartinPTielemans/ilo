@@ -364,9 +364,16 @@ jobs:
                 # A run that ends without a FAIL line, such as one whose tool is missing, mustn't
                 # end the loop: the step's shell is bash -eo pipefail.
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7-) || said=$(tail -1 "$out/$run.log")
-                result="failed ($status): $(echo "$said" | tr '|' '/')"
-                failed=1
-                echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                said=$(echo "$said" | tr '|' '/')
+                result="failed ($status): $said"
+                # A quarantined failure shows, but doesn't fail the check (#2197).
+                if issue=$(sh check/quarantine.sh match windows "$run" "" "$said"); then
+                  result="quarantined, $issue: $result"
+                  echo "::warning::The $run run failed, quarantined under $issue. Its log: $run.log in the artifact."
+                else
+                  failed=1
+                  echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                fi
               fi
               ;;
             *)
@@ -375,6 +382,7 @@ jobs:
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          { echo; sh check/quarantine.sh list windows; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
       # Windows' own Microsoft sign-in, which Chromium logs on or off as it starts (#1345). The core
@@ -444,9 +452,12 @@ jobs:
       checks: read
       issues: write
     steps:
+      # With app/check, whose quarantine keeps a quarantined run's issue open.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.engine.result == 'failure' && 'failure' || needs.check.result }}
