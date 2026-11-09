@@ -74,10 +74,10 @@ words=
 for _ in $(seq 30); do
   clipboard
   words=$clipped
-  [ "$(echo "$words" | wc -w)" = 24 ] && break
+  [ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] && break
   sleep 0.1
 done
-[ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
+[ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
 clipboard formats
 echo "$clipped" | grep -qx "$hint" ||
   fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
