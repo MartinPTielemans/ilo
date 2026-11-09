@@ -64,13 +64,18 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
       ready=$(mktemp -u)
       if [ "$BROWSER_XVFB" = kwin ]; then
         # With OpenGL in Mesa'"'"'s software driver, which KWin composites with only when told to,
-        # and ready once its blur says on the root window that it runs (#2134).
-        KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
+        # and its blur, which it leaves off there unless its config turns it on. Ready once the blur
+        # names its property on the root window (#2134).
+        config=$(mktemp -d)
+        printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
         tries=0
-        until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null | grep -q " = "; do
+        until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
+          grep -q "^_KDE_NET_WM_BLUR_BEHIND_REGION("; do
           tries=$((tries + 1))
           if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 600 ]; then
-            echo "kwin: no blur" >&2
+            echo "kwin: no blur; the effects it says on the root window:" >&2
+            xprop -root | grep "^_KDE" >&2
             cat "$ready.log" >&2
             exit 1
           fi
