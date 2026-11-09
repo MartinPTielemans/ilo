@@ -305,6 +305,12 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-,", Command::Settings, false),
     ("alt-cmd-down", Command::NextTab, true),
     ("alt-cmd-up", Command::PreviousTab, true),
+    // Arc's ⌘} and ⌘{, Chrome's too. GPUI names them by their character and a page by the key with
+    // shift, as ⌃⇧] below.
+    ("shift-cmd-]", Command::NextTab, true),
+    ("shift-cmd-}", Command::NextTab, true),
+    ("shift-cmd-[", Command::PreviousTab, true),
+    ("shift-cmd-{", Command::PreviousTab, true),
     ("ctrl-tab", Command::RecentTab, true),
     ("ctrl-shift-tab", Command::RecentTabBack, true),
     ("alt-cmd-right", Command::NextSpace, true),

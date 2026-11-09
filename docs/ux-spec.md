@@ -176,7 +176,7 @@ Arc's note at the window's top right, saying what was just done where the result
 | Library | ⇧⌘L (menus) | — | ⇧⌘L, which closes it too |
 | Little Arc / open it in the main window | ⌥⌘N / ⌘O | — | Arc's, in Little ilo (⌘O does nothing in other windows, until Open File) |
 | Switch Space 1–9 / next / previous | ⌃1–⌃9 / ⌥⌘→ / ⌥⌘← (menus) | ⌃1–⌃9 (profiles) | Arc's |
-| Next / previous tab | ⌥⌘↓ / ⌥⌘↑ (menus) | ⇧⌘] / ⇧⌘[, ⌥⌘→ / ⌥⌘←, ⌥⌘↓ / ⌥⌘↑ | Arc's |
+| Next / previous tab | ⌥⌘↓ / ⌥⌘↑ (menus), ⌘} / ⌘{ (Settings › Shortcuts) | ⇧⌘] / ⇧⌘[, ⌥⌘→ / ⌥⌘←, ⌥⌘↓ / ⌥⌘↑ | Arc's |
 | Select tab 1–8 / last | ⌘1–⌘8 / ⌘9, pinned tabs first, counting those in an open folder (ax) | ⌘1–⌘8 / ⌘9 in sidebar order | Dia's |
 | Tab used last, then further back | ⌃Tab (rec) | ⌃Tab / ⌃⇧Tab (switcher) | ⌃Tab / ⌃⇧Tab, no switcher (owner, 2026-10-29) |
 | Search tabs | none: Arc has no Search Tabs (menus, bar, Settings › Shortcuts) | ⇧⌘A | ⇧⌘A, with Search Tabs |
@@ -198,7 +198,7 @@ Arc's note at the window's top right, saying what was just done where the result
 | Full screen | ⌃⌘F (menus) | Globe-F | Globe-F, plus ⌃⌘F, which AppKit's Enter Full Screen in View binds |
 | Settings | ⌘, | ⌘, | ⌘, |
 
-Arc's other default keys (Arc 1.170.0, Settings › Shortcuts) come with their features: ⌘{ / ⌘} next and previous tab, ⌘E Open Extensions, ⇧⌘O Little Arc's, ⇧⌘D Show/Hide Toolbar, ⌥⌘F Find and Replace, ⇧⌘V Paste and Match Style, ⌃⇧⌘C Copy URL as Quote, ⇧⌘2 Capture…, ⌃⌘N Blank Window, ⌃⇧E New Easel. Its ⌃Space Reveal Current Tab has no key here: macOS takes ⌃Space by default to switch input sources, which anyone typing Japanese or another language through an input method relies on, so the key wouldn't reach the browser. Reveal Tab in Sidebar is that one command, with no key until Settings › Shortcuts gives it one. Its Help › Essential Keyboard Shortcuts is a panel of five (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) whose View All opens Settings › Shortcuts.
+Arc's other default keys (Arc 1.170.0, Settings › Shortcuts) come with their features: ⌘E Open Extensions, ⇧⌘O Little Arc's, ⇧⌘D Show/Hide Toolbar, ⌥⌘F Find and Replace, ⇧⌘V Paste and Match Style, ⌃⇧⌘C Copy URL as Quote, ⇧⌘2 Capture…, ⌃⌘N Blank Window, ⌃⇧E New Easel. Its ⌃Space Reveal Current Tab has no key here: macOS takes ⌃Space by default to switch input sources, which anyone typing Japanese or another language through an input method relies on, so the key wouldn't reach the browser. Reveal Tab in Sidebar is that one command, with no key until Settings › Shortcuts gives it one. Its Help › Essential Keyboard Shortcuts is a panel of five (⌘T, ⌃Tab, ⇧⌘C, ⌃⇧=, ⌥⌘N) whose View All opens Settings › Shortcuts.
 
 Mouse (Dia and Chrome, P§ Keyboard shortcuts):
 
