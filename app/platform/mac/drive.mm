@@ -69,7 +69,8 @@
 //   display remove                        pulls it out again, logging "browser: display removed"
 //                                         once AppKit's screens no longer have it
 //   minimize                              minimizes the window to the Dock, or brings it back
-//   hide                                  hides the app, as ⌘H does, or brings it back
+//   hide                                  hides the app, as ⌘H does, or brings it back, done
+//                                         once AppKit has
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -1249,12 +1250,24 @@ bool Run(const std::string& line, void (^done)(void)) {
     return true;
   }
   if (action == "hide") {
-    if (NSApp.hidden) {
-      [NSApp unhide:nil];
-    } else {
+    // Done once AppKit has hidden or shown the app, which happens after this returns: a hide
+    // straight after a hide undid it before it took, and the app never left the front.
+    const bool hiding = !NSApp.hidden;
+    NSString* name = hiding ? NSApplicationDidHideNotification : NSApplicationDidUnhideNotification;
+    __block id observer =
+        [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                        object:nil
+                                                         queue:nil
+                                                    usingBlock:^(NSNotification*) {
+                                                      [NSNotificationCenter.defaultCenter
+                                                          removeObserver:observer];
+                                                      done();
+                                                    }];
+    if (hiding) {
       [NSApp hide:nil];
+    } else {
+      [NSApp unhide:nil];
     }
-    done();
     return true;
   }
   if (action == "display") {

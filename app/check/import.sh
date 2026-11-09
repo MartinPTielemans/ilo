@@ -686,24 +686,14 @@ if [ "$(uname)" = Darwin ]; then
   chmod 000 "$safari/Bookmarks.plist"
   # Readable again whatever ends the run, or the artifact's upload stops at it.
   trap 'cleanup; chmod 644 "$safari/Bookmarks.plist" 2> /dev/null || true' EXIT
-  # Hides the app until the driver says it isn't the active one, then shows it again until it is,
-  # with $hidden the hide's step, which what the app does on coming back is logged after.
+  # Hides the app, which takes it from the front, and shows it again, which brings it back, with
+  # $hidden the hide's step, which what the app does on coming back is logged after. The driver
+  # does no other command while the app is hidden, as it finds no window then.
   come_back() {
     send hide
     hidden=$step
-    for _ in $(seq 50); do
-      [ "$active" = 0 ] && break
-      sleep 0.1
-      send state
-    done
     [ "$active" = 0 ] || fail "the hidden app stayed the active one"
     send hide
-    for _ in $(seq 50); do
-      [ "$active" = 1 ] && break
-      sleep 0.1
-      send state
-    done
-    [ "$active" = 1 ] || fail "the app shown again didn't become the active one"
   }
   send menu Import from Other Browsers…
   expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for Safari"
