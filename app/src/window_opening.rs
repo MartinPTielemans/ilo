@@ -151,12 +151,12 @@ pub(crate) fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id
 
 thread_local! {
     /// Whether the window opened last came on screen with its first frame drawn.
-    static DRAWN_BEFORE_SHOWN: Cell<bool> = const { Cell::new(false) };
+    static DRAWN_BEFORE_SHOWN: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// Whether the window opened last came on screen with its first frame drawn, so that frame was
-/// on screen as it was shown.
-pub(crate) fn drawn_before_shown() -> bool {
+/// When the window opened last came on screen with its first frame drawn, so that frame was on
+/// screen as it was shown, if it did.
+pub(crate) fn drawn_before_shown() -> Option<Instant> {
     DRAWN_BEFORE_SHOWN.get()
 }
 
@@ -419,7 +419,7 @@ pub(crate) fn open_window_as(
         },
         _ => unsafe { platform::host_show_window(ui_view) },
     }
-    DRAWN_BEFORE_SHOWN.set(drawn);
+    DRAWN_BEFORE_SHOWN.set(drawn.then(Instant::now));
     log_frame(id, ui_view);
     if !first {
         finish_opening(id, ui_view, window, true, saved.is_none(), own, cx);
