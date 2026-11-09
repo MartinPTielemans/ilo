@@ -392,6 +392,31 @@ jobs:
           fi
           printf 'ime\t%s\n' "$result" | tee -a "$RESULTS"
 
+      # A run that failed and left Crashpad's dump in its folder (check/lib.sh) crashed, and the dump's
+      # frames in the app can be named only from this build's libBrowser.so, which the job throws
+      # away (#2223): its symbol table goes in the leg's artifact then, and only then.
+      - name: Symbols
+        if: ${{ !cancelled() && steps.engine.outputs.found == 'true' }}
+        env:
+          SESSION: ${{ matrix.session }}
+          RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+        run: |
+          out=$RUNNER_TEMP/check
+          where=
+          [ "$SESSION" != wayland ] || where=wayland/
+          crashed=
+          if [ -f "$RESULTS" ]; then
+            while IFS="$(printf '\t')" read -r run result; do
+              case $result in failed*) ;; *) continue ;; esac
+              ! find "$out/$where$run" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
+            done < "$RESULTS"
+          fi
+          [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
+          mkdir -p "$out/symbols"
+          objcopy --only-keep-debug target/release/libBrowser.so "$out/symbols/libBrowser.so.debug"
+          id=$(readelf -n target/release/libBrowser.so | sed -n 's/^ *Build ID: //p')
+          echo "::warning::$crashed crashed: libBrowser.so's symbols, build id $id, are in symbols/ in the artifact. addr2line -f -C -e libBrowser.so.debug names a frame's offset."
+
       # The check job puts the legs' files back together as one check-linux artifact.
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
