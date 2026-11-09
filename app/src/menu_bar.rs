@@ -120,9 +120,11 @@ pub(crate) fn menus(
             ])
             // Arc's place for it. As Change Profile's, only an empty Space takes a new profile, and
             // a private window has none.
-            .chain(bar.profiles.as_ref().map(|(_, new)| {
-                item("New Profile", Command::ChangeProfile(None)).disabled(!new)
-            }))
+            .chain(
+                bar.profiles.as_ref().map(|(_, new)| {
+                    item("New Profile", Command::ChangeProfile(None)).disabled(!new)
+                }),
+            )
             .chain([
                 MenuItem::separator(),
                 item("Close Window", Command::CloseWindow),
