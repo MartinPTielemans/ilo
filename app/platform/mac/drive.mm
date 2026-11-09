@@ -108,6 +108,11 @@
 //   savecancel                            ends the save panel the app began as its Cancel does,
 //                                         once it has, logging "browser: save panel cancelled",
 //                                         or "browser: no save panel" if none begins within 5 s
+//   pip                                   logs the frame of Chrome's Picture in Picture window, a
+//                                         floating call's or the Mini Player's, as "browser: pip
+//                                         at <x> <y> <width> <height>" in place's terms, or
+//                                         "browser: pip none". The driver doesn't move or size it:
+//                                         the window server does that with the real pointer
 //   front                                 logs which of the app's windows other apps take for
 //                                         the one in front, as "browser: front <first>, main
 //                                         <window>, key <window>, ax focused <window>, ax main
@@ -1063,6 +1068,18 @@ NSString* Describe(id element) {
                                     window.accessibilityRole];
 }
 
+// Chrome's Picture in Picture window: one of the app's on screen, over the normal level, that is
+// Chrome's own, not a browser window, and no other window's child, as the command bar and Peek are.
+NSWindow* PictureInPicture() {
+  for (NSWindow* window in NSApp.orderedWindows) {
+    if (window.visible && !window.parentWindow && window.level > NSNormalWindowLevel &&
+        [NSStringFromClass(window.class) hasPrefix:@"NativeWidgetMac"]) {
+      return window;
+    }
+  }
+  return nil;
+}
+
 // The app's first window on screen at the normal level, front to back, as another app finds it.
 id FirstNormalWindow() {
   NSArray* windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
@@ -1546,6 +1563,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
     [window setFrame:NSMakeRect(x, top - y - height, width, height) display:YES];
+    done();
+    return true;
+  }
+  if (action == "pip") {
+    NSWindow* pip = PictureInPicture();
+    if (!pip) {
+      fprintf(stderr, "browser: pip none\n");
+    } else {
+      const CGFloat top = NSHeight(NSScreen.screens.firstObject.frame);
+      const NSRect frame = pip.frame;
+      fprintf(stderr, "browser: pip at %.0f %.0f %.0f %.0f\n", NSMinX(frame),
+              top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
+    }
     done();
     return true;
   }

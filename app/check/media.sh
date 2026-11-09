@@ -3,13 +3,13 @@
 # tab it shares shows the screen too. While it shares a tab, another tab's menu has Share This Tab
 # Instead, which moves the share there. The marks go once the call ends. A call floats in Picture in
 # Picture while its tab is hidden, and comes back with it, unless its Site Controls block that, or
-# Settings turns it off for the sites they don't allow; on Linux its window moves by its top bar
-# and sizes from its corner, and on Windows its hit test says a press there would. A tab playing
-# music out of sight has a player at the sidebar's foot, whose buttons pause it and float it in
-# Picture in Picture, whose click shows the tab, and whose × puts it away. A private window's music
-# has a player in that window alone. View › Cast… and the page menu's Cast… open the tab's Cast
-# card, and × closes it; on the Mac the run answers macOS's question for the local network that
-# looking for devices brings. A video's page menu floats it in Picture
+# Settings turns it off for the sites they don't allow; on Linux, and on the Mac in CI, its window
+# moves by its top bar and sizes from its corner, and on Windows its hit test says a press there
+# would. A tab playing music out of sight has a player at the sidebar's foot, whose buttons pause
+# it and float it in Picture in Picture, whose click shows the tab, and whose × puts it away. A
+# private window's music has a player in that window alone. View › Cast… and the page menu's Cast…
+# open the tab's Cast card, and × closes it; on the Mac the run answers macOS's question for the
+# local network that looking for devices brings. A video's page menu floats it in Picture
 # in Picture, the Mini Player, 10 in from the top right of the screen, which a scroll or a drag
 # moves, ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
@@ -343,7 +343,7 @@ kept_keys
 # The call's window moves and sizes as Chrome's does, by its frame, so the page keeps its own
 # scroll, pinch and double-click: a drag on its top bar, off the buttons at its ends, moves it, and
 # one from its bottom right corner, in the 10 its edges keep for sizing, sizes it. The window
-# manager does both, with the display's pointer. Not on the Mac: drive.mm doesn't find it yet.
+# manager does both, with the display's pointer.
 if [ "$(uname)" = Linux ]; then
   px=0 py=0 pw=0 ph=0
   send pip
@@ -380,8 +380,45 @@ elif windows; then
     "the floating call's bottom right corner wasn't one a press sizes it from"
   ../tools/window-screenshot.sh "$pid" "$out/media-call-floating.png" all ||
     fail "no window to capture"
+elif [ "$(uname)" = Darwin ] && [ "${GITHUB_ACTIONS:-}" = true ]; then
+  # The window server moves and sizes it with the real pointer, which the driver's events never
+  # move, so check/pointer.mm drags it with events posted as a mouse's are. They move the
+  # desktop's pointer, so only in a CI job, where nobody's work is on the screen.
+  clang++ -fobjc-arc -framework Cocoa -o "$out/pointer" check/pointer.mm 2> "$out/pointer.log" ||
+    fail "check/pointer.mm didn't build: $(cat "$out/pointer.log")"
+  # The window's frame once it matches $1, as the window server settles it after the let-go.
+  pip_is() {
+    for _ in $(seq 30); do
+      send pip
+      at=$(grep '^browser: pip at ' "$log" | tail -1 | cut -d' ' -f4-)
+      if [ -n "$at" ] && echo "$at" | awk -v px="$px" -v py="$py" -v pw="$pw" -v ph="$ph" \
+        "{ x = \$1; y = \$2; w = \$3; h = \$4; exit !($1) }"; then
+        read -r px py pw ph <<EOF
+$at
+EOF
+        return 0
+      fi
+      sleep 0.1
+    done
+    fail "$2, at $at: $(cat "$out/pointer.txt")"
+  }
+  px=0 py=0 pw=0 ph=0
+  pip_is 1 "the floating call had no window"
+  "$out/pointer" drag $((px + pw / 2)) $((py + 17)) $((px + pw / 2 - 150)) $((py - 23)) \
+    > "$out/pointer.txt" 2>&1 || fail "check/pointer.mm didn't drag: $(cat "$out/pointer.txt")"
+  pip_is "x == px - 150 && y == py - 40 && w == pw && h == ph" \
+    "a drag on the floating call's top bar didn't move it"
+  "$out/pointer" drag $((px + pw - 3)) $((py + ph - 3)) $((px + pw + 47)) $((py + ph + 27)) \
+    > "$out/pointer.txt" 2>&1 || fail "check/pointer.mm didn't drag: $(cat "$out/pointer.txt")"
+  pip_is "x == px && y == py && w >= pw + 45 && w <= pw + 55 && h >= ph + 25 && h <= ph + 35" \
+    "a drag from the floating call's corner didn't size it"
+  ../tools/window-screenshot.sh "$pid" "$out/media-call-floating.png" all ||
+    fail "no window to capture"
+  # The press gave the call's window the keys, as on Linux.
+  send click $page_point
 else
-  echo "skip: moving and sizing the floating call on $(uname): drive.mm has no pip."
+  echo "skip: moving and sizing the floating call on $(uname) outside CI: it takes the real" \
+    "pointer."
 fi
 shown "$f"
 expect "^browser: title $f landed\$" "the call allowed to float didn't come back with its tab"
@@ -649,7 +686,8 @@ if [ "$(uname)" = Linux ]; then
   expect "^browser: title $v landed\$" "a double-click on the Mini Player didn't land it"
   expect '^browser: pip gone$' "the Mini Player stayed after a double-click"
 else
-  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): drive.mm has no pip."
+  echo "skip: moving, sizing and double-clicking the Mini Player on $(uname): the driver doesn't" \
+    "drag a Picture in Picture window there."
   send click $page_point
   send key x
   expect "^browser: title $v landed\$" "the floating video didn't come back"
@@ -694,6 +732,12 @@ send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
 # The driver numbers windows in the order they were made, the private one that closed too.
 second=$(grep -c '^browser: window opened ' "$log")
+# The new window becomes the one the user is in a moment after it opens; going back before then
+# leaves the first one main all along, and nothing comes back to it. Linux's host doesn't say.
+if [ "$(uname)" != Linux ]; then
+  opened=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
+  expect "^browser: window $opened main true\$" "the window ⌘N opened didn't become the main one"
+fi
 send window 1
 expect 'browser: mini player back in its tab$' \
   "coming back to the video's window didn't put the Mini Player back in its tab"
