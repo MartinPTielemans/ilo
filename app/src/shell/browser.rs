@@ -387,6 +387,15 @@ pub trait Browser {
     }
     /// Keeps `text` as `profile`'s past tasks, as `agent_history` reads them.
     fn set_agent_history(&self, _profile: u64, _text: &str) {}
+    /// The sites where the user answered agents for good under `key`, a past task's
+    /// (`agent_history::Past::answers`), each true for Always Allow and false for Never, as
+    /// Settings › Agents lists them.
+    fn agent_answers(&self, _key: &str, _cx: &App) -> Vec<(String, bool)> {
+        Vec::new()
+    }
+    /// Revoke on a past task's page: the answer for good under `key` on `site` goes, as Settings ›
+    /// Agents' Revoke has it go, with its entry in the activity log.
+    fn revoke_agent_answer(&self, _key: &str, _site: &str, _cx: &mut App) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;

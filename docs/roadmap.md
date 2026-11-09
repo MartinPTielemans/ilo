@@ -30,7 +30,7 @@ Sidebar, Spaces (with the Agent Space kind in the data model), command bar, spli
 
 Peek, Little Arc, link rules (Arc's Air Traffic Control), themes, end-to-end encrypted sync (not iCloud-only), Widevine, passkeys.
 
-Agents (decision 8): the built-in local MCP server, Agent Spaces (their hidden tabs keep running unthrottled, as Chrome keeps a tab it captures), engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server.
+Agents (decision 8): the built-in local MCP server, agent sessions (#1080), their hidden tabs unthrottled as Chrome's captured tabs are, engine-native page access, per-agent and per-site permissions with an activity log, and handoff to the human. Then tasks asked from ⌘T, which the user's own `claude` or `codex` CLI runs through the same server.
 
 **Partly met** (17 of 41 rows). Built:
 

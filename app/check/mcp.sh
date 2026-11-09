@@ -422,9 +422,14 @@ watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
+  # Counted, as a page watched before has its lines already.
+  watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
   send click $((wx + ww / 2)) $((wy + wh / 2))
-  await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
-  await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
+  await_more "^browser: task $session page $1\$" "$watched" ||
+    fail "a click on tab $1's picture didn't watch it"
+  await_more "^browser: task page $1 in place\$" "$placed" ||
+    fail "tab $1's page didn't come to rest in place"
 }
 # A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
 # hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
@@ -1096,6 +1101,19 @@ CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
+  # Back in the conversation's Pages, the page handed to the user says so under its picture, with
+  # why (#1080). Then its page is watched again, as before.
+  back="^browser: task page $agent_tab back\$"
+  thumbnail='^browser: task page in its thumbnail$'
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to Pages"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
+  await_log "^browser: task picture $opened_tab says Needs you · Sign in for the check\$" \
+    "the handed page's picture didn't say it needs the user: $(grep "^browser: task picture $opened_tab says" "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages-needs-you.png" || fail "no window to capture"
+  watch "$agent_tab"
   # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
@@ -1109,9 +1127,11 @@ CARD
   # From the conversation, a press in the page watched takes the tab the agent is at work in over,
   # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
   # user hands it back. The strip then says the user drives.
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
-  await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
-  await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
+  await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
   watch "$opened_tab"
   await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
   ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"

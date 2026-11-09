@@ -190,6 +190,15 @@ impl Shell {
         })
     }
 
+    /// Why the user holds `tab` from its agent, if they do: what the agent asked of them, or empty
+    /// if they took it over.
+    pub(super) fn held_why(&self, tab: u64) -> Option<SharedString> {
+        (self.agent_status.iter())
+            .flat_map(|status| status.held.iter())
+            .find(|(each, _)| *each == tab)
+            .map(|(_, why)| why.clone())
+    }
+
     /// Take Over, or Hand Back: the bar's first button and ⌘↩.
     pub(super) fn agent_bar_primary(&mut self, cx: &mut Context<Self>) {
         match self.agent_bar() {
