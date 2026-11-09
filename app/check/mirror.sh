@@ -86,7 +86,7 @@ mirrors_on() {
   for k in $(seq 1 $(($1 - 1))); do
     # shellcheck disable=SC2046 # x y width height
     send mirror "$1" "$k" $(grep "^browser: window $(window_id "$k") picture at " "$log" | tail -1 |
-      cut -d' ' -f5-)
+      cut -d' ' -f6-)
     grep -q '^browser: mirror \(hosts\|thumbnails\)' "$log" || fail "no mirror in window $k"
   done
 }
