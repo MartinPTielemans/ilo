@@ -4,7 +4,9 @@
 //! or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
+    cell::RefCell,
     hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -418,6 +420,13 @@ pub(super) struct Library {
     only: Only,
     /// The downloads the log last said Downloads lists, for check.sh.
     logged: Option<String>,
+    /// The past task whose page Agents shows in its list's place, by its id (#1080).
+    opened: Option<String>,
+    /// That page's sites, each with the agent's answer there for good: true for Always Allow,
+    /// false for Never, None while it asks first.
+    sites: Vec<(String, Option<bool>)>,
+    /// Where the page's controls were drawn, as the log said, for check.sh to click them.
+    drawn: Rc<RefCell<Vec<String>>>,
     _search: Subscription,
 }
 
@@ -456,6 +465,12 @@ enum Item {
     Past(usize),
     /// Agents' Clear, over its list.
     Clear,
+    /// A past task's page, opened from its row: the way back, its title, and what it did.
+    PastHead(usize),
+    /// The page's site at this index of `Library::sites`.
+    PastSite(usize),
+    /// The step of the past task at the first index, at the second of its steps.
+    PastStep(usize, usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -871,6 +886,9 @@ impl Shell {
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
             only: Only::All,
             logged: None,
+            opened: None,
+            sites: Vec::new(),
+            drawn: Rc::default(),
             _search: observe,
         });
         // check.sh waits for these lines.
@@ -959,6 +977,69 @@ impl Shell {
         let query = library.search.read(cx).text().trim().to_lowercase();
         if !changed && query == library.query {
             return;
+        }
+        // A search goes back to the list, to find in it.
+        if query != library.query {
+            library.opened = None;
+        }
+        if self.section == Section::Agents
+            && let Some(id) = library.opened.clone()
+        {
+            match self.agent_history.iter().position(|past| past.id == id) {
+                Some(index) => {
+                    let past = &self.agent_history[index];
+                    let answers = match past.answers.is_empty() {
+                        true => Vec::new(),
+                        false => self.browser.agent_answers(&past.answers, cx),
+                    };
+                    library.sites = (past.sites().into_iter())
+                        .map(|site| {
+                            let answer = answers.iter().find(|(each, _)| *each == site);
+                            (site, answer.map(|(_, may)| *may))
+                        })
+                        .collect();
+                    let mut items = vec![Item::PastHead(index)];
+                    if !library.sites.is_empty() {
+                        items.push(Item::Heading("Sites"));
+                        items.extend((0..library.sites.len()).map(Item::PastSite));
+                    }
+                    if !past.steps.is_empty() {
+                        items.push(Item::Heading("Steps"));
+                        items.extend(
+                            (0..past.steps.len())
+                                .rev()
+                                .map(|step| Item::PastStep(index, step)),
+                        );
+                    }
+                    let allowed: Vec<String> = (library.sites.iter())
+                        .filter_map(|(site, answer)| match answer {
+                            Some(true) => Some(format!("{site} allowed")),
+                            Some(false) => Some(format!("{site} never")),
+                            None => None,
+                        })
+                        .collect();
+                    // check.sh reads this line.
+                    log!(
+                        "browser: agents history shows {id}: {} steps, {} sites, answers {}",
+                        past.steps.len(),
+                        library.sites.len(),
+                        if allowed.is_empty() {
+                            "none".to_string()
+                        } else {
+                            allowed.join(", ")
+                        }
+                    );
+                    if items != library.items {
+                        library.list.reset(items.len());
+                        library.items = items;
+                    }
+                    library.query = query;
+                    cx.notify();
+                    return;
+                }
+                // Deleted, or gone with history: back to the list.
+                None => library.opened = None,
+            }
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
         let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
@@ -2134,6 +2215,9 @@ impl Shell {
             Item::Task(task) => return self.archived_task_item(task, cx),
             Item::Past(past) => return self.past_task_item(past, cx),
             Item::Clear => return self.agents_clear_item(cx),
+            Item::PastHead(past) => return self.past_head_item(past, cx),
+            Item::PastSite(site) => return self.past_site_item(site, cx),
+            Item::PastStep(past, step) => return self.past_step_item(past, step),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -2337,6 +2421,10 @@ impl Shell {
             return div().into_any_element();
         };
         let id = past.id.clone();
+        let opened = id.clone();
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
+        });
         let group: SharedString = format!("past-{index}").into();
         let mark = self.status_mark(crate::agents::task::Dot::Done);
         let close = div()
@@ -2372,6 +2460,8 @@ impl Shell {
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .children(drawn)
+                    .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_task(&opened, cx)))
                     .child(
                         div()
                             .absolute()
@@ -2408,6 +2498,228 @@ impl Shell {
             .into_any_element()
     }
 
+    /// A click on a past task's row: its page, in the list's place, with its steps and the sites
+    /// it went to, each with its agent's answer there for good and Revoke (#1080).
+    pub(super) fn open_past_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.opened = Some(id.to_string());
+        self.filter(true, cx);
+    }
+
+    /// The page's way back: Agents' list again.
+    pub(super) fn close_past_task(&mut self, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        if library.opened.take().is_some() {
+            // check.sh reads this line.
+            log!("browser: agents history lists");
+        }
+        self.filter(true, cx);
+    }
+
+    /// Revoke on the page's site at `index`: the agent's answer there for good goes, as Settings ›
+    /// Agents' Revoke has it go, and the activity log says so, so what asks first there asks
+    /// again.
+    pub(super) fn revoke_past_site(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(library) = &self.library else {
+            return;
+        };
+        let opened = library.opened.as_deref();
+        let past = self
+            .agent_history
+            .iter()
+            .find(|past| Some(past.id.as_str()) == opened);
+        let (Some(past), Some((site, Some(_)))) = (past, library.sites.get(index)) else {
+            return;
+        };
+        let (answers, site) = (past.answers.clone(), site.clone());
+        self.browser.revoke_agent_answer(&answers, &site, cx);
+        self.filter(true, cx);
+    }
+
+    /// A small button of the Library's lists, as Agents' Clear.
+    fn list_button(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .px(px(8.))
+            .py(px(3.))
+            .rounded(px(ARCHIVED_RADIUS))
+            .text_size(px(text::SMALL))
+            .text_color(self.palette.text(SECONDARY))
+            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .child(label)
+    }
+
+    /// The past task's page's head: Back in its mark's place, which goes back to the list, and its
+    /// title over its agent, how long it ran, when it ended and what it did.
+    fn past_head_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn("library back".into(), library.drawn.clone())
+        });
+        let back = div()
+            .id("past-back")
+            .absolute()
+            .left(px(ARCHIVED_FAVICON_X + FAVICON_SIZE / 2. - 12.))
+            .top(px((ARCHIVED_PLATE - 24.) / 2.))
+            .size(px(24.))
+            .rounded(px(ARCHIVED_RADIUS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .children(drawn)
+            .child(
+                svg()
+                    .path("icons/arrow-left.svg")
+                    .size(px(FAVICON_SIZE))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| shell.close_past_task(cx)));
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .size_full()
+                    .relative()
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(8.))
+                            .child(text_line(
+                                past.title.clone().into(),
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                past.page_about().into(),
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    )
+                    .child(back),
+            )
+            .into_any_element()
+    }
+
+    /// A site the past task went to, over its agent's answer there for good, with Revoke at its
+    /// end while it has one.
+    fn past_site_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some((site, answer)) =
+            (self.library.as_ref()).and_then(|library| library.sites.get(index))
+        else {
+            return div().into_any_element();
+        };
+        let answer_words = match answer {
+            Some(true) => "Always Allow",
+            Some(false) => "Never",
+            None => "Asks first",
+        };
+        let revoke = answer.is_some().then(|| {
+            let drawn = (self.library.as_ref()).map(|library| {
+                crate::settings_rows::drawn(format!("library revoke {site}"), library.drawn.clone())
+            });
+            self.list_button(("past-revoke", index), "Revoke")
+                .relative()
+                .children(drawn)
+                .on_click(cx.listener(move |shell, _, _, cx| shell.revoke_past_site(index, cx)))
+        });
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .pl(px(ARCHIVED_TEXT_X))
+                    .child(text_line(
+                        site.clone().into(),
+                        text::BODY,
+                        17.,
+                        self.palette.text(UNSELECTED_TITLE),
+                    ))
+                    .child(text_line(
+                        answer_words.into(),
+                        text::SMALL,
+                        15.,
+                        self.palette.text(SECONDARY),
+                    )),
+            )
+            .children(revoke)
+            .into_any_element()
+    }
+
+    /// A step of the past task, in the words Settings › Agents' activity log has, over when it
+    /// came and why it was refused, if it was.
+    fn past_step_item(&mut self, index: usize, step: usize) -> AnyElement {
+        let Some(step) = (self.agent_history.get(index)).and_then(|past| past.steps.get(step))
+        else {
+            return div().into_any_element();
+        };
+        let did = crate::agents::tools::Did {
+            tool: step.action.clone(),
+            site: step.site.clone(),
+            ..Default::default()
+        };
+        let tense = match step.refused.is_empty() {
+            true => crate::agents::tools::Tense::Done,
+            false => crate::agents::tools::Tense::Failed,
+        };
+        let when = crate::agents::local_time(step.at);
+        let under = match step.refused.is_empty() {
+            true => when,
+            false => format!("{when} · Refused: {}", step.refused),
+        };
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .pl(px(ARCHIVED_TEXT_X))
+                    .pr(px(8.))
+                    .child(text_line(
+                        crate::agents::tools::step_title(&did, tense).into(),
+                        text::BODY,
+                        17.,
+                        self.palette.text(UNSELECTED_TITLE),
+                    ))
+                    .child(text_line(
+                        under.into(),
+                        text::SMALL,
+                        15.,
+                        self.palette.text(SECONDARY),
+                    )),
+            )
+            .into_any_element()
+    }
+
     /// Agents' Clear, at the end of a line over its list.
     fn agents_clear_item(&mut self, cx: &mut Context<Self>) -> AnyElement {
         div()
@@ -2418,15 +2730,7 @@ impl Shell {
             .items_center()
             .justify_end()
             .child(
-                div()
-                    .id("agents-clear")
-                    .px(px(8.))
-                    .py(px(3.))
-                    .rounded(px(ARCHIVED_RADIUS))
-                    .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .child("Clear")
+                self.list_button("agents-clear", "Clear")
                     .on_click(cx.listener(|shell, _, _, cx| shell.clear_agent_history(cx))),
             )
             .into_any_element()

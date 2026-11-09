@@ -997,6 +997,21 @@ impl Browser for Engine {
         bar_picks_host::set_sessions(profile, text);
     }
 
+    fn agent_answers(&self, key: &str, cx: &App) -> Vec<(String, bool)> {
+        let Some(agents) = browser::agents::global(cx) else {
+            return Vec::new();
+        };
+        (agents.read(cx).grants(key).into_iter())
+            .map(|(site, may)| (site.to_string(), may))
+            .collect()
+    }
+
+    fn revoke_agent_answer(&self, key: &str, site: &str, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.revoke(key, Some(site), cx));
+        }
+    }
+
     fn close_other_window(&self, _: &mut App) -> bool {
         unsafe { platform::host_close_other_window() }
     }
