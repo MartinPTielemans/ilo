@@ -199,6 +199,18 @@ send window 2
 # The same link again, with the regular window in front, brings that Little ilo window back.
 send window 1
 expect "^browser: key window $window\$" "the regular window didn't come to the front"
+sway_ours() {
+  swaymsg -t get_tree | python3 -I -c '
+import json, sys
+def nodes(node):
+    yield node
+    for child in node.get("nodes", []) + node.get("floating_nodes", []):
+        yield from nodes(child)
+for n in nodes(json.load(sys.stdin)):
+    if n.get("pid") == int(sys.argv[1]):
+        print(n.get("id"), n.get("name"), n.get("type"), "urgent", n.get("urgent"), "focused", n.get("focused"), n.get("rect"))' "$pid" >> "$out/sway-ours.log"
+}
+echo before >> "$out/sway-ours.log"; sway_ours
 send_link "${site}?ext"
 expect_late "^browser: link from another app ${site}?ext: little window $little again\$" \
   "the same link again didn't bring its Little ilo window back: $(grep '^browser: link' "$log" | tail -1)"
@@ -227,6 +239,7 @@ if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && old_sway; then
     ! urgent || break
     sleep 0.05
   done
+  echo after >> "$out/sway-ours.log"; sway_ours
   urgent || fail "the link's Little ilo window didn't come to the front, nor was it marked urgent"
   little_front="marked urgent, as sway $(swaymsg -t get_version | python3 -I -c '
 import json, sys
