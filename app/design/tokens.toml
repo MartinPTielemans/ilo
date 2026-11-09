@@ -864,8 +864,9 @@ card-radius = 6.0
 # the card's radius is this less card-inset, never under 0, so the frame between them is as thick
 # round the curve as along the sides (outer = inner + inset, as #361 has the chrome's own). The
 # Mac's is macOS 26's continuous corner on a window with no toolbar, measured in window captures
-# on GitHub's macos-26 runner (16.75) and the owner's Mac (16), and the core rounds the page with
-# the same curve. Windows 11's is 8 points across, unless the window is maximized or full screen.
+# on GitHub's macos-26 runner (16.75) and the owner's Mac (16); the core rounds the page on a
+# circle until it takes the window's curve. Windows 11's is 8 points across, unless the window is
+# maximized or full screen.
 # Linux's compositors don't tell a window how they round it, so it's taken as square.
 window-radius-mac = 16.0
 window-radius-windows = 8.0
