@@ -195,9 +195,9 @@
 // <0|1>, marked <location,length|none>" once AppKit has handled its events, "browser: menu tracked
 // <titles>" as a menu AppKit tracks opens, such as DevTools' page's, "browser: modal shown <texts
 // and buttons>" as an alert does, "browser: desktop space changed" once macOS has slid to
-// another Space, and "browser: window resigned key" as the browser window driven loses the
-// keyboard. A page ignores clicks while the app isn't the active app, and macOS doesn't let a
-// background process make it active.
+// another Space, and "browser: window resigned key" and "browser: window became key" as the
+// browser window driven loses the keyboard and has it back. A page ignores clicks while the app
+// isn't the active app, and macOS doesn't let a background process make it active.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 
@@ -2127,18 +2127,24 @@ void drive_start(void) {
                 fprintf(stderr, "browser: window on screen %.0fx%.0f, full screen %d\n", size.width,
                         size.height, (window.styleMask & NSWindowStyleMaskFullScreen) != 0);
               }];
-  // The browser window losing the keyboard between two commands, as to another app's window that
-  // takes it for a moment (#968), which the commands' own lines miss: Chrome does what waits on the
-  // window being active, such as showing the tab a page starts sharing, only while it is.
-  [NSNotificationCenter.defaultCenter
-      addObserverForName:NSWindowDidResignKeyNotification
-                  object:nil
-                   queue:nil
-              usingBlock:^(NSNotification* notification) {
-                if (notification.object == (__bridge NSWindow*)host_browser_window(g_driven)) {
-                  fprintf(stderr, "browser: window resigned key\n");
-                }
-              }];
+  // The browser window losing the keyboard and having it back between two commands, as to
+  // Chrome's dialog for what a page shares, which the commands' own lines miss: Chrome does what
+  // waits on the window being active, such as showing the tab a page shares, only while it is
+  // (#2148).
+  for (NSNotificationName name :
+       {NSWindowDidResignKeyNotification, NSWindowDidBecomeKeyNotification}) {
+    const char* what =
+        [name isEqualToString:NSWindowDidBecomeKeyNotification] ? "became" : "resigned";
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (notification.object == (__bridge NSWindow*)host_browser_window(g_driven)) {
+                    fprintf(stderr, "browser: window %s key\n", what);
+                  }
+                }];
+  }
   // The same transitions timed, on the uptime clock the core's and the app's lines read: when
   // AppKit starts one, when the window gets its size, and when it ends (above). check.sh reads them.
   for (NSNotificationName name :
