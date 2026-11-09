@@ -88,6 +88,9 @@
 //                                         them, the driven one too, after each one's frame, as
 //                                         "browser: frame window <n> <x> <y> <width> <height>"
 //                                         in place's terms
+//   desktop                               logs the browser windows on the desktop shown, as
+//                                         "browser: desktop shown window <n> window <m> …",
+//                                         numbered as order numbers them
 //   layout                                logs the frames of the window's views and child
 //                                         windows, the centres of its close, minimize and
 //                                         zoom buttons, the frame of the page that has the
@@ -1641,6 +1644,18 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     fprintf(stderr, "browser: order%s, key %s\n", order.UTF8String,
             (name_of(NSApp.keyWindow) ?: @"none").UTF8String);
+    done();
+    return true;
+  }
+  if (action == "desktop") {
+    NSMutableString* shown = [NSMutableString string];
+    for (size_t index = 0; index < 64; index++) {
+      NSWindow* each = (__bridge NSWindow*)host_browser_window(index);
+      if (each && each.visible && each.onActiveSpace) {
+        [shown appendFormat:@" window %zu", index + 1];
+      }
+    }
+    fprintf(stderr, "browser: desktop shown%s\n", shown.UTF8String);
     done();
     return true;
   }
