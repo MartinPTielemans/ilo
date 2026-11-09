@@ -407,7 +407,7 @@ jobs:
               ! find "$out/$where$run" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
             done < "$RESULTS"
           fi
-          [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
+          crashed="${crashed:-(proof, kept regardless)}"
           mkdir -p "$out/symbols"
           objcopy --only-keep-debug target/release/libBrowser.so "$out/symbols/libBrowser.so.debug"
           id=$(readelf -n target/release/libBrowser.so | sed -n 's/^ *Build ID: //p')
