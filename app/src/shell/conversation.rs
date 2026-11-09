@@ -427,7 +427,6 @@ impl Shell {
         let Some(agent) = self.talk_agent() else {
             return false;
         };
-        // check.sh reads this line.
         log!("browser: command dismiss-task via conversation");
         let finished = self
             .task_cards

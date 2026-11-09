@@ -798,7 +798,6 @@ void WatchDisplayGone() {
       if (NSApp.active) {
         return;
       }
-      // check.sh reads this line.
       fprintf(stderr, "browser: active again after its display went away\n");
       [NSApp activateIgnoringOtherApps:YES];
     });
@@ -1258,7 +1257,6 @@ void ReleaseKeys(NSWindow* from) {
   g_keys_for = nil;
   ++g_hold;
   if (g_held_keys.count) {
-    // check.sh reads this line.
     fprintf(stderr, "browser: held %lu key events for %s\n", (unsigned long)g_held_keys.count,
             to ? NSStringFromClass(to.class).UTF8String : "none");
   }
@@ -1512,7 +1510,6 @@ OSErr LogQuitEvent(const AppleEvent* event, AppleEvent* reply, SRefCon) {
       sender ? [NSRunningApplication runningApplicationWithProcessIdentifier:sender].localizedName
              : nil;
   const char why[5] = {char(reason >> 24), char(reason >> 16), char(reason >> 8), char(reason), 0};
-  // check.sh reads this line.
   fprintf(stderr, "browser: quit Apple Event from %d %s, reason %s\n", sender,
           name ? name.UTF8String : "unknown", reason ? why : "none");
   return g_quit_handler(event, reply, g_quit_refcon);
@@ -1529,7 +1526,6 @@ void LogExit() {
   pthread_threadid_np(nullptr, &thread);
   char name[64] = "";
   pthread_getname_np(pthread_self(), name, sizeof(name));
-  // check.sh reads this line.
   fprintf(stderr, "browser: exit on thread %llx %s, queue %s\n", thread, name,
           dispatch_queue_get_label(DISPATCH_CURRENT_QUEUE_LABEL));
   void* calls[64];
@@ -1679,7 +1675,6 @@ static void HoldLittleWindow(Browser* browser, NSWindow* window) {
   frame_view.wantsLayer = YES;
   CALayer* layer = frame_view.layer;
   if (!layer) {
-    // check.sh reads this line.
     fprintf(stderr, "browser: little window can't grow, as its frame has no layer\n");
     return;
   }
@@ -3144,7 +3139,6 @@ bool host_fold_overlay(int index,
         [g_fold_window.parentWindow removeChildWindow:g_fold_window];
         [g_fold_window orderOut:nil];
       }
-      // check.sh reads this line.
       fprintf(stderr, "browser: %s folded\n", overlay->name);
     }];
     NSDictionary<NSString*, id>* to_values = @{
@@ -3169,7 +3163,6 @@ bool host_fold_overlay(int index,
     group.removedOnCompletion = NO;
     [plate addAnimation:group forKey:@"fold"];
     [CATransaction commit];
-    // check.sh reads this line.
     fprintf(stderr, "browser: %s folds to %g %g %g %g\n", overlay->name, x, y, width, height);
     CGColorRelease(start_fill);
     CGColorRelease(end_fill);

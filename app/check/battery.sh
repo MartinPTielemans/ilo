@@ -49,10 +49,11 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
+fifty=$((step + 1))
 send battery 50 unplugged
-none_since 'browser: battery saver on' || fail "Battery Saver turned on at 50%"
 send battery 19 unplugged
 expect 'browser: battery saver on at 19%$' "Battery Saver didn't turn on at 19% on battery"
+none_since 'browser: battery saver on at 50%' "$fifty" || fail "Battery Saver turned on at 50%"
 expect '^browser: toast shown Battery Saver is on at 19% \[turn off battery saver\]$' \
   "the toast didn't say Battery Saver is on, with Turn Off"
 # Captured once it has come in, not as it grows in.
@@ -70,11 +71,13 @@ expect 'browser: battery saver off$' "Turn Off Battery Saver for Now didn't turn
 expect '^browser: toast shown Battery Saver is off until you plug in$' \
   "the toast didn't say Battery Saver is off until plugged in"
 expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Saver off"
+eighteen=$((step + 1))
 send battery 18 unplugged
-none_since 'browser: battery saver on' || fail "Battery Saver came back on, turned off for now"
 send battery 18 plugged
 send battery 17 unplugged
 expect 'browser: battery saver on at 17%$' "plugged in and out again, Battery Saver didn't come back"
+none_since 'browser: battery saver on at 18%' "$eighteen" ||
+  fail "Battery Saver came back on, turned off for now"
 
 # Settings' Battery Saver switch: off, it goes at once and stays off lower still; on again, it's
 # back, below 20% on battery.
@@ -90,11 +93,14 @@ send clickkey $at
 expect '^browser: battery saver setting off$' "a click on Battery Saver's switch didn't turn it off"
 expect 'browser: battery saver off$' "Battery Saver stayed on with its switch off"
 expect '^browser: battery saver leaf hidden$' "the leaf stayed with Battery Saver's switch off"
+sixteen=$((step + 1))
 send battery 16 unplugged
-none_since 'browser: battery saver on' || fail "Battery Saver came on with its switch off"
 send clickkey $at
 expect '^browser: battery saver setting on$' "a click on Battery Saver's switch didn't turn it on"
 expect 'browser: battery saver on at 16%$' "Battery Saver's switch on didn't turn it on at 16%"
+# 16% read, it turned on only once the switch was.
+! since "$sixteen" | sed '/^browser: battery saver setting on$/q' | grep -q 'browser: battery saver on' ||
+  fail "Battery Saver came on with its switch off"
 settings_close
 post clickkey $close
 expect '^browser: settings hidden$' "the close button didn't hide Settings"

@@ -112,8 +112,10 @@ driven=$active
 if [ "$driven" = 1 ]; then
   # ⌃2 and ⌃3 have no second Space to show.
   send key 2 ctrl
+  expect '^browser: command select-space via page$' "⌃2 didn't reach the UI"
   none_since "^browser: \(task \)\{0,1\}space $agent" || fail "⌃2 showed the agent's Space"
   send key 3 ctrl
+  expect '^browser: command select-space via page$' "⌃3 didn't reach the UI"
   none_since "^browser: \(task \)\{0,1\}space $task" || fail "⌃3 showed the task's Space"
   [ "$(space)" = "$first" ] || fail "the window left the user's Space for $(space)"
 fi

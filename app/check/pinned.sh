@@ -84,6 +84,7 @@ expect "^browser: selected $a\( in .*\)\{0,1\}\$" "pressing the row dragged didn
 # a line marks where it would go.
 clicks=$(detents)
 send press $today_top
+expect '^browser: pressed [0-9]*$' "the press on Today's row didn't reach the UI"
 none_since '^browser: detent$' || fail "pressing a row clicked the trackpad"
 send dragto 100 270
 send dragto 100 230
@@ -94,11 +95,11 @@ send dragto 100 175
 none_since '^browser: dragged' || fail "a row dropped before the pointer let go"
 [ "$(detents)" -gt "$clicks" ] || fail "a row dragged up past the pinned rows didn't click"
 # Holding the row at its place doesn't click again, nor does letting go.
+held=$((step + 1))
 send dragto 100 176
-none_since '^browser: detent$' || fail "a row held at its place clicked again"
 send release 100 175
-none_since '^browser: detent$' || fail "letting go of a row clicked the trackpad"
 expect "^browser: dragged $b to pinned 1\$" "a drag of the Today tab up didn't pin it"
+none_since '^browser: detent$' "$held" || fail "a row held at its place, or let go, clicked the trackpad"
 expect_lists "$a $b $c" " *" "after dragging the Today tab into the pinned tabs"
 # The rows make room only once it's let go, as Arc's do, so the next drag waits for them.
 expect '^browser: rows settled$' "the pinned rows didn't settle after the drop"
@@ -492,19 +493,21 @@ expect "^browser: renamed folder $f work\$" "the new folder didn't take the name
 send press $(pinned_row 0)
 send dragto 110 180
 expect '^browser: detent$' "a row dragged under the folder and in didn't click the trackpad"
+held=$((step + 1))
 send dragto 120 200
-none_since '^browser: detent$' || fail "a row held in the folder clicked again"
 send release 120 200
 expect "^browser: dragged $c to folder $f 0\$" "a pinned tab dragged right under the folder didn't go in"
+none_since '^browser: detent$' "$held" || fail "a row held in the folder clicked again"
 expect "^browser: outline $f+\\[$c\\]\$" "the tab dragged in isn't in the folder: $(outline)"
 settled
 send press $(pinned_row 1)
 send dragto 90 197
 expect '^browser: detent$' "a row dragged left out of the folder didn't click the trackpad"
+held=$((step + 1))
 send dragto 76 199
-none_since '^browser: detent$' || fail "a row held out of the folder clicked again"
 send release 76 199
 expect "^browser: dragged $c to pinned 1\$" "a tab dragged left out of the folder didn't come out"
+none_since '^browser: detent$' "$held" || fail "a row held out of the folder clicked again"
 expect "^browser: outline $f+\\[\\] $c\$" "the tab dragged out is still in the folder: $(outline)"
 settled
 send drag $(pinned_row 0) 100 200
@@ -519,10 +522,11 @@ expect "^browser: outline $c $f+\\[\\]\$" "a click on the folder dragged didn't 
 send press $(pinned_row 0)
 send dragto 110 180
 expect '^browser: detent$' "a row dragged under the folder and in didn't click the trackpad"
+held=$((step + 1))
 send dragto 120 200
-none_since '^browser: detent$' || fail "a row held in the folder clicked again"
 send release 120 200
 expect "^browser: outline $f+\\[$c\\]\$" "the tab dragged under the folder didn't go in: $(outline)"
+none_since '^browser: detent$' "$held" || fail "a row held in the folder clicked again"
 settled
 none_since '^browser: selected' || fail "dragging into and out of a folder showed a tab"
 ../tools/window-screenshot.sh "$pid" "$out/folder.png" || fail "no window to capture"
@@ -830,13 +834,15 @@ expect "^browser: loaded $d ${site}notes.txt\$" "the dropped link didn't load in
 # Text that isn't a web link isn't taken, and nothing opens.
 send dragover 100 300 text "javascript:document.title='dropped'"
 expect '^browser: drag over HostUIView refused$' "the list took a javascript: URL dragged as text"
+left=$((step + 1))
 send dragleave
-none_since '^browser: dropped' || fail "dragged text that isn't a web link opened"
 # Other text, let go past the middle of the dropped link's row, centred at 333, goes in the gap
 # under it, the nearest, and is searched for there with the default engine, its spaces run
 # together.
 send dragdrop 100 345 text "dogs  and   cats"
 expect '^browser: dropped 1 in today 2$' "the dropped text wasn't taken under the dropped link"
+[ "$(since "$left" | grep -c '^browser: dropped')" = 1 ] || fail "dragged text that isn't a web link opened"
+[ "$(since "$left" | grep -c '^browser: dropped')" = 1 ] || fail "dragged text that isn't a web link opened"
 expect_lists "$e $c" "$t $d [0-9][0-9]*" "after dropping text"
 s=$(today | cut -d' ' -f3)
 expect "^browser: selected $s\$" "the dropped text's search didn't show"
@@ -895,10 +901,12 @@ expect "^browser: sidebar ring $t at " "the ring wasn't drawn round the tab show
 in_browser AccessKitSubclassOfGPUIView "Focus Sidebar didn't give the sidebar the keyboard"
 settled
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed.png" || fail "no window to capture"
+up=$((step + 1))
 send key up
-none_since '^browser: sidebar keyed' || fail "↑ from the first row moved the ring, onto a collapsed row"
 send key down
 expect "^browser: sidebar keyed $d\$" "↓ didn't move the ring to the next row"
+[ "$(since "$up" | grep -c '^browser: sidebar keyed')" = 1 ] ||
+  fail "↑ from the first row moved the ring, onto a collapsed row"
 expect "^browser: sidebar ring $d at " "the ring wasn't drawn round the next row"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-keyed-down.png" || fail "no window to capture"
 send key return

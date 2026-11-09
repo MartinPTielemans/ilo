@@ -463,6 +463,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   send key z cmd
+  expect '^browser: settings undo had nothing$' "⌘Z didn't reach Settings"
   none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey $(drawn "link space 0")
   expect "^browser: menu shown $front, [^,]*, work, Little ilo (checked)\$" \

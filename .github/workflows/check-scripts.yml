@@ -9,15 +9,20 @@
 # and a parse error in a sourced run ends the check (#1267). This job builds bash 3.2 from GNU's
 # source once, caches it, and parses each script as the Mac would. A parse misses the bash 4
 # features that fail only when they run, so a grep finds those.
+# tools/check-lints.py checks the runs and the app's log lines they read: a "check.sh reads this
+# line" marker over a line no run reads, a bare sleep that says no window it waits out, and a
+# none_since straight after the input it's about (#2196).
 name: Check scripts
 
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
   push:
     branches: ['**']
-    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+    paths: [app/check.sh, 'app/check/*.sh', 'app/src/**', 'app/platform/**', 'core/**', 'tools/**',
+      '.github/workflows/**']
   pull_request:
-    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+    paths: [app/check.sh, 'app/check/*.sh', 'app/src/**', 'app/platform/**', 'core/**', 'tools/**',
+      '.github/workflows/**']
 
 permissions: {}
 
@@ -83,3 +88,15 @@ jobs:
             status=1
           fi
           exit $status
+
+  lints:
+    name: lints
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -I tools/check-lints.py

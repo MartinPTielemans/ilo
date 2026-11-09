@@ -942,7 +942,6 @@ bool AddSentKey(UINT vk) {
     DWORD process = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &process);
     if (process != GetCurrentProcessId()) {
-      // check.sh reads this line.
       fprintf(stderr, "browser: drive: the IME's key went to another app's window\n");
       return;
     }

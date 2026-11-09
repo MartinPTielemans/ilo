@@ -166,16 +166,20 @@ send type nihongo
 [ "$marked" = 0,7 ] || fail "the offer's field didn't take the composition: marked $marked"
 send key space
 [ "$marked" = 0,3 ] || fail "the offer's field didn't take the conversion: marked $marked"
+committed=$((step + 1))
 send key return
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
-none_since "^browser: offer $tab answered" || fail "return committing the composition answered"
 ../tools/window-screenshot.sh "$pid" "$out/password-offer-ime.png" || fail "no window to capture"
 # Return saves the username as the field has it.
 send key a cmd
 send type check@example.test
 send key return
 expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save"
+[ "$(since "$committed" | grep -c "^browser: offer $tab answered")" = 1 ] ||
+  fail "return committing the composition answered"
+[ "$(since "$committed" | grep -c "^browser: offer $tab answered")" = 1 ] ||
+  fail "return committing the composition answered"
 expect '^browser: offer hidden$' "saving didn't hide the offer"
 expect "^browser: offer $tab gone\$" "saving didn't close Chrome's offer"
 
@@ -301,7 +305,7 @@ else
   # The alert runs a loop of its own, where the UI's tasks and timers go on: held open a while, none
   # may find the UI in an update, which GPUI would drop or panic on (#1358).
   asked=$(wc -l < "$log")
-  sleep 2
+  sleep 2 # the alert held open, its loop running the UI's timers
   send choose Cancel
   ! tail -n "+$((asked + 1))" "$log" | grep -q 'gpui dropped\|panicked\|already borrowed' ||
     fail "the UI's work in the alert's loop found it in an update: $(tail -n "+$((asked + 1))" "$log" |

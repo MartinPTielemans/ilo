@@ -1201,7 +1201,6 @@ impl Shell {
     /// Delete from Archive on a task: it leaves the Archive and ⇧⌘T's reach, a step of the
     /// window's ⌘Z history, as a tab's Delete from Archive is.
     fn delete_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
-        // check.sh waits for this line.
         log!("browser: remove archived task {agent}");
         if self
             .closed_task
@@ -2394,7 +2393,6 @@ impl Shell {
         let Some(profile) = self.learning_profile() else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: agents history delete {id}");
         let entries = crate::agent_history::read(&self.browser.agent_history(profile));
         let entries = crate::agent_history::deleted(entries, id);
@@ -2408,7 +2406,6 @@ impl Shell {
         let Some(profile) = self.learning_profile() else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: agents history cleared");
         self.browser.set_agent_history(profile, "");
         self.filter(true, cx);

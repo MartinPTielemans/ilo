@@ -186,11 +186,12 @@ expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $th
 Set Profile › Profile 2 (checked), Set Profile › New Profile (disabled), \
 New Folder…, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the menu of a Space with a tab offered another profile"
+own=$((step + 1))
 send choose Profile 2
-none_since '^browser: profiled space' || fail "choosing its own profile changed the Space's"
 # A Space made from this one is in its profile. Cancel takes it away again.
 send menu New Space…
 expect "^browser: spaces $first $second [0-9]*\$" "New Space didn't make a third Space"
+none_since "^browser: profiled space $second " "$own" || fail "choosing its own profile changed the Space's"
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: profiled space $third $work\$" \
   "a Space made from the new profile's Space isn't in it"
@@ -330,8 +331,8 @@ post rightclick 100 $(($(row 0 | cut -d' ' -f2) + 55))
 expect '^browser: menu shown .*, Move to › Space 1 (checked), Move to › work, ' \
   "the moved tab's menu didn't offer its old Space"
 send choose work
-none_since '^browser: dialog shown' || fail "the second move to another profile warned again"
 expect "^browser: tab $c closed\$" "the tab moved back kept its page in the first profile"
+none_since '^browser: dialog shown' || fail "the second move to another profile warned again"
 expect "^browser: space $second\$" "the window didn't go with the tab moved back"
 expect '^browser: today [0-9][0-9]*$' "the tab moved back isn't in the second Space"
 d=$(today)

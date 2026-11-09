@@ -570,10 +570,12 @@ expect '^browser: title [0-9]* page saw cmd-t$' "⌘T with the page focused didn
 none_since '^browser: command new-tab' || fail "⌘T with the page focused still ran New Tab"
 send click $sidebar_point
 in_browser AccessKitSubclassOfGPUIView "after a click on the sidebar"
+cmd_t=$((step + 1))
 send key t cmd
-none_since '^browser: command new-tab' || fail "⌘T with the UI focused still ran New Tab"
 send key t cmd ctrl
 expect '^browser: command new-tab via ui$' "⌃⌘T with the UI focused didn't reach the UI"
+[ "$(since "$cmd_t" | grep -c '^browser: command new-tab')" = 1 ] ||
+  fail "⌘T with the UI focused still ran New Tab"
 expect '^browser: command bar shown$' "⌃⌘T with the UI focused didn't open the command bar"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
@@ -745,8 +747,8 @@ send type nihongo
 send key space
 [ "$marked" = 0,3 ] || fail "the command bar didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/ime.png" || fail "no window to capture"
+committed=$((step + 1))
 send key return
-none_since '^browser: command bar typed' || fail "return while composing went somewhere"
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
 send type .invalid
@@ -754,6 +756,10 @@ send key return
 expect '^browser: command bar typed 日本語.invalid$' "the command bar didn't keep the committed text: $(grep '^browser: command bar typed' "$log" | tail -1)"
 searching '%E6%97%A5%E6%9C%AC%E8%AA%9E\.invalid' \
   "the committed text didn't start a search for it: $(grep '^browser: page ' "$log" | tail -1)"
+[ "$(since "$committed" | grep -c '^browser: command bar typed')" = 1 ] ||
+  fail "return while composing went somewhere"
+[ "$(since "$committed" | grep -c '^browser: command bar typed')" = 1 ] ||
+  fail "return while composing went somewhere"
 
 # ⌘L from the page the search $searched started in. ⌘L goes to the page first, and a key the page
 # being replaced hasn't answered leaves with it: DuckDuckGo's page replaces it once DuckDuckGo
