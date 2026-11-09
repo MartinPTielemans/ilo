@@ -5,7 +5,12 @@
 
 use gpui::{App, Context, SharedString};
 
-use super::{Shell, commands::keystroke_label, extensions::keystroke_text};
+use super::{
+    Shell,
+    commands::{Command, keystroke_label},
+    extensions::keystroke_text,
+    keys::user_keys,
+};
 use crate::agents::Status;
 
 /// What the bar shows.
@@ -73,6 +78,23 @@ impl Shell {
             return false;
         };
         self.browser.stop_agent(agent, cx);
+        true
+    }
+
+    /// As `run_agent_key`, for a key the agent's page would get first: also Take Over's and Hand
+    /// Back's key (⌘↩, Back to Pinned URL's), which a form in the page would otherwise take as its
+    /// own, such as a comment box's Send. Not from the UI's keys, where the command bar's and the
+    /// link preview's ⌘↩ are theirs.
+    pub fn run_agent_page_key(&mut self, keystroke: &str, cx: &mut Context<Self>) -> bool {
+        if self.run_agent_key(keystroke, cx) {
+            return true;
+        }
+        if self.agent_bar().is_none()
+            || user_keys(cx).command_for(keystroke, false) != Some(Command::BackToPinnedUrl)
+        {
+            return false;
+        }
+        self.agent_bar_primary(cx);
         true
     }
 

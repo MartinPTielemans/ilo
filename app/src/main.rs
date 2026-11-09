@@ -243,8 +243,10 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         return (true, "reserved shortcut");
     }
     let keystroke = keystroke(unsafe { &*key });
-    // ⌘. is the agent bar's Stop while it shows one, before the page could keep it.
-    if update_tab_window(tab, |shell, cx| shell.run_agent_key(&keystroke, cx)).unwrap_or(false) {
+    // ⌘. is the agent bar's Stop while it shows one, and ⌘↩ its Take Over or Hand Back, before
+    // the page could keep them.
+    if update_tab_window(tab, |shell, cx| shell.run_agent_page_key(&keystroke, cx)).unwrap_or(false)
+    {
         return (true, "agent bar");
     }
     if update_tab_window(tab, |shell, cx| {
