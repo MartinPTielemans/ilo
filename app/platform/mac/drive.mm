@@ -1234,41 +1234,56 @@ bool ChooseModal(NSString* title) {
 // the browser's works per frame. The core's own spike did the same (spike/live-mirror-359-2).
 NSMutableArray<NSView*>* g_mirrors;
 
-// The biggest CALayerHost under |layer|, with the size of the view holding it in |size|.
-CALayer* FindLayerHost(CALayer* layer, NSSize view_size, NSSize* size, CGFloat* area) {
-  CALayer* found = nil;
-  if ([NSStringFromClass(layer.class) isEqual:@"CALayerHost"] &&
-      view_size.width * view_size.height > *area) {
-    *area = view_size.width * view_size.height;
-    *size = view_size;
-    found = layer;
+// The CALayerHost under |layer| in the smallest view holding one, with that view in |holder|.
+CALayer* FindLayerHost(CALayer* layer) {
+  if ([NSStringFromClass(layer.class) isEqual:@"CALayerHost"]) {
+    return layer;
   }
   for (CALayer* sublayer in layer.sublayers) {
-    if (CALayer* host = FindLayerHost(sublayer, view_size, size, area)) {
-      found = host;
+    if (CALayer* host = FindLayerHost(sublayer)) {
+      return host;
     }
   }
-  return found;
+  return nil;
 }
 
-CALayer* FindPageHost(NSView* view, NSSize* size, CGFloat* area) {
-  CALayer* found = view.layer ? FindLayerHost(view.layer, view.bounds.size, size, area) : nil;
+CALayer* FindPageHost(NSView* view, NSView** holder) {
+  // The deepest view first: a layer-backed view's layer holds its subviews' layers too.
   for (NSView* subview in view.subviews) {
-    if (CALayer* host = FindPageHost(subview, size, area)) {
-      found = host;
+    if (CALayer* host = FindPageHost(subview, holder)) {
+      return host;
     }
   }
-  return found;
+  CALayer* host = view.layer ? FindLayerHost(view.layer) : nil;
+  if (host) {
+    *holder = view;
+  }
+  return host;
 }
 
-bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
-  NSSize size = NSZeroSize;
-  CGFloat area = 0;
-  CALayer* host = FindPageHost(from.contentView, &size, &area);
+NSView* FindView(NSView* view, NSString* name) {
+  if ([NSStringFromClass(view.class) isEqual:name]) {
+    return view;
+  }
+  for (NSView* subview in view.subviews) {
+    if (NSView* found = FindView(subview, name)) {
+      return found;
+    }
+  }
+  return nil;
+}
+
+// |portal|: a CAPortalLayer of the page view's layer, private, in place of a second CALayerHost.
+bool Mirror(NSWindow* from, NSWindow* to, NSRect rect, bool portal) {
+  NSView* page = nil;
+  CALayer* host = FindPageHost(from.contentView, &page);
+  const NSSize size = page.bounds.size;
   if (!host || size.width <= 0 || size.height <= 0) {
     fprintf(stderr, "browser: mirror found no page compositor\n");
     return false;
   }
+  // In GPUI's view, over the picture it draws: the core lets go of any other view of its window's.
+  NSView* parent = FindView(to.contentView, @"GPUIView") ?: to.contentView;
   const uint32_t context = [[host valueForKey:@"contextId"] unsignedIntValue];
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
@@ -1278,7 +1293,7 @@ bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
   root.masksToBounds = YES;
   CALayer* content = [CALayer layer];
   content.anchorPoint = CGPointZero;
-  content.geometryFlipped = host.superlayer.geometryFlipped;
+  content.geometryFlipped = portal ? NO : host.superlayer.geometryFlipped;
   [root addSublayer:content];
   // The picture's veil (docs/ux-spec.md › Several windows): black 0.12.
   CALayer* veil = [CALayer layer];
@@ -1286,7 +1301,6 @@ bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
   [root addSublayer:veil];
   mirror.layer = root;
   mirror.wantsLayer = YES;
-  NSView* parent = to.contentView;
   const CGFloat y = parent.isFlipped ? NSMinY(rect) : NSHeight(parent.bounds) - NSMaxY(rect);
   mirror.frame = NSMakeRect(NSMinX(rect), y, NSWidth(rect), NSHeight(rect));
   const double scale = std::min(NSWidth(rect) / size.width, NSHeight(rect) / size.height);
@@ -1294,10 +1308,25 @@ bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
   content.position = CGPointZero;
   content.transform = CATransform3DMakeScale(scale, scale, 1);
   veil.frame = root.bounds;
-  CALayer* copy = [[NSClassFromString(@"CALayerHost") alloc] init];
+  CALayer* copy;
+  if (portal) {
+    Class portal_class = NSClassFromString(@"CAPortalLayer");
+    if (!portal_class || !page.layer) {
+      fprintf(stderr, "browser: mirror has no CAPortalLayer\n");
+      [CATransaction commit];
+      return false;
+    }
+    copy = [[portal_class alloc] init];
+    [copy setValue:page.layer forKey:@"sourceLayer"];
+    for (NSString* key in @[ @"matchesPosition", @"matchesTransform", @"matchesOpacity" ]) {
+      [copy setValue:@NO forKey:key];
+    }
+  } else {
+    copy = [[NSClassFromString(@"CALayerHost") alloc] init];
+    [copy setValue:@(context) forKey:@"contextId"];
+  }
   copy.anchorPoint = CGPointZero;
   copy.bounds = content.bounds;
-  [copy setValue:@(context) forKey:@"contextId"];
   [content addSublayer:copy];
   [parent addSubview:mirror positioned:NSWindowAbove relativeTo:nil];
   [CATransaction commit];
@@ -1305,9 +1334,13 @@ bool Mirror(NSWindow* from, NSWindow* to, NSRect rect) {
     g_mirrors = [NSMutableArray array];
   }
   [g_mirrors addObject:mirror];
-  fprintf(stderr, "browser: mirror hosts context %u of a %.0fx%.0f page at %.0f %.0f %.0f %.0f\n",
-          context, size.width, size.height, NSMinX(rect), NSMinY(rect), NSWidth(rect),
-          NSHeight(rect));
+  fprintf(stderr,
+          "browser: mirror %s context %u of a %.0fx%.0f %s at %.0f %.0f %.0f %.0f in %s, "
+          "host %.0fx%.0f under %s\n",
+          portal ? "portals" : "hosts", context, size.width, size.height,
+          NSStringFromClass(page.class).UTF8String, NSMinX(rect), NSMinY(rect), NSWidth(rect),
+          NSHeight(rect), NSStringFromClass(parent.class).UTF8String, host.bounds.size.width,
+          host.bounds.size.height, NSStringFromClass(host.superlayer.class).UTF8String);
   return true;
 }
 
@@ -1333,11 +1366,12 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     size_t from = std::strtoul(first.c_str(), nullptr, 10), to;
     double x, y, width, height;
+    std::string mode;
     if (!(words >> to >> x >> y >> width >> height) || !from || !to ||
         !host_browser_window(from - 1) || !host_browser_window(to - 1) ||
         !Mirror((__bridge NSWindow*)host_browser_window(from - 1),
                 (__bridge NSWindow*)host_browser_window(to - 1),
-                NSMakeRect(x, y, width, height))) {
+                NSMakeRect(x, y, width, height), (words >> mode) && mode == "portal")) {
       return false;
     }
     done();

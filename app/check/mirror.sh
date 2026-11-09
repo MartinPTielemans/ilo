@@ -86,8 +86,7 @@ mirrors_on() {
   for k in $(seq 1 $(($1 - 1))); do
     # shellcheck disable=SC2046 # x y width height
     send mirror "$1" "$k" $(grep "^browser: window $(window_id "$k") picture at " "$log" | tail -1 |
-      cut -d' ' -f6-)
-    grep -q '^browser: mirror \(hosts\|thumbnails\)' "$log" || fail "no mirror in window $k"
+      cut -d' ' -f6-) "$mode"
   done
 }
 # The page in window $1 painting ($2 moving) or not (still).
@@ -140,7 +139,7 @@ rounds() {
   for r in $(seq "$rounds"); do
     measure "$1 windows $2 picture"
     mirrors_on "$1"
-    measure "$1 windows $2 mirror"
+    measure "$1 windows $2 mirror $mode"
     send mirror off
   done
 }
@@ -159,8 +158,24 @@ fi
 take_page 2 920 40
 page_state 2 moving
 card_changes picture
+# On the Mac a second CALayerHost of the page's context, or a CAPortalLayer of its view's layer,
+# whichever draws the page live; on Windows the DWM thumbnail.
+mode=host
 mirrors_on 2
-card_changes mirror
+card_changes host
+send mirror off
+if [ "$server" = WindowServer ]; then
+  mode=portal
+  mirrors_on 2
+  card_changes portal
+  send mirror off
+  if grep -q '^mirror: card host: changed' "$results" ||
+    ! grep -q '^mirror: card portal: changed' "$results"; then
+    mode=host
+  fi
+fi
+echo "mirror: mode $mode" | tee -a "$results"
+mirrors_on 2
 ../tools/window-screenshot.sh "$pid" "$out/mirror-2.png" all || fail "no window to capture"
 send mirror off
 rounds 2 moving
@@ -193,6 +208,7 @@ awk -F': ' '/^mirror: [24] windows/ {
         s[k, 3] / n[k], s[k, 4] / n[k], gn[k] ? sprintf("%.2f percent", gs[k] / gn[k]) : "n/a"
     }
   }' "$results" | sort | tee -a "$results"
-grep -q '^mirror: card mirror: changed' "$results" || fail "window 1's mirror didn't change while the page painted"
+grep -q "^mirror: card $mode: changed" "$results" ||
+  fail "window 1's mirror ($mode) didn't change while the page painted"
 echo "ok: mirror, $(grep -c '^mirror: [24] windows' "$results") measures in $results." \
   "Windows: $out/mirror-2.png, $out/mirror-4.png"
