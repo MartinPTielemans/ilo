@@ -1,0 +1,200 @@
+# Temporary, for #678, never for main: the released ilo 0.1.11, as the DMG has it, updates itself
+# from the product's own feed (branding/update-feed) to the release after it, and that release's
+# first launch opens its notes, as only a signed build with an https feed can. It changes nothing
+# in the copy, the feed or a release.
+name: Update notes proof
+
+on:
+  push:
+    branches: ['docs/678-update-notes-*']
+    paths: [.github/workflows/update-notes-proof.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-notes-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  proof:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FROM: 0.1.11
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App
+        run: |
+          swift .github/scripts/display-mode.swift 1920 1080 || true
+          out=$RUNNER_TEMP/out
+          d=$RUNNER_TEMP/released
+          mkdir -p "$out" "$d" "$RUNNER_TEMP/run"
+          gh release download "v$FROM" -R MartinPTielemans/ilo -p ilo-mac-arm64.dmg -D "$d"
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$d/volume" "$d/ilo-mac-arm64.dmg"
+          ditto "$d/volume/ilo.app" "$RUNNER_TEMP/run/ilo.app"
+          hdiutil detach -quiet "$d/volume"
+          rm -rf "$d"
+          a=$RUNNER_TEMP/run/ilo.app
+          {
+            echo "copy: $(plutil -extract CFBundleShortVersionString raw "$a/Contents/Info.plist") ($(plutil -extract CFBundleVersion raw "$a/Contents/Info.plist"))"
+            codesign -dv "$a" 2>&1 | grep -E 'Authority=Developer|TeamIdentifier'
+            echo "SUFeedURL: $(plutil -extract SUFeedURL raw "$a/Contents/Info.plist")"
+            git fetch -q --depth 1 origin "refs/tags/v$FROM:refs/tags/v$FROM"
+            echo "branding/update-feed at v$FROM: $(git show "v$FROM:app/branding/update-feed")"
+            echo "branding/update-feed on main: $(cat app/branding/update-feed)"
+          } | tee "$out/copy.txt"
+          [ "$(plutil -extract SUFeedURL raw "$a/Contents/Info.plist")" = "$(cat app/branding/update-feed)" ] ||
+            { echo "::error::the released copy's feed isn't branding/update-feed's"; exit 1; }
+
+      # Screen capture for the copy, as check-mac.yml grants it.
+      - name: Grants
+        run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          a=$RUNNER_TEMP/run/ilo.app
+          paths="$a/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$a/Contents/Info.plist")"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in /*) paths="$paths
+          $path" ;; esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            sudo sqlite3 "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      - name: Update
+        run: |
+          out=$RUNNER_TEMP/out
+          app=$RUNNER_TEMP/run/ilo.app
+          exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
+          profile=$RUNNER_TEMP/profile
+          mkdir -p "$profile"
+          now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+          stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
+          has() { grep -q " $1" "$log"; }
+          # Waits up to $2 s for a line matching $1.
+          wait_for() {
+            local i
+            for i in $(seq $(($2 * 10))); do
+              has "$1" && return 0
+              kill -0 "$pid" 2> /dev/null || return 1
+              sleep 0.1
+            done
+            return 1
+          }
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            wait_for "browser: drive $step done" 30 || echo "driver didn't finish $*"
+          }
+          version() { plutil -extract "$1" raw "$app/Contents/Info.plist"; }
+          launch() {
+            log=$out/$1.log
+            : > "$log"
+            fifo=$RUNNER_TEMP/drive-$1
+            rm -f "$fifo"
+            mkfifo "$fifo"
+            step=0
+            (BROWSER_DRIVE=1 BROWSER_PROFILE_DIR="$profile" "$exe" < "$fifo" 2>&1 | stamp >> "$log") &
+            exec 3> "$fifo"
+            for _ in $(seq 100); do
+              pid=$(pgrep -n -f "^$exe" || true)
+              [ -n "$pid" ] && break
+              sleep 0.1
+            done
+            log stream --style compact --level debug \
+              --predicate 'subsystem BEGINSWITH "org.sparkle-project"' > "$out/$1-sparkle.txt" 2>&1 &
+            streamer=$!
+            wait_for 'browser: loaded' 60 || echo "$1: no page loaded"
+          }
+          stop() {
+            exec 3>&-
+            kill "$pid" 2> /dev/null || true
+            for _ in $(seq 100); do kill -0 "$pid" 2> /dev/null || break; sleep 0.1; done
+            kill "$streamer" 2> /dev/null || true
+          }
+          failed=0
+          fail() { echo "::error::$*"; failed=1; }
+
+          # A copy that last checked a moment ago, so it makes no check of its own at launch.
+          defaults delete "$id" > /dev/null 2>&1 || true
+          defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+          before=$(version CFBundleVersion)
+          cd app
+          launch before
+          wait_for 'browser: updater started' 30 || fail "$FROM didn't start its updater"
+          send menu "About ilo"
+          wait_for 'browser: settings update check at ' 15 || fail "About had no Check for Updates"
+          at=$(grep ' browser: settings update check at ' "$log" | tail -1 | sed 's/.* at //' || true)
+          # shellcheck disable=SC2086
+          send clickkey $at
+          wait_for 'browser: update stage found' 60 || fail "$FROM found no update in the product's feed"
+          wait_for 'browser: update stage ready' 900 || fail "the update never got ready"
+          ../tools/window-screenshot.sh "$pid" "$out/ready.png" all || echo "no window to capture"
+          defaults read "$id" UpdateNotes 2>&1 | tee "$out/kept-notes.txt" || true
+          # Quitting installs the ready update over the copy.
+          stop
+          for i in $(seq 1200); do
+            [ "$(version CFBundleVersion 2> /dev/null || true)" != "$before" ] &&
+              ! pgrep -f Autoupdate > /dev/null && break
+            sleep 0.1
+          done
+          echo "installed: $(version CFBundleShortVersionString) ($(version CFBundleVersion)), $((i / 10)) s after the quit" | tee -a "$out/copy.txt"
+          codesign --verify --deep --strict "$app" 2>&1 && echo "signature: valid" | tee -a "$out/copy.txt"
+          after=$(version CFBundleShortVersionString)
+          [ "$after" != "$FROM" ] || fail "the update didn't install"
+
+          # The update's first launch opens its notes, What's New.
+          launch after
+          if wait_for "browser: update notes https://" 60; then
+            line=$(grep ' browser: update notes ' "$log" | head -1)
+            echo "$line" | tee -a "$out/copy.txt"
+            tab=$(echo "$line" | sed 's/.*: tab \([0-9]*\) .*/\1/')
+            wait_for "browser: loaded $tab https://" 60 || echo "the notes didn't load"
+            wait_for "browser: title $tab " 30 || echo "the notes had no title"
+            grep -E " browser: (loaded|title) $tab " "$log" | tee -a "$out/copy.txt" || true
+            ../tools/window-screenshot.sh "$pid" "$out/notes.png" all || echo "no window to capture"
+          else
+            fail "$after's first launch didn't open its notes"
+          fi
+          stop
+          pkill -9 -f "$RUNNER_TEMP/run/" || true
+
+          # A second launch doesn't open them again.
+          launch again
+          wait_for 'browser: updater started' 30 || true
+          ! has 'browser: update notes' || fail "the second launch opened the notes again"
+          stop
+          pkill -9 -f "$RUNNER_TEMP/run/" || true
+
+          {
+            echo '```'
+            cat "$out/copy.txt"
+            grep -h -E ' browser: update| update ' "$out/before.log" "$out/after.log" | cut -c1-200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $failed
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: update-notes-proof
+          path: ${{ runner.temp }}/out
