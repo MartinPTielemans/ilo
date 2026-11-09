@@ -1,0 +1,119 @@
+# Temporary, for #1444, never for main: what an agent reads of Microsoft's public Word for the web
+# viewer in the released ilo on GitHub's hosted Mac, through ilo's own MCP bridge, with a throwaway
+# profile and no sign-in. It reads the page, has the agent turn on the viewer's accessible reading
+# mode, which shows the document as text, and reads it again.
+name: Word viewer agent read repro
+
+on:
+  push:
+    branches: [test/word-viewer-mcp-1444]
+    paths: [.github/workflows/word-mcp-1444.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      URL: https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fcalibre-ebook.com%2Fdownloads%2Fdemos%2Fdemo.docx
+    steps:
+      - name: App
+        run: |
+          gh release download -R MartinPTielemans/ilo -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          gh release view -R MartinPTielemans/ilo --json tagName -q .tagName
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          mkdir -p "$RUNNER_TEMP/apps"
+          ditto "$RUNNER_TEMP/mnt/ilo.app" "$RUNNER_TEMP/apps/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+
+      - name: Agent
+        run: |
+          out=$RUNNER_TEMP/out
+          profile=$RUNNER_TEMP/profile
+          mkdir -p "$out" "$profile"
+          app=$RUNNER_TEMP/apps/ilo.app
+          exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+          # Settings › Agents on, with one client, as check.sh's mcp run saves it.
+          printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$profile/Agents"
+          BROWSER_URL='data:text/html,<title>user</title>' BROWSER_PROFILE_DIR="$profile" \
+            "$exe" < /dev/null > "$out/ilo.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 120); do
+            grep -q '^browser: agents server on ' "$out/ilo.log" && break
+            sleep 0.5
+          done
+          socket=$(grep '^browser: agents server on ' "$out/ilo.log" | tail -1 | sed 's/^browser: agents server on //')
+          [ -n "$socket" ] || { tail -40 "$out/ilo.log"; exit 1; }
+          cat > "$RUNNER_TEMP/client.py" <<'PY'
+          # An MCP client on ilo's bridge: opens the viewer, reads it, turns on accessible reading
+          # mode by the agent's own click, and reads it again.
+          import base64, json, os, re, subprocess, sys, time
+          bridge, socket, url, out = sys.argv[1:]
+          p = subprocess.Popen([bridge, socket], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=open(os.path.join(out, "bridge.log"), "w"), text=True)
+          ids = iter(range(1, 1000))
+          def rpc(method, params=None, notify=False):
+              msg = {"jsonrpc": "2.0", "method": method}
+              if params is not None:
+                  msg["params"] = params
+              if not notify:
+                  msg["id"] = next(ids)
+              p.stdin.write(json.dumps(msg) + "\n")
+              p.stdin.flush()
+              return None if notify else json.loads(p.stdout.readline())
+          def call(name, **args):
+              result = rpc("tools/call", {"name": name, "arguments": args})["result"]
+              content = result["content"][0]
+              if content["type"] == "image":
+                  return content
+              return ("error: " if result.get("isError") else "") + content["text"]
+          def save(name, text):
+              with open(os.path.join(out, name), "w") as f:
+                  f.write(text)
+              print(f"== {name} ({len(text)} chars)\n{text[:3000]}\n")
+          rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                             "clientInfo": {"name": "repro-1444", "version": "1"}})
+          rpc("notifications/initialized", notify=True)
+          opened = call("open_tab", url=url)
+          save("1-open.txt", opened)
+          tab = int(re.match(r"Opened tab (\d+)\.", opened).group(1))
+          time.sleep(20)
+          outline = call("snapshot", tab=tab)
+          save("2-snapshot.txt", outline)
+          save("3-read_page.txt", call("read_page", tab=tab))
+          ref = re.search(r'(?:link|button) "Accessib[^"]*" \[(e\d+)\]', outline)
+          if ref:
+              save("4-click.txt", call("click", tab=tab, ref=ref.group(1)))
+              time.sleep(20)
+              save("5-snapshot.txt", call("snapshot", tab=tab))
+              save("6-read_page.txt", call("read_page", tab=tab))
+          else:
+              print("no accessible reading mode control in the outline")
+          shot = call("screenshot", tab=tab)
+          if isinstance(shot, dict):
+              with open(os.path.join(out, "7-screenshot.png"), "wb") as f:
+                  f.write(base64.b64decode(shot["data"]))
+          else:
+              print(shot)
+          for name in sorted(os.listdir(out)):
+              if name.endswith(".txt"):
+                  text = open(os.path.join(out, name)).read()
+                  print(name, "has the document's first heading:",
+                        "Demonstration of DOCX support in calibre" in text)
+          p.stdin.close()
+          PY
+          BROWSER_AGENT_TOKEN=$token python3 -I "$RUNNER_TEMP/client.py" \
+            "$(dirname "$exe")/mcp-bridge" "$socket" "$URL" "$out" || status=$?
+          grep '^browser: \(agent\|tab text\|page\)' "$out/ilo.log" | tail -60 || true
+          kill "$pid" 2> /dev/null || true
+          exit "${status:-0}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: word-mcp
+          path: ${{ runner.temp }}/out
