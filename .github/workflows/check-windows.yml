@@ -52,11 +52,12 @@ jobs:
         run: .github/scripts/main-check.sh seen
 
   # Whether an engine fits, alone, so that a commit none fits shows its check as skipped, not as
-  # passed with nothing run.
+  # passed with nothing run. On Linux, so the answer costs no Windows runner (#2199): fetch.sh
+  # picks its engine by uname, which answers here as Git Bash on Windows does.
   engine:
     needs: gate
     if: needs.gate.outputs.check == 'true'
-    runs-on: windows-2022
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -70,8 +71,12 @@ jobs:
           fetch-depth: 0
       - id: engine
         run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\ncase "$1" in -s) echo MINGW64_NT-10.0-20348 ;; *) echo "MINGW64_NT-10.0-20348 x86_64" ;; esac\n' \
+            >"$RUNNER_TEMP/bin/uname"
+          chmod +x "$RUNNER_TEMP/bin/uname"
           status=0
-          ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
+          PATH=$RUNNER_TEMP/bin:$PATH ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
           cat "$RUNNER_TEMP/fetch.log" >&2
           case $status in
           0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
