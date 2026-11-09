@@ -26,6 +26,23 @@
 # the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
 # process of its own, so each time from a key includes one process start, which the run says.
 
+# #2138 proof: on the Mac, a first pass with the classic helpers, on the same runner, before the
+# run with Apéritif's, its rows prefixed "classic:".
+if [ "$(uname)" = Darwin ] && [ -z "${perf_pass:-}" ]; then
+  perf_real=$browser
+  printf '#!/bin/sh\nexec "%s" "$@" --disable-features=MacAppCodeSignClone,AperitifHelpers\n' \
+    "$perf_real" > "$out/classic"
+  chmod +x "$out/classic"
+  (
+    perf_pass=classic browser=$out/classic
+    . check/perf.sh
+  ) 2>&1 | sed 's/^perf: /perf: classic: /'
+  rm -rf "$out/perf-classic"
+  mv "$out/perf" "$out/perf-classic" || true
+  pkill -9 -f "$app/Contents" 2> /dev/null || true
+  sleep 3
+  perf_pass=aperitif browser=$perf_real
+fi
 serve
 perf_dir="$out/perf"
 rm -rf "$perf_dir"

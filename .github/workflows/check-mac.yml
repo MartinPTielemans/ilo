@@ -219,7 +219,7 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              ${limit:+$limit 45m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
               # A run that passes may have skipped steps, or all of itself, such as when the app
