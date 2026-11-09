@@ -1,9 +1,10 @@
 #!/bin/bash
 # Prepares ungoogled-chromium-windows at the tag pins.ini names, in the directory its CI builds in,
-# to build our engine: its build.py with three hooks. After its patches and domain substitution, it
-# runs series.sh (the core and our series). It builds what ILO_TARGETS names: chrome, or with
-# ILO_CORE_ONLY the core's own objects, the compile check. And beside its package it leaves
-# chrome.dll.lib, which the app links. Run by .github/workflows/engine-windows.yml, in Git Bash.
+# to build our engine: its build.py with three hooks, and package.py with one. After its patches and
+# domain substitution, it runs series.sh (the core and our series). It builds what ILO_TARGETS
+# names: chrome, or with ILO_CORE_ONLY the core's own objects, the compile check. And beside its
+# package it leaves chrome.dll.lib, which the app links. Run by .github/workflows/engine-windows.yml,
+# in Git Bash.
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: prepare.sh <directory>" >&2 && exit 2; }
 ucw=$1
@@ -19,12 +20,13 @@ check_ungoogled "$ucw/ungoogled-chromium" "ungoogled-chromium-windows $ucw_tag"
 # Windows (decision 1). build.py writes this file's args after ungoogled-chromium's.
 printf '\nenable_playready=true\n' >>"$ucw/flags.windows.gn"
 
-# Each hook replaces a line build.py has at this tag, and fails if it's gone.
+# Each hook replaces lines a script has at this tag, build.py unless it names another, and fails if
+# they're gone.
 hook() {
-  local anchor=$1 replacement=$2
-  ANCHOR=$anchor REPLACEMENT=$replacement perl -0pi -e \
-    '$n = s/\Q$ENV{ANCHOR}\E/$ENV{REPLACEMENT}/; die "build.py has no \"$ENV{ANCHOR}\"\n" unless $n' \
-    "$ucw/build.py"
+  local anchor=$1 replacement=$2 script=${3:-build.py}
+  ANCHOR=$anchor REPLACEMENT=$replacement SCRIPT=$script perl -0pi -e \
+    '$n = s/\Q$ENV{ANCHOR}\E/$ENV{REPLACEMENT}/; die "$ENV{SCRIPT} has no \"$ENV{ANCHOR}\"\n" unless $n' \
+    "$ucw/$script"
 }
 hook "    # Check if rust-toolchain folder has been populated" \
 "    # ilo: the core and our series, once (engine/windows/prepare.sh).
@@ -53,3 +55,10 @@ hook "        subprocess.run([sys.executable, 'package.py', '--cpu-arch', '32bit
 "        if not os.environ.get('ILO_CORE_ONLY'):
             subprocess.run([sys.executable, 'package.py', '--cpu-arch', '64bit'], check=True)
             shutil.copy2('build/src/out/Default/chrome.dll.lib', 'build/ungoogled-chromium_chrome.dll.lib')"
+# package.py copies the installer out first, but only chrome is built, and the package it zips
+# leaves the installer out anyway, so without this the last stage fails after the build.
+hook "    shutil.copyfile('build/src/out/Default/mini_installer.exe',
+        'build/ungoogled-chromium_{}-{}.{}_installer_{}.exe'.format(
+            get_chromium_version(), _get_release_revision(),
+            _get_packaging_revision(), _get_target_cpu(build_outputs)))
+" "" package.py
