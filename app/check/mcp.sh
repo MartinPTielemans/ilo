@@ -389,6 +389,8 @@ for target in 'link "Open"' 'button "Pop up"'; do
     *) fail "the agent's click on its $target answered: $clicked" ;;
   esac
   call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"
+  # Beside the agent's tab, it's as quiet as the agent's own (#1080).
+  await_log "^browser: page $new_tab audible 0 muted 1\$" "the tab its $target opened has sound"
   grep -q "^browser: selected $new_tab\( in .*\)\{0,1\}\$" "$log" &&
     fail "the tab the agent's $target opened was shown"
   [ "$(today)" = "$user_today" ] || fail "the agent's $target changed the user's Today: $(today)"
@@ -420,9 +422,14 @@ watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
+  # Counted, as a page watched before has its lines already.
+  watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
   send click $((wx + ww / 2)) $((wy + wh / 2))
-  await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
-  await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
+  await_more "^browser: task $session page $1\$" "$watched" ||
+    fail "a click on tab $1's picture didn't watch it"
+  await_more "^browser: task page $1 in place\$" "$placed" ||
+    fail "tab $1's page didn't come to rest in place"
 }
 # A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
 # hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
@@ -558,6 +565,13 @@ if [ "$driven" = 1 ]; then
 password.value = "hunter2-by-ada";
 email.value = "ada@example.com";
 typed.oninput = () => document.title = "typed";
+// A form'"'"'s Send on ⌘↩ or Ctrl+Enter, which would keep Hand Back'"'"'s key from ilo (#1080).
+onkeydown = (e) => {
+  if (e.key == "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.title = "sent";
+  }
+};
 note.oninput = () => document.title = "noted";
 painted(() => document.title = "fields");
 </script>' > "$out/site/fields.html"
@@ -571,7 +585,10 @@ painted(() => document.title = "fields");
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  # The page keeps ⌘↩ as its form's Send, so Hand Back's key reaches ilo before it (#1080).
   hand_back_pressed "$presses"
+  grep -q "^browser: title $agent_tab sent\$" "$log" &&
+    fail "the page's form took ⌘↩, not Hand Back"
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
@@ -1084,6 +1101,19 @@ CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
+  # Back in the conversation's Pages, the page handed to the user says so under its picture, with
+  # why (#1080). Then its page is watched again, as before.
+  back="^browser: task page $agent_tab back\$"
+  thumbnail='^browser: task page in its thumbnail$'
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to Pages"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
+  await_log "^browser: task picture $opened_tab says Needs you · Sign in for the check\$" \
+    "the handed page's picture didn't say it needs the user: $(grep "^browser: task picture $opened_tab says" "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages-needs-you.png" || fail "no window to capture"
+  watch "$agent_tab"
   # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
@@ -1097,9 +1127,11 @@ CARD
   # From the conversation, a press in the page watched takes the tab the agent is at work in over,
   # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
   # user hands it back. The strip then says the user drives.
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
-  await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
-  await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
+  await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
   watch "$opened_tab"
   await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
   ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"

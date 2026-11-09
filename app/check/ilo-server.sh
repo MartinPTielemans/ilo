@@ -1,7 +1,7 @@
 # An ilo-server of the run's own, for the runs that sign in: SQLite, DEV_MODE, which logs its
 # sign-in codes, and a throwaway address, never the hosted server or a real account. ILO_SERVER
-# names the server's binary, built from its repo (check-linux.yml and check-windows.yml build it); a run checks for it
-# before it sources this. The server is ilo_server, so cleanup stops it after a failure.
+# names the server's binary, built from its repo (check-linux.yml, check-windows.yml and
+# check-mac.yml build it); a run checks for it before it sources this. The server is ilo_server, so cleanup stops it after a failure.
 
 db="$out/$run-server.db"
 server_log="$out/$run-server.log"
@@ -107,6 +107,31 @@ settings_keyboard() {
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"
+}
+
+# Sets clipped to what the clipboard holds, the X server's or Windows': its text, or with formats
+# the formats it holds. On the Mac the driver gives each copy a pasteboard of its own in its place,
+# which nothing else reads, so it's the device's text, as its driver logs it (not the formats). A
+# variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
+clipboard() {
+  if windows; then
+    clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
+  elif [ "$(uname)" = Darwin ]; then
+    clipped=
+    [ -n "${1:-}" ] && return 0
+    send pasteboard
+    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: pasteboard text //p' | tail -1)
+  else
+    clipped=$(timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true)
+  fi
+}
+# The device's first browser window in front with the keyboard, as a click on it gives it. On
+# Windows the driver's window activates a window within its own copy alone, so the copy's window
+# takes the foreground from the others' too.
+forward() {
+  send window 1
+  ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
+    fail "$on's window couldn't take the foreground"
 }
 
 # The runs with several devices, each a copy of the app with a profile of its own: a, b and c, on

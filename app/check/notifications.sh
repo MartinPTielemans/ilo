@@ -135,20 +135,32 @@ PY
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
       [ "$each" = "“${app_name}”" ] || fail "macOS asked whether $each may notify, not $app_name"
-    done <<< "$asked"
+    # A here-document: sh doesn't parse bash's <<<, and a pipe's loop would fail only its subshell.
+    done <<EOF
+$asked
+EOF
     echo "$asked" | tr '\n' ' ' > "$out/notifications-asked.txt"
   }
   # Clicks notification $1: the server sends its click, as a desktop's does, or on the Mac the run
-  # presses macOS's banner.
+  # presses macOS's banner. One that's gone to Notification Center's list sits in a stack with the
+  # app's others, where the first press only spreads the stack out, and the page hears nothing
+  # (#2159), so the run presses again while the page hasn't said it was clicked.
   click() {
     if [ "$notify" = linux ]; then
       echo "click $id" >&6
       return
     fi
-    "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
-      mac_notifications_said
-      fail "macOS showed no banner for the page's notification $1: $(grep '^banner' "$notes" | tail -2)"
-    }
+    for press in 1 2 3; do
+      "$out/banner" "ilo check $1" >> "$notes" 2>&1 || {
+        mac_notifications_said
+        fail "macOS showed no banner for the page's notification $1: $(grep '^banner' "$notes" | tail -2)"
+      }
+      for _ in $(seq 20); do
+        logged "^browser: title $tab notification $1 clicked\$" && return
+        sleep 0.1
+      done
+      echo "banner: press $press on notification $1 reached no page" >> "$notes"
+    done
   }
   # What macOS made of the app's notifications, for the run's artifact: its notification processes,
   # what usernoted logged, and what it keeps of the app's leave to notify.

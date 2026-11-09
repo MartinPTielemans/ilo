@@ -374,7 +374,7 @@ pub(crate) unsafe extern "C" fn tab_opened(
     };
     log!("browser: tab {tab} opened by {opener} in the {side}");
     if opener != 0 {
-        agents_core::update(move |agents, _| agents.tab_opened(tab, opener));
+        agents_core::update(move |agents, cx| agents.tab_opened(tab, opener, cx));
     }
     let little = WINDOWS.with_borrow(|windows| {
         windows

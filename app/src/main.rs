@@ -245,8 +245,10 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         return (true, "reserved shortcut");
     }
     let keystroke = keystroke(unsafe { &*key });
-    // ⌘. is the agent bar's Stop while it shows one, before the page could keep it.
-    if update_tab_window(tab, |shell, cx| shell.run_agent_key(&keystroke, cx)).unwrap_or(false) {
+    // ⌘. is the agent bar's Stop while it shows one, and ⌘↩ its Take Over or Hand Back, before
+    // the page could keep them.
+    if update_tab_window(tab, |shell, cx| shell.run_agent_page_key(&keystroke, cx)).unwrap_or(false)
+    {
         return (true, "agent bar");
     }
     // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
@@ -853,7 +855,17 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
         "--disable-stack-profiler".into(),
-        "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval".into(),
+        // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
+        // them: those link the framework at launch, so the kernel binds its constant data clean
+        // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        format!(
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
+            if cfg!(target_os = "macos") {
+                ",AperitifHelpers"
+            } else {
+                ""
+            }
+        ),
     ];
     // Chromium keeps its cookie encryption key in the Keychain. An ad-hoc-signed dev build asking
     // for it gets a password prompt after every build, and every request that uses cookies waits.

@@ -28,9 +28,9 @@ takes a command a line on its standard input:
                   included, or none for no such page, such as Chrome's password manager page, a
                   WebUI page
   focus PREFIX    logs "cdp: focus NAME|none": the name of what has the keyboard in the page opened
-                  last at an address starting with PREFIX, through its shadow trees, its label or
-                  its text, or none for no such page or nothing focused: a WebUI dialog takes the
-                  keyboard a moment after its page loads
+                  last at an address starting with PREFIX, through its shadow trees, its label,
+                  its text or its id, or none for no such page or nothing focused: a WebUI dialog
+                  takes the keyboard a moment after its page loads
   requests FILE   records each request the attached page and its frames make from now on, a JSON
                   line each in FILE: "sent" with its id, address and wall time in ms, "failed"
                   with its id and Chromium's error, as net::ERR_BLOCKED_BY_CLIENT for an ad
@@ -308,7 +308,7 @@ FOCUSED = """(() => {
     focused = focused.shadowRoot.activeElement;
   }
   if (!focused || focused === document.body) return "";
-  const name = focused.getAttribute("aria-label") || focused.textContent || "";
+  const name = focused.getAttribute("aria-label") || focused.textContent || focused.id || "";
   return name.trim().replace(/\\s+/g, " ").slice(0, 60);
 })()"""
 

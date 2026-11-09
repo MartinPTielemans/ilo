@@ -2093,6 +2093,10 @@ impl ImportView {
         let open = self
             .control("import-full-disk-access", "Open System Settings")
             .on_click(cx.listener(|view, _, _, _| view.host.open_full_disk_access()));
+        let open = div().relative().child(open).child(drawn(
+            "import-full-disk-access".into(),
+            self.drawn_at.clone(),
+        ));
         let back = self
             .control("import-back", "Back")
             .on_click(cx.listener(|view, _, _, cx| view.back(cx)));

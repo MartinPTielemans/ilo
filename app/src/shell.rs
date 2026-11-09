@@ -54,6 +54,8 @@ mod clean_link;
 mod close_tab;
 mod commands;
 mod conversation;
+#[cfg(test)]
+mod corner_tests;
 mod display_face;
 #[cfg(test)]
 mod dock_dot;
@@ -200,6 +202,65 @@ pub use crate::tokens::shell::CARD_INSET;
 pub use crate::tokens::shell::CARD_RADIUS;
 pub use crate::tokens::shell::SIDEBAR_WIDTH;
 use crate::tokens::shell::SPLIT_GAP;
+
+/// The radius of the card's corners and the page's in a window whose own corner is `window`, or 0
+/// where it's square: concentric with it, so the frame between them is as thick round the curve as
+/// along the sides, and never under 0 where the frame is wider than the window's curve (Windows
+/// 11's). A square corner has no curve to follow, and the card keeps ilo's own, so a Mac window
+/// going full screen keeps its card as it was.
+pub fn card_radius(window: f32) -> f32 {
+    match window > 0. {
+        true => (window - CARD_INSET).max(0.),
+        false => CARD_RADIUS,
+    }
+}
+
+/// The radius of the corners the OS gives a browser window that isn't maximized or full screen, or
+/// 0 where they're square.
+pub fn window_radius() -> f32 {
+    use crate::tokens::shell as tokens;
+    #[cfg(target_os = "macos")]
+    return tokens::WINDOW_RADIUS_MAC;
+    #[cfg(target_os = "windows")]
+    return match windows_11() {
+        true => tokens::WINDOW_RADIUS_WINDOWS,
+        false => 0.,
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return tokens::WINDOW_RADIUS_LINUX;
+}
+
+/// Whether this is Windows 11, build 22000 on, which rounds a window's corners, as the registry
+/// says (the window captures in tools/window-screenshot.sh read it there too).
+#[cfg(target_os = "windows")]
+fn windows_11() -> bool {
+    use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let build = *BUILD.get_or_init(|| {
+        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let folder = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        let name = wide("CurrentBuildNumber");
+        let mut text = [0u16; 16];
+        let mut size = std::mem::size_of_val(&text) as u32;
+        let read = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                folder.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                text.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        let text = String::from_utf16_lossy(&text[..(size as usize / 2).min(text.len())]);
+        match read {
+            0 => text.trim_end_matches('\0').parse().unwrap_or(0),
+            _ => 0,
+        }
+    });
+    build >= 22000
+}
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
 use crate::tokens::shell::FOCUS_GLOW;
@@ -2409,7 +2470,7 @@ impl Shell {
         let radius = if self.card_left() == 0. {
             0.
         } else {
-            CARD_RADIUS
+            self.card_radius()
         };
         match self.adding_pane {
             Some(with) => {
@@ -2422,6 +2483,15 @@ impl Shell {
             }
             None => (frame, radius),
         }
+    }
+
+    /// The radius of the card's corners and the page's, which follow the window's own corner while
+    /// the OS rounds it.
+    pub fn card_radius(&self) -> f32 {
+        card_radius(match self.full_screen || self.maximized {
+            true => 0.,
+            false => window_radius(),
+        })
     }
 
     /// Where the page goes as the window's content takes `viewport`, unless it's held where it is
@@ -3876,6 +3946,31 @@ impl Shell {
         .size_full()
     }
 
+    /// The pointer moving or pressing in the reveal's window, which shows the row under it again,
+    /// as `hover_listener` does in the browser window's, which draws no sidebar while it's hidden.
+    fn reveal_listener(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let shell = cx.weak_entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = shell.clone();
+                window.on_mouse_event(move |_: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        moved.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+                let pressed = shell.clone();
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        pressed.update(cx, |shell, cx| shell.pointer_moved(cx)).ok();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// The pointer leaving the window's own view, for the page's or another window, which ends a
     /// wait at the edge and the sidebar's hover. The window's, not the sidebar's: with the sidebar
     /// hidden no listener of its heard the leave on Linux and Windows, whose pages are windows the
@@ -4177,7 +4272,11 @@ impl Render for Shell {
         self.step_held_nav(window);
         self.step_space_slides(window);
         self.step_form_going(cx);
-        self.step_scroll_edge(window, cx);
+        // The window that draws the list measures it: with the sidebar hidden that's the reveal's,
+        // and the two of different sizes measuring it in turn each asked the other for a frame.
+        if !self.sidebar_hidden || self.sidebar_motion.is_some() {
+            self.step_scroll_edge(window, cx);
+        }
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_empty(window, cx);
@@ -4386,10 +4485,11 @@ impl Shell {
     fn cards(&self) -> Vec<gpui::Div> {
         let (frame, _) = self.page_frame(self.viewport);
         // At the pages' scale, as a tab or a link over them draws them smaller.
-        let scale = self.content_scale.now();
+        let (scale, radius) = (self.content_scale.now(), self.card_radius());
         let card = |bounds, fill| {
             card(
                 split_targets::scaled_about(bounds, frame.center(), scale),
+                radius,
                 fill,
             )
         };
@@ -4896,6 +4996,7 @@ impl Shell {
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
+            .child(self.reveal_listener(cx))
             .into_any_element();
         self.breath.arm(cx);
         panel
@@ -5038,15 +5139,15 @@ fn packed(color: Hsla) -> u32 {
     channel(color.r) << 16 | channel(color.g) << 8 | channel(color.b)
 }
 
-/// A card at `bounds` in the window, of `fill`.
-fn card(bounds: Bounds<Pixels>, fill: Rgba) -> gpui::Div {
+/// A card at `bounds` in the window with corners of `radius`, of `fill`.
+fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
     div()
         .absolute()
         .left(bounds.left())
         .top(bounds.top())
         .w(bounds.size.width)
         .h(bounds.size.height)
-        .rounded(px(CARD_RADIUS))
+        .rounded(px(radius))
         .bg(fill)
 }
 
