@@ -693,9 +693,11 @@ bar_runs() {
   expect "^browser: command bar runs $1\$" "↩ on $1 ran another row"
 }
 before=$(today)
+# The note goes first in Today, ahead of what was there; with Today empty it's alone.
+atop="^browser: today [0-9][0-9]*${before:+ $before}\$"
 bar_runs "New Note"
 expect '^browser: new note https://notion\.new$' "the command bar's New Note didn't open a new Notion page"
-expect "^browser: today [0-9][0-9]* $before\$" "the bar's note didn't open at the top of Today: Today is \"$(today)\""
+expect "$atop" "the bar's note didn't open at the top of Today: Today is \"$(today)\""
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the bar's note"
 send layout
@@ -706,7 +708,7 @@ expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split Vie
   "the footer's + didn't offer New Note"
 send choose New Note
 expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"
-expect "^browser: today [0-9][0-9]* $before\$" "the footer's note didn't open at the top of Today: Today is \"$(today)\""
+expect "$atop" "the footer's note didn't open at the top of Today: Today is \"$(today)\""
 send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the footer's note"
 shown=$(sed -n 's/^browser: selected \([0-9]*\).*/\1/p' "$log" | tail -1)
