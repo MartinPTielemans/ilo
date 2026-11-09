@@ -318,6 +318,19 @@ skip_on_sway_xwayland() {
   echo "skip: $1: sway's Xwayland sends child windows' X focus back (#1646)"
   exit 0
 }
+# Under Xvfb and KWin (check.sh's BROWSER_XVFB=kwin), whether a window that shows asks KWin to blur
+# under it within 2 s, as an overlay does once its motion ends at rest (#2134). Elsewhere, false.
+kwin_blurs() {
+  [ "${BROWSER_XVFB:-}" = kwin ] || return 1
+  for _ in $(seq 20); do
+    for window in $(xwininfo -root -children | awk '$1 ~ /^0x/ { print $1 }'); do
+      xwininfo -id "$window" | grep -q 'Map State: IsViewable' || continue
+      xprop -id "$window" _KDE_NET_WM_BLUR_BEHIND_REGION | grep -q ' = [0-9]' && return 0
+    done
+    sleep 0.1
+  done
+  return 1
+}
 
 # Sends a command to the app's driver (platform/mac/drive.mm, platform/windows/drive.cc,
 # platform/linux/drive.rs) and waits

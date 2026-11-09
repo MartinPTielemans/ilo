@@ -211,10 +211,15 @@ at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 echo "$at $tile" | awk '{ x = $1 + 13 - $5; y = $2 - 12 - $6; exit !(x > -2 && x < 2 && y > -2 && y < 2) }' ||
   fail "the icon picker opened at $at, not under the tile's middle at $tile"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-icon-picker.png" || fail "no window to capture"
+# Under KWin it asks for the blur behind it that the Mac's material has, and stops as it goes.
+[ "${BROWSER_XVFB:-}" != kwin ] || kwin_blurs ||
+  fail "the icon picker's window didn't ask KWin to blur under it"
 send insert glowing star
 send key return
 expect "^browser: page $a icon 🌟\$" "the picker's pick didn't become the favorite's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
+[ "${BROWSER_XVFB:-}" != kwin ] || ! kwin_blurs ||
+  fail "a window still asked KWin to blur under it after the icon picker went"
 expect "^browser: tile $a drawn with icon 🌟\$" "the tile didn't draw the favorite's new icon"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-icon.png" || fail "no window to capture"
 post rightclick $tile

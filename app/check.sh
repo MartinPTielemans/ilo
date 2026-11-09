@@ -41,7 +41,8 @@
 # load and history pass there so far; the others stop where they need what Linux hasn't yet, such
 # as Japanese input in a page (keys), ilo's menu over the command bar (tabs) and IME (spaces),
 # which the driver says it can't do. Captures are the session's whole output.
-# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has. BROWSER_WAYLAND=1 runs it
+# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has, and BROWSER_XVFB=kwin under
+# Xvfb and KWin, which composites and blurs under the overlays that ask. BROWSER_WAYLAND=1 runs it
 # on the sway session's Wayland, where the driver's input is sway's virtual pointer and keyboard
 # (platform/linux/drive_wayland.rs), which it refuses outside that session.
 set -e
@@ -61,12 +62,33 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
     # shellcheck disable=SC2016 # expanded by the session's shell
     exec xvfb-run -a -s "-screen 0 1280x800x24" sh -c '
       ready=$(mktemp -u)
-      openbox --startup "touch $ready" &
-      while [ ! -e "$ready" ]; do
-        kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
-        sleep 0.1
-      done
-      rm -f "$ready"
+      if [ "$BROWSER_XVFB" = kwin ]; then
+        # With OpenGL in Mesa'"'"'s software driver, which KWin composites with only when told to,
+        # and its blur, which it leaves off there unless its config turns it on. Ready once the blur
+        # names its property on the root window (#2134).
+        config=$(mktemp -d)
+        printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
+        tries=0
+        until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
+          grep -q "^_KDE_NET_WM_BLUR_BEHIND_REGION("; do
+          tries=$((tries + 1))
+          if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 600 ]; then
+            echo "kwin: no blur; the effects it says on the root window:" >&2
+            xprop -root | grep "^_KDE" >&2
+            cat "$ready.log" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+      else
+        openbox --startup "touch $ready" &
+        while [ ! -e "$ready" ]; do
+          kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
+          sleep 0.1
+        done
+        rm -f "$ready"
+      fi
       # The real pointer starts mid-screen, over the app, where the X server tells GPUI it left as
       # the page views of Chromium change under it, mid-drag too. The driver sends a pointer of its
       # own, so the real one waits in the corner the window leaves.
