@@ -8,8 +8,7 @@
 //! The pointer over Capture is ilo's camera, as on the Mac, which GPUI shows in the crosshair's
 //! place over its window (`gpui_linux::set_overlay_cursor`); the crosshair where it can't.
 //!
-//! The Site Controls blur what's behind them, as on the Mac, where the compositor can: KWin on X11,
-//! once their motion's frames show them at full size and opacity (`gpui_linux::set_overlay_blur`).
+//! shortcut: no blur under the Site Controls.
 
 use std::{
     cell::{Cell, RefCell},
@@ -115,7 +114,6 @@ fn show(kind: Kind, ui_view: *mut c_void, left: f64, top: f64, width: f64, heigh
         // It comes in from nothing, as their frames say (host_site_controls_drew).
         if !had {
             shadows::drew(SITE_CONTROLS, 1., 0., point(px(0.), px(0.)));
-            gpui_linux::set_overlay_blur(view, false);
         }
         shadows::show(SITE_CONTROLS, ui_view, bounds, 0.);
     }
@@ -285,10 +283,9 @@ pub extern "C" fn host_set_site_controls_height(height: f64) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn host_site_controls_drew(scale: f64, opacity: f64, x: f64, y: f64) {
-    if let Some(Some(view)) = with(Kind::SiteControls, |p| p.shown.map(|_| p.view)) {
+    if with(Kind::SiteControls, |p| p.shown.is_some()) == Some(true) {
         let origin = point(px(x as f32), px(y as f32));
         shadows::drew(SITE_CONTROLS, scale as f32, opacity as f32, origin);
-        gpui_linux::set_overlay_blur(view, scale >= 1. && opacity >= 1.);
     }
 }
 
