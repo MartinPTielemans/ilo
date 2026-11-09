@@ -1275,8 +1275,12 @@ NSView* FindView(NSView* view, NSString* name) {
 
 // |portal|: a CAPortalLayer of the page view's layer, private, in place of a second CALayerHost.
 bool Mirror(NSWindow* from, NSWindow* to, NSRect rect, bool portal) {
-  NSView* page = nil;
-  CALayer* host = FindPageHost(from.contentView, &page);
+  // The page's own view: the window's views compositor, found first otherwise, draws nothing.
+  NSView* page = FindView(from.contentView, @"RenderWidgetHostViewCocoa");
+  CALayer* host = page.layer ? FindLayerHost(page.layer) : nil;
+  if (!host) {
+    host = FindPageHost(from.contentView, &page);
+  }
   const NSSize size = page.bounds.size;
   if (!host || size.width <= 0 || size.height <= 0) {
     fprintf(stderr, "browser: mirror found no page compositor\n");
@@ -1284,6 +1288,11 @@ bool Mirror(NSWindow* from, NSWindow* to, NSRect rect, bool portal) {
   }
   // In GPUI's view, over the picture it draws: the core lets go of any other view of its window's.
   NSView* parent = FindView(to.contentView, @"GPUIView") ?: to.contentView;
+  for (NSView* v in to.contentView.subviews) {
+    fprintf(stderr, "browser: mirror sees %s with %lu subviews, first %s\n",
+            NSStringFromClass(v.class).UTF8String, (unsigned long)v.subviews.count,
+            v.subviews.count ? NSStringFromClass(v.subviews[0].class).UTF8String : "none");
+  }
   const uint32_t context = [[host valueForKey:@"contextId"] unsignedIntValue];
   [CATransaction begin];
   [CATransaction setDisableActions:YES];
