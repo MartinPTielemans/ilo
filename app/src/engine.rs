@@ -2146,13 +2146,14 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
         })
     };
     let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
-    let drawn = crate::window_opening::drawn_before_shown();
-    if drawn {
+    let shown = crate::window_opening::drawn_before_shown();
+    if let Some(shown) = shown {
         // check.sh reads this line, the new window's time from the key to its first frame, which
-        // came on screen with it.
-        let ms = asked.elapsed().as_secs_f64() * 1000.;
+        // came on screen with it, before its overlays were made.
+        let ms = shown.duration_since(asked).as_secs_f64() * 1000.;
         log!("browser: new window first frame at {ms:.1} ms");
     }
+    let drawn = shown.is_some();
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
             shell.open_bar_when_shown(asked, full_screen, drawn);
