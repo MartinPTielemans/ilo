@@ -221,6 +221,7 @@ call() {
 # What the user has before the agent's first call: the window with the keyboard, the view with
 # focus in it, their Today and its shown tab, and the Space shown. The agent's whole run, up to
 # the user's first click below, changes none of them (decision 8).
+probe() { send state; echo "probe $1: $key $focus" | tee -a "$out/focus-probe.log" >&2; }
 send state
 user_key=$key user_focus=$focus before_today=$(today)
 user_selects=$(grep -c '^browser: selected ' "$log" || true)
@@ -254,6 +255,7 @@ await_log "^browser: agent activity mcp-client $user_tab read_page refused: The 
   "the refused read didn't reach the activity log"
 grep -q "^browser: tab text $user_tab " "$log" && fail "the core read the user's tab"
 
+probe space
 # A link to an app, as a Word document's in SharePoint (ms-word:), opens nothing outside the
 # browser and asks nothing: the tab stays on its page, which the agent can go on using, and the
 # click's answer names the scheme (#1443).
@@ -280,6 +282,7 @@ esac
 closed=$(call close_tab "{\"tab\":$documents}")
 case "$closed" in "Closed tab $documents."*) ;; *) fail "closing the documents tab answered: $closed" ;; esac
 
+probe ms-word
 # Ten cases of a web toolkit, each the same form on a page of its own, which an agent moves to
 # Closed in tabs the user isn't looking at, each step on all ten in one turn: cases.py, through a
 # bridge of its own. The server answers a turn's calls at once (#1476). The form says Ready once
@@ -317,6 +320,7 @@ for n in $(seq 10); do
 done
 cases=$(sed -n 's/^cases: \(10 cases in .*\)/\1/p' "$out/cases.log")
 
+probe cases
 # An action waits for its element to take input and for its page to settle (#1436). The Load
 # button is enabled 4 s after the page shows, as a form's once its data is in: after open_tab's
 # answer, which waits for the page to settle and took 2.5 s on Windows' runner (#2079), and well
@@ -362,6 +366,7 @@ settle="the settle page's click waited $(($(date +%s) - started)) s in all"
 closed=$(call close_tab "{\"tab\":$settle_tab}")
 case "$closed" in "Closed tab $settle_tab."*) ;; *) fail "closing the settle page answered: $closed" ;; esac
 
+probe settle
 # A page whose first load hasn't committed once an action has waited 15 s for it (kLoadTimeout in
 # agent_page.cc) is still loading, which the answer says, naming the tab it opened, and not a page
 # agents may not use (#1461). /wait never comes.
@@ -374,6 +379,7 @@ waiting_tab=$(printf '%s\n' "$waited" | sed -n '1s/^error: Opened tab \([0-9]*\)
 closed=$(call close_tab "{\"tab\":$waiting_tab}")
 case "$closed" in "Closed tab $waiting_tab."*) ;; *) fail "closing the tab still loading answered: $closed" ;; esac
 
+probe wait
 # A tab the agent's page opens, by a link to a new tab or a page's window.open, goes in its Space,
 # behind, with the agent's tab as its opener, and the click's answer names it. The user's tab stays
 # shown, and their Space gets none (#1470).
@@ -407,6 +413,7 @@ done
 closed=$(call close_tab "{\"tab\":$opener}")
 case "$closed" in "Closed tab $opener."*) ;; *) fail "closing the opener answered: $closed" ;; esac
 
+probe opened-tabs
 # The client's work is one card at the sidebar's foot, from its first call that acted on a tab, and
 # the cases' calls on their connection of their own were steps of the same card (#1080). Its name
 # is the one the client gave.
@@ -417,6 +424,7 @@ await_log "^browser: task plate task-${session#session-} at " "the client's card
 opened=$(call open_tab '{"url":"example.com"}')
 agent_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$agent_tab" ] || fail "open_tab example.com answered: $opened"
+probe card
 # An agent's tab opens muted, until the user unmutes it or keeps it (#1080).
 await_log "^browser: page $agent_tab audible 0 muted 1\$" "the agent's tab didn't open muted"
 # Its page's picture in the card's conversation, once it shows: "x y width height".
@@ -449,6 +457,7 @@ hand_back_pressed() {
   send key return cmd
   await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
 }
+probe end
 send state
 [ "$key $focus" = "$user_key $user_focus" ] ||
   fail "the agent's run moved the keyboard from $user_key, $user_focus to $key, $focus"
