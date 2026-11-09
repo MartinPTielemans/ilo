@@ -558,6 +558,13 @@ if [ "$driven" = 1 ]; then
 password.value = "hunter2-by-ada";
 email.value = "ada@example.com";
 typed.oninput = () => document.title = "typed";
+// A form'"'"'s Send on ⌘↩ or Ctrl+Enter, which would keep Hand Back'"'"'s key from ilo (#1080).
+onkeydown = (e) => {
+  if (e.key == "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.title = "sent";
+  }
+};
 note.oninput = () => document.title = "noted";
 painted(() => document.title = "fields");
 </script>' > "$out/site/fields.html"
@@ -571,7 +578,10 @@ painted(() => document.title = "fields");
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  # The page keeps ⌘↩ as its form's Send, so Hand Back's key reaches ilo before it (#1080).
   hand_back_pressed "$presses"
+  grep -q "^browser: title $agent_tab sent\$" "$log" &&
+    fail "the page's form took ⌘↩, not Hand Back"
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
