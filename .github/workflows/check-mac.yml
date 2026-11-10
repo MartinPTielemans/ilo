@@ -15,10 +15,10 @@
 # owner's Mac.
 # Its default runs, the night's and a train's, are every run check.sh does unnamed but VM_RUNS, the
 # runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
-# - switch-frames: a Space or tab switch here showed the empty page area in one picture, in 3 of 4
-#   runs, where the VM showed a page in every one (#2248).
 # - clear: in 2 of 5 runs here the tab Clear Browsing Data opened drew nothing in the page area,
 #   so its dialog never had the keyboard; the VM passes it (#2248).
+# switch-frames runs here: its empty page area through a switch, here in 3 of 4 runs, is on the VM
+# too, about half the time, and quarantined on the Mac under #2248 (check/quarantine.mac).
 # And one part of a run that passes here, which skips it, saying so:
 # - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
 #   Dia was measured over (#1554).
@@ -90,7 +90,7 @@ jobs:
     env:
       # The runs a release still needs from the check VM, as the header says why: one leaves the
       # list once it passes on the runner (#2248).
-      VM_RUNS: switch-frames clear
+      VM_RUNS: clear
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
