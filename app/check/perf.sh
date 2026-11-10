@@ -406,11 +406,13 @@ fi
 chrome_dir="$PWD/$perf_dir/chrome-profile"
 chrome_profile=$chrome_dir
 ! windows || chrome_profile="$(cygpath -w "$chrome_profile")"
-# Opens page $1 in Chrome, which a running Chrome takes as a new tab, with $chrome_flags.
+# Opens page $1 in Chrome, which a running Chrome takes as a new tab, with flags $2. Only a launch
+# gets $chrome_flags: a Chrome handing a tab on sets up their log too, which on Linux empties the
+# running one's.
 chrome_open() {
   # shellcheck disable=SC2086 # the flags, a word each
   "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic $chrome_flags "$page?$1" < /dev/null \
+    --use-mock-keychain --password-store=basic $2 "$page?$1" < /dev/null \
     >> "$perf_dir/chrome.log" 2>&1 &
 }
 # Quits Chrome as quit_app does the app, then ends what's left of it.
@@ -443,7 +445,7 @@ chrome_quit() {
 }
 # Launches Chrome on page $1 and sets $pid, or says it didn't stay.
 chrome_launch() {
-  chrome_open "$1"
+  chrome_open "$1" "$chrome_flags"
   pid=$!
   sleep 5 # the 5 s a Chrome that won't stay takes to go
   kill -0 "$pid" 2> /dev/null
