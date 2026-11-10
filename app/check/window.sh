@@ -350,6 +350,13 @@ expect '^browser: appearance automatic$' \
   "View › Appearance › Automatic didn't give back the system's appearance"
 send click $page_point
 
+# Probe (#2256): every core busy through the scroll, as the owner reproduced it.
+busy=""
+for _ in $(seq "$(nproc)"); do
+  nice -n 19 sh -c 'while :; do :; done' &
+  busy="$busy $!"
+done
+echo "probe: $(nproc) busy loops through the scroll"
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
 # turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches, five at a time.
 # Chromium hands a page one wheel event at a time and merges those that queue meanwhile, capping a
@@ -368,6 +375,8 @@ expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
 # The page says its count after each pause of 300 ms, so the last is the whole scroll's.
 await '^browser: title [0-9]* frames .* scrolled 3000$' || true
 timing=$(grep '^browser: title [0-9]* frames' "$log" | tail -1 | sed 's/^browser: title [0-9]* //')
+kill $busy
+echo "probe: scroll $(grep '^browser: title [0-9]* frames' "$log" | sed 's/.* scrolled //' | tr '\n' ' ')"
 echo "$timing" | grep -q ' scrolled 3000$' || fail "the page didn't scroll by exactly 3000 points: $timing"
 frames=$(echo "$timing" | sed 's/^frames \([0-9]*\) .*/\1/')
 slow=$(echo "$timing" | sed 's/.* slow \([0-9]*\) .*/\1/')
