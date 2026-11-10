@@ -718,12 +718,18 @@ give_way() {
   # Linux's window manager gives the keyboard on by itself.
   [ "$(uname)" = Linux ] || expect '^browser: little window gave way to cover$' \
     "the Little ilo window didn't give way to the other app's window behind it ($1)"
-  covered || fail "closing the Little ilo window by $1 put a window of ilo's in front of the other app's: $(stack)"
+  # Probe (#2216): a window of ilo's in front is logged, and the next try goes on.
+  if ! covered; then
+    echo "probe: closing the Little ilo window by $1 put a window of ilo's in front of the other app's: $(stack)"
+    uncover
+    return
+  fi
   await_active 0 "closing the Little ilo window by $1 left ilo the active app, not the other app"
   ../tools/window-screenshot.sh "$pid" "$out/little-gave-way-$2.png" all || fail "no window to capture"
   uncover
 }
-give_way ⌘W w
+# Probe (#2216): ten tries, for the race to show.
+for _ in 1 2 3 4 5 6 7 8 9 10; do give_way ⌘W w; done
 give_way escape escape
 
 exec 3>&-

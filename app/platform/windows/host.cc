@@ -18,6 +18,7 @@
 #include <shobjidl.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <dbghelp.h>
 
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
@@ -29,6 +30,7 @@
 #include <cstdarg>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <iterator>
@@ -980,6 +982,8 @@ void TellMain(HWND front) {
 }
 
 void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWORD, DWORD) {
+  fprintf(stderr, "browser: probe %llu foreground event %p\n", GetTickCount64() % 1000000,
+          static_cast<void*>(hwnd));
   TellMain(hwnd);
   DWORD process = 0;
   GetWindowThreadProcessId(hwnd, &process);
@@ -2468,6 +2472,61 @@ HHOOK g_giving_way = nullptr;
 HWND g_giving_way_root = nullptr;
 // Whether the other app's window has come in front since.
 bool g_gave_way = false;
+
+// Probe (#2216): who activates ilo's windows around a Little ilo window's give-way, by the call
+// stack's modules and their nearest exports.
+std::string ProbeStack() {
+  static decltype(&SymFromAddr) sym_from_addr = [] {
+    HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
+    if (!dbghelp) {
+      return static_cast<decltype(&SymFromAddr)>(nullptr);
+    }
+    auto initialize =
+        reinterpret_cast<decltype(&SymInitialize)>(GetProcAddress(dbghelp, "SymInitialize"));
+    if (!initialize || !initialize(GetCurrentProcess(), nullptr, TRUE)) {
+      return static_cast<decltype(&SymFromAddr)>(nullptr);
+    }
+    return reinterpret_cast<decltype(&SymFromAddr)>(GetProcAddress(dbghelp, "SymFromAddr"));
+  }();
+  void* frames[48];
+  const USHORT count = CaptureStackBackTrace(1, 48, frames, nullptr);
+  std::string out;
+  for (USHORT i = 0; i < count; ++i) {
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(frames[i]), &module)) {
+      GetModuleFileNameA(module, name, MAX_PATH);
+    }
+    const char* base = strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name;
+    char line[400];
+    alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256] = {};
+    auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol->MaxNameLen = 255;
+    DWORD64 displacement = 0;
+    const DWORD64 at = reinterpret_cast<DWORD64>(frames[i]);
+    if (sym_from_addr && sym_from_addr(GetCurrentProcess(), at, &displacement, symbol)) {
+      snprintf(line, sizeof(line), " %s!%s+0x%llx", base, symbol->Name, displacement);
+    } else {
+      snprintf(line, sizeof(line), " %s+0x%llx", base,
+               at - reinterpret_cast<DWORD64>(module));
+    }
+    out += line;
+  }
+  return out;
+}
+
+void Probe(const char* what, HWND hwnd) {
+  DWORD process = 0;
+  HWND front = GetForegroundWindow();
+  GetWindowThreadProcessId(front, &process);
+  fprintf(stderr, "browser: probe %llu %s %p, foreground %p%s, sent %lx:%s\n",
+          GetTickCount64() % 1000000, what, static_cast<void*>(hwnd), static_cast<void*>(front),
+          process == GetCurrentProcessId() ? " ours" : "", InSendMessageEx(nullptr),
+          ProbeStack().c_str());
+}
 // Counts the give-ways, so a fallback's timer leaves a later one be.
 int g_give_ways = 0;
 
@@ -2481,6 +2540,7 @@ int g_give_ways = 0;
 // window is in front, or the window shows again.
 LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HCBT_ACTIVATE && !reinterpret_cast<CBTACTIVATESTRUCT*>(lparam)->fMouse) {
+    Probe("held activation of", reinterpret_cast<HWND>(wparam));
     return 1;
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
@@ -2490,6 +2550,7 @@ LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
 // window is back.
 void StopGivingWay() {
   if (g_giving_way) {
+    Probe("stops giving way for", g_giving_way_root);
     UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr));
   }
   g_giving_way_root = nullptr;
@@ -2554,6 +2615,7 @@ void OtherAppInFront() {
   if (g_giving_way && !g_gave_way && front && GetWindowThreadProcessId(front, &process) &&
       process != GetCurrentProcessId()) {
     g_gave_way = true;
+    Probe("other app in front", front);
     if (!g_giving_way_root) {
       StopGivingWayLater();
     }
@@ -2563,6 +2625,11 @@ void OtherAppInFront() {
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                            DWORD_PTR) {
   switch (message) {
+    case WM_ACTIVATE:
+      if (LOWORD(wparam) != WA_INACTIVE) {
+        Probe(g_giving_way ? "activates while giving way" : "activates", hwnd);
+      }
+      break;
     case WM_WINDOWPOSCHANGING:
       if (reinterpret_cast<WINDOWPOS*>(lparam)->flags & SWP_HIDEWINDOW) {
         LittleHiding(hwnd);
@@ -2623,6 +2690,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
     case WM_NCDESTROY:
       // The other app can come in front after this.
       if (hwnd == g_giving_way_root) {
+        Probe("destroyed", hwnd);
         g_giving_way_root = nullptr;
         if (g_gave_way) {
           StopGivingWayLater();
@@ -2651,6 +2719,9 @@ void TakeTitleBar(void* ui_view) {
   if (!root || GetWindowSubclass(root, FrameProc, kFrame, &data)) {
     return;
   }
+  // Probe (#2216): its symbols loaded before a give-way, not during one.
+  static const bool warmed = (ProbeStack(), true);
+  (void)warmed;
   SetWindowSubclass(root, FrameProc, kFrame, 0);
   if (HWND ui = GetWindow(Hwnd(ui_view), GW_CHILD)) {
     SetWindowSubclass(ui, FrameChildProc, kFrame, 0);
