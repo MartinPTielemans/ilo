@@ -344,7 +344,11 @@ await '^browser: account NeedsSecret None$' ||
 # and their return chooses Cancel, so there it's unrun.
 deleted=,
 if [ "$(uname)" = Linux ]; then
-  post clickkey $(drawn "sync delete-account")
+  # Settings asks the other devices for the secret once it shows a device that needs it, which
+  # moves the rows below down, so Delete Account is where a frame after that request draws it.
+  await '^browser: account Pairing None$' ||
+    fail "the device without the secret didn't ask the others for it"
+  post clickkey $(drawn_after "sync delete-account" '^browser: account Pairing None$')
   expect "^browser: dialog shown Delete the account $email?\$" "Delete Account didn't ask first"
   expect '^browser: dialog settled$' "Settings' dialog didn't settle"
   expect '^browser: dialog confirm at ' "Delete Account's question didn't say where its button is"
