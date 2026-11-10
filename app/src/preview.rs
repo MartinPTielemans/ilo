@@ -2235,6 +2235,12 @@ fn main() {
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
+            // Mock (#2326): PREVIEW_ACTIVITY=closed, read, write or refused shows Settings › Agents'
+            // activity with that request's row opened.
+            if let Ok(which) = std::env::var("PREVIEW_ACTIVITY") {
+                preview_activity(which, cx);
+                return;
+            }
             let account = std::env::var("PREVIEW_ACCOUNT").ok();
             if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
                 preview_account(state, cx);
@@ -3378,4 +3384,242 @@ fn preview_update(update: &str, cx: &mut App) {
         _ => Stage::Ready(version),
     };
     updates::changed(stage, cx);
+}
+
+/// Mock (#2326): Settings › Agents' activity for an agent, its request rows closed, or the one
+/// `which` names opened among its neighbours.
+fn preview_activity(which: String, cx: &mut App) {
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(WIDTH), px(HEIGHT)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            let dark = preview_tone() != Some(Tone::Light);
+            let look = browser::settings_rows::Look::settings(dark);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            ActivityPage {
+                which,
+                card: Card::default(),
+                search,
+            }
+        })
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open activity: {error}");
+    }
+}
+
+struct ActivityPage {
+    which: String,
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+}
+
+/// A mock activity row: its title, its line, when, and if it's a request, what opening it shows,
+/// each a label and its lines.
+struct MockEntry {
+    title: &'static str,
+    line: Option<&'static str>,
+    ago: &'static str,
+    opens: Option<(&'static str, Vec<(&'static str, Vec<&'static str>)>)>,
+}
+
+impl gpui::Render for ActivityPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::{Look, end, frame, group, text};
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use browser::tokens::settings::{
+            DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, LEDE_LINE, LEDE_TOP, NAME, PADDING,
+            TEXT_X, TITLE,
+        };
+        use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
+        use browser::tokens::text;
+        use gpui::{FontWeight, ParentElement, Styled, div, rgb, svg};
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        log!("preview: activity drawn");
+        let field = browser::settings_search::field(
+            &self.search,
+            if dark { rgb(PAPER) } else { rgb(INK) },
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let column = settings_column::column(
+            Section::Agents,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            window.is_a11y_active(),
+        );
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let entries = [
+            MockEntry {
+                title: "Sent POST /anything/notes to httpbin.org",
+                line: None,
+                ago: "Just now",
+                opens: Some((
+                    "write",
+                    vec![
+                        ("To", vec!["https://httpbin.org/anything/notes"]),
+                        (
+                            "Sent",
+                            vec!["title: Groceries", "items: milk, eggs, bread", "pinned: true"],
+                        ),
+                    ],
+                )),
+            },
+            MockEntry {
+                title: "Couldn't send PUT /anything/notes/7 to httpbin.org",
+                line: Some("Refused: You said no."),
+                ago: "1 min ago",
+                opens: Some((
+                    "refused",
+                    vec![
+                        ("To", vec!["https://httpbin.org/anything/notes/7"]),
+                        ("Not sent", vec!["title: Groceries (old)", "archived: true"]),
+                    ],
+                )),
+            },
+            MockEntry {
+                title: "Sent GET /anything/notes?limit=20 to httpbin.org",
+                line: None,
+                ago: "2 min ago",
+                opens: Some((
+                    "read",
+                    vec![("To", vec!["https://httpbin.org/anything/notes?limit=20"])],
+                )),
+            },
+            MockEntry {
+                title: "Read the page on httpbin.org",
+                line: None,
+                ago: "3 min ago",
+                opens: None,
+            },
+            MockEntry {
+                title: "Opened httpbin.org",
+                line: None,
+                ago: "3 min ago",
+                opens: None,
+            },
+        ];
+        let small = |child: &'static str| {
+            div()
+                .text_size(px(text::SMALL))
+                .line_height(px(DETAIL_LINE))
+                .child(child)
+        };
+        let rows = entries.into_iter().map(|entry| {
+            let opened = entry
+                .opens
+                .as_ref()
+                .is_some_and(|(name, _)| *name == self.which);
+            let ago = div().text_color(look.detail).child(entry.ago);
+            let chevron = entry.opens.as_ref().map(|_| {
+                svg()
+                    .path(if opened {
+                        "icons/chevron-up.svg"
+                    } else {
+                        "icons/chevron-down.svg"
+                    })
+                    .size(px(12.))
+                    .flex_none()
+                    .text_color(look.detail)
+            });
+            let mut controls = vec![gpui::IntoElement::into_any_element(ago)];
+            controls.extend(chevron.map(gpui::IntoElement::into_any_element));
+            let head = frame()
+                .child(text(&look, entry.title, entry.line.map(Into::into)))
+                .child(end(controls));
+            let details = (entry.opens.filter(|_| opened)).map(|(_, details)| {
+                div()
+                    .px(px(browser::tokens::settings::ROW_X))
+                    .pb(px(PADDING + 2.))
+                    .mt(px(-4.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .children(details.into_iter().map(|(label, lines)| {
+                        div()
+                            .flex()
+                            .child(small(label).w(px(64.)).flex_none().text_color(look.detail))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(look.ink)
+                                    .children(lines.into_iter().map(small)),
+                            )
+                    }))
+            });
+            div().child(head).children(details)
+        });
+        let heading = div()
+            .px(px(TEXT_X))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(look.heading)
+            .child("What Claude Code may do");
+        let title = shell::display_text("Agents", TITLE_SIZE, TITLE_LINE, cx)
+            .text_color(base.opacity(TITLE));
+        let lede = div()
+            .mt(px(LEDE_TOP))
+            .line_height(px(LEDE_LINE))
+            .text_color(base.opacity(browser::tokens::settings::DETAIL))
+            .child("Agents never see your passwords, cookies or autofill.");
+        let head = div().px(px(TEXT_X)).child(title).child(lede);
+        let grants = group(
+            &look,
+            [frame().child(text(
+                &look,
+                "httpbin.org",
+                Some("May send requests that change things, after you say yes".into()),
+            ))],
+        );
+        let page = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(head)
+            .child(div().mt(px(FIRST_GROUP)).child(heading))
+            .child(div().mt(px(HEADING_BOTTOM)).child(grants))
+            .child(div().mt(px(GROUP_GAP)).child(group(&look, rows)));
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw("", page, dark, colors);
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
+    }
 }

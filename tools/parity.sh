@@ -26,19 +26,11 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # shell words, so a value with spaces is quoted, and for one taken under the pointer, what the
 # preview logs ending in the point the pointer goes to.
 screens=(
-  "sidebar|drawn at|"
-  "command-bar|command bar drew|PREVIEW_BAR=tabs"
-  "context-menu|menu shown|PREVIEW_MENU=100,247"
-  "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
-  "icon-picker|icon picker for|PREVIEW_ICON_PICKER="
-  "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
-  "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
-  "peek|link preview settled|PREVIEW_PEEK=1"
-  "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
-  "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
-  "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
-  "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
+  "activity-closed|activity drawn|PREVIEW_ACTIVITY=closed"
+  "activity-write|activity drawn|PREVIEW_ACTIVITY=write"
+  "activity-refused|activity drawn|PREVIEW_ACTIVITY=refused"
+  "activity-read|activity drawn|PREVIEW_ACTIVITY=read"
+  "activity-write-light|activity drawn|PREVIEW_ACTIVITY=write PREVIEW_APPEARANCE=light"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
