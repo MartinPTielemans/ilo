@@ -29,18 +29,19 @@ namespace browser_core {
 // A Space is the user's, or an agent's (decision 8), for as long as it lives: an agent may act only
 // on the tabs of its own Space.
 //
-// Each Space, pinned tab and folder is a node, as sync knows them, with a random id and a place among
-// its siblings (Node), which the session keeps.
+// Each Space, pinned tab, folder and Today tab is a node, as sync knows them, with a random id and
+// a place among its siblings (Node), which the session keeps.
 class Space {
  public:
   // The most tabs a split shows.
   static constexpr size_t kMaxPanes = 3;
 
-  // What sync knows a Space, a pinned tab or a folder by: an id, random, that it keeps for as long
-  // as it lives, across launches, and its place among its siblings, the Spaces or what's in its
-  // folder or outside one. Their places are in their order, and only what moves gets a new one, so
-  // one moved between two others changes none of theirs. A tab moved to another Space is a new
-  // node there.
+  // What sync knows a Space, a pinned tab, a folder or a Today tab by: an id, random, that it keeps
+  // for as long as it lives, across launches, and its place among its siblings, the Spaces, what's
+  // in its folder or outside one, or the Today tabs. Their places are in their order, and only what
+  // moves gets a new one, so one moved between two others changes none of theirs. A pinned tab or
+  // folder moved to another Space is a new node there; a Today tab keeps its id (MoveToSpace), so
+  // the account's other devices move it rather than archive it.
   struct Node {
     base::Uuid id;
     syncer::UniquePosition position;
@@ -122,11 +123,12 @@ class Space {
   bool blank() const { return own_ == Own::kBlank; }
   // The Space's node. A window's own has none.
   const Node& node() const { return node_; }
-  // The pinned tab's or folder's |id|'s node, or null if it isn't one of the Space's.
+  // The pinned tab's, folder's or Today tab's |id|'s node, or null if it isn't one of the Space's.
+  // A window's own Space's tabs have none.
   const Node* NodeOf(bc_id id) const;
-  // Gives the Space and its pinned tabs and folders the nodes the session kept for them, each that
-  // has an id: |rows| by the pinned tab's or folder's id. Those whose places are out of their
-  // order get new ones.
+  // Gives the Space and its rows the nodes the session or sync kept for them, each that has an id:
+  // |rows| by the pinned tab's, folder's or Today tab's id. Those whose places are invalid or out
+  // of their order get new ones.
   void RestoreNodes(const Node& space, const std::map<bc_id, Node>& rows);
   // The pinned tabs and folders, top to bottom, each folder followed by what's in it.
   const std::vector<bc_id>& pinned_rows() const { return pinned_; }

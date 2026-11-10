@@ -257,11 +257,11 @@ jobs:
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
-      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
-      # at the commit ilo's sync was last checked against, in the leg that has them.
+      # The sync-account, sync-devices, sync-extensions and sync-versions runs sign in to an
+      # ilo-server of their own, on SQLite with a throwaway account, never the hosted one: built from
+      # the server's repo at the commit ilo's sync was last checked against, in the leg that has them.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ') || contains(format(' {0} ', matrix.runs), ' sync-versions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -287,6 +287,23 @@ jobs:
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      # The sync-versions run syncs with an older ilo, the release ILO_OLD names, as its users
+      # have it: ilo's Flatpak, installed from the release's bundle, which runs in bubblewrap's
+      # user namespaces as Chromium's sandbox does.
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD: 0.1.12
+        run: |
+          sudo apt-get install -yq flatpak
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          dir=$(mktemp -d)
+          gh release download "v$OLD" -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
+          flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
+          flatpak info --user app.ilo.browser
+          echo "ILO_OLD=$OLD" >> "$GITHUB_ENV"
 
       # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
       # which stays plugged in for the job: in the leg that has it.

@@ -9,12 +9,12 @@ use std::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use gpui::{
-    AnyElement, AsyncApp, Bounds, Context, Corners, MouseButton, Pixels, RenderImage, Task,
-    WeakEntity, Window, canvas, div, hsla, point, prelude::*, px, size,
+    AnyElement, AsyncApp, Bounds, Context, Corners, MouseButton, Pixels, RenderImage, WeakEntity,
+    Window, canvas, div, hsla, point, prelude::*, px, size,
 };
 use image::{Frame, RgbaImage};
 
@@ -24,12 +24,6 @@ use crate::elevation::Level;
 use crate::tokens::shell::picture::REST;
 /// It steps back from the card's size to REST as the page goes to the other window, easing out.
 const STEP_BACK: f32 = 0.2;
-/// After an empty answer to a page change's picture, how long until each of the asks again.
-const RETRIES: [Duration; 3] = [
-    Duration::from_millis(100),
-    Duration::from_millis(300),
-    Duration::from_millis(900),
-];
 use crate::tokens::shell::picture::RIM;
 use crate::tokens::shell::picture::VEIL;
 
@@ -154,10 +148,6 @@ pub(super) struct Picture {
     pending: bool,
     /// The page changed while that answer was out, so another picture follows it.
     again: bool,
-    /// How many times an empty answer to a page change's picture has been asked again, while that
-    /// picture is the one out or awaited, and the wait for the next ask.
-    retries: Option<usize>,
-    retry: Option<Task<()>>,
     image: Option<PagePicture>,
     /// Whether the window has drawn `image`, for the handover lines.
     drawn: bool,
@@ -197,8 +187,6 @@ impl Shell {
             request: 0,
             pending: false,
             again: false,
-            retries: None,
-            retry: None,
             motion: image.is_some().then(|| Move::step_back(cx)),
             image,
             drawn: false,
@@ -229,10 +217,6 @@ impl Shell {
             .as_ref()
             .is_some_and(|picture| picture.image.is_some() && !picture.pending && !picture.taken);
         if seen {
-            if let Some(picture) = &mut self.picture {
-                picture.retries = None;
-                picture.retry = None;
-            }
             self.ask_picture(cx);
         }
     }
@@ -252,52 +236,7 @@ impl Shell {
             picture.again = true;
             return;
         }
-        self.ask_after_change(cx);
-    }
-
-    /// Asks for a picture of the page as it changed, which an empty answer asks again for.
-    fn ask_after_change(&mut self, cx: &mut Context<Self>) {
-        if let Some(picture) = &mut self.picture {
-            picture.retries = Some(0);
-            picture.retry = None;
-        }
         self.ask_picture(cx);
-    }
-
-    /// The core had no picture of the page as it changed: a page that just loaded has drawn no frame
-    /// yet on Windows, and a still page sends no report after. It's asked again RETRIES' times
-    /// after, once each, and then left until the window comes to the front. Only after a change,
-    /// so an idle browser takes none (#359).
-    fn retry_picture(&mut self, cx: &mut Context<Self>) {
-        let window = self.browser.window();
-        let Some(picture) = &mut self.picture else {
-            return;
-        };
-        let Some(done) = picture.retries.filter(|&done| done < RETRIES.len()) else {
-            picture.retries = None;
-            return;
-        };
-        picture.retries = Some(done + 1);
-        let (wait, request) = (RETRIES[done], picture.request);
-        log!(
-            "browser: window {window} picture empty, again in {} ms",
-            wait.as_millis()
-        );
-        picture.retry = Some(cx.spawn(async move |shell, cx| {
-            cx.background_executor().timer(wait).await;
-            shell
-                .update(cx, |shell, cx| {
-                    // Asked since, by another change or the window coming to the front.
-                    if shell
-                        .picture
-                        .as_ref()
-                        .is_some_and(|picture| picture.request == request && !picture.pending)
-                    {
-                        shell.ask_picture(cx);
-                    }
-                })
-                .ok();
-        }));
     }
 
     fn ask_picture(&mut self, cx: &mut Context<Self>) {
@@ -348,9 +287,7 @@ impl Shell {
         };
         picture.pending = false;
         if replace(&mut picture.again, false) {
-            self.ask_after_change(cx);
-        } else if image.is_none() {
-            self.retry_picture(cx);
+            self.ask_picture(cx);
         }
         let Some(picture) = self.picture.as_mut() else {
             return;
@@ -358,7 +295,6 @@ impl Shell {
         let Some(image) = image else {
             return;
         };
-        picture.retries = None;
         image.share(picture.tab);
         // The page steps back as it goes, the first time; a fresh picture of it replaces the old
         // where it is.

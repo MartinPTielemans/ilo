@@ -125,6 +125,11 @@ class Tab : public content::WebContentsObserver,
   void Unload();
   // Whether Unload is deleting its page.
   bool unloading() const { return unloading_; }
+  // Points the tab, while it has no page, at |url| titled |title|, as a navigation another device
+  // made reached (sync_spaces.h), without loading it: its history goes on to |url| as a
+  // navigation's does, dropping what was forward of where it was. Shown, it loads there. Returns
+  // whether it could: not with its page, nor for an invalid |url|.
+  bool Repoint(const GURL& url, const std::u16string& title);
   // Whether its page may ask before it's left, as one with unsaved changes does: a frame of it has
   // a beforeunload handler, which Chromium asks with only once the frame was clicked or typed in.
   bool AsksBeforeLeaving() const;
