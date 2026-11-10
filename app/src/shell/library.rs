@@ -1536,7 +1536,7 @@ impl Shell {
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
             // column when fingers take it past its end.
-            .children(buttons.then(|| self.window_buttons(cx)));
+            .children(buttons.then(|| self.window_buttons(None, cx)));
         let edge = div()
             .absolute()
             .left(px(COLUMN_WIDTH))
