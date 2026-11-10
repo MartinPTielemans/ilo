@@ -937,6 +937,7 @@ impl Shell {
         width: f32,
         first: bool,
         focused: bool,
+        cx: &App,
     ) -> gpui::Div {
         let page = self.page(tab);
         let icon = div()
@@ -947,7 +948,13 @@ impl Shell {
             .items_center()
             .justify_center()
             .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-            .child(self.tab_icon_in(palette, tab));
+            .child(self.with_return_mark(
+                palette,
+                tab,
+                FAVICON_SIZE,
+                || self.tab_icon_in(palette, tab),
+                cx,
+            ));
         let line = div()
             .absolute()
             .left_0()
@@ -986,7 +993,7 @@ impl Shell {
         focused: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        self.segment(&self.palette, tab, width, first, focused)
+        self.segment(&self.palette, tab, width, first, focused, cx)
             .id(("segment", tab))
             .when(self.a11y, |segment| {
                 segment
@@ -1105,7 +1112,7 @@ impl Shell {
                     })
                     .collect();
                 if let Some(((tab, _), slot)) = drop.zip(slot) {
-                    segments.insert(slot, self.drop_slot(tab, width, slot == 0));
+                    segments.insert(slot, self.drop_slot(tab, width, slot == 0, cx));
                 }
                 split_plate(segments).children(close)
             }
@@ -1211,7 +1218,7 @@ impl Shell {
 
     /// The slot `tab`, dragged onto a row, would take in the split view it would make: its segment,
     /// faint, on a plate inset in its place, so the row reads as the split before it's let go.
-    fn drop_slot(&self, tab: u64, width: f32, first: bool) -> AnyElement {
+    fn drop_slot(&self, tab: u64, width: f32, first: bool, cx: &App) -> AnyElement {
         // The first segment starts inside the split plate's padding, and the slot from its edge.
         let padding = FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X;
         let left = if first {
@@ -1228,7 +1235,7 @@ impl Shell {
             .rounded(px(PLATE_RADIUS - DROP_SLOT_INSET))
             .bg(self.palette.plate(HOVERED));
         let segment = self
-            .segment(&self.palette, tab, width, first, false)
+            .segment(&self.palette, tab, width, first, false, cx)
             .opacity(SECONDARY);
         let slot = div().relative().flex_1().min_w_0().h_full().flex();
         slot.child(fill).child(segment).into_any_element()
@@ -1341,7 +1348,9 @@ impl Shell {
                 .size(px(FAVICON_DRAWN))
                 .text_color(self.palette.glyph(NAV))
                 .into_any_element(),
-            false => self.tab_icon(tab),
+            false => {
+                self.with_return_mark(&self.palette, tab, FAVICON_SIZE, || self.tab_icon(tab), cx)
+            }
         };
         let icon = div()
             .id(("favicon", tab))
