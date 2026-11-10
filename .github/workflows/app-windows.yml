@@ -29,14 +29,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push to main whose tree a pull request or a dispatch already passed the tests on skips them,
+  # saying which run passed them (#2198). The tests record the tree they passed on at their end.
+  proven:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      test: ${{ steps.look.outputs.test }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/tree-proven.sh
+          sparse-checkout-cone-mode: false
+      - id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+        run: echo "test=$(.github/scripts/tree-proven.sh app-windows-test "$TREE")" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: proven
     # 10.9 minutes of a Windows runner, so a pull request from a branch here runs it once it's
     # labelled queue:ready, not at each push before (#2199).
     if: >-
+      !cancelled() && !needs.proven.outputs.test && (
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'queue:ready') ||
       (github.event.action != 'labeled' && (contains(github.event.pull_request.labels.*.name, 'queue:ready') ||
-        github.event.pull_request.head.repo.full_name != github.repository))
+        github.event.pull_request.head.repo.full_name != github.repository)))
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -70,6 +94,10 @@ jobs:
       - run: cargo build --release --bin mcp-bridge
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
       - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
+      # What follows decides nothing, so this tree has passed.
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: app-windows-test
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4

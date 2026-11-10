@@ -1,0 +1,4 @@
+# Runs of check.sh, or a step of one, whose failure doesn't fail Check on Windows while their issue is
+# open (check/quarantine.sh says how). A line lasts 14 days:
+# <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
+little #2216 2026-11-09 closing the Little ilo window by ⌘W put a window of ilo's in front of the other app's
