@@ -31,6 +31,10 @@ screens=(
   "activity-refused|activity drawn|PREVIEW_ACTIVITY=refused"
   "activity-read|activity drawn|PREVIEW_ACTIVITY=read"
   "activity-write-light|activity drawn|PREVIEW_ACTIVITY=write PREVIEW_APPEARANCE=light"
+  "activity-long|activity drawn|PREVIEW_ACTIVITY=long"
+  "activity-long-all|activity drawn|PREVIEW_ACTIVITY=long-all"
+  "activity-nested|activity drawn|PREVIEW_ACTIVITY=nested"
+  "activity-long-light|activity drawn|PREVIEW_ACTIVITY=long PREVIEW_APPEARANCE=light"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

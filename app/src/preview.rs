@@ -2235,8 +2235,8 @@ fn main() {
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
-            // Mock (#2326): PREVIEW_ACTIVITY=closed, read, write or refused shows Settings › Agents'
-            // activity with that request's row opened.
+            // Mock (#2326): PREVIEW_ACTIVITY=closed, read, write, refused, long, long-all or nested
+            // shows Settings › Agents' activity with that request's row opened, long-all in full.
             if let Ok(which) = std::env::var("PREVIEW_ACTIVITY") {
                 preview_activity(which, cx);
                 return;
@@ -3427,14 +3427,21 @@ struct ActivityPage {
     search: gpui::Entity<browser::text_input::TextInput>,
 }
 
+/// A line of what a mock request sent: how deep it is, a field's name or an object's, and its
+/// value, empty for an object's name, "(hidden)" for a secret's.
+type MockLine = (u8, &'static str, &'static str);
+
 /// A mock activity row: its title, its line, when, and if it's a request, what opening it shows,
 /// each a label and its lines.
 struct MockEntry {
     title: &'static str,
     line: Option<&'static str>,
     ago: &'static str,
-    opens: Option<(&'static str, Vec<(&'static str, Vec<&'static str>)>)>,
+    opens: Option<(&'static str, Vec<(&'static str, Vec<MockLine>)>)>,
 }
+
+/// How many lines of what was sent show before "Show all".
+const MOCK_CAP: usize = 8;
 
 impl gpui::Render for ActivityPage {
     fn render(
@@ -3448,12 +3455,12 @@ impl gpui::Render for ActivityPage {
         use browser::settings_rows::{Look, end, frame, group, text};
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, LEDE_LINE, LEDE_TOP, NAME, PADDING,
-            TEXT_X, TITLE,
+            DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, LEDE_LINE, LEDE_TOP, NAME,
+            PADDING, TEXT_X, TITLE,
         };
         use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
         use browser::tokens::text;
-        use gpui::{FontWeight, ParentElement, Styled, div, rgb, svg};
+        use gpui::{FontWeight, ParentElement, SharedString, Styled, div, rgb, svg};
         let dark = preview_tone() != Some(Tone::Light);
         let look = Look::settings(dark);
         log!("preview: activity drawn");
@@ -3475,81 +3482,187 @@ impl gpui::Render for ActivityPage {
             window.is_a11y_active(),
         );
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
-        let entries = [
-            MockEntry {
-                title: "Sent POST /anything/notes to httpbin.org",
-                line: None,
-                ago: "Just now",
-                opens: Some((
-                    "write",
-                    vec![
-                        ("To", vec!["https://httpbin.org/anything/notes"]),
-                        (
-                            "Sent",
-                            vec!["title: Groceries", "items: milk, eggs, bread", "pinned: true"],
-                        ),
-                    ],
-                )),
-            },
-            MockEntry {
-                title: "Couldn't send PUT /anything/notes/7 to httpbin.org",
-                line: Some("Refused: You said no."),
-                ago: "1 min ago",
-                opens: Some((
-                    "refused",
-                    vec![
-                        ("To", vec!["https://httpbin.org/anything/notes/7"]),
-                        ("Not sent", vec!["title: Groceries (old)", "archived: true"]),
-                    ],
-                )),
-            },
-            MockEntry {
-                title: "Sent GET /anything/notes?limit=20 to httpbin.org",
-                line: None,
-                ago: "2 min ago",
-                opens: Some((
-                    "read",
-                    vec![("To", vec!["https://httpbin.org/anything/notes?limit=20"])],
-                )),
-            },
-            MockEntry {
-                title: "Read the page on httpbin.org",
-                line: None,
-                ago: "3 min ago",
-                opens: None,
-            },
-            MockEntry {
-                title: "Opened httpbin.org",
-                line: None,
-                ago: "3 min ago",
-                opens: None,
-            },
-        ];
-        let small = |child: &'static str| {
+        let write = MockEntry {
+            title: "Sent POST /anything/notes to httpbin.org",
+            line: None,
+            ago: "Just now",
+            opens: Some((
+                "write",
+                vec![
+                    ("To", vec![(0, "", "https://httpbin.org/anything/notes")]),
+                    (
+                        "Sent",
+                        vec![
+                            (0, "title", "Groceries"),
+                            (0, "items", "milk, eggs, bread"),
+                            (0, "pinned", "true"),
+                        ],
+                    ),
+                ],
+            )),
+        };
+        let refused = MockEntry {
+            title: "Couldn't send PUT /anything/notes/7 to httpbin.org",
+            line: Some("Refused: You said no."),
+            ago: "1 min ago",
+            opens: Some((
+                "refused",
+                vec![
+                    ("To", vec![(0, "", "https://httpbin.org/anything/notes/7")]),
+                    (
+                        "Not sent",
+                        vec![(0, "title", "Groceries (old)"), (0, "archived", "true")],
+                    ),
+                ],
+            )),
+        };
+        let read = MockEntry {
+            title: "Sent GET /anything/notes?limit=20 to httpbin.org",
+            line: None,
+            ago: "2 min ago",
+            opens: Some((
+                "read",
+                vec![(
+                    "To",
+                    vec![(0, "", "https://httpbin.org/anything/notes?limit=20")],
+                )],
+            )),
+        };
+        let long = MockEntry {
+            title: "Sent POST /anything/profile to httpbin.org",
+            line: None,
+            ago: "Just now",
+            opens: Some((
+                "long",
+                vec![
+                    ("To", vec![(0, "", "https://httpbin.org/anything/profile")]),
+                    (
+                        "Sent",
+                        vec![
+                            (0, "name", "Ada Lovelace"),
+                            (0, "email", "ada@example.com"),
+                            (0, "password", "(hidden)"),
+                            (
+                                0,
+                                "bio",
+                                "Mathematician and writer, known for her notes on the \
+                                 Analytical Engine, which hold what is often called the \
+                                 first program, and for seeing that such a machine could \
+                                 work with more than numbers.",
+                            ),
+                            (0, "city", "London"),
+                            (0, "country", "United Kingdom"),
+                            (0, "language", "en-GB"),
+                            (0, "timezone", "Europe/London"),
+                            (0, "newsletter", "true"),
+                            (0, "theme", "dark"),
+                        ],
+                    ),
+                ],
+            )),
+        };
+        let nested = MockEntry {
+            title: "Sent PATCH /anything/boards/3 to httpbin.org",
+            line: None,
+            ago: "1 min ago",
+            opens: Some((
+                "nested",
+                vec![
+                    ("To", vec![(0, "", "https://httpbin.org/anything/boards/3")]),
+                    (
+                        "Sent",
+                        vec![
+                            (0, "board", ""),
+                            (1, "name", "Home"),
+                            (1, "columns", ""),
+                            (2, "1", "title: To do · cards: 2"),
+                            (2, "2", "title: Done · cards: 5"),
+                            (0, "api_token", "(hidden)"),
+                            (0, "notify", "true"),
+                        ],
+                    ),
+                ],
+            )),
+        };
+        let page_read = MockEntry {
+            title: "Read the page on httpbin.org",
+            line: None,
+            ago: "3 min ago",
+            opens: None,
+        };
+        let opened_site = MockEntry {
+            title: "Opened httpbin.org",
+            line: None,
+            ago: "3 min ago",
+            opens: None,
+        };
+        // The long ones among fewer neighbours, so the row opened in full fits the card.
+        let (which, all) = match self.which.as_str() {
+            "long-all" => ("long", true),
+            which => (which, false),
+        };
+        let entries = match which {
+            "long" | "nested" => vec![long, nested, page_read],
+            _ => vec![write, refused, read, page_read, opened_site],
+        };
+        let small = |child: SharedString| {
             div()
                 .text_size(px(text::SMALL))
                 .line_height(px(DETAIL_LINE))
                 .child(child)
         };
-        let rows = entries.into_iter().map(|entry| {
-            let opened = entry
-                .opens
-                .as_ref()
-                .is_some_and(|(name, _)| *name == self.which);
-            let ago = div().text_color(look.detail).child(entry.ago);
-            let chevron = entry.opens.as_ref().map(|_| {
-                svg()
-                    .path(if opened {
-                        "icons/chevron-up.svg"
-                    } else {
-                        "icons/chevron-down.svg"
-                    })
-                    .size(px(12.))
+        let chevron = |up: bool| {
+            svg()
+                .path(if up {
+                    "icons/chevron-up.svg"
+                } else {
+                    "icons/chevron-down.svg"
+                })
+                .size(px(12.))
+                .flex_none()
+                .text_color(look.detail)
+        };
+        // A line of what was sent: its name, then its value, cut with an ellipsis at the row's
+        // width unless it's shown in full; a secret's "(hidden)" is grey.
+        let sent_line = |(depth, name, value): MockLine, whole: bool| {
+            let indent = px(12. * f32::from(depth));
+            let line = div().flex().min_w_0().pl(indent);
+            if value.is_empty() {
+                return line.child(small(name.into()).text_color(look.detail));
+            }
+            let value_color = if value == "(hidden)" {
+                look.detail
+            } else {
+                look.ink
+            };
+            let shown = if name.is_empty() {
+                small(value.into())
+            } else {
+                small(format!("{name}: ").into())
                     .flex_none()
                     .text_color(look.detail)
-            });
-            let mut controls = vec![gpui::IntoElement::into_any_element(ago)];
-            controls.extend(chevron.map(gpui::IntoElement::into_any_element));
+            };
+            if name.is_empty() {
+                return line.child(if whole { shown } else { shown.truncate() });
+            }
+            let value = small(value.into()).min_w_0().text_color(value_color);
+            line.child(shown)
+                .child(if whole { value } else { value.truncate() })
+        };
+        let rows = entries.into_iter().map(|entry| {
+            let opened = entry.opens.as_ref().is_some_and(|(name, _)| *name == which);
+            let ago = div().text_color(look.detail).child(entry.ago);
+            // The chevron's place is kept on every row, so every time ends on one edge.
+            let slot = div()
+                .w(px(12.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .children(entry.opens.as_ref().map(|_| chevron(opened)));
+            let controls = vec![
+                gpui::IntoElement::into_any_element(ago),
+                gpui::IntoElement::into_any_element(slot),
+            ];
             let head = frame()
                 .child(text(&look, entry.title, entry.line.map(Into::into)))
                 .child(end(controls));
@@ -3562,15 +3675,40 @@ impl gpui::Render for ActivityPage {
                     .flex_col()
                     .gap(px(4.))
                     .children(details.into_iter().map(|(label, lines)| {
+                        let count = lines.len();
+                        let capped = !all && count > MOCK_CAP;
+                        let shown = if capped { MOCK_CAP - 1 } else { count };
+                        let more = capped.then(|| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .text_color(look.detail)
+                                .child(small(format!("Show all {count} fields").into()))
+                                .child(chevron(false))
+                        });
                         div()
                             .flex()
-                            .child(small(label).w(px(64.)).flex_none().text_color(look.detail))
+                            .child(
+                                small(label.into())
+                                    .w(px(64.))
+                                    .flex_none()
+                                    .text_color(look.detail),
+                            )
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
+                                    .flex()
+                                    .flex_col()
                                     .text_color(look.ink)
-                                    .children(lines.into_iter().map(small)),
+                                    .children(
+                                        lines
+                                            .into_iter()
+                                            .take(shown)
+                                            .map(|line| sent_line(line, all)),
+                                    )
+                                    .children(more),
                             )
                     }))
             });
