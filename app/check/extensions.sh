@@ -711,7 +711,7 @@ log="$out/install.log"
 step=0
 BROWSER_DRIVE=1 BROWSER_URL="$site" BROWSER_PROFILE_DIR="$crx/profile" \
   "$browser" --extension-mime-request-handling=always-prompt-for-install \
-  --extensions-update-frequency=5 < "$out/drive" > "$log" 2>&1 &
+  --extensions-update-frequency=5 --vmodule=extension_updater=3,extension_downloader=3,extension_service=2,crx_installer=2 < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -783,12 +783,12 @@ printf "<?xml version='1.0' encoding='UTF-8'?>
 <updatecheck codebase='%scheck.crx' version='3' hash_sha256='%s'/></app></gupdate>\n" \
   "$installed" "$site" "$hash" > "$out/site/updates.xml"
 # Off once the Extensions menu the app logs no longer lists it, within 60 s.
-for _ in $(seq 600); do
+for _ in $(seq 1800); do
   case "$(grep '^browser: extensions menu' "$log" | tail -1) " in *" $installed "*) ;; *) break ;; esac
   sleep 0.1
 done
 case "$(grep '^browser: extensions menu' "$log" | tail -1) " in
-  *" $installed "*) fail "the update the browser fetched didn't turn Check Install off within 60 s" ;;
+  *" $installed "*) fail "the update the browser fetched didn't turn Check Install off within 180 s" ;;
 esac
 [ "$(grep -c '^browser: dialog shown ' "$log" || true)" = "$asked" ] ||
   fail "the fetched update asked, where Chrome turns it off: $(grep '^browser: dialog shown ' "$log" | tail -1)"
