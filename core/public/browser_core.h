@@ -155,6 +155,9 @@ typedef struct bc_suggestion {
   const char* keyword;
   // That engine's name, such as "DuckDuckGo", or "".
   const char* site;
+  // When the profile's history last saw a visit to its page, in microseconds since 1970, which the
+  // row says as "Visited yesterday" (#2337). Else 0, as for a search or a page not in history.
+  int64_t last_visit;
 } bc_suggestion;
 
 // A page in a tab's history, which bc_tab_history lists, as Chrome's back and forward buttons'
@@ -1263,6 +1266,12 @@ typedef struct bc_host {
   // first launch, which comes before the app has a window: the app reads that one's command line.
   // The user's alone: agents get no windows.
   void (*app_new_window)(void* context, bool private_window);
+  // The pages bc_profile_list_history asked for as |request|, newest first, each once a day with
+  // |last_visit| its last visit that day, and |visits| and |typed| as history counts them for the
+  // page. |more| when history has pages older than the last. The strings last only for the call.
+  // The user's alone: agents get none.
+  void (*history_listed)(void* context, bc_id profile, uint64_t request,
+                         const bc_history_page* pages, size_t count, bool more);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -1767,6 +1776,21 @@ typedef struct bc_history_page {
 // already there with a visit as late is skipped, so importing the same history again adds
 // nothing. Then history_added, with how many it added. The core copies what it needs.
 BC_EXPORT bool bc_profile_add_history(bc_id profile, const bc_history_page* pages, size_t count);
+
+// Lists up to |max| pages of |profile|'s history visited before |before|, microseconds since 1970,
+// or now if 0, as the Library's History does a page of its list at a time (#2337): newest first,
+// each page once a day, whose title or URL has |text|'s words when it isn't empty. Then
+// history_listed with |request|. History reads them on its own thread, off the UI thread. Returns
+// whether it will: not for a private profile, whose history nothing keeps, or one that hasn't
+// loaded.
+BC_EXPORT bool bc_profile_list_history(bc_id profile, uint64_t request, int64_t before,
+                                       const char* text, size_t max);
+
+// Deletes |profile|'s visits to |url| from |begin| to |end|, microseconds since 1970, as the
+// Library's History removes one row, a page on one day. Chrome's observers hear it as any deletion,
+// and history_deleted follows. Returns whether it will, as bc_profile_list_history.
+BC_EXPORT bool bc_profile_remove_history(bc_id profile, const char* url, int64_t begin,
+                                         int64_t end);
 
 // A field of another browser's saved address, for bc_profile_add_addresses, as a Chromium-based
 // browser's Web Data keeps it: Chromium's FieldType and VerificationStatus numbers, and the value,
