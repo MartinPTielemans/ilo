@@ -3464,6 +3464,7 @@ impl gpui::Render for PrivacyPage {
         let dark = preview_tone() != Some(Tone::Light);
         let look = Look::settings(dark);
         let accent = rgb(NO_THEME_ACCENT);
+        log!("preview: privacy drawn");
         let field = browser::settings_search::field(
             &self.search,
             if dark { rgb(PAPER) } else { rgb(INK) },
