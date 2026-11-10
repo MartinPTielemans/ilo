@@ -56,32 +56,6 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
-# A second window on the site, which takes the editor's changes as they're made.
-send key n cmd
-expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
-new_window_bar
-send window 2
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
-send insert "${site}boost.html"
-send key return
-expect "^browser: loaded [0-9]* ${site}boost.html\$" "the second window didn't load the page"
-other=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
-expect "^browser: title $other ad block rgb(0, 128, 0)\$" "the second window's page wasn't Boosted"
-send window 1
-send click $page_point
-# Waits for both windows' pages to say their body is $1, or fails with $2.
-both_are() {
-  for _ in $(seq 100); do
-    [ "$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
-      [ "$(grep "^browser: title $other " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
-      return 0
-    sleep 0.1
-  done
-  fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
-}
-
-
 bar_command edit-boost "Edit Boost" "edit boost"
 expect "^browser: boost card $tab opened\$" "Edit Boost opened no card"
 expect "^browser: boost card $tab at " "the Boost's card wasn't drawn"
@@ -104,9 +78,53 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
-# Customize…, the last line of the card Zap leaves open, opens the editor in its place. Its clicks
-# are in its points: its arrow 13 wide, then the card, whose field is 340 wide and 176 tall, 8.5 in
-# and 48 down.
+# A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the +'s menu
+# after New Note; each opens the card.
+post rightclick $(row 0)
+expect "^browser: menu shown .*, $(cased 'Mute (disabled), Edit Boost…, Add Split View'), " \
+  "the tab's menu didn't offer Edit Boost… after Mute"
+expect '^browser: menu drawn ' "the tab's menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-tab-menu.png" || fail "no window to capture"
+send choose "$(cased 'Edit Boost…')"
+expect "^browser: boost card $tab opened\$" "the tab menu's Edit Boost… opened no card"
+send layout
+height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+post click 204 $((height - 25))
+plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
+expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
+expect '^browser: menu drawn ' "the +'s menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
+send choose "$(cased 'Edit Boost…')"
+expect "^browser: boost card $tab opened\$" "the +'s Edit Boost… opened no card"
+
+# A second window on the site, which takes the editor's changes as they're made.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+new_window_bar
+send window 2
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+send insert "${site}boost.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}boost.html\$" "the second window didn't load the page"
+other=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
+expect "^browser: title $other ad none rgb(0, 128, 0)\$" "the second window's page wasn't Boosted"
+send window 1
+# Waits for both windows' pages to say their body is $1, or fails with $2.
+both_are() {
+  for _ in $(seq 100); do
+    [ "$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      [ "$(grep "^browser: title $other " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      return 0
+    sleep 0.1
+  done
+  fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
+}
+
+# Customize…, the last line of the card the +'s Edit Boost… left open, opens the editor in its
+# place. Its clicks are in its points: its arrow 13 wide, then the card, whose field is 340 wide
+# and 176 tall, 8.5 in and 48 down.
 send layout
 read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
@@ -149,7 +167,8 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
-  "Customize… opened the editor, whose field coloured the page in both windows, ⌘Z took it" \
-  "back and escape closed it; with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png, $out/boost-editor.png," \
-  "$out/boost-edited.png"
+  "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
+  "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
+  "with the file gone the page was its own again." \
+  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png, $out/boost-edited.png"
