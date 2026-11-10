@@ -2725,7 +2725,18 @@ fn main() {
                         browser::palette::Tone::Dark,
                     );
                     let site = "news.example".to_string();
-                    boost_editor::show(0, site, style, true, at, f32::MAX, palette, requested, cx);
+                    boost_editor::show(
+                        0,
+                        site,
+                        None,
+                        style,
+                        true,
+                        at,
+                        f32::MAX,
+                        palette,
+                        requested,
+                        cx,
+                    );
                 }
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
