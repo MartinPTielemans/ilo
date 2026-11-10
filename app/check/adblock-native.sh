@@ -5,9 +5,17 @@
 # ADBLOCK_PARITY_BASELINE names another run's sites.tsv. So ./check.sh adblock-parity adblock-native
 # compares the two engines on the same sites the same hour.
 # It leaves adblock-native/ as adblock-parity leaves its own.
-engine=native
-if [ -z "${ADBLOCK_PARITY_BASELINE:-}" ] && [ -s build/adblock-parity-sites.tsv ]; then
-  ADBLOCK_PARITY_BASELINE=build/adblock-parity-sites.tsv
+# A checkout or prebuilt engine with no native engine would ignore the switch and compare uBlock
+# Origin with itself, whose list updates land at different times from one run to the next.
+if [ ! -f ../core/native_ad_block.cc ]; then
+  echo "skip: adblock-native. This checkout has no native ad block engine yet (#2116)."
+elif ! engine_has ../core/native_ad_block.cc; then
+  echo "skip: adblock-native. The engine was built before the core's native ad block engine."
+else
+  engine=native
+  if [ -z "${ADBLOCK_PARITY_BASELINE:-}" ] && [ -s build/adblock-parity-sites.tsv ]; then
+    ADBLOCK_PARITY_BASELINE=build/adblock-parity-sites.tsv
+  fi
+  . check/adblock-parity.sh
+  engine=
 fi
-. check/adblock-parity.sh
-engine=

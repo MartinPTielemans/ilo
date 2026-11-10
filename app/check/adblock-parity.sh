@@ -154,15 +154,20 @@ import json, sys
 from urllib.parse import urlsplit
 
 recorded, starts, table, baseline = sys.argv[1:]
-# Each request, by its id: its address, when it went, and whether the ad blocker blocked it or
-# answered it with a stand-in, an extension's resource it redirected the request to.
-requests = {}
+# Each request: its address, when it went, and whether the ad blocker blocked it or answered it
+# with a stand-in, an extension's resource it redirected the request to. Its later events come by
+# its id, which a later request can take again, once a renderer's process id comes back: an id sent
+# again to an http(s) address, not as a redirect, is a new request.
+requests = []
+live = {}
 for line in open(recorded, encoding="utf-8"):
     event = json.loads(line)
-    request = requests.get(event["id"])
-    if event["event"] == "sent" and not request:
-        if event["url"].startswith("http"):
-            requests[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed"}
+    request = live.get(event["id"])
+    if event["event"] == "sent" and event["url"].startswith("http") and not event.get("redirect"):
+        live[event["id"]] = {"url": event["url"], "at": event["at"], "how": "allowed"}
+        requests.append(live[event["id"]])
+    elif not request:
+        continue
     elif event["event"] == "sent" and not event["url"].startswith("http"):
         request["how"] = "stand-in"
     elif event["event"] == "failed" and request and "BLOCKED_BY_CLIENT" in event["error"]:
@@ -178,7 +183,7 @@ for line in open(starts, encoding="utf-8"):
     sites.append({"at": int(started), "url": url, "loaded": ok, "load_ms": load_ms if ok else ""})
 for i, s in enumerate(sites):
     end = sites[i + 1]["at"] if i + 1 < len(sites) else float("inf")
-    mine = [r for r in requests.values() if s["at"] <= r["at"] < end]
+    mine = [r for r in requests if s["at"] <= r["at"] < end]
     host = lambda r: urlsplit(r["url"]).hostname or "?"
     s["requests"] = len(mine)
     s["blocked"] = sorted({host(r) for r in mine if r["how"] != "allowed"})
