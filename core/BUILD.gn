@@ -167,6 +167,15 @@ source_set("archive_rule") {
   deps = [ "//base" ]
 }
 
+# How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
+source_set("typing_keys") {
+  sources = [
+    "typing_keys.cc",
+    "typing_keys.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
 source_set("mini_player_place") {
   sources = [
@@ -393,6 +402,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typing_keys",
     ":window_frames",
     "//base",
     "//base:i18n",
@@ -687,6 +697,7 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
   ]
   deps = [
@@ -702,6 +713,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typing_keys",
     ":window_frames",
     "//base",
     "//base/test:run_all_unittests",

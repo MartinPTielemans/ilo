@@ -23,12 +23,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/third_party/icu/icu_utf.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/typing_keys.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/shell_integration.h"
@@ -1242,30 +1242,20 @@ void AgentPage::TypeKeys(std::u16string text, bool submit) {
     Send("Input.dispatchKeyEvent", key.Clone().Set("type", "keyUp"), std::move(typed));
     return;
   }
-  // A character a key, as a keyboard types it, rather than DevTools' insertText: a key carries
-  // DevTools' mark of input that isn't the user's, which keeps it from an extension's listeners
+  // DevTools' key events rather than its insertText, as a key carries DevTools' mark of input
+  // that isn't the user's, which keeps it from an extension's listeners
   // (engine/patches/ours/chromium-agent-extension-listeners.patch), and an IME's commit doesn't.
-  // A line break is Enter's.
-  size_t at = 0;
-  while (at < text.size()) {
-    const size_t size =
-        CBU16_IS_LEAD(text[at]) && at + 1 < text.size() && CBU16_IS_TRAIL(text[at + 1]) ? 2 : 1;
-    const std::string piece = base::UTF16ToUTF8(text.substr(at, size));
-    at += size;
-    base::DictValue event = base::DictValue().Set("type", "char");
-    if (piece == "\n") {
-      event.Set("key", "Enter")
-          .Set("code", "Enter")
-          .Set("windowsVirtualKeyCode", 13)
-          .Set("text", "\r")
-          .Set("unmodifiedText", "\r");
+  std::vector<base::DictValue> keys = TypingKeys(text);
+  if (keys.empty()) {
+    const base::DictValue none;
+    std::move(typed).Run(&none);
+    return;
+  }
+  for (size_t each = 0; each < keys.size(); ++each) {
+    if (each + 1 < keys.size()) {
+      Send("Input.dispatchKeyEvent", std::move(keys[each]), base::DoNothing());
     } else {
-      event.Set("key", piece).Set("text", piece).Set("unmodifiedText", piece);
-    }
-    if (at < text.size()) {
-      Send("Input.dispatchKeyEvent", std::move(event), base::DoNothing());
-    } else {
-      Send("Input.dispatchKeyEvent", std::move(event), std::move(typed));
+      Send("Input.dispatchKeyEvent", std::move(keys[each]), std::move(typed));
     }
   }
 }

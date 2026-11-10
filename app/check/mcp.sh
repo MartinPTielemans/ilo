@@ -1016,6 +1016,81 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
 
+  # Its typing is keys, as a keyboard's, so a field's own key handlers filter and format it as they
+  # do a user's, and a line break never sends or submits: a chat composer whose Enter sends gets
+  # the agent's lines as one unsent message. Text that isn't one key arrives exact, with no
+  # composition left open, and a long text loses nothing on a busy page (#2355). Each field says
+  # what it holds in the title; the run writes what each came to, then checks them.
+  printf '%s' '<script>
+function report(name, text) { document.title = name + " " + text.replace(/\n/g, "|"); }
+let composing = false;
+addEventListener("compositionstart", () => composing = true);
+addEventListener("compositionend", () => composing = false);
+const digitsOnly = (event) => {
+  if (event.key.length === 1 && !/[0-9]/.test(event.key)) event.preventDefault();
+};
+let keyups = 0;
+function busy() { const until = performance.now() + 2; while (performance.now() < until); }
+const expected = "日本語 😀👩‍👩‍👧 é";
+</script>
+<div contenteditable role=textbox aria-label=Composer
+  onkeydown="if (event.key === &quot;Enter&quot; &amp;&amp; !event.shiftKey) { event.preventDefault(); report(&quot;sent&quot;, this.innerText); }"
+  onkeypress="if (event.keyCode === 13) { event.preventDefault(); report(&quot;sent&quot;, this.innerText); }"
+  oninput="report(&quot;composer&quot;, this.innerText.split(&quot;\n&quot;).filter(Boolean).join(&quot;\n&quot;))"></div>
+<textarea aria-label=Notes oninput="report(&quot;notes&quot;, this.value)"></textarea>
+<input aria-label=Unicode oninput="report(&quot;unicode&quot;, (this.value === expected ? &quot;exact&quot; : &quot;wrong &quot; + this.value.length) + (composing ? &quot; composing&quot; : &quot; closed&quot;))">
+<input aria-label=Digits onkeydown="digitsOnly(event)" oninput="report(&quot;digits&quot;, this.value)">
+<input aria-label=Short maxlength=5 oninput="report(&quot;short&quot;, this.value)">
+<input aria-label=Card onkeydown="digitsOnly(event)"
+  oninput="this.value = this.value.replace(/\D/g, &quot;&quot;).slice(0, 16).replace(/(\d{4})(?=\d)/g, &quot;$1 &quot;); report(&quot;card&quot;, this.value)">
+<input aria-label=Expiry onkeydown="digitsOnly(event)"
+  oninput="const d = this.value.replace(/\D/g, &quot;&quot;).slice(0, 4); this.value = d.length > 2 ? d.slice(0, 2) + &quot;/&quot; + d.slice(2) : d; report(&quot;expiry&quot;, this.value)">
+<input aria-label=Suggest onkeyup="if (event.key.length === 1 &amp;&amp; !event.ctrlKey &amp;&amp; !event.metaKey) report(&quot;suggest&quot;, ++keyups + &quot; &quot; + this.value)">
+<input aria-label=Long oninput="if (this.value.length >= 5000) report(&quot;long&quot;, this.value.length + &quot; &quot; + (this.value === &quot;abcdefghij&quot;.repeat(500)))">
+<input aria-label=Busy onkeydown="busy()" onkeypress="busy()"
+  oninput="busy(); if (this.value.length >= 2000) report(&quot;busy&quot;, this.value.length + &quot; &quot; + (this.value === &quot;0123456789&quot;.repeat(200)))">
+<script>document.title = "typing";</script>' > "$out/site/typing.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/typing.html\"}")
+  typing_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$typing_tab" ] || fail "open_tab of the typing page answered: $outline"
+  await_log "^browser: title $typing_tab typing\$" "the typing page didn't load"
+  outline=$(call snapshot "{\"tab\":$typing_tab}")
+  now_ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
+  : > "$out/mcp-typing.txt"
+  typing_wrong=
+  # Types $2 into the field named $1 and checks that what its title last said starts with $3.
+  type_and_see() {
+    field=$(ref_of textbox "$1")
+    [ -n "$field" ] || fail "the typing page's outline had no $1 field: $outline"
+    started=$(now_ms)
+    typed=$(call type "{\"tab\":$typing_tab,\"ref\":\"$field\",\"text\":\"$2\"}")
+    took=$(($(now_ms) - started))
+    name=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    seen=
+    for _ in $(seq 30); do
+      seen=$(grep -E "^browser: title $typing_tab ($name|sent) " "$log" | tail -1 |
+        sed "s/^browser: title $typing_tab //")
+      [ "$seen" = "$name $3" ] && break
+      sleep 0.1
+    done
+    printf '%s: %s in %s ms, answered %s\n' "$1" "${seen:-nothing}" "$took" \
+      "$(printf '%s' "$typed" | head -1)" | tee -a "$out/mcp-typing.txt"
+    [ "$seen" = "$name $3" ] || typing_wrong="$typing_wrong; $1 came to '${seen:-nothing}', not '$name $3'"
+  }
+  type_and_see Composer 'line one\nline two\n\nline four' 'line one|line two|line four'
+  type_and_see Notes 'first\nsecond\n' 'first|second|'
+  type_and_see Unicode '日本語 😀👩‍👩‍👧 é' 'exact closed'
+  type_and_see Digits 'a1b2c3' '123'
+  type_and_see Short 'abcdefgh' 'abcde'
+  type_and_see Card '4242424242424242' '4242 4242 4242 4242'
+  type_and_see Expiry '1229' '12/29'
+  type_and_see Suggest 'abc' '3 abc'
+  type_and_see Long "$(printf 'abcdefghij%.0s' $(seq 500))" '5000 true'
+  type_and_see Busy "$(printf '0123456789%.0s' $(seq 200))" '2000 true'
+  grep -q "^browser: title $typing_tab sent " "$log" && typing_wrong="$typing_wrong; a line break sent the composer's message"
+  [ -z "$typing_wrong" ] || fail "the agent's typing came out wrong${typing_wrong}"
+  call close_tab "{\"tab\":$typing_tab}" > /dev/null
+
   # An extension's controls in a page aren't the page's, and the agent can't act on them (#2355).
   printf '%s' '<title>covered loading</title>
 <button style="position: absolute; left: 20px; top: 20px; width: 200px; height: 60px"
