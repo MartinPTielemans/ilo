@@ -198,22 +198,37 @@ for tab in "$user_tab" "$other_tab"; do
   if printf '%s\n' "$listed" | grep -q "^. $tab  "; then missed "list_tabs listed tab $tab, which isn't the agent's"; fi
 done
 
+# As refused, for a tool that acts on a ref, an element of the tab's outline: the agent has none of a
+# tab it was never given, so the call stops at the ref with nothing done, which leaves nothing to
+# log; a tab another agent has an outline of gets to the rule $4.
+by_ref() {
+  tries=$((tries + 1))
+  logged=$(grep -c "$refusals" "$log" || true)
+  got=$(call "$1" "$2")
+  # shellcheck disable=SC2254 # $4 is a pattern
+  case "$got" in
+    "error: There's no element e1 in tab "*) ;;
+    "error: "$4) await_more "$refusals" "$logged" || missed "$3 was refused, but the activity log doesn't have it" ;;
+    *) missed "$3 answered: $got" ;;
+  esac
+}
+
 # Every tool that takes a tab, on the user's tab and on the other agent's.
 outside() {
   space="The tab isn't in the agent's own Space."
   refused read_page "{\"tab\":$1}" "read_page of $2" "$space"
   refused snapshot "{\"tab\":$1}" "snapshot of $2" "$space"
   refused screenshot "{\"tab\":$1}" "screenshot of $2" "$space"
-  refused click "{\"tab\":$1,\"ref\":\"e1\"}" "click in $2" "$space"
-  refused type "{\"tab\":$1,\"ref\":\"e1\",\"text\":\"x\"}" "type in $2" "$space"
-  refused select "{\"tab\":$1,\"ref\":\"e1\",\"option\":\"x\"}" "select in $2" "$space"
+  by_ref click "{\"tab\":$1,\"ref\":\"e1\"}" "click in $2" "$space"
+  by_ref type "{\"tab\":$1,\"ref\":\"e1\",\"text\":\"x\"}" "type in $2" "$space"
+  by_ref select "{\"tab\":$1,\"ref\":\"e1\",\"option\":\"x\"}" "select in $2" "$space"
   refused press_key "{\"tab\":$1,\"key\":\"Enter\"}" "press_key in $2" "$space"
   refused scroll "{\"tab\":$1,\"direction\":\"down\"}" "scroll in $2" "$space"
   refused navigate "{\"tab\":$1,\"url\":\"$local_site/rules-own.html\"}" "navigate of $2" "$space"
   refused pin_tab "{\"tab\":$1}" "pin_tab of $2" "$space"
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me?rules-outside\"}]}" \
-    "request from $2" "$space"
-  refused run_steps "{\"tab\":$1,\"steps\":[{\"action\":\"snapshot\"}]}" "run_steps in $2" "$space"
+    "request from $2" "*: $space"
+  refused run_steps "{\"tab\":$1,\"steps\":[{\"action\":\"snapshot\"}]}" "run_steps in $2" "Step 1 failed: $space"
   refused split_tabs "{\"tabs\":[$own_tab,$1]}" "split_tabs with $2" "$space"
   refused hand_off "{\"tab\":$1,\"reason\":\"Sign in\"}" "hand_off of $2" "$space"
   refused ask_for_tab "{\"tab\":$1,\"reason\":\"Give it back\"}" "ask_for_tab of $2" \
