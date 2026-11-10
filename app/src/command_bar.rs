@@ -2727,8 +2727,6 @@ impl CommandBar {
         // unless it has left the archive since, when its page loads as any page's.
         if row.archived != 0 && !matches!(self.target, Target::Beside(_)) {
             let (archived, url) = (row.archived, row.url.clone());
-            // check.sh reads this line.
-            log!("browser: command bar reopens archived {archived}");
             if !self.host.restore_archived(archived, cx) {
                 return self.go_to(&url, cx);
             }
