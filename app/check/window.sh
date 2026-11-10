@@ -1114,6 +1114,16 @@ rest_cpu() {
   from=$(cpu)
   sleep 4 # the window measured
   set -- $from $(cpu)
+  # Probe: the main thread's stack, five times, after the measure.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    command -v gdb > /dev/null || sudo apt-get install -y -q gdb > /dev/null 2>&1 || true
+    main=$(pgrep -f -- "$procs" | while read -r p; do tr '\0' '\n' < "/proc/$p/cmdline" | grep -q '^--type=' || echo "$p"; done | head -1)
+    for i in 1 2 3 4 5; do
+      echo "probe: stack $i of $main"
+      sudo gdb -p "$main" -batch -nx -ex 'thread 1' -ex 'bt 40' 2> /dev/null | grep '^#' | cut -c1-220 | sed 's/^/probe:   /'
+      sleep 0.3 # between samples
+    done
+  fi
   probe_procs > "$out/rest-after.txt"
   # Probe: each process's CPU in the 4 s, over 0.05 s.
   awk 'NR == FNR { t[$1] = $2; next } ($2 - t[$1]) > 0.05 { printf "probe: rest cpu %.2f s pid %s %s\n", $2 - t[$1], $1, $3 }' \
