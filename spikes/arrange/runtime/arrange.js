@@ -158,13 +158,37 @@
     s.applied = false;
   }
 
+  // What the user is looking at stays still across the runtime's own changes. The browser's
+  // scroll anchoring does it when an element above the view leaves the flow, but not when it comes
+  // back, since changing its position suppresses the adjustment: Wikipedia's view jumped 195 px on
+  // a preview taken away. So an element in view that no change touches is held where it was, and
+  // a preview taken away scrolls back by exactly what it scrolled.
+  function viewAnchor() {
+    const touched = [];
+    for (const s of live) touched.push(s.el, s.ref, ...(s.keepers || []));
+    for (const fy of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]) for (const fx of [0.5, 0.3, 0.7]) {
+      const el = document.elementFromPoint(innerWidth * fx, innerHeight * fy);
+      if (!el || el === document.documentElement || el === document.body) continue;
+      if (touched.some((m) => m && (m.contains(el) || el.contains(m)))) continue;
+      return { el, top: el.getBoundingClientRect().top };
+    }
+    return null;
+  }
+  function holdView(a) {
+    if (!a || !a.el.isConnected) return;
+    const d = a.el.getBoundingClientRect().top - a.top;
+    if (Math.abs(d) >= 0.5) scrollBy(0, d);
+  }
+
   // The site's own layout comes back at once: every inline style the runtime set goes back.
   // Off until reapply: the size it changes would otherwise place everything again.
   let on = true;
   function reset() {
     on = false;
+    const a = viewAnchor();
     for (const s of live) unplace(s);
     for (const el of [...saved.keys()]) restore(el);
+    holdView(a);
   }
 
   function place(s) {
@@ -521,9 +545,13 @@
       live.push(s);
       const t = performance.now();
       resolveAll();
+      const a = viewAnchor();
       const mine = moved(s);
       for (const o of live) if (o !== s && !o.preview && !o.suspendedBy && moved(o).some((e) => mine.includes(e))) { unplace(o); o.suspendedBy = c.id; }
+      const y0 = scrollY;
       layoutAll('preview');
+      holdView(a);
+      s.scrolled = scrollY - y0;
       return { ms: performance.now() - t, applied: s.applied, why: s.why, fitMs: s.fitMs, waiting: live.filter((o) => o.suspendedBy === c.id).map((o) => o.c.id) };
     },
     // The drop: the preview becomes a placed change, and the changes it took over are gone.
@@ -548,11 +576,14 @@
       if (i < 0) return null;
       const s = live[i];
       const t = performance.now();
+      const y0 = scrollY;
       unplace(s);
       live.splice(i, 1);
       for (const o of live) if (o.suspendedBy === id) delete o.suspendedBy;
       // What's placed goes back where the page now puts it, without the preview.
       layoutAll('unpreview');
+      document.documentElement.getBoundingClientRect();
+      if (Math.abs(scrollY - (y0 - s.scrolled)) >= 0.5) scrollTo(scrollX, y0 - s.scrolled);
       return { ms: performance.now() - t };
     },
     state: () => live.map((s) => {
