@@ -72,3 +72,23 @@ public static extern bool SystemParametersInfoW(
       exit 1
     }'
 }
+# Copies the screen's pixels from ($1, $2) to ($3, $4) to the PNG $5: what Explorer draws, which no
+# capture of the app's windows takes, so only a check VM's runs copy its screen.
+screen_png() {
+  LEFT=$1 TOP=$2 RIGHT=$3 BOTTOM=$4 OUT="$(cygpath -w "$5")" powershell.exe -NoProfile \
+    -NonInteractive -Command 'Add-Type -AssemblyName System.Drawing
+      Add-Type -Namespace Check -Name Dpi -MemberDefinition @"
+[DllImport("user32.dll")]
+public static extern bool SetProcessDPIAware();
+"@
+      # The screen'"'"'s own pixels, as the driver gives them, at any scale.
+      [Check.Dpi]::SetProcessDPIAware() | Out-Null
+      $width = [int]$env:RIGHT - [int]$env:LEFT
+      $height = [int]$env:BOTTOM - [int]$env:TOP
+      $image = New-Object System.Drawing.Bitmap $width, $height
+      $graphics = [System.Drawing.Graphics]::FromImage($image)
+      $graphics.CopyFromScreen([int]$env:LEFT, [int]$env:TOP, 0, 0, $image.Size)
+      $graphics.Dispose()
+      $image.Save($env:OUT, [System.Drawing.Imaging.ImageFormat]::Png)
+      $image.Dispose()'
+}

@@ -53,7 +53,7 @@ fn look_values_come_from_the_token_file() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
     let mut used = vec![false; ALLOWED.len()];
-    for (file, text) in sources(&src) {
+    for (file, text) in sources(&src, false) {
         let lines: Vec<&str> = text.lines().collect();
         for (n, line) in lines.iter().enumerate() {
             // A file's tests come last, and their made-up colours aren't the look.
@@ -220,8 +220,141 @@ fn finds_colours_and_radii_but_not_tokens() {
     }
 }
 
-/// Every Rust file under `dir` but the test files, by its path from there.
-fn sources(dir: &Path) -> Vec<(String, String)> {
+/// A test that asserts a constant is a literal, as WIDTH is 765, fails on every design
+/// change and catches no behaviour (#2196). A relation between constants, or what a function
+/// answers, is a test.
+#[test]
+fn no_test_restates_a_constant() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for (file, text) in sources(&src, true) {
+        // Not the needle below, which is in quotes.
+        for (at, _) in text
+            .match_indices("assert_eq!(")
+            .filter(|(at, _)| !text[..*at].ends_with('"'))
+        {
+            if let [a, b, ..] = &macro_args(&text[at + "assert_eq!(".len()..])[..]
+                && restates(a, b)
+            {
+                let line = text[..at].matches('\n').count() + 1;
+                found.push(format!("{file}:{line}: {a} == {b}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "these tests restate a constant; test what it does instead:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn finds_a_constant_against_a_literal_but_not_a_relation() {
+    for (a, b) in [
+        ("WIDTH", "765."),
+        ("tooltip::DELAY", "Duration::from_millis(1600)"),
+        ("FADE_IN", "Duration::ZERO"),
+        ("CHIP + CHIP_GAP", "22."),
+        ("\"Docs\"", "NAME"),
+    ] {
+        assert!(restates(a, b), "{a} == {b}");
+    }
+    for (a, b) in [
+        ("menu::RADIUS", "radius::CONTROL + menu::PADDING"),
+        ("height(5)", "328.5"),
+        ("label(&tip)", "\"Docs\""),
+        ("DELAY / 2", "half"),
+        ("4.", "2. * 2."),
+    ] {
+        assert!(!restates(a, b), "{a} == {b}");
+    }
+}
+
+/// Whether one side is a literal and the other constants and literals alone.
+fn restates(a: &str, b: &str) -> bool {
+    matches!((constant(a), constant(b)), (Some(x), Some(y)) if x != y)
+}
+
+/// Whether `side` names a constant, if it's made of constants, literals and arithmetic alone.
+fn constant(side: &str) -> Option<bool> {
+    let screaming = |w: &str| {
+        w.len() > 1
+            && w.starts_with(|c: char| c.is_ascii_uppercase())
+            && w.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    };
+    let (mut rest, mut names) = (side, false);
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_whitespace() || "()+-*/".contains(c));
+        if rest.is_empty() {
+            return Some(names);
+        }
+        if let Some(after) = rest.strip_prefix('"') {
+            rest = &after[after.find('"')? + 1..];
+            continue;
+        }
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || "_:.".contains(c)))
+            .unwrap_or(rest.len());
+        let (word, after) = rest.split_at(end);
+        rest = after;
+        let mut path: Vec<&str> = word.split("::").collect();
+        let name = path.pop()?;
+        let literal = word.starts_with(|c: char| c.is_ascii_digit())
+            || ["true", "false", "Duration::ZERO"].contains(&word)
+            // Its argument comes next, as a word of its own.
+            || (["px", "Duration::from_millis", "Duration::from_secs", "Duration::from_secs_f32"]
+                .contains(&word)
+                && rest.starts_with('('));
+        if literal {
+            continue;
+        }
+        if !screaming(name)
+            || path
+                .iter()
+                .any(|m| m.is_empty() || m.contains(char::is_uppercase))
+        {
+            return None;
+        }
+        names = true;
+    }
+}
+
+/// The arguments of the macro call whose text starts after its `(`, split at its top-level commas.
+fn macro_args(text: &str) -> Vec<String> {
+    let (mut args, mut arg, mut depth, mut chars) = (Vec::new(), String::new(), 0, text.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth == 0 => break,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(std::mem::take(&mut arg).trim().to_string());
+                continue;
+            }
+            '"' => {
+                arg.push(c);
+                while let Some(c) = chars.next() {
+                    arg.push(c);
+                    match c {
+                        '\\' => arg.extend(chars.next()),
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        arg.push(c);
+    }
+    args.push(arg.trim().to_string());
+    args.retain(|a| !a.is_empty());
+    args
+}
+
+/// Every Rust file under `dir`, by its path from there, with the test files or without.
+fn sources(dir: &Path, tests: bool) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut dirs = vec![dir.to_path_buf()];
     while let Some(at) = dirs.pop() {
@@ -229,7 +362,9 @@ fn sources(dir: &Path) -> Vec<(String, String)> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 dirs.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") && !path.ends_with("tests.rs") {
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && (tests || !path.ends_with("tests.rs"))
+            {
                 let file = path
                     .strip_prefix(dir)
                     .unwrap()

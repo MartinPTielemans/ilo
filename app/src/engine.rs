@@ -292,10 +292,15 @@ impl Browser for Engine {
         let action = match action {
             MediaAction::Play => bc::BC_MEDIA_PLAY,
             MediaAction::Pause => bc::BC_MEDIA_PAUSE,
+            MediaAction::Previous => bc::BC_MEDIA_PREVIOUS,
             MediaAction::Next => bc::BC_MEDIA_NEXT,
             MediaAction::PictureInPicture => bc::BC_MEDIA_PICTURE_IN_PICTURE,
         };
         unsafe { bc::bc_tab_media(tab, action as i32) };
+    }
+
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }
 
     fn cast(&self, tab: u64, _: &mut App) {
@@ -989,6 +994,28 @@ impl Browser for Engine {
         bar_picks_host::folder(profile)
     }
 
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        boosts_host::load(profile, cx);
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, _: &mut App) {
+        boosts_host::show(changes);
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        // check.sh reads this line.
+        log!("browser: zap {tab} {}", if on { "on" } else { "off" });
+        unsafe { bc::bc_tab_boost_zap(tab, on) };
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::edit_file(path);
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::show_file(path);
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         bar_picks_host::sessions(profile)
     }
@@ -1197,12 +1224,11 @@ impl Browser for Engine {
     }
 
     fn set_appearance(&self, appearance: Appearance, _: &mut App) {
-        settings::save_appearance(appearance);
         give_host_appearance(appearance);
     }
 
     fn keep_lone_header(&self, kept: bool, _: &mut App) {
-        settings::save_lone_header(kept);
+        unsafe { bc::bc_set_space_header(kept) };
     }
 
     fn page_moving(&self, moving: bool, _: &mut App) {

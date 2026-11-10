@@ -1,12 +1,13 @@
 # What a device chooses to sync besides the Spaces (#1235), on an ilo-server of the run's own
 # (ilo-server.sh), each device a copy of the app with a profile of its own. A adds uBlock Origin
-# Lite from the Chrome Web Store, as the store run does, then signs in first, which starts with Also
-# sync's Settings and Extensions on, and turns Little ilo off. B recovers with A's words and takes
-# both by itself: Little ilo's setting, and the extension, which it installs from the store. B
-# turns Settings off, and the core takes it. It needs the network and Google's store, so it runs
-# only when named: ./check.sh sync-extensions. On Linux under Xvfb, on Windows, where each copy's
-# window takes the foreground from the other's as the run drives it, as sync-devices' do, and on the
-# Mac, where each copy activates itself as it starts.
+# Lite from the Chrome Web Store, as the store run does, and picks View › Appearance › Dark, then
+# signs in first, which starts with Also sync's Settings and Extensions on, and turns Little ilo
+# off. B recovers with A's words and takes them by itself: Dark, which its windows draw in, Little
+# ilo's setting, and the extension, which it installs from the store. B turns Settings off, and the
+# core takes it. It needs the network and Google's store, so it runs only when named:
+# ./check.sh sync-extensions. On Linux under Xvfb, on Windows, where each copy's window takes the
+# foreground from the other's as the run drives it, as sync-devices' do, and on the Mac, where each
+# copy activates itself as it starts.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-extensions. It needs ILO_SERVER, an ilo-server built from its repo," \
@@ -41,6 +42,9 @@ expect '^browser: dialog takes input$' "A's install dialog never took input"
 send key return
 expect '^browser: dialog confirmed$' "return didn't confirm adding the extension on A"
 await "^browser: extensions menu.* $store_id" || fail "A didn't add the store's extension"
+# Dark goes up with A's settings as A signs in first.
+send menu "Appearance › Dark"
+expect '^browser: appearance dark$' "View › Appearance › Dark didn't change A's appearance"
 
 open_sign_in
 sign_in first
@@ -83,6 +87,9 @@ await '^browser: account syncs settings true extensions true$' ||
   fail "B, signed in, didn't start syncing its settings and extensions"
 await 'browser: sync settings took little_windows off$' ||
   fail "B didn't take Little ilo's setting: $(grep 'sync settings took' "$log" | tr '\n' ' ')"
+await 'browser: sync settings took appearance 2$' ||
+  fail "B didn't take A's appearance: $(grep 'sync settings took' "$log" | tr '\n' ' ')"
+await '^browser: appearance followed dark$' || fail "B's windows didn't take A's appearance"
 # Sync asks the store for the extension, as an update check would, and installs it.
 installed=
 for _ in $(seq 1200); do
@@ -124,7 +131,8 @@ quit
 kill "$ilo_server" 2>/dev/null || true
 ilo_server=
 echo "ok: A, signed in first, synced its settings and extensions; B, recovered with A's words," \
-  "took A's Little ilo setting and installed the extension A added from the Web Store, by itself;" \
+  "took A's Dark and Little ilo setting and installed the extension A added from the Web Store," \
+  "by itself;" \
   "and B's core took turning Settings off. On a local ilo-server as $email." \
   "Windows: $out/sync-extensions-a.png, $out/sync-extensions-b.png," \
   "$out/sync-extensions-b-off.png"
