@@ -255,14 +255,12 @@ exited() {
   [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
-# What the runs that trace record: tabs, and perf's traced leg. Unset, it's latency, Chrome's tab
-# switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for a
-# breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
-# trace input. More than latency fills the trace's buffer early in a long run, so then it keeps
-# the run's last part, where perf's switches are.
+# What the runs that trace record: tabs, and perf's traced switches. Unset, it's latency, Chrome's
+# tab switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for
+# a breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
+# trace input. More than latency fills tabs' trace before its run ends, which tabs then says; perf
+# traces only its switches, through DevTools, so its buffer holds them all.
 trace_categories=${CHECK_TRACE_CATEGORIES:-latency}
-trace_mode=
-[ "$trace_categories" = latency ] || trace_mode=--trace-startup-record-mode=record-continuously
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
 # user logs out. On Windows each browser window is asked to close, as its close button does, and
 # Chromium quits with its last one: taskkill without /F closed one of two (#1017). On Linux SIGINT

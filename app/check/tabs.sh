@@ -70,8 +70,7 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
-# shellcheck disable=SC2086 # the record mode, or nothing
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
+BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" \
   --enable-tracing-format=json --trace-startup-file="$trace" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -1523,6 +1522,10 @@ chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
 [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
+# With more than latency, the trace's buffer fills before the run ends, and the switches after are
+# left out of it, which perf's traced switches aren't.
+[ "$trace_categories" = latency ] || chrome_ms="$chrome_ms, $(echo "$spans" | wc -l |
+  tr -d ' ') switches in the trace, which keeps only what its buffer held with $trace_categories"
 # A tab that let go of its page, unseen 2 hours, gets its page back once shown with its
 # sessionStorage, where a site keeps its sign-in, as Chrome's discarded tabs keep theirs (#1934).
 # Its cookies are its profile's, so only the storage could go.
