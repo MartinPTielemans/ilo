@@ -652,7 +652,7 @@ impl Shell {
                 self.hover_fill(Row::Tab(tab)).unwrap_or(0.),
             ),
         };
-        self.window_fill_at(0.05).blend(fill)
+        self.window_fill_at(0.3).blend(fill)
     }
 
     /// Whether `tab` can become a favorite of the Space shown, or is one already, below the most
