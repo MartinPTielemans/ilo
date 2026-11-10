@@ -349,3 +349,52 @@ fn a_page_hides_its_own_and_generic_selectors_and_runs_its_scriptlets() {
     assert_eq!(other["hide"], serde_json::json!(["[data-ad]"]));
     assert_eq!(other["script"], "");
 }
+
+#[test]
+fn a_pages_procedural_filters_run_isolated_and_a_plain_style_is_a_rule() {
+    let folder = folder("procedural");
+    let filters = "news.example##.post:has-text(Sponsored)\nnews.example##.x:style(height: 0 !important)\n\
+                   news.example##.y:remove()\nnews.example##.ad:upward(2):style(opacity: 0)\n\
+                   news.example##.z:others()\n";
+    let engine = compile(&setup(&folder, filters));
+    let answer: serde_json::Value =
+        serde_json::from_str(&page(&engine, "https://news.example/today")).unwrap();
+    let styles = answer["styles"].as_array().unwrap();
+    assert!(
+        styles.contains(&serde_json::json!([".x", "height: 0 !important"])),
+        "{styles:?}"
+    );
+    // The upward one's style, by the attribute its script gives what it finds.
+    assert_eq!(styles.len(), 2, "{styles:?}");
+    let styled = styles
+        .iter()
+        .find(|style| style[1] == "opacity: 0")
+        .unwrap()[0]
+        .as_str()
+        .unwrap();
+    let hidden = answer["hide"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    for name in [hidden, styled] {
+        assert!(name.starts_with("[x") && name.ends_with(']'), "{name}");
+    }
+    assert_ne!(hidden, styled);
+    let script = answer["isolated"].as_str().unwrap();
+    assert!(script.contains("const compileProceduralSelector = "));
+    for part in ["\"has-text\"", "\"Sponsored\"", "\"upward\"", "\"remove\""] {
+        assert!(script.contains(part), "{part} in the script");
+    }
+    assert!(script.contains(&styled[1..styled.len() - 1]));
+    assert!(script.contains(&hidden[1..hidden.len() - 1]));
+    // The plain style needs no script.
+    assert!(!script.contains("height: 0"));
+    // Another site has none of them.
+    let other: serde_json::Value =
+        serde_json::from_str(&page(&engine, "https://other.example/")).unwrap();
+    assert_eq!(other["styles"], serde_json::json!([]));
+    assert_eq!(other["isolated"], "");
+}

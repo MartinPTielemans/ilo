@@ -320,8 +320,9 @@ pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
 }
 
 /// What the page at `url` hides and runs from the start, as bc_host's ad_block_page writes it: a
-/// JSON object of its "hide" selectors, its "procedural" filters, the "exceptions" to generic
-/// hiding, its scriptlets' "script", and whether "generic" hiding applies.
+/// JSON object of its "hide" selectors, its "styles", each a selector and the declarations for
+/// it, the "exceptions" to generic hiding, its scriptlets' "script", the "isolated" one that runs
+/// its procedural filters, and whether "generic" hiding applies.
 pub fn page(engine: &Engine, url: &str) -> String {
     let resources = engine.rules.url_cosmetic_resources(url);
     let sorted = |set: std::collections::HashSet<String>| {
@@ -329,14 +330,100 @@ pub fn page(engine: &Engine, url: &str) -> String {
         all.sort();
         all
     };
+    let mut hide = sorted(resources.hide_selectors);
+    let procedural = Procedural::of(&sorted(resources.procedural_actions));
+    hide.extend(procedural.hide);
     serde_json::json!({
-        "hide": sorted(resources.hide_selectors),
-        "procedural": sorted(resources.procedural_actions),
+        "hide": hide,
+        "styles": procedural.styles,
         "exceptions": sorted(resources.exceptions),
         "script": wrapped(&resources.injected_script),
+        "isolated": procedural.script,
         "generic": !resources.generichide,
     })
     .to_string()
+}
+
+/// procedural.js and procedural_run.js, which match a page's procedural filters and act on what
+/// they find.
+const PROCEDURAL: &str = concat!(
+    include_str!("ad_block/procedural.js"),
+    "\n",
+    include_str!("ad_block/procedural_run.js")
+);
+
+/// What a page's procedural filters need: the selectors its user style sheet hides, the styles it
+/// gives, each a selector and its declarations, and the script that finds the elements, for the
+/// isolated world.
+#[derive(Default)]
+struct Procedural {
+    hide: Vec<String>,
+    styles: Vec<(String, String)>,
+    script: String,
+}
+
+impl Procedural {
+    /// Of `filters`, adblock-rust's procedural actions, each a JSON object of a "selector" and its
+    /// "action". One that only styles a plain selector, as `.ad:style(height: 0)` does, is a rule
+    /// of the style sheet, as uBlock Origin makes it, and needs no script.
+    fn of(filters: &[String]) -> Self {
+        let mut procedural = Self::default();
+        let mut scripted = Vec::new();
+        // Names of the page's own, so a page can't hide its elements from them, nor find them out.
+        let names = std::hash::BuildHasher::hash_one(
+            &std::collections::hash_map::RandomState::new(),
+            filters,
+        );
+        let name = |n: usize| format!("{}{n}", letters(names));
+        let mut styled = serde_json::Map::new();
+        for filter in filters {
+            let Ok(filter) = serde_json::from_str::<serde_json::Value>(filter) else {
+                continue;
+            };
+            let style = (filter["action"]["type"] == "style")
+                .then(|| filter["action"]["arg"].as_str())
+                .flatten();
+            let plain = match filter["selector"].as_array().map(Vec::as_slice) {
+                Some([only]) if only["type"] == "css-selector" => only["arg"].as_str(),
+                _ => None,
+            };
+            if let (Some(style), Some(plain)) = (style, plain) {
+                procedural
+                    .styles
+                    .push((plain.to_string(), style.to_string()));
+                continue;
+            }
+            if let Some(style) = style.filter(|style| !styled.contains_key(*style)) {
+                let attribute = name(styled.len() + 1);
+                procedural
+                    .styles
+                    .push((format!("[{attribute}]"), style.to_string()));
+                styled.insert(style.to_string(), attribute.into());
+            }
+            scripted.push(filter);
+        }
+        if !scripted.is_empty() {
+            let hidden = name(0);
+            procedural.hide.push(format!("[{hidden}]"));
+            procedural.script = format!(
+                "(() => {{\n'use strict';\n{PROCEDURAL}\nrun({}, {}, {});\n}})();\n",
+                serde_json::Value::from(scripted),
+                serde_json::Value::from(hidden),
+                serde_json::Value::from(styled),
+            );
+        }
+        procedural
+    }
+}
+
+/// `seed` as lowercase letters, an attribute name no page has.
+fn letters(mut seed: u64) -> String {
+    let mut out = String::from("x");
+    for _ in 0..8 {
+        out.push(char::from(b'a' + (seed % 26) as u8));
+        seed /= 26;
+    }
+    out
 }
 
 /// The page's scriptlets, `script`, in a scope of their own with the globals they share, as uBlock
@@ -363,8 +450,8 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
 
 /// What `compile` makes of the same lists: one more each time it reads them differently, so an
 /// engine the last compile made isn't loaded. 2: bare hostnames anchored. 3: pop-ups' filters apart,
-/// the file the two engines, the first's length before it.
-const COMPILED: u32 = 3;
+/// the file the two engines, the first's length before it. 4: procedural filters read as such.
+const COMPILED: u32 = 4;
 
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
 /// a list, the filters, adblock-rust's version or COMPILED names another.
