@@ -45,7 +45,7 @@ The most common defect is a change that works on the path you tested and is miss
 - **Platforms.** Mac ships first, but the core compiles on Linux (`engine/check-linux.sh`) and per-OS code stays in the platform layer. A PR touching it (`app/platform/`, `host.h`) or what the OS draws (window material, overlay corners and shadows, window controls, key routing, IME, scaling) shows before and after on each OS.
 - **Hot paths.** A change to tab switch, new tab, the command bar or launch comes with before-and-after numbers against the performance gate.
 - **The look.** A visual change goes through `app/design/tokens.toml`, and the design file follows with `tools/design-sync.md`.
-- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates `docs/roadmap.md`.
+- **Docs.** A changed decision rewrites `docs/decisions.md`. Parity and roadmap ticks go in a daily ticks PR; name rows on `Parity:`.
 - **Reverse states.** If you added a way in, add the way out and the way to see it. A one-way door is a bug: a permission an agent can be granted needs a revoke and a place where it's listed.
 
 ## Dev
@@ -62,7 +62,7 @@ The most common defect is a change that works on the path you tested and is miss
 - `cargo test --release --lib` in `app/` runs the UI's tests in under a second, without the engine. A test drives a GPUI view as the user does, on a host recording what it asks of the core, so logic the UI decides, such as the command bar's keys, is tested there, and `check.sh` keeps what needs the engine: pages, focus, windows, the core's answers.
 - Name the exact checks you ran. For the app that's `./build.sh && ./check.sh`, naming the runs if not all, then a look at the captures.
 - For UI, the proof is the running app. Launch it, wait for the event that marks the milestone (a check that needs a fixed sleep to pass is wrong), capture the window with `tools/window-screenshot.sh`, and look at the image before saying it works. The owner is often away from the Mac, so your capture is the proof they get.
-- Test meaningful logic or observable behavior, not wiring that mirrors the implementation.
+- Test behavior and relations, not wiring, pixels or copy; spec values come from tokens.
 
 ## Commits and pull requests
 

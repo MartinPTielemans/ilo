@@ -37,3 +37,6 @@ jobs:
           sudo chown "$USER" /mnt/work
 
       - run: engine/check-linux.sh /mnt/work
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: ci-core_linux

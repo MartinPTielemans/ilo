@@ -48,17 +48,22 @@ env:
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
-    webrtc tab-drag count ranking
+    webrtc tab-drag count ranking everyday hosts policies translate
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
-    favorites cards extensions adblock adblock-lists private little capture passwords preview
-    access dialogs crash import quit onboarding passkeys appearance about sync sync-account
+    favorites cards extensions adblock adblock-lists private little capture passwords preview access
+    dialogs crash import quit onboarding passkeys appearance about sync sync-account sync-devices
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
+    window windows
+    media
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
+    scripting: AppleScript is the Mac's alone
+    filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
@@ -225,8 +230,11 @@ jobs:
         with:
           packages: flatpak flatpak-builder ostree xdg-desktop-portal
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -240,6 +248,15 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh && ./build.sh
 
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit ilo's sync was last checked against, in the leg that has them.
@@ -251,8 +268,10 @@ jobs:
           ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
           path: app/.deps/ilo-server
 
-      - if: ${{ steps.server.outcome == 'success' }}
-        uses: actions/cache@v4
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
         with:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
@@ -262,6 +281,12 @@ jobs:
         run: |
           cargo build --release --locked
           echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
       # which stays plugged in for the job: in the leg that has it.
@@ -367,6 +392,31 @@ jobs:
           fi
           printf 'ime\t%s\n' "$result" | tee -a "$RESULTS"
 
+      # A run that failed and left Crashpad's dump in its folder (check/lib.sh) crashed, and the dump's
+      # frames in the app can be named only from this build's libBrowser.so, which the job throws
+      # away (#2223): its symbol table goes in the leg's artifact then, and only then.
+      - name: Symbols
+        if: ${{ !cancelled() && steps.engine.outputs.found == 'true' }}
+        env:
+          SESSION: ${{ matrix.session }}
+          RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+        run: |
+          out=$RUNNER_TEMP/check
+          where=
+          [ "$SESSION" != wayland ] || where=wayland/
+          crashed=
+          if [ -f "$RESULTS" ]; then
+            while IFS="$(printf '\t')" read -r run result; do
+              case $result in failed*) ;; *) continue ;; esac
+              ! find "$out/$where$run" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
+            done < "$RESULTS"
+          fi
+          [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
+          mkdir -p "$out/symbols"
+          objcopy --only-keep-debug target/release/libBrowser.so "$out/symbols/libBrowser.so.debug"
+          id=$(readelf -n target/release/libBrowser.so | sed -n 's/^ *Build ID: //p')
+          echo "::warning::$crashed crashed: libBrowser.so's symbols, build id $id, are in symbols/ in the artifact. addr2line -f -C -e libBrowser.so.debug names a frame's offset."
+
       # The check job puts the legs' files back together as one check-linux artifact.
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
         uses: actions/upload-artifact@v4
@@ -398,9 +448,12 @@ jobs:
     outputs:
       found: ${{ steps.engine.outputs.found }}
     steps:
+      # With app/check, whose quarantine.linux the verdict reads.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
 
       - if: ${{ github.run_attempt != '1' }}
         env:
@@ -460,6 +513,16 @@ jobs:
             [ "$4" = 1 ] || name="$name $3/$4"
             echo "not run: $name didn't finish"
           }
+          # A failed run fails the check, with an error, unless its failure is quarantined (#2197).
+          failure() { # <session> <run> <result> <error>
+            if issue=$(sh app/check/quarantine.sh match linux "$2" "$1" "${3#*): }"); then
+              result="quarantined, $issue: $3"
+              echo "::warning::$4 Quarantined under $issue."
+            else
+              failed=1
+              echo "::error::$4"
+            fi
+          }
           # A run with no result fails the check, with an error once for its leg.
           unfinished=
           unfinished() {
@@ -504,7 +567,7 @@ jobs:
                 result=$(result "$session" "$run")
                 case $result in
                 passed*) ;;
-                failed*) failed=1; echo "::error::The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
+                failed*) failure "$session" "$run" "$result" "The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
                 *) unfinished "$result" ;;
                 esac
               else
@@ -521,7 +584,7 @@ jobs:
               result=$(result ime drops)
               case $result in
               passed) ;;
-              failed*) failed=1; echo "::error::Drops under Wayland failed. Its log: drops.log in the artifact." ;;
+              failed*) failure "" drops "$result" "Drops under Wayland failed. Its log: drops.log in the artifact." ;;
               *) unfinished "$result" ;;
               esac
               printf '\nUnder Wayland, in a headless sway session: check/drops.sh %s.\n' "$result" |
@@ -533,7 +596,7 @@ jobs:
               result=$(result ime ime)
               case $result in
               passed) ;;
-              failed*) failed=1; echo "::error::Input methods failed. Its log: ime.log in the artifact." ;;
+              failed*) failure "" ime "$result" "Input methods failed. Its log: ime.log in the artifact." ;;
               *) unfinished "$result" ;;
               esac
               printf '\nOn Wayland and Xwayland, in headless sway sessions with fcitx5: check/ime.sh %s.\n' \
@@ -541,6 +604,7 @@ jobs:
               ;;
             esac
           fi
+          { echo; sh app/check/quarantine.sh list linux; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
       # The legs' files, together as one job's were: X11's at the top, Wayland's in wayland/.
@@ -565,9 +629,12 @@ jobs:
       checks: read
       issues: write
     steps:
+      # With app/check, whose quarantine keeps a quarantined run's issue open.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.check.result }}

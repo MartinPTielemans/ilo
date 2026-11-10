@@ -411,6 +411,20 @@ expect '^browser: command select-space via wheel$' "a wheel's tick across the si
 expect "^browser: space $first in " "a wheel's tick across the sidebar didn't show the first Space"
 expect_tabs "$a" "$a" "after a wheel's tick showed the first Space"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
+# A mouse's side buttons over the sidebar show the next Space and the previous, as Arc's (#688).
+# Windows' driver can't press them yet (drive.cc).
+if windows; then
+  echo "skip: side buttons over the sidebar: the Windows driver can't press them yet."
+else
+  send sideclick $swipe_point forward
+  expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
+  expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
+  send sideclick $swipe_point back
+  expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
+  expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
+  expect_tabs "$a" "$a" "after the back side button showed the first Space"
+  expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
+fi
 # Past the first Space is the Library. Held partway it shows beside the page, and let go short of
 # halfway it goes back. A flick brings it out and one the other way puts it back, and so do a
 # wheel's ticks.
@@ -456,9 +470,9 @@ library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
 # Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is the third of five, with
-# Agents (#1080) last, 100 apart and centred 5 above the window's middle, 56 in.
-send click 56 $((${content#*x} / 2 - 5))
+# leave the page less than 56, as Arc 1.171's. The section's button is the third of six, with
+# Agents (#1080) and Boosts (#695) last, 100 apart and centred 5 above the window's middle, 56 in.
+send click 56 $((${content#*x} / 2 - 55))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
 spaces_wide=$((216 + 264 * 2))
 [ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))

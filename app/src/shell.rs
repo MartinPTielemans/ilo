@@ -43,6 +43,7 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+mod boost;
 mod browser;
 mod card_strip;
 mod cast;
@@ -140,7 +141,7 @@ pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -1731,6 +1732,15 @@ pub struct Shell {
     translate_card: Option<u64>,
     translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose Boost card is open, the tab whose page Zap is on, and where the card was drawn
+    /// last, which the log says when it changes (boost.rs).
+    boost_card: Option<u64>,
+    /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
+    boost_pending: Option<u64>,
+    zapping: Option<u64>,
+    boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Library › Boosts' list, the window's profile's, read as it's shown.
+    boost_list: Vec<crate::boosts::Boost>,
     /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
     /// card and its swatches were drawn last (portrait.rs).
     portrait_card: Option<(u64, crate::capture::portrait::Background)>,
@@ -2084,6 +2094,11 @@ impl Shell {
             portrait_card_drawn: Rc::default(),
             portrait_swatches_drawn: Default::default(),
             translate_mark_drawn: Rc::default(),
+            boost_card: None,
+            boost_pending: None,
+            zapping: None,
+            boost_card_drawn: Rc::default(),
+            boost_list: Vec::new(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -3219,6 +3234,9 @@ impl Shell {
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
+        if self.boost_pending.take() == Some(tab) {
+            self.open_boost(cx);
+        }
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
         }
@@ -3420,6 +3438,10 @@ impl Shell {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
+        if page.volume != entry.page.volume {
+            // check.sh waits for this line.
+            log!("browser: page {tab} volume {:.2}", page.volume.0);
+        }
         let capture = |page: &Page| [page.camera, page.microphone, page.sharing, page.shared];
         if capture(&page) != capture(&entry.page) {
             let [camera, microphone, sharing, shared] = capture(&page).map(flag);
@@ -3441,6 +3463,7 @@ impl Shell {
             (
                 page.media,
                 page.media_playing,
+                page.media_previous,
                 page.media_next,
                 pip,
                 page.media_title.clone(),
@@ -3450,9 +3473,10 @@ impl Shell {
         if media_changed {
             // check.sh waits for this line.
             log!(
-                "browser: page {tab} media {} playing {} next {} pip {} {}",
+                "browser: page {tab} media {} playing {} previous {} next {} pip {} {}",
                 flag(page.media),
                 flag(page.media_playing),
+                flag(page.media_previous),
                 flag(page.media_next),
                 flag(page.media_picture_in_picture),
                 page.media_title
@@ -3482,10 +3506,16 @@ impl Shell {
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
         let card_changed = carded(&page) != carded(&entry.page);
+        // A load that finished, or a URL that changed with none under way, as a same-page one does:
+        // the page differs from its picture in the window it left.
+        let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
             self.card_changed(tab, cx);
+        }
+        if page_changed {
+            self.picture_page_changed(tab, cx);
         }
         // An untitled tab is named by its URL.
         if changed && tab == self.selected {
@@ -4565,6 +4595,7 @@ impl Shell {
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
                     .children(self.translate_card(cx))
+                    .children(self.boost_card(cx))
                     .children(self.portrait_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))

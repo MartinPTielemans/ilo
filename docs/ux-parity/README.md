@@ -2,7 +2,7 @@
 
 One row per item in [ux-spec.md](../ux-spec.md). The spec holds the full rule and wins when the two disagree; change both in the same commit. When an Arc capture replaces a value, change the row's target and source.
 
-- Tick an item only when the running app matches its target, checked against a capture of our window (AGENTS.md › Verifying).
+- Only the integrator's daily `docs/parity-ticks-<date>` PR ticks a row, or changes the roadmap's counts, and only once the running app matches its target, checked against a capture of our window (AGENTS.md › Verifying), with the run that proved it. A feature's PR names the rows it completes on its `Parity:` line and keeps its new rows and measured values (#2204).
 - **Phase.** MVP is Phase 3, 4 is Phase 4, and later is anything not yet on the roadmap.
 - **Target.** "measure" means there's no number yet; the item is in the spec's Arc capture plan.
 - **Source.** The spec's source tags: `D›` is Ardia's `dia-spec.md`, `P§` its `dia-feature-parity.md`, `O` its `omnibox-ux.md`.
@@ -32,6 +32,7 @@ One file per area, so lanes working on different areas edit different files. A n
 - [DevTools](devtools.md)
 - [Developer Mode](developer-mode.md)
 - [Capture](capture.md)
+- [Boosts](boosts.md)
 - [Import](import.md)
 - [Updates](updates.md)
 - [Keyboard](keyboard.md)

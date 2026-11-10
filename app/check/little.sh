@@ -348,6 +348,40 @@ if [ "$(uname)" = Darwin ]; then
   # The driver numbers windows in the order they were made, the closed ones too.
   send window "$(grep -c '^browser: window opened ' "$log")"
   ../tools/window-screenshot.sh "$pid" "$out/little-dock.png" all || fail "no window to capture"
+  # Brought back from another desktop: the main window in full screen is a desktop of its own,
+  # which the Little ilo window left on the first isn't on, and Show All brings it over the full
+  # screen, rather than the user back to the desktop it was left on.
+  little_window=$(grep -c '^browser: window opened ' "$log")
+  # Waits until the desktop shown has the browser windows $1 and not those of $2, by number.
+  desktop_shows() {
+    for _ in $(seq 50); do
+      send desktop
+      shown="$(grep '^browser: desktop shown' "$log" | tail -1 | sed 's/^browser: desktop shown//') "
+      missing=
+      for each in $1; do case "$shown" in *" window $each "*) ;; *) missing=1 ;; esac; done
+      for each in $2; do case "$shown" in *" window $each "*) missing=1 ;; esac; done
+      [ -z "$missing" ] && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  send window 1
+  send fullscreen
+  expect '^browser: window entered full screen$' "the main window didn't go full screen"
+  desktop_shows 1 "$little_window" ||
+    fail "the full-screen desktop didn't show the main window alone:$shown"
+  send dock Hide All Little ilo Windows
+  expect "^browser: dock hid little windows $little\$" "Hide All didn't hide it over full screen"
+  send dock Show All Little ilo Windows
+  expect "^browser: dock showed little windows $little\$" "Show All didn't show it over full screen"
+  desktop_shows "1 $little_window" ||
+    fail "Show All didn't bring the Little ilo window over the full-screen window:$shown"
+  send window "$little_window"
+  ../tools/window-screenshot.sh "$pid" "$out/little-brought-back.png" all || fail "no window to capture"
+  send window 1
+  send fullscreen
+  expect '^browser: window left full screen$' "the main window didn't leave full screen"
+  send window "$little_window"
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Dock's Little ilo window"
   send window 1
@@ -376,10 +410,28 @@ if [ "$(uname)" = Darwin ] || windows; then
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
   expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
-  # Windows' icon is Explorer's to draw, where no capture of ours can take it.
   if [ "$(uname)" = Darwin ]; then
     send statusitem capture "$out/little-menu-bar.png"
     expect '^browser: status item captured ' "the menu bar's button didn't draw itself to capture"
+  elif [ -n "${GITHUB_ACTIONS:-}" ]; then
+    # Windows' icon is Explorer's to draw, where no capture of ours can take it, so a check VM's
+    # run copies the notification area off its screen, which shows every icon (check-windows.yml),
+    # as it shows ilo's for a user who's dragged it out of the overflow. Explorer places it a
+    # moment after it's added.
+    tries=0
+    until send statusitem place
+      placed=$(grep '^browser: status item ' "$log" | tail -1)
+      [ "${placed#browser: status item at }" != "$placed" ] || [ $tries -ge 50 ]; do
+      tries=$((tries + 1))
+    done
+    # The icon's left, top, right and bottom, then the area's.
+    set -- $(echo "${placed#browser: status item at }" | sed 's/[^-0-9 ]//g')
+    [ "${placed#browser: status item at }" != "$placed" ] && [ $# = 8 ] ||
+      fail "Explorer didn't place the notification area's icon: $placed"
+    { [ "$1" -ge "$5" ] && [ "$2" -ge "$6" ] && [ "$3" -le "$7" ] && [ "$4" -le "$8" ]; } ||
+      fail "Explorer drew the icon outside the notification area, in its overflow: $placed"
+    screen_png "$5" "$6" "$7" "$8" "$out/little-notification-area.png" ||
+      fail "PowerShell didn't copy the notification area off the screen"
   fi
   send statusitem click
   expect "^browser: $place opened little window [0-9]*\$" "the $place's button didn't open a Little ilo window"
@@ -908,4 +960,4 @@ if [ "$(uname)" = Linux ]; then
   exec 3>&-
   quit
 fi
-echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window live, its text, its music playing and its Developer Mode kept, and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, and on the Mac $out/little-full-screen.png $out/little-dock.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."
+echo "ok: ⌥⌘N opens a Little ilo window for the Space shown, ⌘L opens the command bar inside it and loads a URL in it, its chevron opens the Spaces menu under it, ⌘O moves its page to the main window live, its text, its music playing and its Developer Mode kept, and closes it, ⌥⌘-click on a link opens it in one and not beside the page, a tab a Little ilo window's page opens goes to its Space's Today and outlives it, ⌘W closes one, and so does an unused escape, each opens at the size the last closed at, the first 900 × 640, and on the Mac one grows in, from its middle for ⌥⌘N and from the pointer for a click, and opens over the main window in full screen, the Dock's menu opens one and hides and shows them all, Show All bringing one left on another desktop over the main window in full screen, and the menu bar's button opens one once Settings turns it on. ⌥⌘-click on a Today tab's row moves the tab into one, live. Closing one archives its tab, ⇧⌘T reopens it in a new one, and the Library's Filter lists Little ilo's alone. One left unused past its time, which the run makes 4 s, closes into the archive, and one that's the active window doesn't. One takes its Space's look as it changes, light and dark, and its bar ends a long title in an ellipsis. Closed by ⌘W or an unused escape over another app's window, one leaves that window in front and its app active, the main window behind it. A page in one goes full screen there, and its escape brings it back without closing the window. On Linux the desktop entry's New Little ilo Window action opens one, launching the browser. Windows: $out/little-bar.png $out/little.png $out/little-spaces.png $out/little-moved.png $out/little-link.png $out/little-archive.png $out/little-light.png $out/little-dark.png $out/little-over-other-app.png $out/little-gave-way-w.png $out/little-gave-way-escape.png $out/little-page-fullscreen.png, on a Windows check VM $out/little-notification-area.png, and on the Mac $out/little-full-screen.png $out/little-dock.png $out/little-brought-back.png, recorded in $out/little-open.mp4 $out/little-click-open.mp4 A sign-in pop-up a page in one opens comes up as a Little ilo window of its own over it, at the size it asked, and gives the keyboard back as it closes."

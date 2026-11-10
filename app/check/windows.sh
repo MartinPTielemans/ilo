@@ -609,7 +609,10 @@ fi
 # one let go where nothing takes it. ⌘Z after the drop on the list puts it back too. On Windows the
 # driver carries the app's drag itself, as Windows' own waits for the real pointer (#1583). The
 # windows sit side by side, their lists in the open: Xvfb's screen is 1280 wide, the Macs' 1920.
-if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
+# Under Wayland the row's drag is the data device's, which the driver's pointer carries all the way
+# between windows, so the tab-drag run checks it there with no stand-in.
+x11() { [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ]; }
+if [ "$(uname)" = Darwin ] || windows || x11; then
   case $(uname) in
   Linux) left=10 right=640 wide=620 ;;
   *) left=20 right=960 wide=900 ;;
@@ -720,6 +723,8 @@ if [ "$(uname)" = Darwin ] || windows || [ "$(uname)" = Linux ]; then
   expect "^browser: window closed $sixth\$" "⇧⌘W didn't close the window the tab was dragged to"
   send window 1
   dragged_out=", a tab's row dragged out of its window moves its page live to the other window's list, or let go where nothing takes it to a window of its own under the pointer, which ⌘Z closes, sending it back"
+elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "skip: a tab's row dragged out of its window: under Wayland the tab-drag run checks it."
 else
   echo "skip: a tab's row dragged out of its window: this system has no drag of a tab (#1798)."
 fi

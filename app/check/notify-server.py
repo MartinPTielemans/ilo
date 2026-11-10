@@ -5,7 +5,9 @@
 # prints "ready" once it has the name, and "notify <id> <summary>" for each notification, then
 # "body <id> <body>" and "hints <id> <names>", and a
 # line "click <id>" on stdin sends ActionInvoked for it with the default action, as a desktop's
-# server does when the user clicks one. It answers with the capabilities Chromium needs to use it.
+# server does when the user clicks one. "click <id> <token>" sends ActivationToken with the
+# activation token first, as a desktop's does under Wayland, where a window comes forward only with
+# one. It answers with the capabilities Chromium needs to use it.
 import sys
 
 from gi.repository import Gio, GLib
@@ -26,6 +28,7 @@ INTERFACE = """<node><interface name="org.freedesktop.Notifications">
 </method>
 <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
 <signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
+<signal name="ActivationToken"><arg type="u"/><arg type="s"/></signal>
 </interface></node>"""
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -61,7 +64,10 @@ def command(source, condition):
         loop.quit()
         return False
     words = line.split()
-    if len(words) == 2 and words[0] == "click":
+    if len(words) in (2, 3) and words[0] == "click":
+        if len(words) == 3:
+            bus.emit_signal(None, PATH, NAME, "ActivationToken",
+                            GLib.Variant("(us)", (int(words[1]), words[2])))
         bus.emit_signal(None, PATH, NAME, "ActionInvoked",
                         GLib.Variant("(us)", (int(words[1]), "default")))
         say(f"clicked {words[1]}")
