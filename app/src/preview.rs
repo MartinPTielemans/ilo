@@ -2124,6 +2124,49 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // Memory (#2324): "sourdough hydration" finds a page by its title, a search typed before,
+        // and two pages whose titles don't say it, by their words; with the ask, before Memory is
+        // on, it finds no page at all.
+        "memory-row" | "memory-row-selected" => (
+            MEMORY_QUERY,
+            vec![
+                search(MEMORY_QUERY),
+                Suggestion {
+                    removable: true,
+                    ..page(
+                        "Sourdough Hydration, Explained",
+                        "bakeschool.org",
+                        "https://bakeschool.org/sourdough/hydration",
+                        0,
+                    )
+                },
+                Suggestion {
+                    removable: true,
+                    ..search("sourdough hydration calculator")
+                },
+                memory_row(
+                    "Open Crumb Loaf, Day 3",
+                    "loafandlevain.com",
+                    "https://loafandlevain.com/2026/03/open-crumb-day-3",
+                    "…raise the hydration to 78% once your sourdough starter doubles in four \
+                     hours, then fold every half hour…",
+                ),
+                memory_row(
+                    "Grandma's rye, written down",
+                    "kitchenjournal.net",
+                    "https://kitchenjournal.net/grandmas-rye",
+                    "…about 65% hydration, stiffer than any sourdough I had made before…",
+                ),
+            ],
+        ),
+        "memory-ask" => (
+            MEMORY_QUERY,
+            vec![
+                search(MEMORY_QUERY),
+                search("sourdough hydration calculator"),
+                search("sourdough hydration chart"),
+            ],
+        ),
         "sites" => (
             "wik",
             vec![
@@ -2175,9 +2218,18 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
         ),
     };
     let rows_shown = rows.len();
+    let asking = mode == "memory-ask";
+    let ask = if asking {
+        command_bar::memory::ask_height()
+    } else {
+        0.
+    };
     let bounds = Bounds::new(
         at,
-        size(px(command_bar::WIDTH), px(command_bar::height(rows_shown))),
+        size(
+            px(command_bar::WIDTH),
+            px(command_bar::height(rows_shown) + ask),
+        ),
     );
     if command_bar::open_at(Rc::new(PreviewBar), bounds, true, cx).is_none() {
         return;
@@ -2216,6 +2268,43 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
     for (url, favicon) in favicons {
         command_bar::page_favicon(&url, favicon, cx);
     }
+    if mode.starts_with("memory-") {
+        command_bar::memory::typed(cx);
+    }
+    if asking {
+        command_bar::memory::ask(cx);
+    }
+    // The first of Memory's rows, as ↓ ↓ ↓ selects it.
+    if mode == "memory-row-selected" {
+        command_bar::memory::select(3, cx);
+    }
+}
+
+/// What the Memory mocks type (#2324).
+const MEMORY_QUERY: &str = "sourdough hydration";
+
+/// A page from history Memory found by its `words`, the words of what's typed in them marked.
+fn memory_row(title: &str, host: &str, url: &str, words: &str) -> Suggestion {
+    let lower = words.to_lowercase();
+    let mut matched: Vec<std::ops::Range<usize>> = MEMORY_QUERY
+        .split_whitespace()
+        .flat_map(|word| {
+            lower
+                .match_indices(word)
+                .map(|(at, found)| at..at + found.len())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    matched.sort_by_key(|range| range.start);
+    Suggestion {
+        url: url.into(),
+        text: title.to_string().into(),
+        detail: host.to_string().into(),
+        removable: true,
+        words: words.to_string().into(),
+        matched,
+        ..Suggestion::default()
+    }
 }
 
 fn main() {
@@ -2238,6 +2327,14 @@ fn main() {
             let account = std::env::var("PREVIEW_ACCOUNT").ok();
             if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
                 preview_account(state, cx);
+                return;
+            }
+            // PREVIEW_MEMORY=row shows ⌘T finding pages by their words for "sourdough hydration",
+            // =row-selected with the first of them selected, =ask the one-time ask at the panel's
+            // foot, and =settings Settings › Features at Memory, alone (#2324, the spike's mocks).
+            let memory = std::env::var("PREVIEW_MEMORY").ok();
+            if memory.as_deref() == Some("settings") {
+                preview_memory_settings(cx);
                 return;
             }
             // PREVIEW_SIZE=<width>x<height> opens the window at that size.
@@ -2657,7 +2754,8 @@ fn main() {
             }
             // PREVIEW_BAR=tabs, sites or commands shows the command bar over the window, with made-up
             // suggestions.
-            if let Ok(mode) = std::env::var("PREVIEW_BAR") {
+            let bar = std::env::var("PREVIEW_BAR").ok();
+            if let Some(mode) = bar.or(memory.map(|memory| format!("memory-{memory}"))) {
                 let left = x + (width - command_bar::WIDTH as f64) / 2.;
                 let top = y as f32 + command_bar::centered_top(height as f32);
                 let at = point(px(left as f32), px(top));
@@ -3288,6 +3386,321 @@ impl gpui::Render for AccountPage {
             .child(column)
             .child(card)
             .children(dialog::cover(&self.dialog, cx))
+    }
+}
+
+/// Settings › Features alone, scrolled to Memory, in a window of Settings' size, drawn with
+/// Settings' own column, card and rows, as the account's is (#2324, the spike's mock). Settings'
+/// page is the main binary's, so the preview lays its page out again here, as Settings does.
+fn preview_memory_settings(cx: &mut App) {
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let (width, height) = std::env::var("PREVIEW_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.parse().ok()?, height.parse().ok()?))
+        })
+        .unwrap_or((WIDTH, HEIGHT));
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(width as f64, height as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(width), px(height)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    // Scrolled so Memory's group is at the card's top, as a search for it leaves it, with the
+    // sites kept out under it; PREVIEW_SCROLL moves it.
+    let scroll: f32 = std::env::var("PREVIEW_SCROLL")
+        .ok()
+        .and_then(|scroll| scroll.parse().ok())
+        .unwrap_or(MEMORY_SCROLL);
+    let opened = cx.open_window(options, |window, cx| {
+        let page = cx.new(|cx| {
+            let look = browser::settings_rows::Look::settings(preview_tone() != Some(Tone::Light));
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            MemoryPage {
+                card: Card::default(),
+                search,
+            }
+        });
+        let scrolled = page.clone();
+        window.on_next_frame(move |_, cx| {
+            scrolled.update(cx, |page, cx| {
+                page.card.scroll.set_offset(point(px(0.), px(-scroll)));
+                cx.notify();
+            });
+        });
+        page
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open Settings' window: {error}");
+    }
+}
+
+/// How far down Features' card Memory's group starts, less the held title's room.
+const MEMORY_SCROLL: f32 = 525.;
+
+/// Settings › Features with Memory's rows under the other features.
+struct MemoryPage {
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+}
+
+impl MemoryPage {
+    /// The page as Settings' `page` lays it out: the section's name in the display face, its
+    /// sentence, and its groups, each spaced by what's before it.
+    fn page(&self, look: &browser::settings_rows::Look, dark: bool, cx: &mut App) -> gpui::Div {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_rows::{
+            button, end, frame, glyph_plate, group, group_lined, icon_button, popup, switch, text,
+        };
+        use browser::tokens::settings::{
+            ADD_X, BUTTONS_TOP, DETAIL, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+            HEADING_BOTTOM, HEADING_TOP, LEDE_LINE, LEDE_TOP, PAGE_WIDTH, POPUP_WIDTH, ROW_X,
+            TEXT_X, TITLE,
+        };
+        use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
+        use gpui::prelude::FluentBuilder;
+        use gpui::{
+            AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, Styled, div,
+            rgb,
+        };
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let off_the_mac = shell::OFF_THE_MAC;
+        let on = |name: &'static str| {
+            div()
+                .id(name)
+                .child(switch(look, true, 1., look.accent))
+                .into_any_element()
+        };
+        let plain =
+            |id: &'static str, title: &'static str| button(look, id, title).into_any_element();
+        let row = |name: &str, line: Option<&str>, controls: Vec<AnyElement>| {
+            frame()
+                .child(text(
+                    look,
+                    name.to_string(),
+                    line.map(|line| line.to_string().into()),
+                ))
+                .when(!controls.is_empty(), |row| row.child(end(controls)))
+        };
+        let feature = |glyph: &'static str, name: &str, line: &str, controls: Vec<AnyElement>| {
+            frame()
+                .child(glyph_plate(look, glyph, true))
+                .child(text(look, name.to_string(), Some(line.to_string().into())))
+                .child(end(controls))
+        };
+        // A feature's own settings start where its name does, their hairlines too.
+        let nested_x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let nested = |row: gpui::Div| (row.pl(px(nested_x)), nested_x);
+        let (little_keys, little_click, peek_click) = match off_the_mac {
+            true => ("Ctrl+Alt+N", "Ctrl+Alt-click", "Shift-click"),
+            false => ("⌥⌘N", "⌥⌘-click", "⇧-click"),
+        };
+        let little = vec![
+            (
+                feature(
+                    "icons/app-window.svg",
+                    concat!("Little ", env!("APP_NAME")),
+                    &format!(
+                        "A small window for a quick look: {little_keys}, {little_click} a link, \
+                         or a link from another app."
+                    ),
+                    vec![on("little")],
+                ),
+                ROW_X,
+            ),
+            nested(row(
+                "Archive windows left unused after",
+                Some("Counted from when you leave the window."),
+                vec![popup(look, "12 hours", POPUP_WIDTH, false).into_any_element()],
+            )),
+        ];
+        let peek = feature(
+            "icons/eye.svg",
+            "Peek",
+            &format!(
+                "Links from pinned tabs and favorites open in a preview, and so do {peek_click} \
+                 on any link and a click on an archived tab."
+            ),
+            vec![on("peek")],
+        );
+        let mini_player = feature(
+            "icons/picture-in-picture-2.svg",
+            "Mini Player",
+            "A playing video or call floats over your work when you leave its tab.",
+            vec![on("mini-player")],
+        );
+        let boosts = feature(
+            "icons/paintbrush.svg",
+            "Boosts",
+            "Your CSS and Zap on the sites you boost. New Boost in the command bar makes one.",
+            vec![on("boosts")],
+        );
+        let note = feature(
+            "icons/pencil.svg",
+            "New Note",
+            "New Note opens a new document in the service you pick.",
+            vec![popup(look, browser::notes::SERVICES[0].1, POPUP_WIDTH, false).into_any_element()],
+        );
+        // Memory: the feature and its switch, its pause, and what it keeps with the ways to
+        // forget it; then the sites it keeps nothing of, the automatic ones saying why.
+        let bar_keys = shell::keystroke_label("cmd-t");
+        let memory = vec![
+            (
+                feature(
+                    command_bar::memory::GLYPH,
+                    "Memory",
+                    &format!(
+                        "{bar_keys} finds pages you read by their words. Kept on this device, \
+                         encrypted, never synced. Agents can't read it."
+                    ),
+                    vec![on("memory")],
+                ),
+                ROW_X,
+            ),
+            nested(row(
+                "Pause",
+                Some(&format!(
+                    "Nothing new is kept until you resume. {bar_keys} still finds what's kept."
+                )),
+                vec![plain("memory-pause", "Pause")],
+            )),
+            nested(row(
+                "1,284 pages from 212 sites",
+                Some("Clearing history clears them too."),
+                vec![
+                    plain("memory-forget-site", "Forget a Site…"),
+                    plain("memory-forget-all", "Forget Everything…"),
+                ],
+            )),
+        ];
+        let remove = |id: &'static str| plain(id, "Remove");
+        let kept_out = group(
+            look,
+            [
+                // What's never kept whatever the list says, and what joins it by itself and what
+                // doesn't, wrapped as a row's line is.
+                frame().child(div().flex_1().min_w_0().text_color(look.detail).child(
+                    "Never kept: private windows, password and payment fields, and pages that \
+                     ask not to be kept. Sites that say they're a bank, insurer or medical site, \
+                     or are on .bank or .insurance, join this list by themselves. Others, health \
+                     reading on general sites too, are kept until you add them.",
+                )),
+                row(
+                    "northwind.bank",
+                    Some("Kept out by itself: it's on .bank."),
+                    vec![remove("remove-northwind")],
+                ),
+                row(
+                    "harborcreditunion.com",
+                    Some("Kept out by itself: it said it's a bank."),
+                    vec![remove("remove-harbor")],
+                ),
+                row(
+                    "journal.sam.example",
+                    Some("You added it."),
+                    vec![remove("remove-journal")],
+                ),
+            ],
+        );
+        let add = icon_button(look, "add-kept-out", "icons/plus.svg").into_any_element();
+        let heading = "Kept out of Memory";
+        let heading = div()
+            .relative()
+            .child(self.card.mark(heading.into()))
+            .px(px(TEXT_X))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(look.heading)
+            .child(heading);
+        let title = shell::display_text("Features", TITLE_SIZE, TITLE_LINE, cx)
+            .text_color(base.opacity(TITLE));
+        let lede = div()
+            .mt(px(LEDE_TOP))
+            .line_height(px(LEDE_LINE))
+            .text_color(base.opacity(DETAIL))
+            .child(concat!(
+                env!("APP_NAME"),
+                "'s own tools. Off takes every way into one away, and its switch brings it back."
+            ));
+        let one = |row: gpui::Div| group_lined(look, [(row, ROW_X)]);
+        div()
+            .w_full()
+            .max_w(px(PAGE_WIDTH))
+            .flex()
+            .flex_col()
+            .child(div().px(px(TEXT_X)).child(title).child(lede))
+            .child(group_lined(look, little).mt(px(FIRST_GROUP)))
+            .child(one(peek).mt(px(GROUP_GAP)))
+            .child(one(mini_player).mt(px(GROUP_GAP)))
+            .child(one(boosts).mt(px(GROUP_GAP)))
+            .child(one(note).mt(px(GROUP_GAP)))
+            .child(group_lined(look, memory).mt(px(GROUP_GAP)))
+            .child(heading.mt(px(HEADING_TOP)))
+            .child(kept_out.mt(px(HEADING_BOTTOM)))
+            .child(div().mt(px(BUTTONS_TOP)).ml(px(ADD_X)).flex().child(add))
+    }
+}
+
+impl gpui::Render for MemoryPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::Look;
+        use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
+        use browser::tokens::settings::NAME;
+        use browser::tokens::text;
+        use gpui::{ParentElement, Styled, div, rgb};
+        // Dark, as Settings is in a dark system, unless PREVIEW_APPEARANCE=light.
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let field = browser::settings_search::field(
+            &self.search,
+            base,
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let column = settings_column::column(
+            Section::Features,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            window.is_a11y_active(),
+        );
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let page = self.page(&look, dark, cx);
+        let card = self.card.draw(Section::Features.name(), page, dark, colors);
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
     }
 }
 

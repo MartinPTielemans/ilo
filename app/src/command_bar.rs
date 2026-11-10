@@ -25,6 +25,7 @@ use crate::{
 };
 
 mod calculator;
+pub mod memory;
 
 actions!(
     command_bar,
@@ -97,6 +98,7 @@ use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
 use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
+use crate::tokens::command_bar::WORDS_TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::text;
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
@@ -180,6 +182,11 @@ pub struct Suggestion {
     /// The account's other computer the page is open on, which the row names at its end, or
     /// empty (#1234).
     pub computer: SharedString,
+    /// The words of the page Memory found it by, in place of its host, which goes to the row's
+    /// end, and the spans of them that match what's typed (#2324, the spike's mock). Empty for
+    /// any other row.
+    pub words: SharedString,
+    pub matched: Vec<std::ops::Range<usize>>,
 }
 
 /// A tab open on one of the account's other computers, as sync last brought it (#1234).
@@ -325,6 +332,9 @@ impl Suggestion {
         }
         if let Some((section, _)) = &self.setting {
             return Icon::Glyph(section.glyph());
+        }
+        if !self.words.is_empty() {
+            return Icon::Glyph(memory::GLYPH);
         }
         match self.kind() {
             Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
@@ -646,6 +656,8 @@ pub struct CommandBar {
     /// only a message later, or the host reports the user left it. The host closes the window at a
     /// click outside it, before the click reaches the shell, so this stays set until that report.
     open: Cell<bool>,
+    /// Whether Memory's one-time ask shows at the panel's foot (#2324, the spike's mock).
+    memory_asking: bool,
 }
 
 struct CommandBarWindow(WindowHandle<CommandBar>);
@@ -768,6 +780,7 @@ pub fn open_at(
                 tipped: None,
                 remove_frame: Rc::default(),
                 open: Cell::new(false),
+                memory_asking: false,
             }
         })
     });
@@ -2887,6 +2900,9 @@ impl CommandBar {
     /// open it.
     fn spoken(&self, row: &Suggestion) -> String {
         let mut spoken = row.text.to_string();
+        if !row.words.is_empty() {
+            spoken = format!("{spoken}, {}", row.words);
+        }
         if !row.detail.is_empty() && !self.over_field {
             spoken = format!("{spoken}, {}", row.detail);
         }
@@ -3004,12 +3020,44 @@ impl CommandBar {
                     .min_w_0()
                     .flex()
                     .gap(px(3.))
-                    .child(div().min_w_0().truncate().child(row.text.clone()))
+                    .when(!row.words.is_empty(), |line| line.flex_1())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .when(!row.words.is_empty(), |title| {
+                                title.flex_none().max_w(px(WORDS_TITLE))
+                            })
+                            .child(row.text.clone()),
+                    )
+                    // Memory's words take the host's place, which goes to the row's end.
+                    .when(!row.words.is_empty(), |line| {
+                        let ground = match selected {
+                            true => Rgba::from(accent),
+                            false => palette.overlay,
+                        };
+                        line.child(memory::words(&row.words, &row.matched, title, dim, ground))
+                    })
                     // Over the URL field Arc's titles have no host after them.
-                    .when(!row.detail.is_empty() && !self.over_field, |line| {
-                        let detail = format!("— {}", row.detail);
-                        line.child(div().min_w_0().truncate().text_color(dim).child(detail))
-                    }),
+                    .when(
+                        !row.detail.is_empty() && !self.over_field && row.words.is_empty(),
+                        |line| {
+                            let detail = format!("— {}", row.detail);
+                            line.child(div().min_w_0().truncate().text_color(dim).child(detail))
+                        },
+                    ),
+            )
+            .when(
+                !row.words.is_empty() && !row.detail.is_empty() && row.tab == 0,
+                |line| {
+                    line.child(
+                        div()
+                            .flex_none()
+                            .ml(px(HINT_GAP))
+                            .text_color(dim)
+                            .child(row.detail.clone()),
+                    )
+                },
             )
             .when(row.tab != 0, |line| {
                 let action = match self.target {
@@ -3133,6 +3181,7 @@ impl Render for CommandBar {
             .map(|(index, row)| self.row(index, row, cx).into_any_element())
             .collect();
         let shown = rows.len().min(ROWS_SHOWN) as f32;
+        let rows_empty = rows.is_empty();
         let (radius, input_height, list_top) = match self.over_field {
             true => (FIELD_RADIUS, FIELD_INPUT, 0.),
             false => (RADIUS, HEIGHT, LIST_TOP),
@@ -3299,6 +3348,21 @@ impl Render for CommandBar {
                                 .children(rows),
                         )
                     })
+                    // Memory's ask, under a line as the input's, once the rows have their end.
+                    .when(
+                        self.memory_asking && !rows_empty && !self.over_field,
+                        |bar| {
+                            bar.child(
+                                div()
+                                    .mt(px(LIST_END))
+                                    .h(px(hairline))
+                                    .mx(px(LINE_INSET))
+                                    .flex_none()
+                                    .bg(palette.faint(LINE_COLOR)),
+                            )
+                            .child(self.memory_ask(cx))
+                        },
+                    )
                     .children(self.a11y.then(|| self.announcer()))
                     // The modal level's rim in the palette's ink; its outline and shadow are the
                     // host's, round the window.

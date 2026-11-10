@@ -194,6 +194,24 @@ chip = 0.08
 arrow-tile = 0.04
 # A command's keys, as chips.
 chip-radius = 6.0
+# Memory (#2324, the spike's mock). A row found by its page's words shows them in place of the
+# " — host", the words typed at the title's strength and the rest at `dim`, its title at most
+# `words-title` wide so the words show, and its host at the row's end.
+words-title = 280.0
+# The one-time ask, at the panel's foot under a line as the input's: `ask-height` tall, its glyph
+# on a command's tile in the rows' icon column `ask-y` down, its words in their title column on
+# `ask-line` lines, the question at `title` and what it keeps in Dia's secondary text, the bar's
+# measured rgba(239, 244, 255, 0.6) (docs/ux-spec.md › Command bar, Colours), and its two buttons
+# `ask-buttons-top` under the words at their end, `ask-button` tall, `ask-button-x` in, `ask-gap`
+# apart, as the offer's are.
+ask-height = 180.0
+ask-y = 16.0
+ask-line = 18.0
+ask-buttons-top = 10.0
+ask-button = 28.0
+ask-button-x = 12.0
+ask-gap = 8.0
+secondary = 0.6
 
 [command-bar.site-colors]
 # In the site searches a new profile has, the chip and the selected row are in the site's own
