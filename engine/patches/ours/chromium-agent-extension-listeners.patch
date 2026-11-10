@@ -1,0 +1,51 @@
+Keeps an agent's input from an extension's listeners (#2355): while Blink handles an input event
+that came through DevTools' Input domain, as the core's agent's clicks and keys do, it calls no
+listener an extension's content script added, for that event or the events it causes as it's
+handled, focus and click among them. The extension still hears the user's input, in an agent's
+tab at a handoff too. Needs chromium-agent-extension-nodes.patch, for the extension's world.
+
+--- a/third_party/blink/renderer/core/dom/events/event_target.cc
++++ b/third_party/blink/renderer/core/dom/events/event_target.cc
+@@ -36,6 +36,10 @@
+ 
+ #include "base/format_macros.h"
+ #include "base/time/time.h"
++// browser_core: for an agent's input.
++#include "third_party/blink/public/common/input/web_input_event.h"
++#include "third_party/blink/renderer/core/events/current_input_event.h"
++#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
+ #include "third_party/blink/renderer/bindings/core/v8/js_based_event_listener.h"
+ #include "third_party/blink/renderer/bindings/core/v8/js_event_listener.h"
+ #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
+@@ -1015,6 +1019,13 @@
+   return GetDispatchEventResult(event);
+ }
+ 
++// browser_core: whether the input event being handled, if any, came from
++// DevTools' Input domain, as an agent's does.
++static bool FromDebuggerInput() {
++  const WebInputEvent* input = CurrentInputEvent::Get();
++  return input && (input->GetModifiers() & WebInputEvent::kFromDebugger);
++}
++
+ // Fire event listeners, creates a copy of EventListenerVector on being called.
+ bool EventTarget::FireEventListeners(Event& event,
+                                      EventTargetData* d,
+@@ -1078,6 +1089,17 @@
+     }
+ 
+     EventListener* listener = registered_listener->Callback();
++    // browser_core: an agent's input, which comes through DevTools' Input
++    // domain, reaches no listener an extension's content script added, as an
++    // agent may not act on an extension's controls (//browser_core/
++    // agent_page.cc). Events the input causes as it's handled, focus and click
++    // among them, are its too. The extension still hears the user's.
++    if (FromDebuggerInput() && listener->IsJSBasedEventListener() &&
++        To<JSBasedEventListener>(listener)
++            ->GetWorldForInspector()
++            .IsExtensionWorld(context->GetAgentClusterID())) {
++      continue;
++    }
+     // The listener will be retained by Member<EventListener> in the
+     // registeredListener, i and size are updated with the firing event iterator
+     // in case the listener is removed from the listener vector below.
