@@ -320,8 +320,27 @@ changes() {
 # A tab the agent hands to the user is theirs: every tool on it is refused until they hand it back.
 if [ "$driven" = 1 ]; then
   cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
-  ask hand_off "{\"tab\":$own_tab,\"reason\":\"Sign in for the rules check\"}"
-  handed=$id
+  # From a second connection of the agent's: the server answers one connection's calls on a tab in
+  # order, so on the first the tries would wait behind the hand_off and never meet the rule. An
+  # agent may open as many as it likes.
+  rm -f "$out/rules-in2" "$out/rules-out2"
+  mkfifo "$out/rules-in2" "$out/rules-out2"
+  if windows; then
+    BROWSER_AGENT_TOKEN=$token windows_bridge "$bridge" "$socket" "$out/rules-in2" "$out/rules-out2" \
+      2>> "$out/rules-bridge.log" &
+  else
+    BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < "$out/rules-in2" > "$out/rules-out2" \
+      2>> "$out/rules-bridge.log" &
+  fi
+  second_pid=$!
+  exec 6> "$out/rules-in2" 7< "$out/rules-out2"
+  second_answer() {
+    perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&7
+  }
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"rules-second","version":"1"}}}' >&6
+  second_answer > /dev/null || fail "the browser didn't answer the second connection's initialize"
+  printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&6
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"hand_off\",\"arguments\":{\"tab\":$own_tab,\"reason\":\"Sign in for the rules check\"}}}" >&6
   await "^browser: agent mcp-client hands off $own_tab: Sign in for the rules check\$" ||
     fail "hand_off didn't hand the tab to the user"
   await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the handoff wasn't drawn"
@@ -338,8 +357,9 @@ if [ "$driven" = 1 ]; then
   refused request "{\"tab\":$own_tab,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me?rules-held\"}]}" \
     "request from the held tab" "$held"
   refused run_steps "{\"tab\":$own_tab,\"steps\":[{\"action\":\"snapshot\"}]}" "run_steps in the held tab" "$held"
-  grep -q "^GET [a-z]* localhost:$port/api/me?rules-held " "$out/site.log" &&
+  if grep -q "^GET [a-z]* localhost:$port/api/me?rules-held " "$out/site.log"; then
     missed "a request from the held tab reached the site"
+  fi
   # Last, as one that got through would take the tab away.
   for tool in remove_tab close_tab; do
     refused "$tool" "{\"tab\":$own_tab}" "$tool of the held tab" "$held"
@@ -351,8 +371,12 @@ CARD
   # Hand Back, at the left of the card's buttons.
   send click $((qx + 30)) $((qy + qh - 26))
   await "^browser: agent mcp-client handed back $own_tab\$" || fail "Hand Back didn't hand the tab back"
-  got=$(next_answer | answered "$handed")
+  got=$(second_answer | answered 2)
   case "$got" in "The user handed tab $own_tab back."*) ;; *) fail "hand_off answered: $got" ;; esac
+  exec 6>&-
+  for _ in $(seq 100); do kill -0 "$second_pid" 2> /dev/null || break; sleep 0.1; done
+  exec 7<&-
+  rm -f "$out/rules-in2" "$out/rules-out2"
 fi
 
 # The hostile pages. Their words are what a page would say to talk an agent round; the tries after
