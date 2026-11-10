@@ -141,7 +141,8 @@ void PictureOnWorker(bc_id tab, uint64_t request, base::OnceCallback<std::option
                                                base::BindOnce(&Pictured, tab, request));
 }
 
-// Copies the page's last frame, or with |wait| its next one when it has none yet.
+// Copies the page's last frame, or with |wait| and the page on screen its next one when it has
+// none yet.
 void CopyPage(base::WeakPtr<content::WebContents> contents,
               bc_id tab,
               uint64_t request,
@@ -172,7 +173,12 @@ void CopyPage(base::WeakPtr<content::WebContents> contents,
   // shows is out of every window, with no compositor at all, so it's held hidden in its tab's
   // window too.
   base::ScopedClosureRunner held;
-  if (!view->IsShowing()) {
+  const bool showing = view->IsShowing();
+  // Only a page on screen waits for its next frame. A hidden page held drawing that long can be
+  // the page a switch shows next: its frame for the copy then answers the switch's wait for one in
+  // the window, and the page it left goes before the new one is on screen (switch-frames, #2232).
+  wait = wait && showing;
+  if (!showing) {
     Window* window = Window::Holding(tab);
     held = platform::DrawUnseen(window ? window->widget() : nullptr, contents->GetNativeView());
   }
