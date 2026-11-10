@@ -49,6 +49,7 @@
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
+#include "browser_core/link_target.h"
 #include "browser_core/main_delegate.h"
 #include "browser_core/notes.h"
 #include "browser_core/page_dialog.h"
@@ -1751,6 +1752,10 @@ void bc_page_favicon(const char* url) {
   if (url) {
     browser_core::FindFavicon(url);
   }
+}
+
+size_t bc_url_site(const char* url, char* site, size_t capacity) {
+  return CopyString(browser_core::SiteOf(GURL(url ? url : "")), site, capacity);
 }
 
 void bc_window_suggest(bc_id window_id, const char* keyword, const char* text, bool complete) {

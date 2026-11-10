@@ -82,8 +82,8 @@ pub fn names(agent: &str) -> Vec<String> {
         .collect()
 }
 
-/// Pinning, as the user pins in the sidebar: an agent pins its own tabs, and unpins or removes
-/// only those it pinned.
+/// Pinning and sorting, as the user does in the sidebar: an agent pins its own tabs, unpins or
+/// removes only those it pinned, and sorts its own Today tabs by site.
 fn pin_tools() -> Vec<Value> {
     let tab = tab_schema();
     let tabs = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
@@ -112,6 +112,13 @@ fn pin_tools() -> Vec<Value> {
                 "destructiveHint": true,
                 "openWorldHint": false,
             },
+        }),
+        json!({
+            "name": "sort_tabs_by_site",
+            "title": "Sort tabs by site",
+            "description": "Sort your Space's Today tabs by site, as the user's Sort Today Tabs by Site does: each site's tabs come together at its first tab's place, in the order they were in. A site is a registrable domain, so docs.example.com and example.com are one. Pinned tabs, split views and pages off the web stay where they are, and nothing loads or closes. Answers with the new order.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": tabs,
         }),
     ]
 }
@@ -750,6 +757,12 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't look over",
             "a split view".to_string(),
         ),
+        "sort_tabs_by_site" => (
+            "Sorting",
+            "Sorted",
+            "Couldn't sort",
+            "its tabs by site".to_string(),
+        ),
         "hand_off" => (
             "Handing you",
             "Handed you",
@@ -812,7 +825,9 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "request" => "icons/arrow-left-right.svg",
         "wait" => "icons/clock.svg",
         "list_tabs" | "close_tab" | "remove_tab" | "hand_off" | "ask_for_tab" | "split_tabs"
-        | "add_to_split" | "separate_tab" | "list_split" => "icons/app-window.svg",
+        | "add_to_split" | "separate_tab" | "list_split" | "sort_tabs_by_site" => {
+            "icons/app-window.svg"
+        }
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "thought" => "icons/lightbulb.svg",
@@ -913,6 +928,7 @@ pub fn describe(action: &str) -> &'static str {
         "add_to_split" => "Added a tab to a split view",
         "separate_tab" => "Separated a tab from its split view",
         "list_split" => "Looked over a split view",
+        "sort_tabs_by_site" => "Sorted its tabs by site",
         "passkey" => "Handed you a tab for your passkey",
         "ask_for_tab" => "Asked for a tab back",
         "kept" => "You kept the tab",

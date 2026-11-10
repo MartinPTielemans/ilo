@@ -216,6 +216,31 @@ impl Browser for Made {
         }
     }
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::sort_by_site::made_up_site(url)
+    }
+
+    fn move_today(&self, tab: u64, index: usize, cx: &mut App) {
+        let panes = self.split(tab, cx);
+        let mut tabs = self.tabs.borrow_mut();
+        let Some(space) = tabs.iter().find(|each| each.0 == tab).map(|each| each.1) else {
+            return;
+        };
+        let moved: Vec<_> = (panes.iter())
+            .filter_map(|&pane| tabs.iter().find(|each| each.0 == pane).copied())
+            .collect();
+        tabs.retain(|each| !panes.contains(&each.0));
+        let pinned = self.pinned.borrow();
+        let today: Vec<usize> = (0..tabs.len())
+            .filter(|&at| tabs[at].1 == space && !pinned.contains(&tabs[at].0))
+            .collect();
+        let at = match today.get(index) {
+            Some(&at) => at,
+            None => today.last().map_or(tabs.len(), |&last| last + 1),
+        };
+        tabs.splice(at..at, moved);
+    }
+
     // As the core does: three tabs at most, of one Space, the tab leaving any split it was in.
     fn split_with(&self, tab: u64, with: u64, cx: &mut App) -> bool {
         let space = |tab| {
@@ -3038,6 +3063,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "pin_tab",
             "unpin_tab",
             "remove_tab",
+            "sort_tabs_by_site",
         ]
     );
 
@@ -3078,6 +3104,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
         ("remove_tab", tab(json!({}))),
+        ("sort_tabs_by_site", json!({})),
         ("split_tabs", json!({ "tabs": [20, 30] })),
         ("add_to_split", json!({ "tab": 30, "split": 20 })),
         ("list_split", tab(json!({}))),
@@ -5877,4 +5904,58 @@ mod sessions {
         assert_eq!(space(30), None);
         assert_eq!(space(31), Some(2));
     }
+}
+
+/// An agent sorts its own Space's Today tabs by site, by the user's command's rule (#2344): its
+/// pinned tab and its split stay where they are, the user's Space isn't touched, and it's one entry
+/// in the log. Sorted already, it says so and nothing moves. A task has no such tool.
+#[gpui::test]
+fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    browser.tabs.borrow_mut().extend([
+        (21, 2, "Wiki", "https://en.wikipedia.org/wiki/Rust"),
+        (22, 2, "Docs", "https://docs.example.com/"),
+        (23, 2, "Left", "https://news.ycombinator.com/"),
+        (24, 2, "Right", "https://example.org/"),
+        (25, 2, "More", "https://de.wikipedia.org/wiki/Arc"),
+        (26, 1, "Theirs", "https://www.example.com/b"),
+        (27, 2, "Pinned", "https://en.wikipedia.org/"),
+    ]);
+    browser.pinned.borrow_mut().insert(27);
+    browser.splits.borrow_mut().push(vec![23, 24]);
+    let sort = |cx: &mut TestAppContext| {
+        call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx)
+            .recv()
+            .unwrap()
+    };
+    let in_space = |space: u64| -> Vec<u64> {
+        (browser.tabs.borrow().iter())
+            .filter(|tab| tab.1 == space)
+            .map(|tab| tab.0)
+            .collect()
+    };
+    let users = in_space(1);
+    let answer = sort(cx);
+    assert_eq!(
+        answer,
+        ToolResult::text(
+            "Sorted your Today tabs by site, each site's tabs together at its first tab's place: \
+             20, 22, 21, 25, 23."
+        )
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    assert_eq!(in_space(1), users, "the user's Space stays as it was");
+    assert_eq!(
+        sort(cx),
+        ToolResult::text("Your Today tabs are together by site already.")
+    );
+    assert_eq!(in_space(2), [20, 22, 21, 25, 23, 24, 27]);
+    let logged: Vec<_> = (log(&agents, "claude-code", cx).into_iter())
+        .map(|(action, _, refused)| (action, refused))
+        .collect();
+    let sorted = ("sort_tabs_by_site".to_string(), String::new());
+    assert_eq!(logged[..2], [sorted.clone(), sorted]);
+    assert_eq!(tools::describe("sort_tabs_by_site"), "Sorted its tabs by site");
+    assert!(tools::names("claude-code").contains(&"sort_tabs_by_site".to_string()));
+    assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
 }

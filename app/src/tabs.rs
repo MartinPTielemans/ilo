@@ -85,6 +85,11 @@ pub(crate) fn url_for(
     (length > 0).then(|| String::from_utf8_lossy(&url).into_owned())
 }
 
+/// The site of the page at `url`, as the core gives it (bc_url_site), or None off the web.
+pub(crate) fn url_site(url: &str) -> Option<String> {
+    url_for(url, |url, site, capacity| unsafe { bc::bc_url_site(url, site, capacity) })
+}
+
 // The ⌃Tab walk and the file's drag were the user's in the window in front.
 pub(crate) extern "C" fn control_released() {
     update_window(front().0, |shell, cx| shell.control_released(cx));

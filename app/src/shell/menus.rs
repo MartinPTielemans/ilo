@@ -279,6 +279,36 @@ impl Shell {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let items = self.empty_space_items(space, cx);
+        self.show_menu(items, position, None, cx);
+    }
+
+    /// The menu a right-click on the line over Today shows: Today's own commands, then the
+    /// sidebar's empty space's menu (ours: Arc's divider has none recorded, #2344).
+    pub(super) fn divider_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let keys = user_keys(cx);
+        let command = |title, command| {
+            let entry = MenuEntry::new(title, self.offers(command)).shortcut(command, keys);
+            let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
+            (entry, action)
+        };
+        let mut items = vec![
+            command("Sort Today Tabs by Site", Command::SortBySite),
+            command("Clear Today", Command::Clear),
+            (MenuEntry::line(), Box::new(|_, _| {})),
+        ];
+        let after = items.len();
+        items.extend(
+            (self.empty_space_items(self.space, cx).into_iter()).map(|(entry, action)| {
+                let parent = entry.parent.map(|parent| parent + after);
+                (MenuEntry { parent, ..entry }, action)
+            }),
+        );
+        self.show_menu(items, position, None, cx);
+    }
+
+    /// The empty space's menu's items, for `space`.
+    fn empty_space_items(&self, space: u64, cx: &App) -> Vec<(MenuEntry, MenuAction)> {
         let new_tab = MenuEntry::new("New Tab", true).shortcut(Command::NewTab, user_keys(cx));
         let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
             new_tab,
@@ -311,7 +341,7 @@ impl Shell {
                     }),
             );
         }
-        self.show_menu(items, position, None, cx);
+        items
     }
 
     /// The Space's menu's items, for its name, its dot and the sidebar's empty space, in Arc

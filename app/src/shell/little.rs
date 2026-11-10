@@ -763,6 +763,7 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::RenameTab
                     | Command::RevealTab
                     | Command::Clear
+                    | Command::SortBySite
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
                     | Command::AddSplit

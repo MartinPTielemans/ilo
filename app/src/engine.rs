@@ -534,6 +534,10 @@ impl Browser for Engine {
         }
     }
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::url_site(url)
+    }
+
     fn day_starts(&self) -> [f64; 4] {
         let mut starts = [0.; 4];
         unsafe { platform::host_day_starts(starts.as_mut_ptr()) };

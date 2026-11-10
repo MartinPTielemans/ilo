@@ -16,7 +16,7 @@ use gpui::{
 use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, EMOJI_SIZE,
+    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, DIVIDER_HEIGHT, EMOJI_SIZE,
     FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, HOVERED, KeepName,
     LOADING_ROW_MIN, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
@@ -901,9 +901,12 @@ impl Shell {
         let new_tab = (self.layout().into_iter())
             .any(|(slot, top)| matches!(slot, Slot::NewTab) && (top..top + ROW_PITCH).contains(&y));
         if event.button == MouseButton::Right && tab.is_none() && !new_tab {
-            match y < NAME_HEIGHT && !self.name_row_hidden() {
-                true => self.space_menu(self.space, event.position, cx),
-                false => self.empty_space_menu(self.space, event.position, cx),
+            let divider = (self.layout().get(&Slot::Divider))
+                .is_some_and(|&top| (top..top + DIVIDER_HEIGHT).contains(&y));
+            match (divider, y < NAME_HEIGHT && !self.name_row_hidden()) {
+                (true, _) => self.divider_menu(event.position, cx),
+                (false, true) => self.space_menu(self.space, event.position, cx),
+                (false, false) => self.empty_space_menu(self.space, event.position, cx),
             }
             return true;
         }
@@ -1773,7 +1776,18 @@ impl Shell {
                     )
             })
         });
-        divider_box(&self.palette, self.hairline(), clear).top(px(self.slide(Slot::Divider)))
+        divider_box(&self.palette, self.hairline(), clear)
+            .top(px(self.slide(Slot::Divider)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                    // Not the empty space's menu, from the page under it.
+                    cx.stop_propagation();
+                    if shell.drag.is_none() && shell.renaming.is_none() {
+                        shell.divider_menu(event.position, cx);
+                    }
+                }),
+            )
     }
 
     /// The pointer has come onto Clear or left it: it lights up, and after a moment says what it

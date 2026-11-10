@@ -219,6 +219,7 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Reveal Tab in Sidebar", Keys::Of(Command::RevealTab)),
             ("Focus Sidebar", Keys::Of(Command::FocusSidebar)),
             ("Clear Today", Keys::Of(Command::Clear)),
+            ("Sort Today Tabs by Site", Keys::Of(Command::SortBySite)),
             (
                 "Reset all tabs in this Space",
                 Keys::Of(Command::ResetSpaceTabs),

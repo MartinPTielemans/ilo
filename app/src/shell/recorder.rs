@@ -776,6 +776,10 @@ impl Browser for Recorder {
 
     fn page_favicon(&self, _: &str, _: &mut App) {}
 
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::sort_by_site::made_up_site(url)
+    }
+
     fn day_starts(&self) -> [f64; 4] {
         Default::default()
     }

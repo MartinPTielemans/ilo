@@ -234,6 +234,14 @@ impl Browser for Core {
         unsafe { bc::bc_tab_set_pinned(tab, pinned) };
     }
 
+    fn move_today(&self, tab: u64, index: usize, _: &mut App) {
+        unsafe { bc::bc_tab_move(tab, false, 0, index) };
+    }
+
+    fn url_site(&self, url: &str) -> Option<String> {
+        crate::url_site(url)
+    }
+
     // The core has no call that removes a pinned tab, so it's the two the row's remove button
     // takes: unpinning, then closing it with its split.
     fn remove_pinned(&self, tab: u64, _: &mut App) {
