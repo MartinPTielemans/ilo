@@ -128,7 +128,28 @@
 - (void)letLeavingGo {
   for (NSView* page in self.leaving.allObjects) {
     if (page.superview == self) {
-      [page removeFromSuperview];
+      // #2248's tree, not for merge: the page left turns transparent at once and leaves the window
+      // 250 ms later, to tell a hole the removal makes from one the page shown leaves.
+      page.alphaValue = 0;
+      fprintf(stderr, "browser: switch hold %lu transparent at %.4f %p\n",
+              static_cast<unsigned long>(self.holds), base::Time::Now().InSecondsFSinceUnixEpoch(),
+              (__bridge void*)page);
+      __weak NSView* weak_page = page;
+      __weak BrowserCoreWindowView* weak_self = self;
+      const NSUInteger hold = self.holds;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), ^{
+                       NSView* left = weak_page;
+                       BrowserCoreWindowView* holder = weak_self;
+                       if (!left || left.superview != holder || left.alphaValue != 0 ||
+                           [holder.leaving containsObject:left]) {
+                         return;
+                       }
+                       fprintf(stderr, "browser: switch hold %lu removed at %.4f %p\n",
+                               static_cast<unsigned long>(hold),
+                               base::Time::Now().InSecondsFSinceUnixEpoch(), (__bridge void*)left);
+                       [left removeFromSuperview];
+                     });
     }
   }
   [self.leaving removeAllObjects];
@@ -554,8 +575,10 @@ void ShowPages(views::Widget* widget,
     record.page = page_view;
     record.devtools = devtools_view;
     Unhide(page_view, hidden);
+    page_view.alphaValue = 1;
     if (devtools_view) {
       Unhide(devtools_view, hidden);
+      devtools_view.alphaValue = 1;
       RoundCorners(devtools_view, corner_radius, kAllCorners);
       record.pageInDevTools = pane.devtools->page_frame.ToCGRect();
       RoundCorners(page_view, corner_radius,
@@ -592,6 +615,7 @@ void ShowPages(views::Widget* widget,
     record.page = panel_view;
     record.insets = insets(side_panel->frame);
     Unhide(panel_view, hidden);
+    panel_view.alphaValue = 1;
     RoundCorners(panel_view, corner_radius,
                  panel_view.isFlipped ? kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner
                                       : kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
