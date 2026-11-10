@@ -213,5 +213,39 @@ TEST_F(SpaceTest, ASpaceMovedTakesANewPlaceAndTheOthersKeepTheirs) {
   Space::Delete(play->id());
 }
 
+// Each Today tab is a node, as sync knows it, apart from the pinned tabs, and keeps its id pinned
+// and unpinned, so other devices move it rather than closing one and opening another (#2098). A
+// window's own Space isn't synced, so its tabs have none.
+TEST_F(SpaceTest, ATodayTabIsANodeOfItsOwnThatKeepsItsIdPinnedAndUnpinned) {
+  Fill();
+  work_->AddAt(20, 0);
+  work_->AddAt(21, 1);
+  work_->AddAt(22, 0);
+  ASSERT_EQ(work_->today(), (Rows{22, 20, 21}));
+  const Space::Node* top = work_->NodeOf(22);
+  ASSERT_TRUE(top && work_->NodeOf(20) && work_->NodeOf(21));
+  EXPECT_TRUE(top->position.LessThan(work_->NodeOf(20)->position));
+  EXPECT_TRUE(work_->NodeOf(20)->position.LessThan(work_->NodeOf(21)->position));
+  const base::Uuid id = work_->NodeOf(21)->id;
+  EXPECT_NE(id, work_->NodeOf(20)->id);
+
+  work_->Move(21, /*pinned=*/true, 0, 0, [](bc_id) { return Url(21); });
+  ASSERT_TRUE(work_->NodeOf(21));
+  EXPECT_EQ(work_->NodeOf(21)->id, id);
+  EXPECT_TRUE(work_->NodeOf(21)->position.LessThan(work_->NodeOf(1)->position));
+  work_->Move(21, /*pinned=*/false, 0, 0, [](bc_id) { return GURL(); });
+  ASSERT_TRUE(work_->NodeOf(21));
+  EXPECT_EQ(work_->NodeOf(21)->id, id);
+  EXPECT_TRUE(work_->NodeOf(21)->position.LessThan(work_->NodeOf(22)->position));
+
+  work_->Remove(20);
+  EXPECT_FALSE(work_->NodeOf(20));
+
+  Space* little = Space::CreateOwn("Default", Space::Own::kLittle);
+  little->AddAt(30, 0);
+  EXPECT_FALSE(little->NodeOf(30));
+  Space::Delete(little->id());
+}
+
 }  // namespace
 }  // namespace browser_core

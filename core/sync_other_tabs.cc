@@ -1,6 +1,7 @@
 #include "browser_core/sync_other_tabs.h"
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +14,8 @@
 #include "browser_core/host.h"
 #include "browser_core/other_tabs.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
+#include "browser_core/tab.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
@@ -71,23 +74,8 @@ class Watch : public syncer::DeviceInfoTracker::Observer, public ProfileObserver
     Report();
   }
 
- private:
-  friend class base::NoDestructor<Watch>;
-  Watch() = default;
-
-  void Stop() {
-    sessions_ = {};
-    devices_observation_.Reset();
-    profile_observation_.Reset();
-    profile_ = nullptr;
-  }
-
-  // syncer::DeviceInfoTracker::Observer: a computer's name or system came after its tabs.
-  void OnDeviceInfoChange() override { Report(); }
-
-  // ProfileObserver: its sync services go with it.
-  void OnProfileWillBeDestroyed(Profile* profile) override { Stop(); }
-
+  // Tells the app of the tabs as they are now, if they changed: another computer's, or the Spaces'
+  // here, which leave out those in them.
   void Report() {
     if (!profile_ || !Host().other_tabs_changed) {
       return;
@@ -121,6 +109,21 @@ class Watch : public syncer::DeviceInfoTracker::Observer, public ProfileObserver
       }
     }
     std::vector<OtherTab> tabs = OtherTabsOf(computers);
+    // The Spaces' Today and pinned tabs sync as the Spaces' own (#2098), so another computer's are
+    // in a Space here already, where the command bar lists them as this computer's. What it lists
+    // as another computer's is what's outside the Spaces there: a Little ilo window's or a Blank
+    // Window's tabs, and the favorites.
+    std::set<std::string> in_spaces;
+    for (Space* space : Space::All()) {
+      for (const std::vector<bc_id>* rows : {&space->pinned_rows(), &space->today()}) {
+        for (bc_id row : *rows) {
+          if (const Tab* tab = Tab::Get(row)) {
+            in_spaces.insert(tab->Url().spec());
+          }
+        }
+      }
+    }
+    std::erase_if(tabs, [&](const OtherTab& tab) { return in_spaces.contains(tab.url); });
     if (reported_ && tabs == tabs_) {
       return;
     }
@@ -138,6 +141,23 @@ class Watch : public syncer::DeviceInfoTracker::Observer, public ProfileObserver
                               listed.size());
   }
 
+ private:
+  friend class base::NoDestructor<Watch>;
+  Watch() = default;
+
+  void Stop() {
+    sessions_ = {};
+    devices_observation_.Reset();
+    profile_observation_.Reset();
+    profile_ = nullptr;
+  }
+
+  // syncer::DeviceInfoTracker::Observer: a computer's name or system came after its tabs.
+  void OnDeviceInfoChange() override { Report(); }
+
+  // ProfileObserver: its sync services go with it.
+  void OnProfileWillBeDestroyed(Profile* profile) override { Stop(); }
+
   raw_ptr<Profile> profile_ = nullptr;
   base::CallbackListSubscription sessions_;
   base::ScopedObservation<syncer::DeviceInfoTracker, syncer::DeviceInfoTracker::Observer>
@@ -152,6 +172,10 @@ class Watch : public syncer::DeviceInfoTracker::Observer, public ProfileObserver
 
 void WatchOtherTabs(Profile* profile) {
   Watch::Get().Start(profile);
+}
+
+void RefreshOtherTabs() {
+  Watch::Get().Report();
 }
 
 }  // namespace browser_core

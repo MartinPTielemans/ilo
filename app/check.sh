@@ -20,6 +20,8 @@
 # the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
 # tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
 # runs only when named, and skips elsewhere, where the windows run checks it.
+# Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
+# Linux under Xvfb, so it runs only when named too.
 # Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
 # so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
@@ -107,7 +109,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate pictures boosts"
-named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
