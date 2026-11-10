@@ -554,17 +554,24 @@ pub(crate) fn finish_opening(
     let Ok(shell) = window.entity(cx) else {
         return;
     };
+    browser::heap_count::start_logging();
+    // #2138, not for merge: the window without its overlays but the command bar, to measure them.
+    let skip = std::env::var_os("BROWSER_SKIP_OVERLAYS").is_some();
     let weak = shell.downgrade();
     let look = move |cx: &App| {
         let shell = weak.upgrade()?;
         Some((shell.read(cx).window_fill(), shell.read(cx).palette()))
     };
-    let prompt = offer::open(
-        id,
-        Rc::new(OfferHost { ui_view }),
-        move |cx| look(cx).unwrap_or_default(),
-        cx,
-    );
+    let prompt = if skip {
+        None
+    } else {
+        offer::open(
+            id,
+            Rc::new(OfferHost { ui_view }),
+            move |cx| look(cx).unwrap_or_default(),
+            cx,
+        )
+    };
     if let Some(view) = prompt.and_then(|prompt| prompt.update(cx, |_, w, _| ns_view(w)).ok()) {
         let (right, top) = (offer::RIGHT.into(), offer::TOP.into());
         unsafe { platform::host_add_offer(ui_view, view, right, top) };
@@ -590,6 +597,7 @@ pub(crate) fn finish_opening(
     ]
     .into_iter()
     .flatten()
+    .filter(|_| !skip)
     .collect();
     WINDOWS.with_borrow_mut(|windows| {
         if let Some(window) = windows.iter_mut().find(|window| window.id == id) {
@@ -653,6 +661,9 @@ pub(crate) fn finish_opening(
         let radius = command_bar::RADIUS.into();
         elevate(COMMAND_BAR, Level::Modal);
         unsafe { platform::host_add_overlay(COMMAND_BAR, view, radius, command_bar_dismissed) };
+    }
+    if skip {
+        return;
     }
     if let Some(picker) = icon_picker::open(Rc::new(PickerHost), recent_emoji(), cx)
         && let Ok(view) = picker.update(cx, |_, window, _| ns_view(window))
