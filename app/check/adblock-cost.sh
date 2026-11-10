@@ -5,9 +5,11 @@
 # loaded, and the memory of every process of the browser's after the last site, each with ad
 # blocking on and off. Numbers, not a pass or fail: a page's load over the internet moves from run to
 # run. It needs the network and the sites, so it runs only when named: ./check.sh adblock-cost.
-# It leaves adblock-parity/ and adblock-off/, with each pass's sites.tsv and memory.json.
+# It leaves adblock-parity/ and adblock-off/, with each pass's sites.tsv and memory.json, and no
+# pictures, which only adblock-parity takes.
 # Neither pass is held to another run's table: the off pass blocks nothing by design.
 ADBLOCK_PARITY_BASELINE=
+ADBLOCK_PARITY_NO_CAPTURE=1
 engine=ublock
 . check/adblock-parity.sh
 on=$dir

@@ -44,7 +44,9 @@ ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
 engine_switch=
 case $engine in ublock | off) ;; *) engine_switch=--ad-block-engine=$engine ;; esac
-start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html $engine_switch
+# A site's ask to show notifications or the like would hold the keyboard from the next ⌘L, so
+# Chrome answers each with no; without uBlock Origin's lists, sites' scripts ask (nypost.com).
+start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch
 await_load
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
@@ -112,11 +114,14 @@ while read -r url <&4; do
     sleep 0.1
   done
   echo "$started $url $loaded" >> "$starts"
-  # Ads load after the page does, from its scripts.
+  # Ads load after the page does, from its scripts. adblock-cost, whose two passes have to fit a
+  # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site.
+  [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] && continue
   sleep 8
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
 # The most memory a process took, in MB.
 peak() {
@@ -213,4 +218,6 @@ PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
 # uBlock Origin's, for adblock-native's to compare with in a check of its own.
 [ "$engine" != ublock ] || cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
-echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }with the window captured 8 s after each site loaded in $dir"
+captured="with the window captured 8 s after each site loaded in $dir"
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || captured="its sites in $dir"
+echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }$captured"
