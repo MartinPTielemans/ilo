@@ -8,15 +8,23 @@
 //! A private window shows its profile's Boosts but makes none, as it keeps nothing, and an agent's
 //! Space offers none: a Boost is the user's own view of their pages (principle 3, decision 8).
 
-use gpui::{Context, FontWeight, KeyBinding, actions, div, prelude::*, px};
+use std::rc::Rc;
+
+use gpui::{Context, FontWeight, KeyBinding, actions, div, point, prelude::*, px};
 
 use super::{
     KEY_CONTEXT, Shell, TITLE,
     commands::Command,
     permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
 };
-use crate::boosts;
 use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
+use crate::tokens::shell::{URL_FIELD_HEIGHT, URL_FIELD_TOP};
+use crate::{
+    boost_editor::{self, Request},
+    boosts,
+    palette::{Palette, Tone},
+    theme_picker::At,
+};
 
 actions!(boost, [Escape]);
 
@@ -146,11 +154,90 @@ impl Shell {
         cx.notify();
     }
 
+    /// Customize…: the editor without code, beside the sidebar, its arrow at the URL field, in
+    /// place of the card.
+    fn customize_boost(&mut self, cx: &mut Context<Self>) {
+        let Some((profile, site, boost)) = self.shown_boost(cx) else {
+            return;
+        };
+        self.close_boost_card(cx);
+        let style = boosts::with(|boosts| boosts.style(profile, &site));
+        // A new Boost is on as soon as it has edits.
+        let on = boost.is_none_or(|boost| boost.on);
+        let shell = cx.weak_entity();
+        let editing = site.clone();
+        let requested: boost_editor::Requested = Rc::new(move |request, cx| {
+            shell
+                .update(cx, |shell, cx| {
+                    shell.boost_requested(profile, &editing, request, cx)
+                })
+                .ok();
+        });
+        let anchor = point(self.width(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
+        let height = f32::from(self.viewport.height);
+        // The editor is a dark sheet over a dark or a light window, as the theme picker is.
+        let theme = self.spaces.iter().find(|each| each.id == self.space);
+        let palette = Palette::of(theme.and_then(|each| each.theme).as_ref(), Tone::Dark);
+        self.browser.hover_card(crate::hover_card::Hover::Close, cx);
+        let window = self.browser.window();
+        // The page's favicon, a one-colour one in the ink, as the sidebar draws it on the dark
+        // sheet.
+        let icon = (self.tabs.get(&self.field_tab()))
+            .and_then(|each| each.favicon.clone())
+            .map(
+                |favicon| match super::tile_theme::ink_copy(&favicon, Tone::Dark) {
+                    Some(copy) => gpui::ImageSource::from(copy),
+                    None => gpui::ImageSource::from(favicon),
+                },
+            );
+        boost_editor::show(
+            window,
+            site,
+            icon,
+            style,
+            on,
+            At::Row(anchor),
+            height,
+            palette,
+            requested,
+            cx,
+        );
+    }
+
+    /// What the editor asks of `site`'s Boost.
+    fn boost_requested(
+        &mut self,
+        profile: u64,
+        site: &str,
+        request: Request,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            Request::Style(style, kept) => {
+                let changes = boosts::with(|boosts| boosts.set_style(profile, site, &style, kept));
+                self.browser.show_boosts(changes, cx);
+                if kept {
+                    self.boosts_changed(cx);
+                }
+            }
+            Request::On(on) => self.set_boost_on(profile, site, on, cx),
+            Request::EditCss => self.edit_boost_file(profile, site, cx),
+            Request::Zap => {
+                // Zap's own card says what to do and ends it.
+                self.boost_card = Some(self.field_tab());
+                self.start_zap(cx);
+            }
+            Request::Delete => self.delete_boost(profile, site, cx),
+        }
+    }
+
     /// Closes the card, as its × does, ending Zap, and says whether there was one.
     pub(super) fn close_boost_card(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(tab) = self.boost_card.take() else {
             return false;
         };
+        // check.sh reads this line.
+        log!("browser: boost card {tab} closed");
         if self.zapping == Some(tab) {
             self.stop_zap(cx);
         }
@@ -238,7 +325,6 @@ impl Shell {
         let Some(path) = boosts::with(|boosts| boosts.file(profile, site)) else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: boost edit {site}");
         let changes = boosts::with(|boosts| boosts.reload(profile));
         self.browser.show_boosts(changes, cx);
@@ -252,6 +338,8 @@ impl Shell {
         if self.library.is_some() && self.section == super::library::Section::Boosts {
             self.list_boosts(cx);
         }
+        // Settings' switch takes Window › View Boosts… away, and gives it back.
+        self.update_menus(cx);
         cx.notify();
     }
 
@@ -272,7 +360,13 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| shell.edit_boost_css(cx)));
         let zap = card_button_as(palette, "boost-zap", "Zap", Look::Primary)
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
+        let customize = quiet("boost-customize", "Customize…")
+            .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
+        // Customize… has a line of its own under the other two, as three don't fit the card, so
+        // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
+        let customize =
+            (self.zapping != Some(tab)).then(|| div().mt(px(BUTTON_GAP)).flex().child(customize));
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) =
             match (self.zapping == Some(tab), boost) {
                 (true, _) => (
@@ -329,6 +423,7 @@ impl Shell {
                         .gap(px(BUTTON_GAP))
                         .children(buttons),
                 )
+                .children(customize)
                 .child(close),
         )
     }

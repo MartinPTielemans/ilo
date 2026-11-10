@@ -652,8 +652,8 @@ send click $page_point
 send key a
 expect '^browser: reveal shown$' "the page's question didn't bring the hidden sidebar out"
 asks "${site%/}" "the site couldn't ask again after ×"
+away=$((step + 1))
 send move 600 400
-none_since '^browser: reveal hidden$' || fail "the pointer leaving sent the question away"
 ../tools/window-screenshot.sh "$pid" "$out/question-reveal.png" || fail "no window to capture"
 # The pointer comes over the panel to Block, as a hand's does: on Linux the panel hears the pointer
 # leave only once it has had it moving over it.
@@ -661,6 +661,7 @@ send move $((qx + qw / 4)) $((qy + qh - 26))
 send click $((qx + qw / 4)) $((qy + qh - 26))
 expect "^browser: page $r asks nothing\$" "Block didn't take the question down"
 expect "^browser: title $r refused NotAllowedError\$" "Block didn't refuse the page"
+none_since '^browser: reveal hidden$' "$away" || fail "the pointer leaving sent the question away"
 send move 600 400
 expect '^browser: reveal hidden$' "the pointer leaving didn't send the sidebar away once answered"
 # A key that does nothing reports who has the keyboard, which the hidden panel must not.
@@ -737,8 +738,8 @@ expect '^browser: site controls set developer mode on$' \
   "a second click on Developer Mode didn't turn it on"
 expect "^browser: page $r developer mode 1\$" "the tab didn't go back to Developer Mode"
 # http has no certificate to show, so the lock doesn't take the click.
+lock=$((step + 1))
 send click 120 $(footer_y)
-none_since '^browser: site controls run certificate' || fail "the lock ran without a certificate"
 # Share closes them and hangs the system's share menu from its tile, at 122 118. Linux has no share
 # menu, so no Share tile, and escape closes them there instead.
 if [ "$(uname)" = Darwin ]; then
@@ -750,6 +751,7 @@ else
   send key escape
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 fi
+none_since '^browser: site controls run certificate' "$lock" || fail "the lock ran without a certificate"
 # Hover still works once they've closed: the pointer out to the page hides the URL field's buttons,
 # and back over the sidebar shows them. While they were open the buttons stayed, as the pointer
 # over the sidebar keeps them.

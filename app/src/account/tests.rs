@@ -793,6 +793,15 @@ fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext
         tab.status().0.as_deref(),
         Some("Sync stopped after an error.")
     );
+    // A newer version on another device wrote the Spaces: this one has to update to sync them.
+    tab.shows_with("at 15:04", Some(Trouble::Update));
+    assert_eq!(
+        tab.status(),
+        (
+            Some(format!("Update {app} to keep syncing Spaces.")),
+            format!("A newer {app} on another device changed them. The rest still syncs.")
+        )
+    );
 
     // A server of the user's own is named by its host.
     tab.set(State {

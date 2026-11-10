@@ -62,12 +62,14 @@ impl link_preview::Host for LinkPreviewHost {
         unsafe { bc::bc_tab_close(tab, false) };
     }
 
-    fn keep(&self, window: u64, tab: u64) {
-        unsafe { bc::bc_window_keep_preview(window, tab) };
+    fn keep(&self, window: u64, tab: u64, archived: Option<u64>) {
+        match archived {
+            Some(archived) => unsafe { bc::bc_window_keep_archived_preview(window, tab, archived) },
+            None => unsafe { bc::bc_window_keep_preview(window, tab) },
+        }
     }
 
     fn kept_archived(&self, window: u64, archived: u64, cx: &mut App) {
-        unsafe { bc::bc_archive_remove(archived) };
         // check.sh waits for this line.
         log!("browser: restore archived {archived} from preview");
         let shell = WINDOWS.with_borrow(|windows| {

@@ -450,9 +450,15 @@ new_window_bar() {
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
 }
-# Nothing logged since the last command was sent matches $1.
+# What the app logged since the last command was sent, or since command $1.
+since() {
+  sed -n "/^browser: drive ${1:-$step}: /,\$p" "$log"
+}
+# Nothing logged since the last command was sent, or since command $2, matches $1. Straight after
+# a send of input it can pass before the app has got to it: the app handles input in the order it
+# comes, so a later step's expect is what says it has.
 none_since() {
-  ! sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1"
+  ! since "${2:-}" | grep -q "$1"
 }
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
@@ -550,7 +556,9 @@ recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
   unrecorded && return 0
-  said=$(tail -1 "${recording%.mp4}-record.log")
+  # A stream that ended by itself says why when it does, before the failure it leads to (#2280).
+  said=$(grep '^the stream ended by itself' "${recording%.mp4}-record.log" | tail -1)
+  [ -n "$said" ] || said=$(tail -1 "${recording%.mp4}-record.log")
   case "$said" in
   *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
   esac

@@ -517,6 +517,28 @@ SavedTab Tab::Save() const {
   return saved;
 }
 
+bool Tab::Repoint(const GURL& url, const std::u16string& title) {
+  if (!unloaded_ || unloaded_->history.empty() || !url.is_valid()) {
+    return false;
+  }
+  SavedTab& saved = *unloaded_;
+  if (saved.history[saved.current].virtual_url() != url) {
+    saved.history.resize(saved.current + 1);
+    sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
+    page.set_index(static_cast<int>(saved.history.size()) - 1);
+    page.set_virtual_url(url);
+    page.set_original_request_url(url);
+    page.set_transition_type(ui::PAGE_TRANSITION_LINK);
+    page.set_timestamp(base::Time::Now());
+    saved.current = page.index();
+  }
+  saved.history[saved.current].set_title(title);
+  StateChanged();
+  ReportTitle();
+  FindFavicon(url);
+  return true;
+}
+
 void Tab::Unload() {
   content::WebContents* contents = web_contents();
   tabs::TabInterface* in = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;

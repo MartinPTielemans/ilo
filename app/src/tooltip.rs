@@ -485,7 +485,6 @@ impl Render for Tooltip {
         let Some((tip, layout, near)) = self.drawn.clone() else {
             return root;
         };
-        // check.sh reads this line, to see it's drawn as wide as it was placed for.
         log!("browser: tooltip drawn {}", layout.width);
         let text = div()
             .absolute()

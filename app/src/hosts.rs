@@ -12,8 +12,10 @@ pub(crate) const THEME_PICKER: c_int = 2;
 
 pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
+pub(crate) const BOOST_EDITOR: c_int = 4;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 4;
+pub(crate) const SITE_CONTROLS: c_int = 5;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -535,6 +537,38 @@ impl theme_picker::Host for ThemeHost {
 /// The user left the theme picker, such as with a click outside it.
 pub(crate) extern "C" fn theme_picker_dismissed() {
     update_app(theme_picker::dismissed);
+}
+
+/// The Boost editor's requests, to the host's overlay window, over the window that asked, as the
+/// theme picker's.
+pub(crate) struct BoostEditorHost;
+
+impl boost_editor::Host for BoostEditorHost {
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let shape: Vec<f64> = corners
+            .iter()
+            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+            .collect();
+        let (x, y, _) = corners[0];
+        let (left, top, width) = (left.into(), top.into(), boost_editor::WIDTH.into());
+        unsafe {
+            platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
+            platform::host_set_overlay_growth(BOOST_EDITOR, x.into(), y.into());
+            platform::host_show_overlay(BOOST_EDITOR, view, false, left, top, width);
+        }
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(BOOST_EDITOR) };
+    }
+}
+
+/// The user left the Boost editor, such as with a click outside it.
+pub(crate) extern "C" fn boost_editor_dismissed() {
+    update_app(boost_editor::dismissed);
 }
 
 /// The tooltip's requests, to the host's tooltip window, over the window the pointer is in.

@@ -25,19 +25,27 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_animation_observer.h"
+#include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/gfx/animation/animation.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/geometry/vector2d_conversions.h"
 #include "ui/gfx/geometry/vector2d_f.h"
+#include "ui/views/animation/ink_drop.h"
+#include "ui/views/background.h"
+#include "ui/views/border.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
@@ -445,12 +453,93 @@ bool OnEvent(VideoOverlayWindowViews* window, ui::Event* event) {
   return true;
 }
 
+// Dia's Mini Player, as measured (docs/ux-parity/phase-4.md): 6 pt corners and a 1 pt rim of white
+// at 0.17 at rest; under the pointer a scrim of black at 0.35, and its buttons 28 × 28 and 29 × 28,
+// 12 pt in, on white at 0.09, 0.13 under the pointer.
+constexpr float kCornerRadius = 6;
+constexpr SkColor kRim = SkColorSetA(SK_ColorWHITE, 0x2B);
+constexpr SkColor kScrim = SkColorSetA(SK_ColorBLACK, 0x59);
+constexpr int kButtonInset = 12;
+constexpr gfx::Size kCloseSize(28, 28);
+constexpr gfx::Size kBackSize(29, 28);
+constexpr SkColor kButton = SkColorSetA(SK_ColorWHITE, 0x17);
+// The white ink drop's highlight over the button's 0.09, together about 0.13.
+constexpr float kButtonHover = 0.045f;
+
+// The rim's view, among the window's own, found again at each layout.
+constexpr int kRimId = 0x1b0;
+
+// Gives |button| Dia's background and hover, once.
+void Restyle(views::View* button, const gfx::Size& size) {
+  if (!button) {
+    return;
+  }
+  button->SetSize(size);
+  if (button->GetBackground()) {
+    return;
+  }
+  button->SetBackground(views::CreateRoundedRectBackground(kButton, kCornerRadius));
+  views::InstallRoundRectHighlightPathGenerator(button, gfx::Insets(), kCornerRadius);
+  if (views::InkDrop::Get(button)) {
+    views::InkDrop::Get(button)->SetHighlightOpacity(kButtonHover);
+  }
+}
+
+// Once Chrome has laid out |window|'s controls, as it shows and each time it's sized: Dia's look.
+// The close button goes at the top left and back to the tab at the top right, as a Mac window's.
+void LaidOut(VideoOverlayWindowViews* window) {
+  views::View* root = window->GetRootView();
+  views::View* contents = window->GetContentsView();
+  if (!root || !root->layer() || !contents) {
+    return;
+  }
+#if !BUILDFLAG(IS_WIN)
+  // The root view's layer clips the video and controls under it, as ChromeOS rounds its own. On
+  // Windows Chrome's window isn't translucent (crbug.com/425711450), where the corners it clipped
+  // would be black, so it keeps the system's.
+  root->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kCornerRadius));
+  root->layer()->SetIsFastRoundedCorner(true);
+#endif
+  views::View* rim = contents->GetViewByID(kRimId);
+  if (!rim) {
+    // Over the video and the controls, on a layer of its own, taking no events, which go on to
+    // the controls under it.
+    rim = contents->AddChildView(std::make_unique<views::View>());
+    rim->SetID(kRimId);
+    rim->SetPaintToLayer();
+    rim->layer()->SetFillsBoundsOpaquely(false);
+    rim->SetCanProcessEventsWithinSubtree(false);
+    rim->SetBorder(views::CreateRoundedRectBorder(1, kCornerRadius, kRim));
+    // One flat scrim, rather than Chrome's and its gradients at the top and bottom.
+    window->GetControlsScrimView()->SetBackground(views::CreateSolidBackground(kScrim));
+    window->GetControlsTopScrimView()->SetVisible(false);
+    window->GetControlsBottomScrimView()->SetVisible(false);
+  }
+  const gfx::Size size = window->GetBounds().size();
+  rim->SetBoundsRect(gfx::Rect(size));
+  views::View* close = window->GetCloseControlsView();
+  views::View* back = window->GetBackToTabControlsView();
+  Restyle(close, kCloseSize);
+  Restyle(back, kBackSize);
+  if (close) {
+    close->SetPosition(gfx::Point(kButtonInset, kButtonInset));
+  }
+  if (back) {
+    back->SetPosition(gfx::Point(size.width() - kButtonInset - kBackSize.width(), kButtonInset));
+  }
+  // check.sh reads this line.
+  LOG(ERROR) << "browser: mini player look " << size.ToString() << " close "
+             << (close ? close->bounds().ToString() : "none") << " back "
+             << (back ? back->bounds().ToString() : "none");
+}
+
 }  // namespace
 
 void SetUpMiniPlayer() {
   g_browser_core_mini_player_event = &OnEvent;
   g_browser_core_mini_player_place = &Placed;
   g_browser_core_mini_player_left = &Left;
+  g_browser_core_mini_player_laid_out = &LaidOut;
   g_browser_core_register_local_state = &RegisterPrefs;
 }
 

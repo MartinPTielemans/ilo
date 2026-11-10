@@ -66,7 +66,6 @@ pub(crate) unsafe extern "C" fn launched_again(_: *mut c_void) {
     else {
         return;
     };
-    // check.sh reads this line.
     log!("browser: launched again: window {} to the front", window.id);
     unsafe { platform::host_activate(window.ui_view) };
 }

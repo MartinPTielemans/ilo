@@ -258,7 +258,6 @@ pub fn dismissed(cx: &mut App) {
         preview.on_card = false;
         preview.on_row = false;
         if preview.shown.take().is_some() {
-            // check.sh reads this line.
             log!("browser: folder preview dismissed");
             cx.notify();
         }

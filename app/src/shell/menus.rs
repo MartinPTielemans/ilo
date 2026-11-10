@@ -402,7 +402,6 @@ impl Shell {
         items.push((
             MenuEntry::new("Manage Spaces…", true),
             Box::new(|shell, cx| {
-                // check.sh waits for this line.
                 log!("browser: command manage-spaces via space menu");
                 shell.manage_spaces(cx)
             }),

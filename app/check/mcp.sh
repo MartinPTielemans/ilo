@@ -14,7 +14,9 @@
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A frame nested two sites deep, one the page adds after its load and one it fills by posting a
 # form into it are in the page's outline and text too, an empty helper frame is in neither, and a
-# click two frames deep lands.
+# click two frames deep lands. A skip link in a frame, off the page until it's focused, is focused
+# and then clicked, as Tab would bring it, and a click on one off the page that can't take focus
+# is refused rather than answered as done.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
 # activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
@@ -693,7 +695,9 @@ painted(() => document.title = "fields");
   # nor the text has what it holds, as with any field's value.
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
-  printf '%s' '<p>Cross text</p>
+  printf '%s' '<style>.skip { position: absolute; top: -2000px } .skip:focus { top: 0 }</style>
+<a class=skip href=#cross onclick="document.body.append(&quot;skip clicked&quot;)">Skip to cross</a>
+<p id=cross>Cross text</p>
 <button onclick="document.body.append(&quot;cross clicked&quot;)">Cross button</button>
 <input aria-label="Cross field" oninput="document.body.append(&quot;cross typed&quot;)">
 <input type=password aria-label="Cross password"><script src="painted.js"></script>
@@ -714,6 +718,8 @@ painted(() => document.title = "fields");
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
 <iframe title='Helper frame' src=empty.html width=1 height=1></iframe>
 <iframe name=posted></iframe><form target=posted action=http://127.0.0.1:$port/posted.html></form>
+<div role=button style='position: absolute; left: -9999px'
+  onclick='document.body.append(&quot;reached&quot;)'>Out of reach</div>
 <script>const heard = new Set();
 addEventListener('message', (event) => {
   if (event.data === 'painted') {
@@ -788,6 +794,19 @@ addEventListener('message', (event) => {
   case "$clicked" in
     "Clicked button “Deep button”."*"deep clicked"*) ;;
     *) fail "clicking two frames deep answered: $clicked" ;;
+  esac
+  # A skip link, as Office's frame has, is above the page until it's focused, where no click
+  # reaches it: the agent's click focuses it first, as a keyboard user's Tab would (#2174). One off
+  # the page that can't take focus is refused, rather than pressed where nothing is.
+  clicked=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of link "Skip to cross")\"}")
+  case "$clicked" in
+    "Clicked link “Skip to cross”."*"skip clicked"*) ;;
+    *) fail "clicking a skip link answered: $clicked" ;;
+  esac
+  refused=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of button "Out of reach")\"}")
+  case "$refused" in
+    "error: The element is outside the page"*) ;;
+    *) fail "clicking a button off the page that can't take focus answered: $refused" ;;
   esac
 
   # select chooses an option by its text: in a select through the option's own action, and in a

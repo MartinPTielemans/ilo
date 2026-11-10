@@ -32,9 +32,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, launch_picture, link_preview, link_target, log, log_in, menu, offer,
-    passwords, site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
+    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
+    zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -331,7 +332,6 @@ fn leave_agent_space(window: bc::bc_id) {
             && unsafe { bc::bc_space_profile(space) } == profile
     });
     if let Some(home) = home {
-        // check.sh reads this line.
         log!("browser: window {window} left space {shown} of an agent for space {home}");
         unsafe { bc::bc_window_show_space(window, home) };
     }
@@ -662,7 +662,6 @@ unsafe extern "C" fn agent_request_done(
         cut: response.cut,
         error: text(response.error),
     };
-    // check.sh reads this line.
     log!(
         "browser: agent request {request} answered {} {}",
         response.status,

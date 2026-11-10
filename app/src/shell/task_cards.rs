@@ -716,7 +716,6 @@ impl Shell {
         if shown == self.foot.slot {
             return;
         }
-        // check.sh reads this line.
         log!("browser: ask slot {}", shown as u8);
         self.foot.slot = shown;
         self.sync_foot(None, cx);
@@ -1561,7 +1560,6 @@ impl Shell {
                 .right(px(CLOSE_INSET))
                 .on_click(cx.listener(move |shell, _, _, cx| {
                     cx.stop_propagation();
-                    // check.sh reads this line.
                     log!("browser: command dismiss-task via sidebar");
                     shell.dismiss_task(agent.clone(), cx);
                 }))
@@ -1775,7 +1773,6 @@ impl Shell {
                         element.on_click(cx.listener(move |shell, _, _, cx| {
                             cx.stop_propagation();
                             let from = chips.borrow().get(&(n, index)).copied();
-                            // check.sh reads this line.
                             log!("browser: command open-task-pages via sidebar");
                             shell.open_task_pages(agent.clone(), None, from, cx);
                         }))
@@ -1980,7 +1977,6 @@ fn drawn_listener_chip(
             drawn.borrow_mut().insert(key, bounds);
             let name = format!("chip task-{} {label}", key.0);
             if rest && rested.borrow_mut().insert(name, bounds) != Some(bounds) {
-                // check.sh reads this line.
                 log!(
                     "browser: task chip task-{} {label} at {}",
                     key.0,
