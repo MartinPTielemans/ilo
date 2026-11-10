@@ -1919,7 +1919,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..bca25773d7 100644
+index 2d40cf7fa9..3d711203fc 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2442,7 +2442,7 @@ index 2d40cf7fa9..bca25773d7 100644
      }
  
      pub(crate) fn hide_cursor_until_mouse_moves(&self) {
-@@ -1472,8 +1694,16 @@ impl WaylandConnection {
+@@ -1472,11 +1694,28 @@ impl WaylandConnection {
              };
              let data_source = data_device_manager
                  .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
@@ -2461,7 +2461,19 @@ index 2d40cf7fa9..bca25773d7 100644
              }
              data_source.offer(state.clipboard.self_mime());
              data_device.set_selection(Some(&data_source), serial.as_raw());
-@@ -1500,6 +1730,13 @@ impl WaylandConnection {
++            state.clipboard.set_source(data_source);
++        } else if item.text().is_some_and(|text| text.is_empty())
++            && let Some(source) = state.clipboard.take_source()
++        {
++            // Wayland gives the clipboard only to the app with focus, but an app can always drop
++            // its own. An empty write, which takes a secret off after a while (ilo's account.rs,
++            // copy_for), drops it, or a secret copied before the user moved to another app stays.
++            source.destroy();
++            state.clipboard.set(item);
+         }
+     }
+ 
+@@ -1500,6 +1739,13 @@ impl WaylandConnection {
          None
      }
  
@@ -2475,7 +2487,7 @@ index 2d40cf7fa9..bca25773d7 100644
      pub(crate) fn compositor_name(&self) -> &'static str {
          "Wayland"
      }
-@@ -1517,7 +1754,7 @@ impl WaylandConnection {
+@@ -1517,7 +1763,7 @@ impl WaylandConnection {
  
          let client_state = self.0.borrow();
          let active_window = client_state.keyboard_focused_window.as_ref();
@@ -2484,7 +2496,7 @@ index 2d40cf7fa9..bca25773d7 100644
      }
  }
  
-@@ -1617,7 +1854,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1617,7 +1863,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                      state.wl_seat.release();
                      state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
                  }
@@ -2494,7 +2506,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      let Ok(version) = wl_output_version(version) else {
                          log::error!("ignoring wl_output below the required version");
                          return;
-@@ -1656,6 +1894,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1656,6 +1903,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
  delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
  delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
@@ -2503,7 +2515,7 @@ index 2d40cf7fa9..bca25773d7 100644
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
  delegate_noop!(WaylandClientStatePtr: ignore wl_data_device_manager::WlDataDeviceManager);
-@@ -1738,6 +1978,82 @@ pub(crate) fn get_window(
+@@ -1738,6 +1987,82 @@ pub(crate) fn get_window(
      state.windows.get(surface_id).cloned()
  }
  
@@ -2586,7 +2598,7 @@ index 2d40cf7fa9..bca25773d7 100644
  impl Dispatch<wl_surface::WlSurface, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
-@@ -1993,10 +2309,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -1993,10 +2318,10 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      state.composing = false;
                  }
  
@@ -2601,7 +2613,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
  
                  if let Some(wl_keyboard) = &state.wl_keyboard {
-@@ -2023,6 +2339,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2023,6 +2348,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          gesture_manager.get_pinch_gesture(&pointer, qh, ())
                      },
                  );
@@ -2616,7 +2628,7 @@ index 2d40cf7fa9..bca25773d7 100644
  
                  if let Some(wl_pointer) = &state.wl_pointer {
                      wl_pointer.release();
-@@ -2057,7 +2381,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2057,7 +2390,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  ..
              } => {
                  if format != wl_keyboard::KeymapFormat::XkbV1 {
@@ -2628,7 +2640,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      return;
                  }
                  let xkb_context = match new_xkb_context() {
-@@ -2086,16 +2414,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2086,16 +2423,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -2652,7 +2664,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  state.keyboard_focused_window = None;
                  state.enter_token.take();
                  // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
-@@ -2110,7 +2443,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2110,7 +2452,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                      drop(state);
                      window.handle_ime(ImeInput::DeleteText);
                      window.set_focused(false);
@@ -2662,7 +2674,7 @@ index 2d40cf7fa9..bca25773d7 100644
              }
              wl_keyboard::Event::Modifiers {
                  mods_depressed,
-@@ -2119,9 +2454,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2119,9 +2463,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  group,
                  ..
              } => {
@@ -2676,7 +2688,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  let old_layout =
                      keymap_state.serialize_layout(xkbcommon::xkb::STATE_LAYOUT_EFFECTIVE);
                  keymap_state.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
-@@ -2138,6 +2475,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2138,6 +2484,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if let Some(focused_window) = focused_window {
                      focused_window.handle_input(input);
                  }
@@ -2685,7 +2697,7 @@ index 2d40cf7fa9..bca25773d7 100644
  
                  if group != old_layout {
                      this.handle_keyboard_layout_change();
-@@ -2152,13 +2491,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2152,13 +2500,37 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  if key_state == wl_keyboard::KeyState::Pressed {
                      state.serial_tracker.update(SerialKind::KeyPress, serial);
                  }
@@ -2725,7 +2737,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  let keycode = Keycode::from(key + MIN_KEYCODE);
                  let keysym = keymap_state.key_get_one_sym(keycode);
  
-@@ -2218,16 +2581,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2218,16 +2590,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
                          let id = state.repeat.current_id;
@@ -2747,7 +2759,7 @@ index 2d40cf7fa9..bca25773d7 100644
                                      let Some(client) = this.0.upgrade() else {
                                          return TimeoutAction::Drop;
                                      };
-@@ -2240,8 +2604,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2240,8 +2613,11 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                          return TimeoutAction::Drop;
                                      }
  
@@ -2761,7 +2773,7 @@ index 2d40cf7fa9..bca25773d7 100644
  
                                      drop(state);
                                      focused_window.handle_input(input.clone());
-@@ -2249,8 +2616,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2249,8 +2625,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                      // If the new scheduled time is in the past the event will repeat as soon as possible
                                      TimeoutAction::ToInstant(event_timestamp + repeat_interval)
                                  }
@@ -2773,7 +2785,7 @@ index 2d40cf7fa9..bca25773d7 100644
  
                          drop(state);
                          focused_window.handle_input(input);
-@@ -2377,7 +2745,7 @@ fn linux_button_to_gpui(button: u32) -> Option<MouseButton> {
+@@ -2377,7 +2754,7 @@ fn linux_button_to_gpui(button: u32) -> Option<MouseButton> {
  impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
@@ -2782,7 +2794,7 @@ index 2d40cf7fa9..bca25773d7 100644
          event: wl_pointer::Event,
          _: &(),
          _: &Connection,
-@@ -2398,6 +2766,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2398,6 +2775,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  state.serial_tracker.update(SerialKind::MouseEnter, serial);
                  state.mouse_location = Some(position);
                  state.button_pressed = None;
@@ -2793,7 +2805,7 @@ index 2d40cf7fa9..bca25773d7 100644
  
                  if let Some(window) = get_window(&mut state, &surface.id()) {
                      state.mouse_focused_window = Some(window.clone());
-@@ -2407,17 +2779,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2407,17 +2788,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      }
                      state.restore_cursor_after_hide();
                      if let Some(style) = state.cursor_style {
@@ -2812,7 +2824,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      }
                      let modifiers = state.modifiers;
                      drop(state);
-@@ -2432,9 +2794,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2432,9 +2803,24 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
              }
              wl_pointer::Event::Leave { .. } => {
@@ -2838,7 +2850,7 @@ index 2d40cf7fa9..bca25773d7 100644
                          pressed_button: state.button_pressed,
                          modifiers: state.modifiers,
                      });
-@@ -2444,6 +2821,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2444,6 +2830,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.cursor_hidden_window = None;
  
                      drop(state);
@@ -2849,7 +2861,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      focused_window.handle_input(input);
                      focused_window.set_hovered(false);
                  }
-@@ -2453,12 +2834,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2453,12 +2843,29 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  surface_y,
                  ..
              } => {
@@ -2880,7 +2892,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  if let Some(window) = state.mouse_focused_window.clone() {
                      if window.is_blocked() {
                          let default_style = CursorStyle::Arrow;
-@@ -2514,11 +2912,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2514,11 +2921,42 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                  }
                  let button = linux_button_to_gpui(button);
                  let Some(button) = button else { return };
@@ -2923,7 +2935,7 @@ index 2d40cf7fa9..bca25773d7 100644
                          if let Some(window) = state.keyboard_focused_window.clone() {
                              if state.composing && state.text_input.is_some() {
                                  drop(state);
-@@ -2574,10 +3003,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2574,10 +3012,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      wl_pointer::ButtonState::Released => {
                          state.button_pressed = None;
  
@@ -2941,7 +2953,7 @@ index 2d40cf7fa9..bca25773d7 100644
                                  modifiers: state.modifiers,
                                  click_count: state.click.current_count,
                              });
-@@ -2595,11 +3029,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2595,11 +3038,20 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
              } => {
                  state.axis_source = axis_source;
              }
@@ -2962,7 +2974,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  if state.axis_source == AxisSource::Wheel {
                      return;
                  }
-@@ -2688,17 +3131,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+@@ -2688,17 +3140,37 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                      state.scroll_event_received = false;
                      let continuous = state.continuous_scroll_delta.take();
                      let discrete = state.discrete_scroll_delta.take();
@@ -3009,7 +3021,7 @@ index 2d40cf7fa9..bca25773d7 100644
                          }
                      } else if let Some(discrete) = discrete
                          && let Some(window) = state.mouse_focused_window.clone()
-@@ -2733,6 +3196,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
+@@ -2733,6 +3205,68 @@ impl Dispatch<zwp_pointer_gestures_v1::ZwpPointerGesturesV1, ()> for WaylandClie
      }
  }
  
@@ -3078,7 +3090,7 @@ index 2d40cf7fa9..bca25773d7 100644
  impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
      for WaylandClientStatePtr
  {
-@@ -2895,6 +3420,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2895,6 +3429,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                      let Some(drag_window) = get_window(&mut state, &surface.id()) else {
                          return;
                      };
@@ -3103,7 +3115,7 @@ index 2d40cf7fa9..bca25773d7 100644
                      let uri_read_generation = state.drag.begin_uri_read();
  
                      const ACTIONS: DndAction = DndAction::Copy;
-@@ -2968,6 +3511,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2968,6 +3520,12 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Motion { x, y, .. } => {
@@ -3116,7 +3128,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  let Some(drag_window) = state.drag.window.clone() else {
                      return;
                  };
-@@ -2979,6 +3528,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2979,6 +3537,15 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  drag_window.handle_input(input);
              }
              wl_data_device::Event::Leave => {
@@ -3132,7 +3144,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  let input = state.drag.handle_leave();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -2986,6 +3544,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -2986,6 +3553,22 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Drop => {
@@ -3155,7 +3167,7 @@ index 2d40cf7fa9..bca25773d7 100644
                  let input = state.drag.handle_drop();
                  drop(state);
                  if let Some((drag_window, input)) = input {
-@@ -3015,7 +3589,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3015,7 +3598,10 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
  
          if let wl_data_offer::Event::Offer { mime_type } = event {
              // Drag and drop
@@ -3167,7 +3179,15 @@ index 2d40cf7fa9..bca25773d7 100644
                  let serial = state.serial_tracker.get(SerialKind::DataDevice);
                  let mime_type = mime_type.clone();
                  data_offer.accept(serial.as_raw(), Some(mime_type));
-@@ -3059,18 +3636,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+@@ -3050,6 +3636,7 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
+                 state.clipboard.send(mime_type, fd);
+             }
+             (DataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
++                state.clipboard.source_cancelled(data_source);
+                 data_source.destroy();
+             }
+             (DataSourceKind::Drag, wl_data_source::Event::Send { fd, .. }) => {
+@@ -3059,18 +3646,32 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
                  let bytes = external_drag.bytes.clone();
                  state.clipboard.send_bytes(fd, bytes);
              }
@@ -3202,7 +3222,7 @@ index 2d40cf7fa9..bca25773d7 100644
              }
              _ => {}
          }
-@@ -3479,3 +4070,649 @@ mod tests {
+@@ -3479,3 +4080,649 @@ mod tests {
          );
      }
  }
@@ -3853,10 +3873,22 @@ index 2d40cf7fa9..bca25773d7 100644
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
-index 86dc7da97b..91362b8937 100644
+index 86dc7da97b..a38ef82ead 100644
 --- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
 +++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
-@@ -17,6 +17,7 @@ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
+@@ -7,7 +7,10 @@ use std::{
+ use calloop::{LoopHandle, PostAction};
+ use filedescriptor::Pipe;
+ use strum::IntoEnumIterator;
+-use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
++use wayland_client::{
++    Connection,
++    protocol::{wl_data_offer::WlDataOffer, wl_data_source::WlDataSource},
++};
+ use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
+ 
+ use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
+@@ -17,6 +20,7 @@ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
  pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
      ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
  pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
@@ -3864,7 +3896,16 @@ index 86dc7da97b..91362b8937 100644
  
  /// Text mime types that we'll accept from other programs.
  pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
-@@ -72,7 +73,7 @@ impl<T: ReceiveData> DataOffer<T> {
+@@ -29,6 +33,8 @@ pub(crate) struct Clipboard {
+     // Internal clipboard
+     contents: Option<ClipboardItem>,
+     primary_contents: Option<ClipboardItem>,
++    /// The source that holds the clipboard for this app, until another app takes it.
++    source: Option<WlDataSource>,
+ 
+     // External clipboard
+     cached_read: Option<ClipboardItem>,
+@@ -72,7 +78,7 @@ impl<T: ReceiveData> DataOffer<T> {
          self.mime_types.push(mime_type)
      }
  
@@ -3873,10 +3914,35 @@ index 86dc7da97b..91362b8937 100644
          self.mime_types.iter().any(|t| t == mime_type)
      }
  
-@@ -156,6 +157,11 @@ impl Clipboard {
+@@ -144,6 +150,7 @@ impl Clipboard {
+ 
+             contents: None,
+             primary_contents: None,
++            source: None,
+ 
+             cached_read: None,
+             current_offer: None,
+@@ -156,6 +163,28 @@ impl Clipboard {
          self.contents = Some(item);
      }
  
++    /// `source` holds the clipboard for this app now. The compositor cancels the one it replaced.
++    pub fn set_source(&mut self, source: WlDataSource) {
++        self.source = Some(source);
++    }
++
++    /// The source that held the clipboard for this app, which `source` is, has lost it.
++    pub fn source_cancelled(&mut self, source: &WlDataSource) {
++        if self.source.as_ref() == Some(source) {
++            self.source = None;
++        }
++    }
++
++    /// The source that holds the clipboard for this app, taken to drop it.
++    pub fn take_source(&mut self) -> Option<WlDataSource> {
++        self.source.take()
++    }
++
 +    /// What this app last put on the clipboard.
 +    pub fn contents(&self) -> Option<&ClipboardItem> {
 +        self.contents.as_ref()
@@ -3885,7 +3951,7 @@ index 86dc7da97b..91362b8937 100644
      pub fn set_primary(&mut self, item: ClipboardItem) {
          self.primary_contents = Some(item);
      }
-@@ -174,12 +180,25 @@ impl Clipboard {
+@@ -174,12 +203,25 @@ impl Clipboard {
          self.self_mime.clone()
      }
  
