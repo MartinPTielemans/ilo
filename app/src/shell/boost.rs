@@ -223,6 +223,7 @@ impl Shell {
             }
             Request::On(on) => self.set_boost_on(profile, site, on, cx),
             Request::EditCss => self.edit_boost_file(profile, site, cx),
+            Request::EditScript => self.edit_boost_script_file(profile, site, cx),
             Request::Zap => {
                 // Zap's own card says what to do and ends it.
                 self.boost_card = Some(self.field_tab());
@@ -322,6 +323,30 @@ impl Shell {
         self.edit_boost_file(profile, &site, cx);
     }
 
+    /// Edit Script…: the site's script in the user's editor, started if it has none. It runs only
+    /// once the user turns it on in the browser (#2297).
+    fn edit_boost_script(&mut self, cx: &mut Context<Self>) {
+        let Some((profile, site, _)) = self.shown_boost(cx) else {
+            return;
+        };
+        self.edit_boost_script_file(profile, &site, cx);
+    }
+
+    pub(super) fn edit_boost_script_file(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = boosts::with(|boosts| boosts.script_file(profile, site)) else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: boost edit script {site}");
+        self.browser.edit_file(&path, cx);
+        cx.notify();
+    }
+
     pub(super) fn edit_boost_file(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
         let Some(path) = boosts::with(|boosts| boosts.file(profile, site)) else {
             return;
@@ -363,11 +388,20 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
+        let edit_script = quiet("boost-edit-script", "Edit Script…")
+            .on_click(cx.listener(|shell, _, _, cx| shell.edit_boost_script(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
-        // Customize… has a line of its own under the other two, as three don't fit the card, so
-        // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
-        let customize =
-            (self.zapping != Some(tab)).then(|| div().mt(px(BUTTON_GAP)).flex().child(customize));
+        // Edit Script… and Customize… have a line of their own under the other two, as four don't
+        // fit the card, so Zap's row stays where it is as Zap starts and Done comes up under the
+        // pointer. Edit Script… sits under Edit CSS…, the two files in one column (#2297).
+        let customize = (self.zapping != Some(tab)).then(|| {
+            div()
+                .mt(px(BUTTON_GAP))
+                .flex()
+                .gap(px(BUTTON_GAP))
+                .child(edit_script)
+                .child(customize)
+        });
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) =
             match (self.zapping == Some(tab), boost) {
                 (true, _) => (
