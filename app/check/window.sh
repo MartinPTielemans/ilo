@@ -28,7 +28,8 @@
 # View › Appearance on Light, and with the window widened, the space a page hasn't drawn at its new
 # size shows the page's own background. In a check VM, the sidebar over grey backdrops is Dia's composite,
 # dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
-# and back.
+# and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
+# in Settings › General off.
 
 # A long page that times its frames while it scrolls and puts the numbers in its title.
 page=$(base64 << 'HTML' | tr -d '\n'
@@ -1228,11 +1229,8 @@ check_layout "after a double-click on the sidebar's edge"
 # from the window server, which a capture of the window alone leaves out, so this captures the
 # screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
 # runs it dark, and this turns it light for the light pass and back after.
-material="not measured outside a check VM"
-if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
-  # The theme picker's field is black at its middle, and black is neutral, so its gradient is
-  # faint and known: stops at 0.06 in dark and 0.09 in light, from black at the top to 0.25 · 255
-  # at the bottom.
+# Colours the Space black from the theme picker's field, which is black at its middle.
+black_space() {
   post rightclick 100 112
   expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
@@ -1243,6 +1241,12 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
+}
+material="not measured outside a check VM"
+if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
+  # Black is neutral, so the field's gradient is faint and known: stops at 0.06 in dark and 0.09
+  # in light, from black at the top to 0.25 · 255 at the bottom.
+  black_space
   [ "$active" = 1 ] || fail "the app isn't active, so the window shows AppKit's inactive fill"
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
@@ -1332,6 +1336,69 @@ if [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
   material="over grey ${material%; }"
 fi
 
+# The Dock icon's dot shows the Space in front, and with Settings › General's "Dock icon takes the
+# Space's color" off it stays green (docs/ux-spec.md › Dock dot), read from the image the app gives
+# the Dock. The Space is black, which no default Space color is, and black over the dot's green
+# with a color blend leaves it grey. In the Mac's Tinted and Clear icon styles macOS draws the icon
+# in the style's colors and the app leaves it as it is.
+dock="not on this OS"
+if [ "$(uname)" = Darwin ]; then
+  grep -q '^browser: colored space [0-9]* 000000$' "$log" || black_space
+  # The last name the dot was drawn in, once it's $1 or macOS's own.
+  dock_dot() {
+    for _ in $(seq 100); do
+      shown=$(sed -n 's/^browser: dock dot \([^ ]*\) in .*/\1/p' "$log" | tail -1)
+      [ "$shown" = "$1" ] || [ "$shown" = system ] && return 0
+      sleep 0.1
+    done
+    fail "the Dock's dot wasn't drawn $1 but ${shown:-never}"
+  }
+  # The dot's sRGB levels in the icon, saved at $1, as "r g b" in $icon. Not echoed for a $(),
+  # whose subshell would count the driver's step for itself alone.
+  dock_icon() {
+    send dockicon "$1"
+    icon=$(since | sed -n 's/^browser: dock icon //p' | tail -1)
+  }
+  green() { echo "$1" | awk '{ exit !($2 > $1 + 50 && $2 > $3 + 25) }'; }
+  grey() { echo "$1" | awk '{ hi = $1; lo = $1; for (i = 2; i <= 3; i++) { if ($i > hi) hi = $i; if ($i < lo) lo = $i }; exit !(hi - lo <= 12) }'; }
+  dock_dot 000000
+  if [ "$shown" = system ]; then
+    echo "skip: the Dock icon's dot, as this Mac's icon style draws it in its own colors"
+    dock="left to macOS's icon style"
+  else
+    dock_icon "$out/dock-icon-black.png"
+    black=$icon
+    grey "$black" || fail "the Dock icon's dot in a black Space reads $black, not grey"
+    send menu Settings…
+    expect '^browser: settings shown ' "Settings… didn't show Settings for the Dock icon's switch"
+    send clickkey $(drawn "toolbar General")
+    settings_drew General
+    in_sight "switch dock icon color" || fail "Settings didn't draw the Dock icon's switch"
+    send clickkey $at
+    expect '^browser: dock icon color off$' "a click on the Dock icon's switch didn't turn it off"
+    send key w cmd
+    expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+    dock_dot green
+    dock_icon "$out/dock-icon-off.png"
+    plain=$icon
+    green "$plain" || fail "the Dock icon's dot with its switch off reads $plain, not green"
+    send menu Settings…
+    expect '^browser: settings shown General$' "Settings… didn't show General again"
+    settings_drew General
+    in_sight "switch dock icon color" || fail "Settings didn't draw the Dock icon's switch"
+    send clickkey $at
+    expect '^browser: dock icon color on$' "a click on the Dock icon's switch didn't turn it on again"
+    send key w cmd
+    expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+    dock_dot 000000
+    dock_icon "$out/dock-icon-on.png"
+    again=$icon
+    grey "$again" || fail "the Dock icon's dot back on reads $again, not the Space's grey"
+    dock="dot $black in a black Space, $plain with its switch off, $again on again"
+    dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
+  fi
+fi
+
 # Esc in full screen goes to the page first, so a page that keeps it stays full screen on one
 # press. Two within 500 ms leave anyway, and so does one held 600 ms (Arc's).
 printf '%s' '<title>keeps escape</title><p>Escape is mine</p><script>let n = 0;
@@ -1367,6 +1434,9 @@ if [ "$(uname)" = Darwin ]; then
   send click $page_point
   send fullscreen
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
+  # The shell hears of full screen after the window does, and its note says it has: an Esc before
+  # that is no press it counts, so the repeat after it isn't one held.
+  expect '^browser: toast shown To exit full screen' "the window full screen again didn't say how to leave"
   send keydown escape
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
   sleep 0.7 # Esc held past the key repeat's delay
@@ -1453,4 +1523,4 @@ fi
 exec 3>&-
 quit
 echo "edge: $edge"
-echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}"
+echo "ok: the page view keeps its margins and the window's buttons stay at Arc's through a resize and full screen, widened, $gap, full screen says how to leave and a page's doesn't, a full-screen page takes the window with it and escape or the page leaving brings both back, the page resized once each way, the green button takes a full-screen page out with the window and brings back the sidebar and the card, from where the page's full screen takes the window again, a full-screen window's display going away, in full screen and as it leaves, keeps the window and the page together, and going away as the page takes the window full screen leaves both windowed, the command bar opens in full screen and keeps the keyboard when a page commits under it, then gives it to the new page. Drags on the window's background move it and drags on its controls don't. A double-click on the header $zoom, and one on the empty sidebar opens a new tab. ⌘S from the page and the UI, and the sidebar button, hide the sidebar and the window's buttons, the card takes its place through a resize, and ⌘S brings them back. The pointer kept at the window's edge brings the hidden sidebar out over the page, one passing it doesn't, and the pointer past it sends it away, and the sidebar button and ⌘S dock it from there. ⌥ pressed alone, with the UI or the page focused, brings the hidden sidebar out and sends it away again, and ⌥ held with ⌘ or a key doesn't. A tab opened with the sidebar hidden says so in a toast, a second one bumps it, and a click on it brings the sidebar back. The sidebar's edge drags its width between 164 and 500, hides it dragged on past the narrowest, and a double-click puts it back. A page that hasn't drawn shows black or white as websites are told the appearance is:${unpainted_seen%,}. Page full screen, ms from the page's request, median of 6 going in, 3 leaving by the page, 3 by escape: going in ${enter_ms}leaving ${exit_ms}by escape ${escape_ms%, }. Scrolling: $timing. Material: $material. Dock icon: $dock. Windows: $out/fullscreen-note.png, $out/fullscreen.png, $out/page-fullscreen.png, $out/green-button.png, $out/green-button-again.png, $out/display-gone.png, $out/display-gone-again.png, $out/display-gone-leaving.png, $out/display-gone-leaving-again.png, $out/display-gone-entering.png, $out/display-gone-entering-again.png, $out/sidebar-hidden.png, $out/sidebar-reveal.png, $out/sidebar-option.png, $out/new-tab-toast.png, $out/sidebar-wide.png, $out/sidebar-narrow.png, $out/before-paint-light.png, $out/before-paint-dark.png, $out/resize-gap.png${light_shots:-}${dock_shots:-}"
