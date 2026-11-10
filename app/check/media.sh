@@ -749,6 +749,18 @@ if [ "$(uname)" = Linux ]; then
   kept_keys "the video floating from its menu"
 fi
 
+# Its look, Dia's: 6 pt corners and a rim, one flat scrim, and its close button 28 × 28 at the top
+# left and back to its tab 29 × 28 at the top right, 12 in. An engine older than its core has
+# Chrome's.
+if engine_has ../core/mini_player.cc ../engine/patches/ours/chromium-core-mini-player.patch; then
+  expect 'browser: mini player look ' "the core didn't give the Mini Player its look"
+  look=$(grep 'browser: mini player look ' "$log" | tail -1)
+  case "$look" in
+  *" close 12,12 28x28 back "*",12 29x28") ;;
+  *) fail "the Mini Player's buttons weren't Dia's: $look" ;;
+  esac
+fi
+
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll
 # off the Mac, sizes it about its middle. A double-click on it, with another tab shown, shows its
 # tab and lands it. X11 alone, as pip_driven says.
