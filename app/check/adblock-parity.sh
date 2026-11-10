@@ -121,6 +121,7 @@ while read -r url <&4; do
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
+# Without pictures, the last site's ads, which load after its page does, get the 8 s here alone.
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
 # The most memory a process took, in MB.
@@ -208,11 +209,14 @@ if baseline:
 loaded = [s for s in sites if s["loaded"]]
 times = sorted(int(s["load_ms"]) for s in loaded)
 median = times[len(times) // 2] if times else 0
+# The worse sites go first, on one line, since the run's FAIL line, the summary's row and a
+# quarantine line's match read only the first.
+if worse:
+    print("worse than the baseline: " + "; ".join(worse))
 print(f"{len(loaded)} of {len(sites)} sites loaded, in {median} ms at the median; "
       f"{sum(s['blocked_n'] for s in sites)} requests blocked and "
       f"{sum(s['standin_n'] for s in sites)} given a stand-in, of {sum(s['requests'] for s in sites)}")
 if worse:
-    print("worse than the baseline:\n  " + "\n  ".join(worse))
     sys.exit(1)
 PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"

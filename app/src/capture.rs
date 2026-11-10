@@ -1013,7 +1013,6 @@ impl Capture {
             && let Some(editing) = session.editing.take()
         {
             session.marks = editing.before;
-            // check.sh reads this line.
             log!("browser: capture markup cancelled");
             cx.notify();
         }

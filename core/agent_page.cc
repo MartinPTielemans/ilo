@@ -686,13 +686,17 @@ void AgentPage::Still(base::ListValue last) {
 }
 
 void AgentPage::Click() {
+  Press(/*focused=*/false);
+}
+
+void AgentPage::Press(bool focused) {
   // Once it's on screen, still and enabled (Ready). Then in the session of the element's frame:
   // DevTools then gives the click to that frame even while the window's hit-test data lacks it, as
   // in a background tab, where through the main frame's session the page around the frame took the
   // click (#1175). The click's answer waits for the requests it starts (Listen).
   Ready(/*enabled=*/true,
         base::BindOnce(
-            [](base::WeakPtr<AgentPage> page, std::optional<gfx::RectF> ready) {
+            [](base::WeakPtr<AgentPage> page, bool focused, std::optional<gfx::RectF> ready) {
               if (!page) {
                 return;
               }
@@ -701,42 +705,91 @@ void AgentPage::Click() {
                     "The element isn't on the page any more, or is hidden. Take a new snapshot.");
                 return;
               }
-              const int slot = SlotOfElement(page->job_->element);
-              page->Locate(base::BindOnce(
-                  [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
-                    if (!page) {
-                      return;
-                    }
-                    if (!box) {
-                      page->Fail(
-                          "The element isn't on the page any more, or is hidden. Take a new "
-                          "snapshot.");
-                      return;
-                    }
-                    // Where that is in the main frame's viewport, for the agent's pointer.
-                    page->Offset(
-                        slot, *box,
-                        base::BindOnce(
-                            [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
-                               std::optional<gfx::RectF> shown) {
-                              if (!page) {
-                                return;
-                              }
-                              if (!shown) {
-                                page->Fail(
-                                    "The element isn't on the page any more, or is hidden. Take "
-                                    "a new snapshot.");
-                                return;
-                              }
-                              page->Point(*shown);
-                              page->Listen(
-                                  base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
-                            },
-                            page, slot, box->CenterPoint()));
-                  },
-                  page, slot));
+              page->Send(
+                  "Page.getLayoutMetrics", base::DictValue(),
+                  base::BindOnce(
+                      [](base::WeakPtr<AgentPage> page, bool focused, gfx::RectF ready,
+                         const base::DictValue* metrics) {
+                        if (!page || !page->job_) {
+                          return;
+                        }
+                        const base::DictValue* viewport =
+                            metrics ? metrics->FindDict("cssLayoutViewport") : nullptr;
+                        const gfx::RectF view(
+                            static_cast<float>(
+                                viewport ? viewport->FindDouble("clientWidth").value_or(0) : 0),
+                            static_cast<float>(
+                                viewport ? viewport->FindDouble("clientHeight").value_or(0) : 0));
+                        if (view.IsEmpty() || view.Contains(ready.CenterPoint())) {
+                          page->PressInView();
+                          return;
+                        }
+                        // Scrolled to and still outside the page, where no press lands: a skip
+                        // link, which focus brings on screen. So it's focused first, as a
+                        // keyboard user's Tab would, then pressed (#2174).
+                        if (focused) {
+                          page->Fail(
+                              "The element stays outside the page even with focus, where a "
+                              "click can't reach it. Take a new snapshot.");
+                          return;
+                        }
+                        const int64_t element = page->job_->element;
+                        page->Send(
+                            "DOM.focus",
+                            base::DictValue().Set("backendNodeId", NodeOfElement(element)),
+                            base::BindOnce(
+                                [](base::WeakPtr<AgentPage> page, const base::DictValue* done) {
+                                  if (!page) {
+                                    return;
+                                  }
+                                  if (!done) {
+                                    page->Fail(
+                                        "The element is outside the page, where a click can't "
+                                        "reach it, and can't take focus to come into view.");
+                                    return;
+                                  }
+                                  page->Press(/*focused=*/true);
+                                },
+                                page),
+                            SlotOfElement(element));
+                      },
+                      page, focused, *ready));
             },
-            weak_factory_.GetWeakPtr()));
+            weak_factory_.GetWeakPtr(), focused));
+}
+
+void AgentPage::PressInView() {
+  const int slot = SlotOfElement(job_->element);
+  Locate(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, int slot, std::optional<gfx::RectF> box) {
+        if (!page) {
+          return;
+        }
+        if (!box) {
+          page->Fail("The element isn't on the page any more, or is hidden. Take a new snapshot.");
+          return;
+        }
+        // Where that is in the main frame's viewport, for the agent's pointer.
+        page->Offset(
+            slot, *box,
+            base::BindOnce(
+                [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                   std::optional<gfx::RectF> shown) {
+                  if (!page) {
+                    return;
+                  }
+                  if (!shown) {
+                    page->Fail(
+                        "The element isn't on the page any more, or is hidden. Take a "
+                        "new snapshot.");
+                    return;
+                  }
+                  page->Point(*shown);
+                  page->Listen(base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                },
+                page, slot, box->CenterPoint()));
+      },
+      weak_factory_.GetWeakPtr(), slot));
 }
 
 void AgentPage::Choose(const base::ListValue& nodes, const std::vector<std::string>& frames) {

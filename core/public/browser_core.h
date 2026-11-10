@@ -755,6 +755,10 @@ typedef struct bc_sync_device {
 #define BC_SYNC_TROUBLE_THROTTLED 2
 // Sync stopped after an error it doesn't recover from while the browser runs.
 #define BC_SYNC_TROUBLE_STOPPED 3
+// A newer version of the browser on another of the account's devices wrote the Spaces in a form
+// this one can't read whole, so this device stopped syncing them, rather than write over what it
+// can't read, until it's updated. The rest still syncs.
+#define BC_SYNC_TROUBLE_UPDATE 4
 
 // How sync is keeping up with the server, as Settings › Sync says while it shows.
 typedef struct bc_sync_activity {
@@ -2456,6 +2460,13 @@ BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corne
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);
+
+// As bc_window_keep_preview, for |tab| previewing the archived tab |archived|, which leaves the
+// archive: |tab| goes to the top of the Today tabs of the Space that tab closed in, which the window
+// shows with it, as bc_window_restore_archived's does, while that's one of the user's Spaces in
+// |tab|'s profile. Else to the Space the window shows. Then space_changed, archive_changed and
+// window_selected.
+BC_EXPORT void bc_window_keep_archived_preview(bc_id window, bc_id tab, bc_id archived);
 
 // Shows the tab's page at |frame| in its window, in place of the page the window showed. It keeps
 // its distance from the window's edges as the window resizes, and takes the keyboard if that page

@@ -2314,7 +2314,6 @@ impl Agents {
             return;
         };
         let Asking { site, act, .. } = self.asking.remove(at);
-        // check.sh reads this line.
         log!("browser: agent {} asked {id} with no answer", act.agent);
         self.refuse(act, &site, NO_ANSWER, cx);
         self.asked(cx);
@@ -2336,7 +2335,6 @@ impl Agents {
                 };
                 held.timer = None;
                 let agent = held.agent.clone();
-                // check.sh reads this line.
                 log!("browser: agent {agent} handoff {tab} with no hand back");
                 _ = reply.send(ToolResult::error(format!(
                     "The user hasn't handed tab {tab} back in 15 minutes. It stays theirs; \

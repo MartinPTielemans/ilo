@@ -307,9 +307,11 @@ fi
 
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
-# from the start. The page's w opens one whose server never answers, so it never commits, and its
-# URL, which a page asked for, stays hidden until it does. A page already waiting as the appearance
-# changes keeps its colour on the Mac until it draws, so each colour gets a page opened after it.
+# from the start. The page's w opens one whose server never answers, so it never commits. Its URL
+# shows, as Chrome's does for a tab a page opened, until the tab's first, empty document is touched,
+# when Chrome hides it. That's at once in most runs and not for seconds in some (#2215).
+# A page already waiting as the appearance changes keeps its colour on the Mac until it draws, so
+# each colour gets a page opened after it.
 first=$(today)
 # Whether the colour "r g b" is black, or white with $2 light, as near as the capture keeps them.
 unpainted() {
@@ -329,7 +331,7 @@ for scheme in light dark; do
   send key w
   expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
   tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-  expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+  expect "^browser: page $tab back 0 forward 0 loading 1 \(${site}wait\)*\$" \
     "a tab opened to a page that hasn't come doesn't say it's loading"
   for _ in $(seq 20); do
     ../tools/window-screenshot.sh "$pid" "$out/before-paint-$scheme.png" ||
@@ -351,10 +353,19 @@ expect '^browser: appearance automatic$' \
 send click $page_point
 
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
-# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches.
-scroll="10 300"
-[ "$(uname)" = Linux ] && scroll="1 25"
-send scroll $page_point $scroll
+# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches, five at a time.
+# Chromium hands a page one wheel event at a time and merges those that queue meanwhile, capping a
+# merged one at the page's height (LimitScrollDeltaToScrollerSize), as Chrome does. In a slow
+# session the 25 at once came as one notch and 24 merged, and the page stopped at its height, 779
+# points (#2256). Five, 600 points, stay under it.
+if [ "$(uname)" = Linux ]; then
+  for to in 600 1200 1800 2400 3000; do
+    send scroll $page_point 1 5
+    await "^browser: title [0-9]* frames .* scrolled $to\$" || break
+  done
+else
+  send scroll $page_point 10 300
+fi
 expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
 # The page says its count after each pause of 300 ms, so the last is the whole scroll's.
 await '^browser: title [0-9]* frames .* scrolled 3000$' || true
@@ -1023,15 +1034,17 @@ if windows; then
   alone=winalt
   after_key() { send flags winalt shift; }
 fi
+docked=$((step + 1))
 send flags $alone
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
 send key s cmd
 toggle ui hidden "⌘S before ⌥"
 send move 600 300
 send flags $alone
 send flags
 expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
+[ "$(since "$docked" | grep -c '^browser: reveal by option$')" = 1 ] ||
+  fail "⌥ with the sidebar docked brought it out"
 expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
 check_reveal "with the sidebar out for ⌥" shown
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
@@ -1043,20 +1056,18 @@ send flags
 expect '^browser: reveal away by option$' \
   "the pointer over the page, or a second ⌥, sent the sidebar away"
 expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
+not_alone=$((step + 1))
 send flags $alone
 send flags $alone cmd
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
 if windows; then
   send flags cmd
   send flags cmd winalt
   send flags
-  none_since '^browser: reveal by option$' || fail "AltGr, Ctrl then Alt, brought the sidebar out"
 fi
 send flags $alone
 after_key
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
 # The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
 # and on the Mac come through the app again when the page doesn't use them.
 send click $page_point
@@ -1065,18 +1076,21 @@ send flags $alone
 send flags
 expect '^browser: reveal by option$' \
   "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
+[ "$(since "$not_alone" | grep -c '^browser: reveal by option$')" = 1 ] ||
+  fail "⌥ held with ⌘, let go after a key, or as AltGr brought the sidebar out"
 expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
 send flags $alone
 send flags
 expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
 expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
+after_page_key=$((step + 1))
 send flags $alone
 after_key
 send flags
-none_since '^browser: reveal by option$' ||
-  fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
+none_since '^browser: reveal by option$' "$after_page_key" ||
+  fail "⌥ let go after a key with the page focused brought the sidebar out"
 # A shortcut the page hands back hides the row under the pointer until it moves, and the sidebar
 # out, by the edge or by ⌥, hears that move in its own window, so its row under the pointer shows
 # its hover (#2133). While it rests out, the browser takes about the CPU it takes docked: the two
@@ -1091,10 +1105,10 @@ hover_out() {
 # below the rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
-  sleep 1
+  sleep 1 # the hover's fade out, before the window measured
   local from
   from=$(cpu)
-  sleep 4
+  sleep 4 # the window measured
   set -- $from $(cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
@@ -1353,7 +1367,7 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
   send keydown escape
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
-  sleep 0.7
+  sleep 0.7 # Esc held past the key repeat's delay
   send keydown escape repeat
   expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
   send keyup escape
