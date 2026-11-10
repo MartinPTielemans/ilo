@@ -33,6 +33,8 @@ Turn the track off by removing `app/branding/update-feed-nightly` from main. The
 
 ## Cutting a release
 
+A release's core batch lands first, as one squash PR from `batch/<version>`, or `batch/<version>-<N>` when it's replayed. The branch holds one signed commit on main, whose tree is the trial merge, so the agent context budget accepts it without the label, as its folded PRs each passed it already (#2203).
+
 1. **Move the version** on the release's branch, or on main until the nightly track is on. That's `app/Cargo.toml`, `app/Cargo.lock` and the metainfo's release line, merged as any change is.
 2. **Make sure each OS has an engine for that commit.** Each OS's job stops without one, or packs an older core.
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
