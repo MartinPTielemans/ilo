@@ -25,25 +25,45 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # Each screen: its name, what it waits for in the preview's log, and the preview's settings, as
 # shell words, so a value with spaces is quoted, and for one taken under the pointer, what the
 # preview logs ending in the point the pointer goes to.
+# Proof only (#2338, not for merge): the return mark's befores and afters, and its motion.
 screens=(
-  "sidebar|drawn at|"
-  "command-bar|command bar drew|PREVIEW_BAR=tabs"
-  "context-menu|menu shown|PREVIEW_MENU=100,247"
-  "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
-  "icon-picker|icon picker for|PREVIEW_ICON_PICKER="
-  "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
-  "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
-  "peek|link preview settled|PREVIEW_PEEK=1"
-  "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
-  "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
-  "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
-  "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
+  "rest-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=dark"
+  "rest-dark-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark"
+  "rest-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=light"
+  "rest-light-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=light"
+  "split-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=dark"
+  "split-dark-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_APPEARANCE=dark"
+  "split-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=light"
+  "split-light-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_APPEARANCE=light"
+  "tile47-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=173 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=dark"
+  "tile47-dark-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=173 PREVIEW_APPEARANCE=dark"
+  "tile47-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=173 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=light"
+  "tile47-light-after|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=173 PREVIEW_APPEARANCE=light"
+  "rest-1x-dark-before|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=dark"
+  "rest-1x-dark-after|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark"
+  "rest-1x-light-before|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_NO_RETURN_MARK=1 PREVIEW_APPEARANCE=light"
+  "rest-1x-light-after|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=light"
+  "motion-come-0|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0"
+  "motion-come-0.01|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.01"
+  "motion-come-0.02|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.02"
+  "motion-come-0.03|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.03"
+  "motion-come-0.04|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.04"
+  "motion-come-0.05|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.05"
+  "motion-come-0.06|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.06"
+  "motion-come-0.07|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=come PREVIEW_SWAP_T=0.07"
+  "motion-go-0|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0"
+  "motion-go-0.01|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.01"
+  "motion-go-0.02|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.02"
+  "motion-go-0.03|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.03"
+  "motion-go-0.04|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.04"
+  "motion-go-0.05|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.05"
+  "motion-go-0.06|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.06"
+  "motion-go-0.07|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark PREVIEW_RETURN_MOTION=go PREVIEW_SWAP_T=0.07"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
   *)
-    systems=(wayland x11)
+    systems=(x11)
     cargo build -q --release --manifest-path "$here/../app/check/drag/Cargo.toml" \
       --target-dir "$here/../app/target"
     drag=$here/../app/target/release/drag
@@ -64,7 +84,7 @@ capture() { # <system> <output.png> <ready> [<point>]
   case $1 in
     windows) timeout 90 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/window-capture.ps1" \
       "$2" "$3" "$preview" -Moving 400 "${point[@]}" ;;
-    x11) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" --x11 "$2" "$3" "$preview" ;;
+    x11) timeout 90 "$here/headless.sh" --scale "${PARITY_SCALE:-1}" --moving 400 "${then[@]}" --x11 "$2" "$3" "$preview" ;;
     *) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" "$2" "$3" "$preview" ;;
   esac
 }

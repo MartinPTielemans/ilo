@@ -28,6 +28,10 @@ impl Shell {
         icon: impl Fn() -> AnyElement,
         cx: &App,
     ) -> AnyElement {
+        // Proof only (#2338, not for merge): today's look, for the befores.
+        if std::env::var_os("PREVIEW_NO_RETURN_MARK").is_some() {
+            return icon();
+        }
         let away = self.page(tab).away_from_pinned_url;
         let what = Swapped::Away(tab);
         // The notch opens and closes with its glyph's change, and is whole under Reduce Motion,
@@ -62,6 +66,20 @@ impl Shell {
                     .child(glyph),
             )
             .into_any_element()
+    }
+}
+
+impl Shell {
+    /// Proof only (#2338, not for merge): `tabs`' marks coming, or going with the tabs back.
+    pub fn mock_return_motion(&mut self, tabs: &[u64], come: bool) {
+        for &tab in tabs {
+            if !come && let Some(each) = self.tabs.get_mut(&tab) {
+                each.page.away_from_pinned_url = false;
+            }
+            let (from, to) = if come { (NONE, UNDO) } else { (UNDO, NONE) };
+            self.swaps
+                .start(Swapped::Away(tab), from, to, std::time::Instant::now());
+        }
     }
 }
 

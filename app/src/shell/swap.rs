@@ -60,6 +60,13 @@ struct Swap {
 
 impl Swap {
     fn elapsed(&self, now: Instant) -> f32 {
+        // Proof only (#2338, not for merge): every change held PREVIEW_SWAP_T seconds in.
+        if let Some(t) = std::env::var("PREVIEW_SWAP_T")
+            .ok()
+            .and_then(|t| t.parse().ok())
+        {
+            return t;
+        }
         now.saturating_duration_since(self.start).as_secs_f32()
     }
 }
