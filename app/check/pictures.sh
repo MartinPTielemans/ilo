@@ -1,9 +1,8 @@
-# The picture of a page in the window it left follows the page's loads, from the core's reports, not
-# on a timer (#359). A still page moves from the first window into a second, and the first
+# The picture of a page in the window it left follows the page's loads, from the core's reports and
+# never on a timer (#359). A still page moves from the first window into a second, and the first
 # window draws its picture. A same-page navigation in the second window (a click pushes a URL and
 # sets its colour) and then the page loaded again from the command bar each take the first window's
-# picture again, the load's asked again if the core had none yet (a page that has drawn no frame,
-# as on Windows). The page is the check's site's, as a data: URL's fragment commits no navigation.
+# picture again. The page is the check's site's, as a data: URL's fragment commits no navigation.
 # Settled for 10 s, an idle browser is then measured, in PICTURES_ROUNDS (3) rounds of
 # PICTURES_SECONDS (20), with the picture as it first came and again once those have refreshed it:
 # the CPU and wakeups of the app's processes, with no picture taken while it's idle, and the wakeups
