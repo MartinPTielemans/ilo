@@ -20,21 +20,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A push to main whose tree a branch or a pull request already passed a job on skips that job,
+  # saying which run passed it (#2198). Each job records the tree it passed on at its end.
+  proven:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      fmt: ${{ steps.look.outputs.fmt }}
+      test: ${{ steps.look.outputs.test }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/tree-proven.sh
+          sparse-checkout-cone-mode: false
+      - id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+        run: |
+          for job in fmt test; do
+            echo "$job=$(.github/scripts/tree-proven.sh "app-linux-$job" "$TREE")" >> "$GITHUB_OUTPUT"
+          done
+
   # rustfmt alone, on the files git tracks: `cargo fmt` would need the crates setup.sh downloads to
   # read the manifests, and its --all formats them too. The workflow's app/** filter starts it for
   # every Rust file and app/rustfmt.toml.
   fmt:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    needs: proven
+    if: >-
+      !cancelled() && !needs.proven.outputs.fmt &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: rustup component add rustfmt
       - run: git ls-files -z 'app/*.rs' | xargs -0 rustfmt --check
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: app-linux-fmt
 
   test:
+    needs: proven
     # A pull request from a branch here already ran on its push, or on a dispatch on its head.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    if: >-
+      !cancelled() && !needs.proven.outputs.test &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
@@ -76,6 +111,10 @@ jobs:
       # function main.rs builds on the Mac and Windows alone.
       - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+      # What follows decides nothing, so this tree has passed.
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: app-linux-test
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4

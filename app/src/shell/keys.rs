@@ -677,6 +677,7 @@ pub fn change_keys<R>(cx: &mut App, change: impl FnOnce(&mut UserKeys) -> R) -> 
         cx.bind_keys([
             super::drm_note::escape_binding(),
             super::translate::escape_binding(),
+            super::boost::escape_binding(),
         ]);
     }
     for &command in &changed {

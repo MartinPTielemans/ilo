@@ -273,15 +273,23 @@ jobs:
               if [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
-                result="failed ($status): $(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/')"
-                failed=1
-                echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true
+                result="failed ($status): $said"
+                # A quarantined failure shows, but doesn't fail the check (#2197).
+                if issue=$(sh check/quarantine.sh match mac "$run" "" "$said"); then
+                  result="quarantined, $issue: $result"
+                  echo "::warning::The $run run failed, quarantined under $issue. Its log: $run.log in the artifact."
+                else
+                  failed=1
+                  echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                fi
               fi
               ;;
             *) result="skipped: not in the runs the Mac runner passes yet" ;;
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
@@ -304,9 +312,12 @@ jobs:
       checks: read
       issues: write
     steps:
+      # With app/check, whose quarantine keeps a quarantined run's issue open.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.check.result }}

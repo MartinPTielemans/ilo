@@ -58,6 +58,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -603,7 +604,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("widevine", saved.settings.widevine)
                            .Set("ask_where_to_save", saved.settings.ask_where_to_save)
                            .Set("page_zoom", saved.settings.page_zoom)
-                           .Set("notification_prompts", saved.settings.notification_prompts));
+                           .Set("notification_prompts", saved.settings.notification_prompts)
+                           .Set("appearance", saved.settings.appearance)
+                           .Set("space_header", saved.settings.space_header));
   return base::WriteJson(root);
 }
 
@@ -882,6 +885,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.page_zoom = page_zoom > 0 ? page_zoom : 1;
     saved.settings.notification_prompts =
         settings->FindBool("notification_prompts").value_or(true);
+    const int appearance = settings->FindInt("appearance").value_or(0);
+    saved.settings.appearance = appearance >= 0 && appearance <= 2 ? appearance : 0;
+    saved.settings.space_header = settings->FindBool("space_header").value_or(false);
   }
   return saved;
 }
@@ -1236,6 +1242,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     ApplyAdBlocking();
     ApplyAutoPictureInPicture(/*changed=*/false);
     ApplyWebRtc();
+    ApplyAppearance();
     ArchiveDefaultRead();
     sync_settings::Read();
     // The profiles the Spaces and favorites are in load before they come back.
@@ -1302,6 +1309,17 @@ bool SessionKept() {
 Settings& UserSettings() {
   static Settings settings;
   return settings;
+}
+
+void ApplyAppearance() {
+#if !BUILDFLAG(IS_MAC)
+  // Chromium's own override of the system's scheme, which every page's color provider follows.
+  using Scheme = ui::NativeTheme::PreferredColorScheme;
+  const int appearance = UserSettings().appearance;
+  ui::NativeTheme::SetPreferredColorSchemeOverride(appearance == 1   ? std::optional(Scheme::kLight)
+                                                   : appearance == 2 ? std::optional(Scheme::kDark)
+                                                                     : std::nullopt);
+#endif
 }
 
 double SavedSidebarWidth() {

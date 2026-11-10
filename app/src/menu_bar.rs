@@ -303,15 +303,21 @@ pub(crate) fn menus(
         ),
         menu(
             "Window",
-            vec![
-                MenuItem::action("Minimize Window", Minimize),
-                stay_on_top(bar.on_top),
-                MenuItem::separator(),
-                item("Open Library…", Command::ViewLibrary),
-                item("View Downloads…", Command::ViewDownloads),
-                item("View Media…", Command::ViewMedia),
-                item("View Agents…", Command::ViewAgents),
-            ],
+            [
+                Some(MenuItem::action("Minimize Window", Minimize)),
+                Some(stay_on_top(bar.on_top)),
+                Some(MenuItem::separator()),
+                Some(item("Open Library…", Command::ViewLibrary)),
+                Some(item("View Downloads…", Command::ViewDownloads)),
+                Some(item("View Media…", Command::ViewMedia)),
+                // Arc's, after View Media…, where the window lists Boosts (Library › Boosts).
+                bar.boosts
+                    .then(|| item("View Boosts…", Command::ViewBoosts)),
+                Some(item("View Agents…", Command::ViewAgents)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         ),
         menu(
             "Help",
@@ -353,19 +359,21 @@ pub(crate) fn appearance_title(appearance: Appearance) -> &'static str {
     }
 }
 
-/// Gives the host View › Appearance's choice, for the app's native parts and its pages.
-pub(crate) fn give_host_appearance(appearance: Appearance) {
-    let code = match appearance {
+/// View › Appearance's choice as the core has it (bc_appearance).
+pub(crate) fn appearance_code(appearance: Appearance) -> i32 {
+    match appearance {
         Appearance::Automatic => 0,
         Appearance::Light => 1,
         Appearance::Dark => 2,
-    };
+    }
+}
+
+/// Gives the host View › Appearance's choice, for the app's native parts, and the core, which keeps
+/// it and gives it to pages.
+pub(crate) fn give_host_appearance(appearance: Appearance) {
+    let code = appearance_code(appearance);
     unsafe { platform::host_set_app_appearance(code) };
-    // The Mac's pages follow NSApp's appearance, which the host sets.
-    #[cfg(not(target_os = "macos"))]
-    unsafe {
-        bc::bc_set_appearance(code)
-    };
+    unsafe { bc::bc_set_appearance(code) };
 }
 
 /// Help › Restore Earlier Sidebar: the shown Space's profile's sidebar backups, newest first, each

@@ -7,7 +7,8 @@
 # profile's history have none of its pages, the profile's cookies don't have its cookie, and a
 # relaunch brings back no private window. A private window's Library has its session's downloads
 # (#669): a file it goes to downloads, which its Library's Downloads lists, and the regular
-# window's doesn't, nor does the profile's history after the quit.
+# window's doesn't, nor does the profile's history after the quit. Customize Chrome's page, typed in a
+# private window, is refused there, where it crashed the browser (#2070).
 
 # The served cookie page: its title says whether the site has the private cookie, and "p" in it
 # sets it. The private windows load it at a URL of their own, which nothing may write.
@@ -189,6 +190,15 @@ expect "^browser: title $tab cookie none\$" "the new private session had the end
 # it once: the two sessions so far, the empty window's and the cookie's.
 [ "$(grep -c '^browser: private session ended ' "$log")" = 2 ] ||
   fail "the app heard a session end more than once"
+# Customize Chrome's page, which ilo has no UI for, typed in a private window: its handler needs the
+# New Tab page's services, which a private profile hasn't, and crashed the browser (#2070). The
+# page is refused there, as a URL Chrome has no page for.
+send key l cmd
+expect '^browser: command bar shown$' "⌘L didn't open the command bar in the private window"
+send insert "chrome://customize-chrome-side-panel.top-chrome"
+send key return
+expect "^browser: page $tab trouble network -[0-9]*\$" \
+  "Customize Chrome's page typed in a private window wasn't refused"
 
 # The quit, with the private window open, writes nothing of it.
 exec 3>&-
@@ -221,7 +231,7 @@ grep -q '^browser: private window opened' "$log" &&
   fail "the relaunch brought back a private window"
 grep -q 'private-only' "$log" && fail "the relaunch brought back a private window's page"
 quit
-echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, whose download its Library lists and the regular window's doesn't, closing the last one ends the session, the next starts without its cookie, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png, $out/private-library.png"
+echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regular window doesn't see and the profile's other private window does, whose download its Library lists and the regular window's doesn't, closing the last one ends the session, the next starts without its cookie and refuses Customize Chrome's page, and neither the Spaces file, the history, the cookies nor a relaunch has any of it. Windows: $out/private.png, $out/private-library.png"
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
 # the Extensions menu lists only the allowed one and uBlock Origin, the browser's own, allowed
