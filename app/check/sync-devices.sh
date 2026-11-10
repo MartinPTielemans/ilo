@@ -135,6 +135,11 @@ db.execute("INSERT INTO sync_entities (account_id, id, data_type, version, paren
 db.commit()
 PY
 
+# An engine older than the core's guard on what sync takes, as the Mac's can be, takes the plain
+# bookmark, and another user's invitations to share a password.
+guarded=
+! engine_has ../core/sync_guard.cc ../engine/patches/ours/chromium-sync-hooks.patch || guarded=1
+[ -n "$guarded" ] || echo "skip: sync-devices' plain bookmark. The engine was built before sync's guard."
 start b "$PWD/$out/sync-devices-b" 6
 ! windows || forward
 open_sign_in
@@ -158,7 +163,7 @@ expect '^browser: dialog confirmed$' "a click on Add didn't add B"
 device b
 await '^browser: account On None$' || fail "B, added by A, didn't turn sync on"
 await 'browser: sync service active$' || fail "B's sync didn't become active"
-await "browser: sync dropped an update of Bookmarks that isn't ciphertext$" ||
+[ -z "$guarded" ] || await "browser: sync dropped an update of Bookmarks that isn't ciphertext$" ||
   fail "B didn't drop the server's plain bookmark"
 # B's own first Space, untouched, gives way to the account's, as Arc's does on a new device.
 await_spaces 2 "B, synced, doesn't have A's two Spaces"
@@ -178,7 +183,7 @@ send type $words
 send key return
 await '^browser: account On None$' || fail "C didn't turn sync on with the recovery words"
 await 'browser: sync service active$' || fail "C's sync didn't become active"
-await "browser: sync dropped an update of Bookmarks that isn't ciphertext$" ||
+[ -z "$guarded" ] || await "browser: sync dropped an update of Bookmarks that isn't ciphertext$" ||
   fail "C didn't drop the server's plain bookmark"
 await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
 [ "$(stored "SELECT count(*) FROM devices")" = 3 ] ||
@@ -483,9 +488,13 @@ types=$(grep -h 'browser: sync types ' "$a_log" | tail -1 | sed 's/.*browser: sy
 # device asks the server for those, so a server's can't add a login (engine/patches/ours/
 # chromium-sync-no-incoming-password-sharing.patch).
 case ", $types," in *", Passwords,"*) ;; *) fail "A's sync carries no passwords: $types" ;; esac
-case $types in
-*"Incoming Password Sharing Invitations"*) fail "A's sync takes another user's passwords: $types" ;;
-esac
+if engine_has ../engine/patches/ours/chromium-sync-no-incoming-password-sharing.patch; then
+  case $types in
+  *"Incoming Password Sharing Invitations"*) fail "A's sync takes another user's passwords: $types" ;;
+  esac
+else
+  echo "skip: sync-devices' shared passwords. The engine was built before sync stopped taking them."
+fi
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
