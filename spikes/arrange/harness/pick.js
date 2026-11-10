@@ -36,6 +36,8 @@
   }
   const out = { url: location.href, viewport: { w: W, h: H }, picks: {} };
   const picked = [];
+  // Each kind moves an element of its own, so a run of all of them moves no element twice.
+  const free = (e) => e && !picked.some((p) => nest(p, e));
   const rec = (kind, el, extra) => {
     picked.push(el);
     const r = el.getBoundingClientRect();
@@ -50,18 +52,20 @@
       const rx = vis(x);
       return x !== b && !nest(x, b) && docTop(rx) > docTop(rb) + rb.height + 120 && Math.abs(rx.left - rb.left) < 300;
     });
-    if (ref) { rec('settle', b, { ref: D(ref), where: 'after', link: linkIn(b) }); break; }
+    if (ref) { rec('settle', b, { ref: D(ref), where: 'after', link: linkIn(b) }); picked.push(ref); break; }
   }
   // Trade: two link blocks under one parent.
   outer: for (const b of blocks) {
+    if (!free(b)) continue;
     for (const x of blocks) {
-      if (x === b || nest(x, b) || x.parentElement !== b.parentElement) continue;
+      if (x === b || nest(x, b) || !free(x) || x.parentElement !== b.parentElement) continue;
       rec('trade', b, { ref: D(x), link: linkIn(b) });
+      picked.push(x);
       break outer;
     }
   }
   if (!out.picks.trade && blocks.length > 1) {
-    const [b, x] = blocks.filter((e, i, a) => !a.some((o) => o !== e && nest(o, e)));
+    const [b, x] = blocks.filter((e, i, a) => free(e) && !a.some((o) => o !== e && nest(o, e)));
     if (b && x) rec('trade', b, { ref: D(x), link: linkIn(b) });
   }
   // Float, pinned to the screen: the player, else a search form, else a link block.
@@ -76,8 +80,6 @@
   }
   const input = [...document.querySelectorAll('input[type=search], input[type=text], input:not([type]), input[name=q]')].find((i) => vis(i));
   const form = input && (input.closest('form') || blockOf(input, 2000, 120000));
-  // Each kind moves an element of its own, so a run of all of them moves no element twice.
-  const free = (e) => e && !picked.some((p) => nest(p, e));
   const floater = [player, form, ...blocks].find(free);
   if (floater) {
     const r = vis(floater);

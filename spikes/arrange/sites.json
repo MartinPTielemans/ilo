@@ -1,8 +1,9 @@
 [
   { "id": "news", "kind": "a news front page", "url": "https://www.theguardian.com/international" },
   { "id": "docs", "kind": "documentation", "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/position" },
-  { "id": "spa", "kind": "a single-page app (React)", "url": "https://www.npmjs.com/package/react" },
-  { "id": "video", "kind": "a video page", "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ" },
+  { "id": "spa", "kind": "a single-page app (React Native Web, live feed)", "url": "https://bsky.app/profile/bsky.app" },
+  { "id": "video", "kind": "a video page", "url": "https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm" },
+  { "id": "video-yt", "kind": "a video page that asks a runner to sign in", "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ" },
   { "id": "shop", "kind": "a shop's product page", "url": "https://www.ifixit.com/products/pro-tech-toolkit" },
   { "id": "shop2", "kind": "a shop's product page", "url": "https://www.ikea.com/us/en/p/billy-bookcase-white-00263850/" },
   { "id": "article", "kind": "a long article", "url": "https://en.wikipedia.org/wiki/History_of_the_Internet" }

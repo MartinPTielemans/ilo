@@ -58,6 +58,8 @@
     let m = saved.get(el);
     if (!m) { saved.set(el, (m = new Map())); if (!el.hasAttribute('style')) bare.add(el); }
     if (!m.has(prop)) m.set(prop, [el.style.getPropertyValue(prop), el.style.getPropertyPriority(prop)]);
+    // The same value again would still be a style change the page can see, and restyles the element.
+    if (el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important') return;
     el.style.setProperty(prop, value, 'important');
   }
   function restore(el) {
@@ -111,7 +113,10 @@
   }
 
   // The site's own layout comes back at once: every inline style the runtime set goes back.
+  // Off until reapply: the size it changes would otherwise place everything again.
+  let on = true;
   function reset() {
+    on = false;
     for (const s of live) unplace(s);
     for (const el of [...saved.keys()]) restore(el);
   }
@@ -257,7 +262,7 @@
   // ---- Keeping it placed: observers only, no timer, no frame loop.
   let busy = false;
   function layoutAll(why, frame) {
-    if (busy) return;
+    if (busy || !on) return;
     busy = true;
     const t = performance.now();
     try {
@@ -331,7 +336,7 @@
   // The spike's handle, in this isolated world only: the page's own scripts never see it.
   globalThis.__ILO_ARRANGE__ = {
     reset,
-    reapply: () => layoutAll('reapply'),
+    reapply: () => { on = true; layoutAll('reapply'); },
     state: () => live.map((s) => {
       const r = s.el && s.el.isConnected ? s.el.getBoundingClientRect() : null;
       return {
