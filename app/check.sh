@@ -161,6 +161,7 @@ elif [ -n "${BROWSER_FLATPAK:-}" ]; then
     done
     # A run's own profile, as sync-devices gives each device, or the check's.
     dir=${BROWSER_PROFILE_DIR:-$profile_dir}
+    count_off "$dir"
     exec flatpak run --cwd="$PWD" --filesystem="$PWD" --filesystem="$dir:create" \
       --env=BROWSER_PROFILE_DIR="$dir" "$@"
   }
@@ -300,6 +301,7 @@ for run in ${*:-$runs}; do
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"
+  counted_nowhere
   # On Windows GPUI lost a window's move, size or modifiers that came during an update (#1358).
   if windows && grep -q '^browser: gpui dropped ' "$log"; then
     fail "GPUI dropped updates that came during another: $(grep '^browser: gpui dropped ' "$log" |
