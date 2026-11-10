@@ -727,7 +727,12 @@ void AddAdBlockHold(content::NavigationThrottleRegistry& registry) {
       return;
     }
     content::RenderFrameHost* parent = navigation.GetParentFrameOrOuterDocument();
-    const GURL page = parent ? parent->GetOutermostMainFrame()->GetLastCommittedURL() : url;
+    // A tab's page asks at each address it's redirected to, as a site turned off may be one.
+    if (!parent) {
+      AddNativeAdBlockPage(registry);
+      return;
+    }
+    const GURL page = parent->GetOutermostMainFrame()->GetLastCommittedURL();
     Profile* profile =
         Profile::FromBrowserContext(navigation.GetWebContents()->GetBrowserContext());
     if (page.SchemeIsHTTPOrHTTPS() && !OffSites(profile->GetOriginalProfile()).MatchesURL(page)) {
@@ -807,6 +812,10 @@ void ProxyForAdBlock(content::BrowserContext* context,
     return;
   }
   ProxyForNativeAdBlock(factory_builder);
+}
+
+bool AdBlockingOffAt(content::BrowserContext* context, const GURL& url) {
+  return OffSites(Profile::FromBrowserContext(context)->GetOriginalProfile()).MatchesURL(url);
 }
 
 std::optional<bool> AdBlockingOnSite(content::WebContents* contents) {

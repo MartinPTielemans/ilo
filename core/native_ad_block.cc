@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,13 +23,20 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
+#include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "browser_core/ad_block.h"
 #include "browser_core/ad_block_page.mojom.h"
+#include "browser_core/agent_autofill.h"
 #include "browser_core/host.h"
 #include "browser_core/public/browser_core.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -121,7 +130,7 @@ const char* TypeOf(const network::ResourceRequest& request) {
 // What the app's engine does with |request|, and the address its answer writes into |answer|.
 int Ask(const network::ResourceRequest& request, std::string* answer) {
   const bc_host& host = Host();
-  // A page itself always loads: uBlock Origin's warning in place of a blocked one is yet to come.
+  // A page itself was asked about before its request started, by its navigation (PageThrottle).
   if (!g_on.load(std::memory_order_relaxed) || !host.ad_block_request ||
       !request.url.SchemeIsHTTPOrHTTPS() ||
       request.destination == network::mojom::RequestDestination::kDocument) {
@@ -394,21 +403,164 @@ class PageSender : public content::WebContentsObserver,
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(PageSender);
 
+// Whether the app's engine blocks the page at |url| itself, as uBlock Origin's strict blocking
+// does: a filter for its documents, or one for its host alone. Asked as the page's own request,
+// first-party, as uBlock Origin asks for a tab's. On Sequence().
+bool BlocksPage(const GURL& url) {
+  const bc_host& host = Host();
+  if (!g_on.load(std::memory_order_relaxed) || !host.ad_block_request) {
+    return false;
+  }
+  std::string answer;
+  const int verdict = host.ad_block_request(host.context, url.spec().c_str(), url.spec().c_str(),
+                                            "document", &Append, &answer);
+  return verdict == BC_AD_BLOCK_BLOCK || verdict == BC_AD_BLOCK_REDIRECT;
+}
+
+// How long Open anyway lets a host through from its last page, as uBlock Origin's
+// strictBlockingBypassDuration.
+constexpr base::TimeDelta kLetThrough = base::Seconds(120);
+
+// The hosts the user let through a profile's warnings, and until when: each page there moves it
+// on, as uBlock Origin's strictBlockBypasser. Read only as a page starts, so it sets no timer.
+class LetThrough : public base::SupportsUserData::Data {
+ public:
+  static LetThrough& For(content::BrowserContext* context) {
+    auto* through = static_cast<LetThrough*>(context->GetUserData(kKey));
+    if (!through) {
+      auto made = std::make_unique<LetThrough>();
+      through = made.get();
+      context->SetUserData(kKey, std::move(made));
+    }
+    return *through;
+  }
+
+  void Let(const std::string& host) { until_[host] = base::TimeTicks::Now() + kLetThrough; }
+
+  // Whether |host|, or a domain it's under, is let through.
+  bool Lets(std::string_view host) {
+    const base::TimeTicks now = base::TimeTicks::Now();
+    std::erase_if(until_, [now](const auto& entry) { return entry.second <= now; });
+    for (;;) {
+      if (auto it = until_.find(host); it != until_.end()) {
+        it->second = now + kLetThrough;
+        return true;
+      }
+      const size_t dot = host.find('.');
+      if (dot == std::string_view::npos) {
+        return false;
+      }
+      host.remove_prefix(dot + 1);
+    }
+  }
+
+ private:
+  static constexpr char kKey[] = "browser_core::AdBlockLetThrough";
+  std::map<std::string, base::TimeTicks, std::less<>> until_;
+};
+
+// The address a tab's warning was shown for last, which only that warning opens.
+struct Warned : public content::WebContentsUserData<Warned> {
+  explicit Warned(content::WebContents* contents)
+      : content::WebContentsUserData<Warned>(*contents) {}
+  GURL url;
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(Warned);
+
+// The page a blocked page shows in its place, in the look of the core's error page (error_page.cc):
+// its host, its address, the way back where there is one, and Open anyway, which lets its host
+// through for kLetThrough, as uBlock Origin's warning does. Only the user |can_open| it: an agent's
+// tab has no Open anyway, as an agent never gets past a page the user's lists block.
+std::string WarningHtml(const GURL& url, bool can_open) {
+  const std::string host = base::EscapeForHTML(url.host());
+  const std::string address = base::EscapeForHTML(url.spec());
+  return base::StrCat({R"html(<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page blocked</title>
+<style>
+/* error_page.cc's: white words on the pane's colour, or in Light the palette's ink. */
+:root { --ink: 255 255 255; }
+@media (prefers-color-scheme: light) {
+  :root { --ink: 22 20 15; }
+}
+html, body { height: 100%; margin: 0; background: transparent; }
+body {
+  display: flex; align-items: center; justify-content: center;
+  font: 14px system-ui; color: rgb(var(--ink)); cursor: default; -webkit-user-select: none;
+}
+main {
+  display: flex; flex-direction: column; align-items: center;
+  max-width: 400px; padding: 0 24px; text-align: center;
+}
+h1 { margin: 0; font-size: 14px; font-weight: 500; }
+p { margin: 4px 0 0; font-size: 13px; color: rgb(var(--ink) / 0.6); }
+b { font-weight: 500; color: rgb(var(--ink)); }
+#address {
+  margin-top: 12px; max-width: 100%; overflow-wrap: anywhere; font-size: 11px;
+  color: rgb(var(--ink) / 0.32); -webkit-user-select: text; cursor: text;
+}
+#actions { display: flex; gap: 8px; margin-top: 12px; }
+button {
+  height: 28px; padding: 0 12px; border: 0; border-radius: 6px;
+  background: rgb(var(--ink) / 0.1); color: rgb(var(--ink)); font: 500 13px system-ui;
+}
+button:hover { background: rgb(var(--ink) / 0.12); }
+[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+<h1>Ad blocking stopped this page</h1>
+<p><b>)html",
+                       host, R"html(</b> is on a filter list in Settings › Ad blocking.</p>
+<div id="address">)html",
+                       address, R"html(</div>
+<div id="actions">
+<button id="back" hidden>Go back</button>
+)html",
+                       can_open ? base::StrCat({"<button id=\"open\" data-to=\"", address,
+                                                "\">Open anyway</button>\n"})
+                                : std::string(),
+                       R"html(</div>
+</main>
+<script>
+const back = document.getElementById('back');
+if (history.length > 1) {
+  back.hidden = false;
+  back.onclick = () => history.back();
+  back.focus();
+}
+// In this entry's place, so Go back from the page goes where the warning would have.
+const open = document.getElementById('open');
+if (open) {
+  open.onclick = () => location.replace(open.dataset.to);
+}
+</script>
+</body>
+</html>
+)html"});
+}
+
 // Asks the app's engine what the page a navigation loads hides and runs as its request starts, so
-// the answer is in by its response, which waits for it only if it isn't.
+// the answer is in by its response, which waits for it only if it isn't. A tab's page also waits,
+// at each address it goes to, to be asked whether the user's lists block it, before its request
+// goes out, and shows WarningHtml in its place if they do: uBlock Origin's strict blocking, which
+// keeps a badware site from opening at all (#744). It's asked at each address, as uBlock Origin
+// sees each request, so a site the user turned it off on never warns, nor hides or runs anything.
 class PageThrottle : public content::NavigationThrottle {
  public:
-  using content::NavigationThrottle::NavigationThrottle;
+  explicit PageThrottle(content::NavigationThrottleRegistry& registry)
+      : content::NavigationThrottle(registry),
+        page_of_tab_(!registry.GetNavigationHandle().GetParentFrameOrOuterDocument()) {}
 
   // content::NavigationThrottle:
-  ThrottleCheckResult WillStartRequest() override {
-    Ask();
-    return PROCEED;
-  }
-  ThrottleCheckResult WillRedirectRequest() override {
-    Ask();
-    return PROCEED;
-  }
+  ThrottleCheckResult WillStartRequest() override { return Ask(/*started=*/true); }
+  ThrottleCheckResult WillRedirectRequest() override { return Ask(/*started=*/false); }
   ThrottleCheckResult WillProcessResponse() override {
     if (!page_) {
       waiting_ = true;
@@ -421,11 +573,83 @@ class PageThrottle : public content::NavigationThrottle {
 
  private:
   // For the navigation's address now, in place of what was asked for one it redirected from.
-  void Ask() {
+  ThrottleCheckResult Ask(bool started) {
     page_.reset();
+    const int asked = ++asked_;
+    content::NavigationHandle* navigation = navigation_handle();
+    const GURL& url = navigation->GetURL();
+    bool checking = false;
+    if (page_of_tab_) {
+      if (AdBlockingOffAt(navigation->GetWebContents()->GetBrowserContext(), url)) {
+        page_ = Page();
+        return PROCEED;
+      }
+      checking = !LetThroughNow(url, started);
+      if (checking) {
+        // First on the sequence, so it doesn't wait behind what the page hides.
+        Sequence()->PostTaskAndReplyWithResult(
+            FROM_HERE, base::BindOnce(&BlocksPage, url),
+            base::BindOnce(&PageThrottle::Checked, weak_factory_.GetWeakPtr(), asked));
+      }
+    }
     Sequence()->PostTaskAndReplyWithResult(
-        FROM_HERE, base::BindOnce(&PageOf, navigation_handle()->GetURL()),
-        base::BindOnce(&PageThrottle::Answer, weak_factory_.GetWeakPtr(), ++asked_));
+        FROM_HERE, base::BindOnce(&PageOf, url),
+        base::BindOnce(&PageThrottle::Answer, weak_factory_.GetWeakPtr(), asked));
+    return checking ? DEFER : PROCEED;
+  }
+
+  // Whether the page at |url| loads without asking: the user let its host through a warning in
+  // this profile a moment ago, or does now with Open anyway, at the navigation's |started|. Never
+  // in an agent's tab, which neither opens a warning nor uses the user's.
+  bool LetThroughNow(const GURL& url, bool started) {
+    content::NavigationHandle* navigation = navigation_handle();
+    content::WebContents* contents = navigation->GetWebContents();
+    if (IsAgentTab(contents)) {
+      return false;
+    }
+    LetThrough& through = LetThrough::For(contents->GetBrowserContext());
+    if (started && OpensWarning(url)) {
+      through.Let(url.host());
+    }
+    return through.Lets(url.host());
+  }
+
+  // Whether this navigation is the user's click on Open anyway: the tab's warning for |url| shown
+  // now, and the navigation its own, with a gesture. A page that opened the tab can't send it
+  // on to |url| for the user.
+  bool OpensWarning(const GURL& url) {
+    content::NavigationHandle* navigation = navigation_handle();
+    content::WebContents* contents = navigation->GetWebContents();
+    const Warned* warned = Warned::FromWebContents(contents);
+    content::RenderFrameHost* page = contents->GetPrimaryMainFrame();
+    if (!warned || warned->url != url || !navigation->IsInPrimaryMainFrame() ||
+        !navigation->IsRendererInitiated() || !navigation->HasUserGesture() ||
+        !navigation->GetInitiatorFrameToken() || !page->IsErrorDocument() ||
+        page->GetLastCommittedURL() != url) {
+      return false;
+    }
+    return content::RenderFrameHost::FromFrameToken(content::GlobalRenderFrameHostToken(
+               navigation->GetInitiatorProcessId(), *navigation->GetInitiatorFrameToken())) ==
+           page;
+  }
+
+  void Checked(int asked, bool blocked) {
+    if (asked != asked_) {
+      return;
+    }
+    if (!blocked) {
+      Resume();
+      return;
+    }
+    content::WebContents* contents = navigation_handle()->GetWebContents();
+    const GURL url = navigation_handle()->GetURL();
+    if (navigation_handle()->IsInPrimaryMainFrame()) {
+      Warned::CreateForWebContents(contents);
+      Warned::FromWebContents(contents)->url = url;
+    }
+    // Last: the navigation, and this with it, can go here.
+    CancelDeferredNavigation(
+        {CANCEL, net::ERR_BLOCKED_BY_CLIENT, WarningHtml(url, !IsAgentTab(contents))});
   }
   void Answer(int asked, Page page) {
     if (asked != asked_) {
@@ -444,6 +668,8 @@ class PageThrottle : public content::NavigationThrottle {
                                                 std::move(*page_));
   }
 
+  // Whether the navigation is a tab's page, not a frame's, which the frame's page decides for.
+  const bool page_of_tab_;
   std::optional<Page> page_;
   int asked_ = 0;
   bool waiting_ = false;
