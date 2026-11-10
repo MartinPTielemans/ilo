@@ -68,6 +68,23 @@ segment-padding = 2.0
 # The name's menu, under the name.
 menu-left = 14.0
 menu-top = 44.0
+# Advanced (#695 call a, ours, as Arc's isn't recorded): its chip at Invert lightness's line's
+# right end and, while it's open, Reset left of it and three sliders under the line, from
+# slider-y, slider-pitch apart. The card grows by advanced-height and all under them moves down.
+advanced-width = 96.0
+reset-width = 56.0
+slider-y = 280.0
+slider-pitch = 32.0
+advanced-height = 104.0
+# A slider's track runs from the controls' left edge to its value's box, whose % is right-aligned
+# at the controls' right edge, as Size's. Its track, fill and knob are the media player's volume
+# slider's, filled from a tick at 100 %, in the middle.
+slider-value = 48.0
+slider-track-ink = 0.25
+slider-fill-ink = 0.62
+slider-tick = 10.0
+# The focused slider's knob's ring, in the accent: the one the arrow keys move.
+slider-ring = 2.0
 
 [capture]
 # Arc's layout, measured at 1× (docs/ux-spec.md › Capture): the ring around what's chosen and the

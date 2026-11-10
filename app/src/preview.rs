@@ -2714,26 +2714,33 @@ fn main() {
                 }
             }
             // PREVIEW_BOOST_EDITOR=new shows the Boost editor for a site's new Boost, its hint up
-            // and its dots unplaced, and =edited for one with its edits made.
+            // and its dots unplaced, =edited for one with its edits made, and =advanced for that
+            // one with Advanced open and its sliders moved.
             if let Some(kind) = std::env::var_os("PREVIEW_BOOST_EDITOR") {
+                let edited = Style {
+                    ground: Some(boost_style::Dot { x: -0.3, y: 0.86 }),
+                    links: Some(boost_style::Dot { x: 0.5, y: -0.2 }),
+                    face: Some(Face::Serif),
+                    size: 110,
+                    case: Some(Case::Lower),
+                    dragged: true,
+                    name: Some("Quiet news".into()),
+                    ..Style::default()
+                };
+                let style = match kind.to_str() {
+                    Some("edited") => edited,
+                    Some("advanced") => Style {
+                        adjust: [110, 100, 80],
+                        advanced: true,
+                        ..edited
+                    },
+                    _ => Style::default(),
+                };
                 let bounds = Bounds::new(
                     point(px(x as f32 + 230.), px(y as f32 + 34.)),
-                    size(px(boost_editor::WIDTH), px(boost_editor::HEIGHT)),
+                    size(px(boost_editor::WIDTH), px(boost_editor::height_of(&style))),
                 );
                 if boost_editor::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
-                    let style = match kind.to_str() {
-                        Some("edited") => Style {
-                            ground: Some(boost_style::Dot { x: -0.3, y: 0.86 }),
-                            links: Some(boost_style::Dot { x: 0.5, y: -0.2 }),
-                            face: Some(Face::Serif),
-                            size: 110,
-                            case: Some(Case::Lower),
-                            dragged: true,
-                            name: Some("Quiet news".into()),
-                            ..Style::default()
-                        },
-                        _ => Style::default(),
-                    };
                     let requested: boost_editor::Requested = Rc::new(|_, _| {});
                     let at = theme_picker::At::Row(point(0., 30.));
                     let palette = browser::palette::Palette::of(
@@ -2957,6 +2964,9 @@ impl theme_picker::Host for PreviewPicker {
 
 impl boost_editor::Host for PreviewPicker {
     fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+
+    // The preview's window is opened at the height it shows at.
+    fn resize(&self, _: f32, _: &[(f32, f32, f32)]) {}
 
     fn hide(&self) {}
 }
