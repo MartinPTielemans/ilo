@@ -37,6 +37,7 @@
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -417,6 +418,29 @@ bool BlocksPage(const GURL& url) {
   return verdict == BC_AD_BLOCK_BLOCK || verdict == BC_AD_BLOCK_REDIRECT;
 }
 
+// What a tab's page gets.
+enum class Decision {
+  kLoad,
+  // The warning in its place: a list names the page.
+  kWarn,
+  // Its tab closed: a pop-up filter names the page another page opened, as uBlock Origin closes it.
+  kClose,
+};
+
+// Of the page at |url|, in a tab |opener|'s page opened, if it did, and the warning if it |warns|.
+// On Sequence().
+Decision Decide(const GURL& url, const std::optional<GURL>& opener, bool warns) {
+  const bc_host& host = Host();
+  if (opener && g_on.load(std::memory_order_relaxed) && host.ad_block_request) {
+    std::string answer;
+    if (host.ad_block_request(host.context, url.spec().c_str(), opener->spec().c_str(), "popup",
+                              &Append, &answer) == BC_AD_BLOCK_BLOCK) {
+      return Decision::kClose;
+    }
+  }
+  return warns && BlocksPage(url) ? Decision::kWarn : Decision::kLoad;
+}
+
 // How long Open anyway lets a host through from its last page, as uBlock Origin's
 // strictBlockingBypassDuration.
 constexpr base::TimeDelta kLetThrough = base::Seconds(120);
@@ -584,11 +608,13 @@ class PageThrottle : public content::NavigationThrottle {
         page_ = Page();
         return PROCEED;
       }
-      checking = !LetThroughNow(url, started);
+      const std::optional<GURL> opener = Opener();
+      const bool warns = !LetThroughNow(url, started);
+      checking = opener || warns;
       if (checking) {
         // First on the sequence, so it doesn't wait behind what the page hides.
         Sequence()->PostTaskAndReplyWithResult(
-            FROM_HERE, base::BindOnce(&BlocksPage, url),
+            FROM_HERE, base::BindOnce(&Decide, url, opener, warns),
             base::BindOnce(&PageThrottle::Checked, weak_factory_.GetWeakPtr(), asked));
       }
     }
@@ -596,6 +622,25 @@ class PageThrottle : public content::NavigationThrottle {
         FROM_HERE, base::BindOnce(&PageOf, url),
         base::BindOnce(&PageThrottle::Answer, weak_factory_.GetWeakPtr(), asked));
     return checking ? DEFER : PROCEED;
+  }
+
+  // The address of the page that opened this tab, while the tab has shown nothing else, as uBlock
+  // Origin asks its pop-up filters about a tab a page opens, with or without window.opener, and
+  // about each address it's sent on to. None from a site the user turned ad blocking off on.
+  std::optional<GURL> Opener() {
+    content::WebContents* contents = navigation_handle()->GetWebContents();
+    if (!contents->GetController().IsInitialNavigation() ||
+        !contents->HasLiveOriginalOpenerChain()) {
+      return std::nullopt;
+    }
+    const GURL opener = contents->GetFirstWebContentsInLiveOriginalOpenerChain()
+                            ->GetPrimaryMainFrame()
+                            ->GetLastCommittedURL();
+    if (!opener.SchemeIsHTTPOrHTTPS() ||
+        AdBlockingOffAt(contents->GetBrowserContext(), opener)) {
+      return std::nullopt;
+    }
+    return opener;
   }
 
   // Whether the page at |url| loads without asking: the user let its host through a warning in
@@ -633,15 +678,28 @@ class PageThrottle : public content::NavigationThrottle {
            page;
   }
 
-  void Checked(int asked, bool blocked) {
+  void Checked(int asked, Decision decision) {
     if (asked != asked_) {
       return;
     }
-    if (!blocked) {
+    if (decision == Decision::kLoad) {
       Resume();
       return;
     }
     content::WebContents* contents = navigation_handle()->GetWebContents();
+    if (decision == Decision::kClose) {
+      // After the navigation goes, which closing the tab now would take with it mid-call.
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(
+                         [](base::WeakPtr<content::WebContents> tab) {
+                           if (tab) {
+                             tab->Close();
+                           }
+                         },
+                         contents->GetWeakPtr()));
+      CancelDeferredNavigation(CANCEL_AND_IGNORE);
+      return;
+    }
     const GURL url = navigation_handle()->GetURL();
     if (navigation_handle()->IsInPrimaryMainFrame()) {
       Warned::CreateForWebContents(contents);
