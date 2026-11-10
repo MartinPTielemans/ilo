@@ -241,6 +241,28 @@ jobs:
           [ -n "$identity" ]
           echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
 
+      # release.yml's step, as it runs it, then with the 30-day window widened past the
+      # certificate's date and past the profile's own, and with another App ID expected.
+      - name: Gate
+        run: |
+          out=$RUNNER_TEMP/out
+          ../tools/check-profile.sh "$SIGN_IDENTITY" > "$out/gate-pass.txt" 2>&1
+          set +e
+          PROFILE_DAYS=120 ../tools/check-profile.sh "$SIGN_IDENTITY" > "$out/gate-120-days.txt" 2>&1
+          echo "exit $?" >> "$out/gate-120-days.txt"
+          PROFILE_DAYS=7000 ../tools/check-profile.sh "$SIGN_IDENTITY" > "$out/gate-7000-days.txt" 2>&1
+          echo "exit $?" >> "$out/gate-7000-days.txt"
+          PROFILE_APP_ID=938WK3V9K9.app.example ../tools/check-profile.sh "$SIGN_IDENTITY" > "$out/gate-app-id.txt" 2>&1
+          echo "exit $?" >> "$out/gate-app-id.txt"
+          set -e
+          for f in pass 120-days 7000-days app-id; do echo "== $f"; cat "$out/gate-$f.txt"; done
+          grep -q 'can sign 938WK3V9K9.app.ilo.browser' "$out/gate-pass.txt"
+          grep -q 'lists a certificate that expires on Feb  1 22:12:15 2027 GMT, within 120 days' "$out/gate-120-days.txt"
+          grep -q 'expires on 2044-11-05T17:54:39Z, within 7000 days' "$out/gate-7000-days.txt"
+          grep -q 'is for the App ID 938WK3V9K9.app.ilo.browser, not 938WK3V9K9.app.example' "$out/gate-app-id.txt"
+          for f in 120-days 7000-days app-id; do grep -q '^exit 1$' "$out/gate-$f.txt"; done
+          git diff --exit-code -- entitlements/developer-id.provisionprofile
+
       # A Developer ID run without the profile, and one claiming a key the profile doesn't grant.
       - name: Refusals
         run: |
