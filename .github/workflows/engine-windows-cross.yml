@@ -14,6 +14,11 @@ name: Engine on Windows (cross-compiled)
 
 on:
   workflow_dispatch:
+    inputs:
+      yielded:
+        description: Set by tools/engine-yield.sh on a lane's retry after it gave the runner to a release.
+        type: boolean
+        default: false
   # Main's core, once a day, at 02:00 UTC, when it changed (tools/engine-changed.sh).
   schedule:
     - cron: '0 2 * * *'
@@ -31,11 +36,14 @@ on:
       - app/platform/windows/package/Assets/ilo.ico
 
 # The runner takes one job at a time, so this never builds beside the Linux engine. Of this
-# workflow's waiting runs only the newest is kept, but the night has a group of its own, so it never
-# replaces a waiting dispatch, nor one of those it. Sharing the Linux engine's group would instead
-# let each platform's waiting run cancel the other's.
+# workflow's waiting runs only the newest is kept, but the night and a release batch's runs have
+# groups of their own, so neither replaces a waiting dispatch, a main push's run or a lane's retry,
+# nor one of those it (#2332). Sharing the Linux engine's group would instead let each platform's
+# waiting run cancel the other's.
 concurrency:
-  group: ilo-engine-windows${{ github.event_name == 'schedule' && '-night' || '' }}
+  group: >-
+    ilo-engine-windows${{ github.event_name == 'schedule' && '-night'
+    || startsWith(github.ref, 'refs/heads/engine-build/batch-') && '-release' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -45,12 +53,23 @@ jobs:
     name: Changes
     if: github.repository == 'MartinPTielemans/ilo'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # A retry may wait for a release for up to 5 hours (tools/engine-yield.sh).
+    timeout-minutes: ${{ inputs.yielded && 310 || 10 }}
     permissions:
+      actions: read
       contents: read
     outputs:
       build: ${{ steps.decide.outputs.build }}
     steps:
+      # A lane's retry after it gave the runner to a release waits here, on GitHub's runner, until the
+      # release has the runner, so it gives way once for each release (tools/engine-yield.sh).
+      - if: inputs.yielded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" wait
       - if: github.event_name == 'schedule'
         uses: actions/checkout@v4
         with:
@@ -73,11 +92,21 @@ jobs:
     # As long as the Linux engine's first build, or longer: the first build compiles all of Chrome.
     timeout-minutes: 1440
     permissions:
+      actions: write
       contents: read
     env:
       # As engine-linux.yml: a job per 3 GB of the job's 22 GB.
       BUILD_JOBS: 7
     steps:
+      # A lane's build that gets the runner while a release's waits gives it back, before any checkout,
+      # so that costs the runner seconds (tools/engine-yield.sh, #2332).
+      - if: ${{ !startsWith(github.ref, 'refs/heads/engine-build/batch-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/tools/engine-yield.sh?ref=$GITHUB_SHA" \
+            -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/engine-yield.sh" || exit 0
+          bash "$RUNNER_TEMP/engine-yield.sh" yield
       # With its history, where tree.sh finds the versions of our patches a kept tree has in it.
       - uses: actions/checkout@v4
         with:

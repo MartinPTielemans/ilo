@@ -2389,7 +2389,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// Privacy: ad blocking and the sites it's off on, whether copied links leave out trackers,
+    /// whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
     fn privacy(
@@ -2415,6 +2416,24 @@ impl Settings {
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
+        let clean_links = self.toggle(
+            "clean links",
+            "Copy links without tracking",
+            clean_links_on(cx),
+            set_clean_links,
+            accent,
+            cx,
+        );
+        let line = concat!(
+            "Copied and shared links leave out what only tells a site where a click came from. ",
+            "A video's time stays. The URL field's own text copies whole."
+        );
+        let clean_links = setting(
+            look,
+            "Copy links without tracking",
+            Some(line.into()),
+            vec![clean_links],
+        );
         let prompts = unsafe { bc::bc_notification_prompts() };
         let prompts_switch = self.toggle(
             "notification prompts",
@@ -2434,7 +2453,11 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
+        let mut blocks = vec![
+            Block::Rows(vec![ad_blocking]),
+            Block::Rows(vec![clean_links]),
+            Block::Rows(vec![prompts]),
+        ];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -4503,6 +4526,33 @@ fn set_new_note(on: bool, cx: &mut App) {
     };
     cx.set_global(shell::NewNoteOn(on));
     crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
+}
+
+/// Where Copy links without tracking is kept: there while it's off (#2351). The app's, not a
+/// profile's, as its copy paths are.
+fn clean_links_off_path() -> String {
+    format!("{}/copy-links-as-is", crate::profile_dir())
+}
+
+/// Reads Copy links without tracking, before the windows open and read it.
+pub fn read_clean_links(cx: &mut App) {
+    let on = !std::path::Path::new(&clean_links_off_path()).exists();
+    cx.set_global(shell::CleanLinksOn(on));
+}
+
+fn clean_links_on(cx: &App) -> bool {
+    cx.try_global::<shell::CleanLinksOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once.
+fn set_clean_links(on: bool, cx: &mut App) {
+    let path = clean_links_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::CleanLinksOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_clean_links(on, cx));
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
