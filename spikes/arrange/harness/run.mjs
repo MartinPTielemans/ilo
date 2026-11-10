@@ -144,15 +144,18 @@ async function typeInto(p, desc) {
   return { tried: true, found: true, hits: at.hits, typed: typeof value === 'string' && value.includes('ilo') };
 }
 
-// Whether the video |desc| finds plays on: its time moves over 2 s.
+// Whether the video |desc| finds plays on: its time moves within 8 s of it being scrolled into
+// view, since players load what they show only once it's on screen.
 async function playing(p, desc) {
   if (!desc) return { tried: false };
+  await settleOn(p, desc);
   const expr = `(() => { const A = globalThis.__ILO_ARRANGE__; const v = (${findExpr('A', JSON.stringify(desc))}) || document.querySelector('video');
     if (!v) return null; if (v.paused) v.play().catch(() => {}); return { t: v.currentTime, paused: v.paused, w: v.videoWidth }; })()`;
   const a = await p.inWorld(expr);
-  await sleep(2000);
-  const b = await p.inWorld(expr);
-  if (!a || !b) return { tried: true, found: false };
+  if (!a) return { tried: true, found: false };
+  let b = a;
+  for (let i = 0; i < 16 && !(b && b.t > a.t + 0.5); i++) { await sleep(500); b = await p.inWorld(expr); }
+  if (!b) return { tried: true, found: false };
   return { tried: true, found: true, advanced: b.t > a.t + 0.5, frames: b.w > 0 };
 }
 
