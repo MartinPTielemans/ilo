@@ -245,7 +245,8 @@ void Unhide(NSView* view, bool hidden) {
 void RoundCorners(NSView* view, double radius, CACornerMask corners) {
   view.layer.cornerRadius = radius;
   view.layer.maskedCorners = corners;
-  view.layer.masksToBounds = radius > 0 && corners;
+  // Test for #2248: no mask on the page views at all, square corners.
+  view.layer.masksToBounds = NO;
 }
 
 // The corners of |frame| that |rect|, in it from its top-left, reaches.
