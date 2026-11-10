@@ -121,6 +121,7 @@ mod picture;
 mod recent_downloads;
 #[cfg(test)]
 mod recorder;
+mod return_mark;
 mod rows;
 mod scripting;
 mod scroller;
@@ -4678,7 +4679,7 @@ impl Shell {
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
-                    .children(self.beside_pages())
+                    .children(self.beside_pages(cx))
                     .child(rest.h(px(self.under_tiles() - URL_FIELD_TOP)))
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
@@ -4724,9 +4725,9 @@ impl Shell {
                 // Beside the form, the page's URL field and favorites are the shown Space's, over
                 // it (beside_form). Elsewhere it's drawn whole, with its own (beside_pages), over
                 // its place here, which keeps its menu.
-                Some(other) if form.is_some() => {
-                    self.still_page(other, self.tiles_room()).into_any_element()
-                }
+                Some(other) if form.is_some() => self
+                    .still_page(other, self.tiles_room(), cx)
+                    .into_any_element(),
                 Some(_) => div().into_any_element(),
                 None => continue,
             };
@@ -4807,7 +4808,7 @@ impl Shell {
 
     /// Another Space's page as it shows once shown, while it slides in or out: its name, and its
     /// rows with the tab it would show selected, `room` under its top. It takes no input.
-    fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
+    fn still_page(&self, space: &Space, room: f32, cx: &App) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
             let depth = space.listed_depth(tab);
@@ -4821,7 +4822,14 @@ impl Shell {
             if panes.len() > 1 {
                 let width = self.segment_width(depth, panes.len());
                 let segments = panes.iter().map(|&pane| {
-                    self.segment(&self.palette, pane, width, pane == tab, pane == selected)
+                    self.segment(
+                        &self.palette,
+                        pane,
+                        width,
+                        pane == tab,
+                        pane == selected,
+                        cx,
+                    )
                 });
                 let developer = panes.contains(&selected) && self.page(selected).developer_mode;
                 return row.child(
@@ -4837,7 +4845,13 @@ impl Shell {
             let page = self.page(tab);
             let icon = div()
                 .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-                .child(self.tab_icon(tab));
+                .child(self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    || self.tab_icon(tab),
+                    cx,
+                ));
             let bright = tab == selected || page.developer_mode;
             let developer = tab == selected && page.developer_mode;
             row.child(

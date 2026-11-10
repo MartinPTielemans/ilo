@@ -1798,7 +1798,14 @@ impl Shell {
                 let panes = space.panes(tab);
                 if panes.len() == 1 {
                     let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
-                    let plate = plate(self.tab_icon_in(&palette, tab), label);
+                    let icon = self.with_return_mark(
+                        &palette,
+                        tab,
+                        FAVICON_SIZE,
+                        || self.tab_icon_in(&palette, tab),
+                        cx,
+                    );
+                    let plate = plate(icon, label);
                     let dragged = CardTab {
                         tab,
                         space: id,
@@ -1819,13 +1826,13 @@ impl Shell {
                 let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
                 let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
                 let width = plate / panes.len() as f32;
-                let segments = panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &pane)| self.segment(&palette, pane, width, index == 0, false));
+                let segments = panes.iter().enumerate().map(|(index, &pane)| {
+                    self.segment(&palette, pane, width, index == 0, false, cx)
+                });
                 card_row(depth, split_plate(segments))
             }
         });
+        let rows: Vec<_> = rows.collect();
         let field = self.card_field(space, &palette, window_at(0.), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
