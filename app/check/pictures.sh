@@ -39,12 +39,18 @@ if [ "$active" != 1 ]; then
   echo "skip: pictures. Browser wasn't the active app."
   exit 0
 fi
-send place 0 40 900 500
+# Side by side on the screen, which is 1280 wide in Linux's sessions, where Wayland's pointer can't
+# go off it to click the second window's page, and 1920 on the Macs and Windows.
+case $(uname) in
+Linux) left=10 right=640 wide=620 ;;
+*) left=0 right=920 wide=900 ;;
+esac
+send place $left 40 $wide 500
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
 second=$(grep '^browser: window opened ' "$log" | sed -n 2p | cut -d' ' -f4)
 send window 2
-send place 920 40 900 500
+send place $right 40 $wide 500
 send click $(row 0)
 expect "^browser: window $second shows $a\$" "the page didn't move into the second window"
 expect "^browser: window $first pictures tab $a\$" "the first window got no picture of the page"

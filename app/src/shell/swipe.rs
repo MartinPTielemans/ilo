@@ -304,13 +304,14 @@ impl Shell {
         let cancel = space != swipe.from && self.form().is_some();
         let beside = cancel.then_some(swipe.from);
         // The fingers' speed carries on, unless Reduce Motion has the pages land where they go.
-        let start = crate::motion::start(cx);
+        let start = crate::motion::start_at(cx.background_executor().now(), cx);
         self.settle = Some(Settle {
             space,
             beside,
             from,
             velocity,
             start,
+            clock: cx.background_executor().clone(),
             next_door: false,
         });
         if cancel {

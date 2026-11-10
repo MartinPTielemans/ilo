@@ -6,16 +6,19 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
-    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
-    img, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
+    FocusHandle, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
+    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -909,10 +912,28 @@ impl Naming {
     }
 }
 
+/// How many name fields have opened. The host says the page took the keyboard as the press comes,
+/// but a field hears it only after the events queued behind that press, a double-click's second
+/// press among them, which may have opened a field since (#2260). So the host's word counts the
+/// fields as the press comes (`fields_opened`), and a field opened after it stays.
+static FIELDS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// How many name fields have opened so far.
+pub fn fields_opened() -> u64 {
+    FIELDS_OPENED.load(Ordering::Relaxed)
+}
+
+/// Counts a field opening, giving its place among them.
+fn field_opens() -> u64 {
+    FIELDS_OPENED.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 /// The field a Space's name, a tab's title or a folder's name turns into for renaming it.
 struct Renaming {
     naming: Naming,
     name: Entity<TextInput>,
+    /// Its place among the fields opened (`fields_opened`).
+    opened: u64,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
     /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
@@ -1165,6 +1186,9 @@ struct Settle {
     from: f32,
     velocity: f32,
     start: Instant,
+    /// GPUI's: the real one in the app, and in a test one only the test moves, so a time into the
+    /// slide holds on a slow runner (#2265).
+    clock: BackgroundExecutor,
     /// A switch to the Space next to the one before, whose colour changes ahead of the slide.
     next_door: bool,
 }
@@ -1181,19 +1205,26 @@ struct FullScreenTiming {
 impl Settle {
     /// How much of the Space before's colour is left, for a switch next door.
     fn color_left(&self) -> Option<f32> {
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         self.next_door.then(|| (-t / SPACE_COLOR_TAU).exp())
     }
 
     /// How far the page is from its place, or None once it's there.
     fn offset(&self) -> Option<f32> {
         let omega = std::f32::consts::TAU / SPACE_SETTLE;
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         let decay = (-omega * t).exp();
         let rise = self.velocity + omega * self.from;
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
+    }
+
+    fn elapsed(&self) -> f32 {
+        self.clock
+            .now()
+            .saturating_duration_since(self.start)
+            .as_secs_f32()
     }
 }
 
@@ -1713,10 +1744,13 @@ pub struct Shell {
     update_banner: Option<update_banner::Waiting>,
     update_open: bool,
     update_restarting: bool,
+    /// The updater's checks are off, so the open banner offers to turn them on.
+    update_offer: bool,
     update_motion: Option<(f32, Instant)>,
     update_said: Option<&'static str>,
     /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
@@ -2080,9 +2114,11 @@ impl Shell {
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
             update_restarting: false,
+            update_offer: crate::updates::automatic(cx) == Some(false),
             update_motion: None,
             update_said: None,
             update_drawn: Rc::default(),
+            update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -2850,7 +2886,8 @@ impl Shell {
                 beside: Some(before),
                 from: if to > from { width } else { -width },
                 velocity: 0.,
-                start: crate::motion::start(cx),
+                start: crate::motion::start_at(cx.background_executor().now(), cx),
+                clock: cx.background_executor().clone(),
                 next_door: from.abs_diff(to) == 1,
             });
         }
