@@ -35,6 +35,80 @@ pub(crate) fn show(changes: Vec<boosts::Change>) {
         );
         unsafe { bc::bc_profile_set_boost(change.profile, site.as_ptr(), css.as_ptr()) };
     }
+    give_scripts(boosts::with(|boosts| boosts.all_script_changes()));
+}
+
+/// Gives the core each script as it changed, and keeps the state it answers (#2297).
+fn give_scripts(changes: Vec<boosts::ScriptChange>) {
+    for change in changes {
+        let Ok(site) = CString::new(change.site.as_str()) else {
+            continue;
+        };
+        let (bytes, size) = match &change.script {
+            Some(bytes) => (bytes.as_ptr().cast::<c_char>(), bytes.len()),
+            None => (std::ptr::null(), 0),
+        };
+        let state =
+            unsafe { bc::bc_profile_set_boost_script(change.profile, site.as_ptr(), bytes, size) };
+        let state = script_state(state);
+        // check.sh reads this line.
+        log!(
+            "browser: boost script given {} ({}): {state:?}",
+            change.site,
+            change.script.as_ref().map_or(0, Vec::len)
+        );
+        if change.script.is_some() {
+            boosts::with(|boosts| boosts.set_script_state(change.profile, &change.site, state));
+        }
+    }
+}
+
+/// The core's BC_BOOST_SCRIPT_ state as the app's.
+pub(crate) fn script_state(state: std::ffi::c_int) -> boosts::Script {
+    match state as u32 {
+        bc::BC_BOOST_SCRIPT_ON => boosts::Script::On,
+        bc::BC_BOOST_SCRIPT_CHANGED => boosts::Script::Changed,
+        bc::BC_BOOST_SCRIPT_TOO_LARGE => boosts::Script::TooLarge,
+        _ => boosts::Script::New,
+    }
+}
+
+/// The core's state for `bytes` as `site`'s script in `profile`, without giving them to its pages.
+pub(crate) fn boost_script_state(profile: u64, site: &str, bytes: &[u8]) -> boosts::Script {
+    let Ok(site) = CString::new(site) else {
+        return boosts::Script::New;
+    };
+    script_state(unsafe {
+        bc::bc_profile_boost_script_state(
+            profile,
+            site.as_ptr(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
+        )
+    })
+}
+
+/// Turn On in the turn-on dialog: has the core record `bytes`, the ones it showed, as `site`'s
+/// script, and run them. Whether it did.
+pub(crate) fn turn_on_boost_script(profile: u64, site: &str, bytes: &[u8]) -> bool {
+    let Ok(site) = CString::new(site) else {
+        return false;
+    };
+    unsafe {
+        bc::bc_profile_turn_on_boost_script(
+            profile,
+            site.as_ptr(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
+        )
+    }
+}
+
+/// Turn Off and Delete…: the core forgets `site`'s script turned on, which is then new, and off.
+pub(crate) fn forget_boost_script(profile: u64, site: &str) {
+    if let Ok(site) = CString::new(site) {
+        unsafe { bc::bc_profile_forget_boost_script(profile, site.as_ptr()) };
+    }
 }
 
 /// Reads `profile`'s Boosts, has the core show them and watches their folder, once a launch.
@@ -74,8 +148,17 @@ fn folder_changed(profile: u64, cx: &mut App) {
 pub(crate) fn profiles_changed(profiles: &[(u64, String)]) {
     let profiles: Vec<u64> = profiles.iter().map(|(id, _)| *id).collect();
     update_app_later(move |cx| {
-        for profile in profiles {
+        for &profile in &profiles {
             load(profile, cx);
+        }
+        // The core says a script is new while its profile loads, so those given before are asked
+        // again once it has.
+        let again: Vec<boosts::ScriptChange> = (profiles.iter())
+            .flat_map(|&profile| boosts::with(|boosts| boosts.given_scripts(profile)))
+            .collect();
+        if !again.is_empty() {
+            give_scripts(again);
+            update_shells_in(cx, |shell, cx| shell.boosts_changed(cx));
         }
     });
 }

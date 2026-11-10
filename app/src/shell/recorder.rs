@@ -165,6 +165,9 @@ pub(super) struct Recorder {
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's folder, which the test makes.
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
+    /// The core's record of each Boost script turned on, by profile and site: the bytes, where the
+    /// core keeps their hash (#2297).
+    pub(super) boost_scripts_on: RefCell<HashMap<(u64, String), Vec<u8>>>,
     /// Each profile's Library › Agents past tasks, as the file keeps them.
     pub(super) agent_history: RefCell<HashMap<u64, String>>,
     /// The answers for good, by the key they're kept under, each its site and whether it may.
@@ -1055,6 +1058,56 @@ impl Browser for Recorder {
                 change.css.trim_end()
             ));
         }
+        // As the app's host does, the scripts that changed go to the core, which says their state.
+        for change in crate::boosts::with(|boosts| boosts.all_script_changes()) {
+            let given = change
+                .script
+                .as_ref()
+                .map_or("none".into(), |bytes| format!("{} bytes", bytes.len()));
+            self.record(format!(
+                "boost script {} {}: {given}",
+                change.profile, change.site
+            ));
+            if let Some(bytes) = &change.script {
+                let state = self.boost_script_state(change.profile, &change.site, bytes);
+                crate::boosts::with(|boosts| {
+                    boosts.set_script_state(change.profile, &change.site, state)
+                });
+            }
+        }
+    }
+
+    fn boost_script_state(&self, profile: u64, site: &str, bytes: &[u8]) -> crate::boosts::Script {
+        use crate::boosts::{SCRIPT_LIMIT, Script};
+        if bytes.len() > SCRIPT_LIMIT {
+            return Script::TooLarge;
+        }
+        match self
+            .boost_scripts_on
+            .borrow()
+            .get(&(profile, site.to_owned()))
+        {
+            Some(on) if on == bytes => Script::On,
+            Some(_) => Script::Changed,
+            None => Script::New,
+        }
+    }
+
+    fn turn_on_boost_script(&self, profile: u64, site: &str, bytes: &[u8]) -> bool {
+        self.record(format!(
+            "boost script on {profile} {site}: {} bytes",
+            bytes.len()
+        ));
+        if bytes.len() > crate::boosts::SCRIPT_LIMIT {
+            return false;
+        }
+        (self.boost_scripts_on.borrow_mut()).insert((profile, site.to_owned()), bytes.to_owned());
+        true
+    }
+
+    fn forget_boost_script(&self, profile: u64, site: &str) {
+        self.record(format!("boost script forgotten {profile} {site}"));
+        (self.boost_scripts_on.borrow_mut()).remove(&(profile, site.to_owned()));
     }
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {

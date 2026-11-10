@@ -686,6 +686,7 @@ impl Browser for Engine {
                 true => dialog::Return::Cancel,
                 false => dialog::Return::Action,
             },
+            code: None,
         };
         let window = self.window;
         let kind = asked.kind;
@@ -999,6 +1000,23 @@ impl Browser for Engine {
 
     fn show_boosts(&self, changes: Vec<browser::boosts::Change>, _: &mut App) {
         boosts_host::show(changes);
+    }
+
+    fn boost_script_state(
+        &self,
+        profile: u64,
+        site: &str,
+        bytes: &[u8],
+    ) -> browser::boosts::Script {
+        boosts_host::boost_script_state(profile, site, bytes)
+    }
+
+    fn turn_on_boost_script(&self, profile: u64, site: &str, bytes: &[u8]) -> bool {
+        boosts_host::turn_on_boost_script(profile, site, bytes)
+    }
+
+    fn forget_boost_script(&self, profile: u64, site: &str) {
+        boosts_host::forget_boost_script(profile, site);
     }
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {
@@ -2153,6 +2171,7 @@ impl Browser for Engine {
             fields: Vec::new(),
             check: None,
             on_return: dialog::Return::Action,
+            code: None,
         };
         // A Quit as the window comes on screen, before its overlays are made, asks too (#905):
         // with no dialog to ask in, pose would drop it and the app would never quit.

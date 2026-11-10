@@ -317,6 +317,7 @@ pub fn pairing_question(pairing: &Pairing) -> Question {
         fields: Vec::new(),
         check: None,
         on_return: Return::Cancel,
+        code: None,
     }
 }
 

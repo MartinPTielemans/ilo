@@ -18,9 +18,9 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions,
+    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, ScrollHandle, SharedString,
+    Stateful, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
     accesskit::{Role, Toggled},
     actions, canvas, div, img, point,
     prelude::*,
@@ -82,6 +82,11 @@ use crate::tokens::dialog::{
     CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHECK_TOP, FIELD_GAP, FIELD_PLACEHOLDER,
     FIELD_TEXT, FIELDS_TOP,
 };
+use crate::tokens::dialog::{
+    CODE_ADDED, CODE_CAPTION_GAP, CODE_DIFF_FILL, CODE_FADE, CODE_GUTTER, CODE_HEIGHT, CODE_LINE,
+    CODE_NUMBER, CODE_PADDING, CODE_RADIUS, CODE_REMOVED, CODE_RIM, CODE_SCROLLER,
+    CODE_SCROLLER_INK, CODE_SCROLLER_INSET, CODE_SIGN, CODE_TEXT, CODE_TOP, CODE_WIDTH,
+};
 use crate::tokens::text;
 /// Arc's motion: over 0.275 s the window dims and the card comes down 32 pt into place,
 /// ease-in-out, opaque after the first 0.135 s. It leaves the way it came, fading all the way.
@@ -113,6 +118,34 @@ pub struct Question {
     pub check: Option<SharedString>,
     /// What ↩ answers.
     pub on_return: Return,
+    /// Code under the detail, such as a Boost's script, in a monospace well that scrolls (#2297).
+    pub code: Option<Code>,
+}
+
+/// Code a dialog shows, a line at a time: a script's whole text, or what changed in it.
+pub struct Code {
+    /// Over the well, such as the file's name and how long it is.
+    pub caption: SharedString,
+    pub lines: Vec<CodeLine>,
+}
+
+/// A line of a dialog's code.
+pub struct CodeLine {
+    pub kind: LineKind,
+    /// Its number in the file as it is now, none for a removed line or a gap.
+    pub number: Option<usize>,
+    pub text: SharedString,
+}
+
+/// What a line of code is to the version last turned on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LineKind {
+    /// Unchanged, or the whole text of a new script.
+    Same,
+    Added,
+    Removed,
+    /// Unchanged lines left out between two changes; its text says how many.
+    Gap,
 }
 
 /// What ↩ answers in a dialog.
@@ -234,6 +267,8 @@ enum Source {
     Chrome,
     /// The account's, such as adding a device to it, which the core can take back, as Chrome's.
     Account,
+    /// Turning on a Boost's script, which only the user's click on Turn On Script… asks (#2297).
+    Script,
     /// A page's, over its tab's card, which goes when the tab does.
     Page,
 }
@@ -241,7 +276,7 @@ enum Source {
 impl Source {
     /// Its action grants something, so it works only after the dialog's moment on screen.
     fn grants(self) -> bool {
-        matches!(self, Source::Chrome | Source::Account)
+        matches!(self, Source::Chrome | Source::Account | Source::Script)
     }
 }
 
@@ -275,6 +310,8 @@ struct Asked {
     settled: bool,
     /// Its moment on screen before the action of Chrome's question, which grants something, works.
     settling: Settling,
+    /// Where its code is scrolled to, for the scroller.
+    code_scroll: ScrollHandle,
     /// Once the user has answered, or Chrome took it back: when, and where the motion was.
     answered_at: Option<(Instant, Pose)>,
     _leave: Option<Task<()>>,
@@ -482,6 +519,14 @@ pub fn asking(cx: &App) -> bool {
         .is_some_and(|dialog| dialog.asked.is_some())
 }
 
+/// The message and detail the dialog asks, for tests of what asks it.
+#[cfg(test)]
+pub fn asked(cx: &App) -> Option<(SharedString, SharedString)> {
+    let dialog = cx.try_global::<DialogWindow>()?.0.read(cx).ok()?;
+    let question = &dialog.asked.as_ref()?.question;
+    Some((question.message.clone(), question.detail.clone()))
+}
+
 /// Whether `pose` asks now: there's a dialog to ask in, and it isn't asking another question.
 pub fn can_pose(cx: &App) -> bool {
     cx.try_global::<DialogWindow>().is_some() && !asking(cx)
@@ -540,6 +585,7 @@ fn destructive(message: String, detail: String, action: &'static str) -> Questio
         fields: Vec::new(),
         check: None,
         on_return: Return::Action,
+        code: None,
     }
 }
 
@@ -580,6 +626,13 @@ pub fn withdraw_chrome(cx: &mut App) {
 /// other, and neither takes the other's place.
 pub fn ask_account(question: Question, answered: Box<dyn FnOnce(bool, &mut App)>, cx: &mut App) {
     ask_granting(Source::Account, question, answered, cx);
+}
+
+/// Asks whether to turn on a Boost's script (#2297), which only the user's own click on Turn On
+/// Script… does, never a launch, a file's change or anything else: its Turn On works only after
+/// the dialog's moment on screen, and a click outside it cancels, as Esc does.
+pub fn ask_script(question: Question, answered: Box<dyn FnOnce(bool, &mut App)>, cx: &mut App) {
+    ask_granting(Source::Script, question, answered, cx);
 }
 
 /// Takes back the account's question, unanswered, as `withdraw_chrome` does Chrome's.
@@ -797,6 +850,7 @@ impl Dialog {
             shown: None,
             settled: false,
             settling: Settling::default(),
+            code_scroll: ScrollHandle::new(),
             answered_at: None,
             _leave: None,
             hovered: None,
@@ -1072,6 +1126,163 @@ fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
         spread_radius: px(spread),
         inset: false,
     }
+}
+
+/// The computer's monospace face for a dialog's code: the first it has of the Boost editor's Mono
+/// list, and the UI's otherwise.
+fn mono(cx: &App) -> SharedString {
+    thread_local! {
+        static MONO: std::cell::OnceCell<SharedString> = const { std::cell::OnceCell::new() };
+    }
+    MONO.with(|mono| {
+        mono.get_or_init(|| {
+            let fonts = cx.text_system().all_font_names();
+            [
+                "SF Mono",
+                "Menlo",
+                "Cascadia Mono",
+                "Consolas",
+                "DejaVu Sans Mono",
+                "Noto Sans Mono",
+                "Liberation Mono",
+            ]
+            .into_iter()
+            .find(|name| fonts.iter().any(|font| font == name))
+            .unwrap_or(crate::face::UI)
+            .into()
+        })
+        .clone()
+    })
+}
+
+/// A dialog's code: its caption, then its lines in a well that scrolls, each with its number and,
+/// in a diff, its + or − in the ink over its colour's fill, so the sign reads in either tone.
+/// Lines wrap, so none hides past the well's edge. While there's more below, the well's foot
+/// fades and its scroller shows, so the user sees there's more without a hover.
+fn code_well(
+    code: &Code,
+    scroll: &ScrollHandle,
+    palette: &palette::Palette,
+    cx: &mut Context<Dialog>,
+) -> Div {
+    let family = mono(cx);
+    let ink = palette.on_overlay(CODE_TEXT);
+    let number = palette.on_overlay(CODE_NUMBER);
+    let lines = code.lines.iter().map(|line| {
+        let (sign, tint) = match line.kind {
+            LineKind::Same | LineKind::Gap => ("", None),
+            LineKind::Added => ("+", Some(CODE_ADDED)),
+            LineKind::Removed => ("\u{2212}", Some(CODE_REMOVED)),
+        };
+        let gap = line.kind == LineKind::Gap;
+        div()
+            .flex()
+            .items_start()
+            .px(px(CODE_PADDING))
+            .when_some(tint, |row, tint| {
+                row.bg(Hsla::from(rgb(tint)).opacity(CODE_DIFF_FILL))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(CODE_GUTTER))
+                    .pr(px(8.))
+                    .flex()
+                    .justify_end()
+                    .text_color(number)
+                    .children(line.number.map(|n| n.to_string())),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(CODE_SIGN))
+                    .text_color(ink)
+                    .child(sign),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_color(if gap { number } else { ink })
+                    .when(gap, |text| text.font_family(crate::face::UI).italic())
+                    .child(line.text.clone()),
+            )
+    });
+    // Before its first layout the well's height is a guess from its lines, unwrapped.
+    let view = scroll.bounds().size.height.as_f32();
+    let (top, more) = match view > 0. {
+        true => (-scroll.offset().y.as_f32(), scroll.max_offset().y.as_f32()),
+        false => {
+            let tall = code.lines.len() as f32 * CODE_LINE + 2. * CODE_PADDING;
+            (0., (tall - CODE_HEIGHT).max(0.))
+        }
+    };
+    let below = more - top > 0.5;
+    let view = if view > 0. { view } else { CODE_HEIGHT };
+    let thumb = (more > 0.).then(|| {
+        let height = view * view / (view + more);
+        let travel = view - height - 2. * CODE_SCROLLER_INSET;
+        div()
+            .absolute()
+            .right(px(CODE_SCROLLER_INSET))
+            .top(px(CODE_SCROLLER_INSET + travel * (top / more).clamp(0., 1.)))
+            .w(px(CODE_SCROLLER))
+            .h(px(height))
+            .rounded(px(CODE_SCROLLER / 2.))
+            .bg(palette.on_overlay(CODE_SCROLLER_INK))
+    });
+    let well = palette.overlay;
+    div()
+        .mt(px(CODE_TOP))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .mb(px(CODE_CAPTION_GAP))
+                .text_size(px(text::SMALL))
+                .line_height(px(SUBLINE))
+                .text_color(palette.on_overlay(SUBLINE_TEXT))
+                .child(code.caption.clone()),
+        )
+        .child(
+            div()
+                .relative()
+                .rounded(px(CODE_RADIUS))
+                .border_1()
+                .border_color(palette.plate(CODE_RIM))
+                .bg(well)
+                .overflow_hidden()
+                .child(
+                    div()
+                        .id("dialog-code")
+                        .max_h(px(CODE_HEIGHT))
+                        .overflow_y_scroll()
+                        .track_scroll(scroll)
+                        .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
+                        .py(px(CODE_PADDING))
+                        .font_family(family)
+                        .text_size(px(text::SMALL))
+                        .line_height(px(CODE_LINE))
+                        .children(lines),
+                )
+                .children(thumb)
+                .when(below, |box_| {
+                    let clear = Hsla::from(well).opacity(0.);
+                    box_.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(CODE_FADE))
+                            .bg(gpui::linear_gradient(
+                                180.,
+                                gpui::linear_color_stop(clear, 0.),
+                                gpui::linear_color_stop(Hsla::from(well), 1.),
+                            )),
+                    )
+                }),
+        )
 }
 
 impl Render for Dialog {
@@ -1371,6 +1582,8 @@ impl Render for Dialog {
                 )
                 .on_click(cx.listener(|dialog, _, _, cx| dialog.toggle_check(cx)))
         });
+        let code =
+            (question.code.as_ref()).map(|code| code_well(code, &asked.code_scroll, &palette, cx));
         let buttons_top = match detail.is_some() || fields.is_some() || check.is_some() {
             true => BUTTONS_TOP,
             false => BUTTONS_UNDER_TITLE,
@@ -1382,7 +1595,7 @@ impl Render for Dialog {
             .relative()
             .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
-            .w(px(WIDTH))
+            .w(px(if code.is_some() { CODE_WIDTH } else { WIDTH }))
             .pt(px(TEXT_INSET))
             .pl(px(TEXT_INSET))
             .pr(px(BUTTON_INSET))
@@ -1411,6 +1624,7 @@ impl Render for Dialog {
                     .child(question.message.clone()),
             )
             .children(detail)
+            .children(code)
             .children(fields)
             .children(check)
             .child(

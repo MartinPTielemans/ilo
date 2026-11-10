@@ -48,6 +48,24 @@ use crate::{
 };
 
 use crate::tokens::shell::library::LIBRARY_WIDTH;
+/// What a Boost row's menu does.
+#[derive(Clone, Copy)]
+enum BoostAct {
+    TurnOnScript,
+    TurnOffScript,
+    Edit,
+    Switch,
+    Show,
+    Delete,
+}
+
+/// Ours (#2297): Turn On Script… at a Boost row's end, the card's quiet button in the row's
+/// small type, this tall, its label this far in from its sides, its right edge this far in from
+/// the row's, and the room the row's text leaves for it.
+const SCRIPT_BUTTON: f32 = 24.;
+const SCRIPT_BUTTON_PADDING: f32 = 8.;
+const SCRIPT_BUTTON_RIGHT: f32 = 10.;
+const SCRIPT_BUTTON_ROOM: f32 = 118.;
 /// The push, on Arc's measured spring (1 run, rms 1.0 pt). The Library comes with it from its own
 /// width to the left, so they meet as they stop.
 pub(super) const LIBRARY_RESPONSE: f32 = 0.245;
@@ -2766,9 +2784,47 @@ impl Shell {
             return div().into_any_element();
         };
         let site = boost.site.clone();
-        let about = match boost.on {
-            true => boost.summary.describe(),
-            false => format!("Off. {}", boost.summary.describe()),
+        // While the Boost is on and its script is off, the line says why first (#2297).
+        let script = boost.script.filter(|_| boost.on);
+        let about = match (boost.on, script.and_then(|script| script.off_reason())) {
+            (true, Some(reason)) => format!("{reason}. {}", boost.summary.describe()),
+            (true, None) => boost.summary.describe(),
+            (false, _) => format!("Off. {}", boost.summary.describe()),
+        };
+        // Turn On Script… at the row's end, where the script can run.
+        let site_for_script = site.to_string();
+        let turn_on = script.filter(|script| script.can_turn_on()).map(|_| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(px(SCRIPT_BUTTON_RIGHT))
+                .flex()
+                .items_center()
+                .child(
+                    super::permission::card_button_as(
+                        &self.palette,
+                        ("boost-script-on", index),
+                        "Turn On Script…",
+                        super::permission::Look::Quiet,
+                    )
+                    .flex_none()
+                    .min_h(px(SCRIPT_BUTTON))
+                    .h(px(SCRIPT_BUTTON))
+                    .py_0()
+                    .px(px(SCRIPT_BUTTON_PADDING))
+                    .text_size(px(text::SMALL))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        if let Some(profile) = shell.learning_profile() {
+                            shell.turn_on_boost_script(profile, &site_for_script, cx);
+                        }
+                    })),
+                )
+        });
+        let text_end = match turn_on.is_some() {
+            true => SCRIPT_BUTTON_ROOM,
+            false => 12.,
         };
         let menu = |site: SharedString| {
             move |shell: &mut Shell,
@@ -2816,7 +2872,7 @@ impl Shell {
                             .flex_col()
                             .justify_center()
                             .pl(px(ARCHIVED_TEXT_X))
-                            .pr(px(12.))
+                            .pr(px(text_end))
                             .child(text_line(
                                 site,
                                 text::BODY,
@@ -2829,7 +2885,8 @@ impl Shell {
                                 15.,
                                 self.palette.text(SECONDARY),
                             )),
-                    ),
+                    )
+                    .children(turn_on),
             )
             .into_any_element()
     }
@@ -2839,22 +2896,43 @@ impl Shell {
         let Some(profile) = self.learning_profile() else {
             return;
         };
-        let Some(on) =
-            crate::boosts::with(|boosts| boosts.get(profile, &site)).map(|boost| boost.on)
+        let Some((on, script)) = crate::boosts::with(|boosts| boosts.get(profile, &site))
+            .map(|boost| (boost.on, boost.script))
         else {
             return;
         };
+        // Turn On Script… first, where its script can run, and Turn Off Script where it runs
+        // (#2297). The script is the Boost's while it's on.
         let show = match super::OFF_THE_MAC {
             true => "Show in Folder",
             false => "Show in Finder",
         };
-        let entries = vec![
-            MenuEntry::new("Edit CSS…", true),
-            MenuEntry::new(if on { "Turn Off" } else { "Turn On" }, true),
-            MenuEntry::new(show, true),
-            MenuEntry::line(),
+        let script = script.filter(|_| on);
+        let mut acts: Vec<(MenuEntry, Option<BoostAct>)> = Vec::new();
+        if script.is_some_and(|script| script.can_turn_on()) {
+            acts.push((
+                MenuEntry::new("Turn On Script…", true),
+                Some(BoostAct::TurnOnScript),
+            ));
+            acts.push((MenuEntry::line(), None));
+        }
+        acts.push((MenuEntry::new("Edit CSS…", true), Some(BoostAct::Edit)));
+        let switch = if on { "Turn Off" } else { "Turn On" };
+        acts.push((MenuEntry::new(switch, true), Some(BoostAct::Switch)));
+        if script == Some(crate::boosts::Script::On) {
+            acts.push((
+                MenuEntry::new("Turn Off Script", true),
+                Some(BoostAct::TurnOffScript),
+            ));
+        }
+        acts.push((MenuEntry::new(show, true), Some(BoostAct::Show)));
+        acts.push((MenuEntry::line(), None));
+        acts.push((
             MenuEntry::new("Delete…", true).destructive(),
-        ];
+            Some(BoostAct::Delete),
+        ));
+        let chosen_act: Vec<Option<BoostAct>> = acts.iter().map(|(_, act)| *act).collect();
+        let entries: Vec<MenuEntry> = acts.into_iter().map(|(entry, _)| entry).collect();
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -2866,12 +2944,20 @@ impl Shell {
             },
             Box::new(move |chosen, cx| {
                 shell
-                    .update(cx, |shell, cx| match chosen {
-                        Some(0) => shell.edit_boost_file(profile, &site, cx),
-                        Some(1) => shell.set_boost_on(profile, &site, !on, cx),
-                        Some(2) => shell.show_boost_file(profile, &site, cx),
-                        Some(4) => shell.delete_boost(profile, &site, cx),
-                        _ => {}
+                    .update(cx, |shell, cx| {
+                        match chosen.and_then(|chosen| chosen_act.get(chosen).copied().flatten()) {
+                            Some(BoostAct::TurnOnScript) => {
+                                shell.turn_on_boost_script(profile, &site, cx)
+                            }
+                            Some(BoostAct::TurnOffScript) => {
+                                shell.turn_off_boost_script(profile, &site, cx)
+                            }
+                            Some(BoostAct::Edit) => shell.edit_boost_file(profile, &site, cx),
+                            Some(BoostAct::Switch) => shell.set_boost_on(profile, &site, !on, cx),
+                            Some(BoostAct::Show) => shell.show_boost_file(profile, &site, cx),
+                            Some(BoostAct::Delete) => shell.delete_boost(profile, &site, cx),
+                            None => {}
+                        }
                     })
                     .ok();
             }),
@@ -2900,9 +2986,18 @@ impl Shell {
     pub(super) fn delete_boost(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
         let shell = cx.weak_entity();
         let site = site.to_owned();
+        let script = crate::boosts::with(|boosts| boosts.get(profile, &site))
+            .is_some_and(|boost| boost.script.is_some());
+        let detail = match script {
+            true => {
+                "Its files go from the Boosts folder, its script stops running, and the site \
+                     shows as it made itself."
+            }
+            false => "Its file goes from the Boosts folder, and the site shows as it made itself.",
+        };
         self.browser.confirm(
             format!("Delete the Boost for {site}?"),
-            "Its file goes from the Boosts folder, and the site shows as it made itself.".into(),
+            detail.into(),
             "Delete",
             Box::new(move |cx| {
                 shell
@@ -2910,6 +3005,8 @@ impl Shell {
                         // check.sh reads this line.
                         log!("browser: boost {site} deleted");
                         let changes = crate::boosts::with(|boosts| boosts.delete(profile, &site));
+                        // Its record goes too, so a file put back is new, and off.
+                        shell.browser.forget_boost_script(profile, &site);
                         shell.browser.show_boosts(changes, cx);
                         shell.list_boosts(cx);
                     })

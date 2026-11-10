@@ -685,6 +685,7 @@ impl Shell {
             }],
             check: None,
             on_return: crate::dialog::Return::Action,
+            code: None,
         };
         let shell = cx.weak_entity();
         let made = Box::new(move |texts: Vec<String>, cx: &mut App| {

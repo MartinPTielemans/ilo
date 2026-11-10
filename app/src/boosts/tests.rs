@@ -243,3 +243,201 @@ fn the_watcher_tells_of_a_write_in_the_folder() {
     }
     assert!(heard, "no notice of a write in {}", boosts.display());
 }
+
+fn given(site: &str, script: Option<&str>) -> ScriptChange {
+    ScriptChange {
+        profile: 1,
+        site: site.into(),
+        script: script.map(|script| script.as_bytes().to_vec()),
+    }
+}
+
+#[test]
+fn a_script_goes_to_the_core_only_while_its_boost_is_on_and_isnt_too_large() {
+    let folder = Folder::new();
+    folder.write("Boosts/example.com.css", "p {}\n");
+    folder.write("Boosts/example.com.js", "run();\n");
+    folder.write("Boosts/wiki.org.js", &"/".repeat(SCRIPT_LIMIT + 1));
+    folder.write("Boosts/Not A Site.js", "run();\n");
+    let mut boosts = Boosts::default();
+    boosts.load(1, folder.0.clone());
+    assert_eq!(
+        boosts.script_changes(1),
+        vec![given("example.com", Some("run();\n"))]
+    );
+    assert_eq!(boosts.script_changes(1), Vec::new());
+    // New until the core says otherwise; one too large says so itself, with no CSS, and isn't
+    // given at all.
+    let script = |boosts: &Boosts, site| boosts.get(1, site).and_then(|boost| boost.script);
+    assert_eq!(script(&boosts, "example.com"), Some(Script::New));
+    assert_eq!(script(&boosts, "wiki.org"), Some(Script::TooLarge));
+    boosts.set_script_state(1, "example.com", Script::On);
+    assert_eq!(script(&boosts, "example.com"), Some(Script::On));
+
+    // Turned off for its site, or all of them, the core gets none, and its state is forgotten.
+    boosts.set_on(1, "example.com", false);
+    assert_eq!(boosts.script_changes(1), vec![given("example.com", None)]);
+    boosts.set_on(1, "example.com", true);
+    assert_eq!(
+        boosts.script_changes(1),
+        vec![given("example.com", Some("run();\n"))]
+    );
+    assert_eq!(script(&boosts, "example.com"), Some(Script::New));
+    boosts.set_all_off(true);
+    assert_eq!(
+        boosts.all_script_changes(),
+        vec![given("example.com", None)]
+    );
+    boosts.set_all_off(false);
+    boosts.all_script_changes();
+
+    // A changed file goes again, and one grown too large is taken away.
+    folder.write("Boosts/example.com.js", "run(2);\n");
+    boosts.reload(1);
+    assert_eq!(
+        boosts.script_changes(1),
+        vec![given("example.com", Some("run(2);\n"))]
+    );
+    folder.write("Boosts/example.com.js", &"/".repeat(SCRIPT_LIMIT + 1));
+    boosts.reload(1);
+    assert_eq!(boosts.script_changes(1), vec![given("example.com", None)]);
+    assert_eq!(script(&boosts, "example.com"), Some(Script::TooLarge));
+    assert_eq!(boosts.script_bytes(1, "example.com"), None);
+}
+
+#[test]
+fn turning_on_keeps_a_copy_beside_the_folder_and_turning_off_or_delete_takes_it() {
+    let folder = Folder::new();
+    folder.write("Boosts/example.com.js", "run();\n");
+    let mut boosts = Boosts::default();
+    boosts.load(1, folder.0.clone());
+    boosts.script_changes(1);
+    assert_eq!(boosts.turned_on_copy(1, "example.com"), None);
+    boosts.turned_on(1, "example.com", b"run();\n");
+    let copy = format!("{TURNED_ON}/example.com.js");
+    assert_eq!(folder.read(&copy).as_deref(), Some("run();\n"));
+    assert_eq!(
+        boosts.turned_on_copy(1, "example.com"),
+        Some(b"run();\n".to_vec())
+    );
+    let script = |boosts: &Boosts| boosts.get(1, "example.com").and_then(|boost| boost.script);
+    assert_eq!(script(&boosts), Some(Script::On));
+    // The copy is outside the Boosts folder, so the folder never holds it.
+    assert_eq!(boosts.list(1).len(), 1);
+
+    boosts.turned_off(1, "example.com");
+    assert_eq!(folder.read(&copy), None);
+    assert_eq!(script(&boosts), Some(Script::New));
+
+    boosts.turned_on(1, "example.com", b"run();\n");
+    boosts.delete(1, "example.com");
+    assert_eq!(folder.read(&copy), None);
+    assert_eq!(folder.read("Boosts/example.com.js"), None);
+    assert_eq!(boosts.get(1, "example.com"), None);
+    assert_eq!(boosts.script_changes(1), vec![given("example.com", None)]);
+}
+
+#[test]
+fn the_states_say_why_a_script_is_off_in_the_same_words_everywhere() {
+    assert_eq!(Script::On.off_reason(), None);
+    assert_eq!(Script::New.off_reason(), Some("New script, off"));
+    assert_eq!(Script::Changed.off_reason(), Some("Script changed, off"));
+    assert_eq!(
+        Script::TooLarge.off_reason(),
+        Some("Script over 256 KB, off")
+    );
+    assert!(Script::New.can_turn_on() && Script::Changed.can_turn_on());
+    assert!(!Script::On.can_turn_on() && !Script::TooLarge.can_turn_on());
+}
+
+fn shown(code: &crate::dialog::Code) -> Vec<String> {
+    use crate::dialog::LineKind;
+    (code.lines.iter())
+        .map(|line| {
+            let sign = match line.kind {
+                LineKind::Same => " ",
+                LineKind::Added => "+",
+                LineKind::Removed => "-",
+                LineKind::Gap => "~",
+            };
+            let number = line
+                .number
+                .map_or(String::new(), |number| number.to_string());
+            format!("{sign}{number} {}", line.text)
+        })
+        .collect()
+}
+
+#[test]
+fn the_dialog_shows_what_a_line_hides() {
+    let code = script_text(
+        "example.com",
+        "a\tb\r\nlet x = \"\u{202e}cba\";\u{200b}\nend\u{feff}",
+    );
+    assert_eq!(
+        shown(&code),
+        [
+            " 1 a    b\\u{d}",
+            " 2 let x = \"\\u{202e}cba\";\\u{200b}",
+            " 3 end\\u{feff}",
+        ]
+    );
+    assert_eq!(code.caption.as_ref(), "Boosts/example.com.js · 3 lines");
+}
+
+#[test]
+fn the_diff_shows_changes_with_two_lines_around_them() {
+    let before = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    let after = "1\n2\n3\n4\nfive\n6\n7\n8\n9\n10\neleven\n";
+    let code = script_diff("example.com", before, after);
+    assert_eq!(
+        shown(&code),
+        [
+            "~ 2 lines unchanged",
+            " 3 3",
+            " 4 4",
+            "- 5",
+            "+5 five",
+            " 6 6",
+            " 7 7",
+            "~ 1 line unchanged",
+            " 9 9",
+            " 10 10",
+            "+11 eleven",
+        ]
+    );
+    assert_eq!(
+        code.caption.as_ref(),
+        "Boosts/example.com.js · 2 lines added, 1 line removed"
+    );
+    // A line's ending changed shows, as the carriage return does.
+    let code = script_diff("example.com", "a\nb\n", "a\r\nb\n");
+    assert_eq!(shown(&code), ["- a", "+1 a\\u{d}", " 2 b"]);
+    // Bytes that change no line, such as the last newline, show the whole text.
+    let code = script_diff("example.com", "a\nb\n", "a\nb");
+    assert_eq!(shown(&code), [" 1 a", " 2 b"]);
+}
+
+#[test]
+fn a_diff_of_two_long_scripts_is_still_what_changed() {
+    let before: String = (0..3000).map(|line| format!("old {line}\n")).collect();
+    let after: String = (0..3000).map(|line| format!("new {line}\n")).collect();
+    let (before, after) = (
+        format!("head\n{before}tail\n"),
+        format!("head\n{after}tail\n"),
+    );
+    let code = script_diff("example.com", &before, &after);
+    let lines = shown(&code);
+    assert_eq!(lines.first().map(String::as_str), Some(" 1 head"));
+    assert_eq!(lines.last().map(String::as_str), Some(" 3002 tail"));
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with('-')).count(),
+        3000
+    );
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with('+')).count(),
+        3000
+    );
+    assert_eq!(lines[1], "- old 0");
+    assert_eq!(lines[3001], "+2 new 0");
+}

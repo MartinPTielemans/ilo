@@ -292,6 +292,34 @@ check-gap = 8.0
 check-glyph = 12.0
 # The red action's label and glyph.
 text = 0xffffff
+# Ours (#2297): a Boost script's text, or what changed in it, under the detail, in a well of the
+# palette's overlay fill, which the dialog is a step lighter than, inside a card this much wider so
+# a line of a script reads whole. The well reaches the buttons' right edge, and scrolls past
+# `code-height`. While there's more below, its last `code-fade` fades and its scroller shows, with
+# no hover needed, `code-scroller` wide and `code-scroller-inset` in, in the ink at
+# `code-scroller-ink`. Long lines wrap, so nothing hides past the well's right edge. Its caption
+# says which file, in the list's sublines' look.
+code-width = 600.0
+code-top = 14.0
+code-caption-gap = 6.0
+code-height = 320.0
+code-radius = 6.0
+code-rim = 0.12
+code-padding = 8.0
+code-line = 16.0
+code-gutter = 30.0
+code-sign = 14.0
+code-text = 0.86
+code-number = 0.35
+code-fade = 24.0
+code-scroller = 4.0
+code-scroller-inset = 2.0
+code-scroller-ink = 0.3
+# A diff's added and removed lines: these fills under them, the capture markup's green and red, and
+# their + and − in the ink, which reads over either fill in either tone.
+code-added = 0x34c759
+code-removed = 0xff3b30
+code-diff-fill = 0.16
 
 [dock-dot]
 # The icon's own green, which a Space in it leaves alone.

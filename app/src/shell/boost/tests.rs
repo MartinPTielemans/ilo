@@ -435,3 +435,111 @@ fn window_view_boosts_opens_the_list(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.boosts_changed(cx));
     assert!(!offered(&host), "an agent's Space offered View Boosts…");
 }
+
+struct DialogWindow;
+
+impl crate::dialog::Host for DialogWindow {
+    fn show(&self, _: Option<u64>, _: Option<gpui::Bounds<gpui::Pixels>>) {}
+    fn hide(&self) {}
+}
+
+/// Rereads profile 1's Boosts, as a save in the user's editor has the app do.
+fn folder_changed(host: &Rc<Recorder>, cx: &mut VisualTestContext) {
+    use crate::shell::Browser;
+    cx.update(|_, cx| {
+        let changes = crate::boosts::with(|boosts| boosts.reload(1));
+        host.show_boosts(changes, cx);
+    });
+    cx.run_until_parked();
+}
+
+/// Answers the dialog with `label`, then lets it go.
+fn choose(label: &str, cx: &mut VisualTestContext) {
+    assert!(cx.update(|_, cx| crate::dialog::choose(label, cx)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+}
+
+/// A Boost's script is off until the user's click on Turn On Script… and Turn On in the dialog,
+/// which takes the dialog's moment on screen. A change to the file outside ilo turns it off, and
+/// turning it back on shows what changed; Cancel leaves it off, and Turn Off forgets it (#2297).
+#[gpui::test]
+fn a_script_turns_on_only_in_the_dialog_and_off_when_its_file_changes(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(
+        boosts.join("example.com.css"),
+        "#ad { display: none !important; }\n",
+    )
+    .unwrap();
+    std::fs::write(boosts.join("example.com.js"), "one();\n").unwrap();
+    cx.update(|_, cx| crate::dialog::open(Rc::new(DialogWindow), cx))
+        .expect("no window for the dialog");
+    shell.update(cx, |shell, cx| shell.read_boosts_of(10, cx));
+    cx.run_until_parked();
+    let script =
+        |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.boost_script(10));
+    assert_eq!(script(cx), Some(crate::boosts::Script::New));
+    assert!(
+        host.take()
+            .contains(&"boost script 1 example.com: 7 bytes".to_owned())
+    );
+    let asked = |cx: &mut VisualTestContext| cx.update(|_, cx| crate::dialog::asked(cx));
+
+    shell.update(cx, |shell, cx| shell.turn_on_tab_boost_script(10, cx));
+    cx.run_until_parked();
+    let (message, _) = asked(cx).expect("no dialog");
+    assert_eq!(message.as_ref(), "Turn on the script for example.com?");
+    // A click meant for the page, as the dialog comes up, turns nothing on.
+    cx.update(|_, cx| crate::dialog::choose("Turn On", cx));
+    cx.run_until_parked();
+    assert!(asked(cx).is_some());
+    cx.executor().advance_clock(crate::settling::SETTLING);
+    choose("Turn On", cx);
+    assert_eq!(asked(cx), None);
+    assert!(
+        host.take()
+            .contains(&"boost script on 1 example.com: 7 bytes".to_owned())
+    );
+    assert_eq!(script(cx), Some(crate::boosts::Script::On));
+    let copy = folder
+        .0
+        .join("Boost scripts turned on")
+        .join("example.com.js");
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "one();\n");
+
+    std::fs::write(boosts.join("example.com.js"), "one();\ntwo();\n").unwrap();
+    folder_changed(&host, cx);
+    assert_eq!(script(cx), Some(crate::boosts::Script::Changed));
+    host.take();
+    shell.update(cx, |shell, cx| shell.turn_on_tab_boost_script(10, cx));
+    cx.run_until_parked();
+    let (message, detail) = asked(cx).expect("no dialog");
+    assert_eq!(
+        message.as_ref(),
+        "Turn the changed script for example.com back on?"
+    );
+    assert!(
+        detail.contains("what changed since you turned it on"),
+        "{detail}"
+    );
+    cx.executor().advance_clock(crate::settling::SETTLING);
+    choose("Cancel", cx);
+    assert_eq!(host.take(), Vec::<String>::new());
+    assert_eq!(script(cx), Some(crate::boosts::Script::Changed));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), "one();\n");
+
+    shell.update(cx, |shell, cx| {
+        shell.turn_off_boost_script(1, "example.com", cx)
+    });
+    assert_eq!(host.take(), ["boost script forgotten 1 example.com"]);
+    assert_eq!(script(cx), Some(crate::boosts::Script::New));
+    assert!(!copy.exists());
+    // The CSS stays on.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.boost_state(10)),
+        (true, Some(true))
+    );
+}
