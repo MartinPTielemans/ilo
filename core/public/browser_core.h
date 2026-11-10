@@ -2417,6 +2417,13 @@ BC_EXPORT void bc_download_icon(bc_id download);
 // page_favicon.
 BC_EXPORT void bc_page_favicon(const char* url);
 
+// Copies the site of the page at |url| into |site| as bc_space_name does: its host's registrable
+// domain, the part the link target's plate emphasizes (docs.example.com and login.example.com are
+// example.com), or the host itself when it has none, as localhost and an IP address don't. Empty
+// for a page that isn't http(s). One meaning of a site for the app and agents: Sort Today Tabs by
+// Site gathers tabs by it.
+BC_EXPORT size_t bc_url_site(const char* url, char* site, size_t capacity);
+
 // Lists suggestions for |text| typed in the window's command bar, as Chrome's address bar does:
 // pages from the profile's history and bookmarks, open tabs among them, and a search for |text|.
 // Well-known sites |text| could start fill the rows left, under those. Nothing typed leaves the
