@@ -1,4 +1,4 @@
-// The spike's driver: node run.mjs <record|measure|refind> <site> [out dir]
+// The spike's driver: node run.mjs <record|measure|refind|calls> <site> [out dir]
 //
 // record   loads the site as it is today, picks an element for each kind of change (pick.js), and
 //          writes recorded/<site>.json: each change's two descriptions, which refind reads again.
@@ -6,6 +6,9 @@
 //          way of placing it, and once with every change placed by ilo's runtime, and writes what
 //          still worked, the frames, the cost, the idle wakeups and what the page could see.
 // refind   loads the site and counts how many recorded descriptions still find exactly one element.
+// calls    the orchestrator's calls on #2348: a trade as two settles against by transform, a tall
+//          and a short block traded, the top layer for settled and floated elements, and a carry's
+//          preview of a settle and a trade over a placed page, shown and taken away.
 //
 // Chromium from Playwright, headed under Xvfb on a CI runner, sandboxed, with a throwaway profile
 // and no accounts. The runtime is injected into an isolated world from the document's start, as the
@@ -21,8 +24,8 @@ const root = join(here, '..');
 const [mode, siteId, outArg] = process.argv.slice(2);
 const sites = JSON.parse(readFileSync(join(root, 'sites.json'), 'utf8'));
 const site = sites.find((s) => s.id === siteId);
-if (!site || !['record', 'measure', 'refind'].includes(mode)) {
-  console.error('usage: node run.mjs <record|measure|refind> <site>; sites: ' + sites.map((s) => s.id).join(' '));
+if (!site || !['record', 'measure', 'refind', 'calls'].includes(mode)) {
+  console.error('usage: node run.mjs <record|measure|refind|calls> <site>; sites: ' + sites.map((s) => s.id).join(' '));
   process.exit(2);
 }
 const out = outArg || join(root, 'out', siteId);
