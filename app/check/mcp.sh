@@ -21,13 +21,14 @@
 # activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
-# field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Nor is the rest of what an extension puts there (#2355): its
-# button isn't in the outline, a click where its frame covers the page is refused, and so are keys
-# while its frame has the keyboard, each with an activity-log entry, and its listeners don't hear
-# the agent's keys. Neither the agent's click nor its ArrowDown and Enter in a login field opens or
-# accepts Chrome's suggestion of a saved login. Its keys, typed or pressed, go to the page alone,
-# and Escape the page doesn't keep runs no Stop of ilo's. Where it acts in the page watched, its pointer and a
+# field. Its text leaves out a frame an extension puts in the page, which isn't the page's. Nor is
+# the rest of what an extension puts there (#2355): its button is in neither the outline nor the
+# text, a click or the wheel where its frame covers the page, or a frame of the page, is refused,
+# and so are keys while its frame has the keyboard, each with an activity-log entry, and its
+# listeners don't hear the agent's keys or typing. Neither the agent's click nor its ArrowDown and
+# Enter in a login field opens or accepts Chrome's suggestion of a saved login. Its keys, typed or
+# pressed, go to the page alone, and Escape the page doesn't keep runs no Stop of ilo's. Where it
+# acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it, and a page that asks before it's left stays open, with no
 # dialog, until the agent discards it. Its download asks first, and Allow Once downloads the
@@ -78,9 +79,12 @@ cat > "$extension/manifest.json" << 'EOF'
   "version": "1",
   "content_scripts": [
     {"matches": ["http://localhost/frames.html*"], "js": ["content.js"]},
-    {"matches": ["http://localhost/covered.html*"], "js": ["covered.js"]}
+    {"matches": ["http://localhost/covered.html*"], "js": ["covered.js"]},
+    {"matches": ["http://127.0.0.1/covered-inner.html*"], "js": ["covered-inner.js"], "all_frames": true}
   ],
-  "web_accessible_resources": [{"resources": ["frame.html"], "matches": ["http://localhost/*"]}]
+  "web_accessible_resources": [
+    {"resources": ["frame.html"], "matches": ["http://localhost/*", "http://127.0.0.1/*"]}
+  ]
 }
 EOF
 printf '%s' 'const frame = document.createElement("iframe");
@@ -89,7 +93,8 @@ document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
 # On the covered page it adds a button of its own, a frame of its page over the page's button, as a
-# password manager's menu is, and a key listener of its own that marks the page when it hears one.
+# password manager's menu is, and key and input listeners of its own that mark the page when they
+# hear one. In the other site's frame there, it covers the frame's page with a frame of its own.
 printf '%s' 'const button = document.createElement("button");
 button.textContent = "Extension button";
 document.body.append(button);
@@ -97,8 +102,13 @@ const frame = document.createElement("iframe");
 frame.src = chrome.runtime.getURL("frame.html");
 frame.style = "position: absolute; left: 0; top: 0; width: 300px; height: 120px; border: 0";
 document.body.append(frame);
-document.addEventListener("keydown", () => document.documentElement.dataset.heard = "1", true);' \
-  > "$extension/covered.js"
+for (const type of ["keydown", "keypress", "beforeinput", "input"]) {
+  document.addEventListener(type, () => document.documentElement.dataset.heard = "1", true);
+}' > "$extension/covered.js"
+printf '%s' 'const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+frame.style = "position: fixed; left: 0; top: 0; width: 100%; height: 100%; border: 0";
+document.body.append(frame);' > "$extension/covered-inner.js"
 # On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
 # bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
 # python3-gi, the run says it skips them.
@@ -1011,12 +1021,22 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
 <button style="position: absolute; left: 20px; top: 20px; width: 200px; height: 60px"
   onclick="document.body.append(&quot;covered clicked&quot;)">Covered button</button>
 <input aria-label="Page field" style="position: absolute; left: 20px; top: 200px"
-  onkeydown="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + event.key">
+  onkeydown="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + event.key"
+  oninput="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + this.value">
 <button style="position: absolute; left: 20px; top: 260px"
-  onclick="document.querySelector(&quot;iframe&quot;).focus(); document.title = &quot;extension focused&quot;">Focus extension</button>
-<script>addEventListener("message", (event) => {
-  if (event.data === "extension frame") document.title = "covered";
+  onclick="document.querySelector(&quot;iframe:not([title])&quot;).focus(); document.title = &quot;extension focused&quot;">Focus extension</button>
+<script>const heard = new Set();
+addEventListener("message", (event) => {
+  heard.add(event.data);
+  if (heard.has("extension frame") && heard.has("inner covered")) document.title = "covered";
 });</script>' > "$out/site/covered.html"
+  printf '%s' "<iframe title='Inner frame' src=http://127.0.0.1:$port/covered-inner.html
+  style='position: absolute; left: 20px; top: 360px; width: 400px; height: 200px'></iframe>" \
+    >> "$out/site/covered.html"
+  printf '%s' '<p>Inner covered text</p><div style="height: 3000px"></div>
+<script>addEventListener("message", (event) => {
+  if (event.data === "extension frame") top.postMessage("inner covered", "*");
+});</script>' > "$out/site/covered-inner.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/covered.html\"}")
   covered_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
   [ -n "$covered_tab" ] || fail "open_tab of the covered page answered: $outline"
@@ -1042,6 +1062,26 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   await_log "^browser: title $covered_tab [a-z]* heard ArrowDown\$" "the agent's key didn't reach the page"
   grep -q "^browser: title $covered_tab extension heard " "$log" &&
     fail "the extension's key listener heard the agent's key"
+  typed=$(call type "{\"tab\":$covered_tab,\"ref\":\"$(ref_of textbox "Page field")\",\"text\":\"by-the-agent\"}")
+  case "$typed" in "Typed into “Page field”."*) ;; *) fail "typing in the page's field answered: $typed" ;; esac
+  await_log "^browser: title $covered_tab [a-z]* heard by-the-agent\$" "the agent's typing didn't reach the page"
+  grep -q "^browser: title $covered_tab extension heard " "$log" &&
+    fail "the extension's listeners heard the agent's typing"
+  read=$(call read_page "{\"tab\":$covered_tab}")
+  printf '%s\n' "$read" > "$out/mcp-covered-text.txt"
+  case "$read" in
+    *"Extension button"*) fail "reading the covered page gave the extension's button: $read" ;;
+    *"Covered button"*"Inner covered text"*) ;;
+    *) fail "reading the covered page answered: $read" ;;
+  esac
+  # The wheel finds what's under it in every frame it goes into, as a click does.
+  refused=$(call scroll "{\"tab\":$covered_tab,\"ref\":\"$(ref_of Iframe "Inner frame")\",\"direction\":\"down\"}")
+  case "$refused" in
+    "error: An extension's control covers that spot"*) ;;
+    *) fail "scrolling where the extension covers the other site's frame answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab scroll refused: An extension's control covers" \
+    "the refused scroll didn't reach the activity log"
   clicked=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of button "Focus extension")\"}")
   case "$clicked" in "Clicked"*) ;; *) fail "clicking Focus extension answered: $clicked" ;; esac
   await_log "^browser: title $covered_tab extension focused\$" "the page didn't focus the extension's frame"
