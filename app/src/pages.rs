@@ -137,15 +137,19 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
         .collect(),
         boostable: false,
         boost: None,
+        boost_script: None,
     };
     update_app(|cx| {
         // The app keeps the Boosts, so its window says what the core can't.
         let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
-        let (boostable, boost) =
-            shell.map_or((false, None), |shell| shell.read(cx).boost_state(tab));
+        let ((boostable, boost), boost_script) = shell.map_or(((false, None), None), |shell| {
+            let shell = shell.read(cx);
+            (shell.boost_state(tab), shell.boost_script(tab))
+        });
         let site = site_controls::Site {
             boostable,
             boost,
+            boost_script,
             ..site
         };
         site_controls::changed(tab, site, cx)

@@ -18,6 +18,12 @@ use super::{
     permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener},
 };
 use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
+
+/// Ours (#2297): the script's line under the detail, its glyph, and Turn On Script… under
+/// it, each this far below what's over it.
+const SCRIPT_TOP: f32 = 8.;
+const SCRIPT_GAP: f32 = 6.;
+const SCRIPT_GLYPH: f32 = 14.;
 use crate::tokens::shell::{URL_FIELD_HEIGHT, URL_FIELD_TOP};
 use crate::{
     boost_editor::{self, Request},
@@ -80,6 +86,13 @@ impl Shell {
             true => (false, None),
             false => (true, boosts.get(profile, &site).map(|boost| boost.on)),
         })
+    }
+
+    /// The script of the Boost of the site of `tab`'s page, where it has one, for its Site
+    /// Controls (#2297).
+    pub fn boost_script(&self, tab: u64) -> Option<boosts::Script> {
+        let (profile, site) = self.boost_site(tab)?;
+        boosts::with(|boosts| boosts.get(profile, &site)?.script)
     }
 
     /// Site Controls' switch: the Boost of the site of `tab`'s page on or off there.
@@ -231,6 +244,106 @@ impl Shell {
         }
     }
 
+    /// The card's Turn On Script…: the card closes for the browser's dialog.
+    fn turn_on_card_script(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.boost_card else {
+            return;
+        };
+        self.close_boost_card(cx);
+        self.turn_on_tab_boost_script(tab, cx);
+    }
+
+    /// Turn On Script… for the site of `tab`'s page, as the card asks.
+    pub fn turn_on_tab_boost_script(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if let Some((profile, site)) = self.boost_site(tab) {
+            self.turn_on_boost_script(profile, &site, cx);
+        }
+    }
+
+    /// Turn On Script…, the user's own click in the card or the Library, and
+    /// nothing else (#2297): the browser's dialog, with the script whole, or what changed since
+    /// the text last turned on, which is shown only while the core says it's that text. What turns
+    /// on is the bytes the dialog showed.
+    pub(super) fn turn_on_boost_script(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bytes) = boosts::with(|boosts| boosts.script_bytes(profile, site)) else {
+            return;
+        };
+        let state = self.browser.boost_script_state(profile, site, &bytes);
+        if !state.can_turn_on() {
+            return;
+        }
+        let before = (boosts::with(|boosts| boosts.turned_on_copy(profile, site))).filter(|copy| {
+            self.browser.boost_script_state(profile, site, copy) == boosts::Script::On
+        });
+        let after = String::from_utf8_lossy(&bytes);
+        let (code, asking) = match (state, before) {
+            (boosts::Script::Changed, Some(before)) => (
+                boosts::script_diff(site, &String::from_utf8_lossy(&before), &after),
+                boosts::Asking::Changed,
+            ),
+            (boosts::Script::Changed, None) => (
+                boosts::script_text(site, &after),
+                boosts::Asking::ChangedWhole,
+            ),
+            _ => (boosts::script_text(site, &after), boosts::Asking::New),
+        };
+        // check.sh reads this line.
+        log!("browser: boost script asked {site} {asking:?}");
+        let question = boosts::script_question(site, code, asking);
+        let shell = cx.weak_entity();
+        let site = site.to_owned();
+        let answered = Box::new(move |yes: bool, cx: &mut gpui::App| {
+            if !yes {
+                // check.sh reads this line.
+                log!("browser: boost script cancelled {site}");
+                return;
+            }
+            (shell.update(cx, |shell, cx| {
+                shell.boost_script_turned_on(profile, &site, &bytes, cx)
+            }))
+            .ok();
+        });
+        crate::dialog::ask_script(question, answered, cx);
+    }
+
+    fn boost_script_turned_on(
+        &mut self,
+        profile: u64,
+        site: &str,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) {
+        if !self.browser.turn_on_boost_script(profile, site, bytes) {
+            log!("browser: boost script couldn't turn on {site}");
+            return;
+        }
+        boosts::with(|boosts| boosts.turned_on(profile, site, bytes));
+        // check.sh reads this line.
+        log!("browser: boost script turned on {site}");
+        // The file may have changed while the dialog showed: the core gets what's there now.
+        self.browser.show_boosts(Vec::new(), cx);
+        self.boosts_changed(cx);
+    }
+
+    /// Turn Off Script, in the Library: the core forgets the script turned on, which is new again
+    /// and off until the user turns it on in the dialog. The CSS stays.
+    pub(super) fn turn_off_boost_script(
+        &mut self,
+        profile: u64,
+        site: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.browser.forget_boost_script(profile, site);
+        boosts::with(|boosts| boosts.turned_off(profile, site));
+        log!("browser: boost script turned off {site}");
+        self.boosts_changed(cx);
+    }
+
     /// Closes the card, as its × does, ending Zap, and says whether there was one.
     pub(super) fn close_boost_card(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(tab) = self.boost_card.take() else {
@@ -363,6 +476,36 @@ impl Shell {
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
+        // While the Boost is on and its script is off, a line says why, with Turn On Script…
+        // under it where the script can run (#2297). Nothing else says so by itself.
+        let script = (boost.as_ref())
+            .filter(|boost| boost.on && self.zapping != Some(tab))
+            .and_then(|boost| boost.script)
+            .and_then(|script| Some((script, script.off_reason()?)))
+            .map(|(script, reason)| {
+                let line = div()
+                    .mt(px(SCRIPT_TOP))
+                    .flex()
+                    .items_center()
+                    .gap(px(SCRIPT_GAP))
+                    .text_color(palette.text(TITLE))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        gpui::svg()
+                            .path("icons/terminal.svg")
+                            .flex_none()
+                            .size(px(SCRIPT_GLYPH))
+                            .text_color(palette.on_overlay(DETAIL)),
+                    )
+                    .child(reason);
+                let turn_on = script.can_turn_on().then(|| {
+                    div().mt(px(SCRIPT_TOP)).flex().child(
+                        quiet("boost-script-on", "Turn On Script…")
+                            .on_click(cx.listener(|shell, _, _, cx| shell.turn_on_card_script(cx))),
+                    )
+                });
+                div().children([line.into_any_element()]).children(turn_on)
+            });
         // Customize… has a line of its own under the other two, as three don't fit the card, so
         // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
         let customize =
@@ -416,6 +559,7 @@ impl Shell {
                         .child(title),
                 )
                 .child(div().text_color(palette.on_overlay(DETAIL)).child(detail))
+                .children(script)
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))

@@ -218,6 +218,8 @@ pub struct Site {
     pub boostable: bool,
     /// Whether the site's Boost is on, none where it has none.
     pub boost: Option<bool>,
+    /// The Boost's script, where it has one (#2297). While it's off, the Boost row says why.
+    pub boost_script: Option<crate::boosts::Script>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -2203,7 +2205,17 @@ impl Render for SiteControls {
                 y += ROW_PITCH;
             }
             if let Some(on) = site.boost {
-                let state = Some(if on { "On" } else { "Off for this site" }.into());
+                // While the Boost is on, its CSS shows and only its script is off, which the
+                // state says in its place.
+                let off = (site.boost_script.and_then(|script| script.off_reason())).filter(|_| on);
+                let state = Some(
+                    match (on, off) {
+                        (true, Some(off)) => off,
+                        (true, None) => "On",
+                        (false, _) => "Off for this site",
+                    }
+                    .into(),
+                );
                 let (id, name) = ("site-boost".into(), BOOST_NAME.into());
                 let row = Self::row(&palette, id, y, BOOST, on, name, state);
                 let row = row.when(a11y, |row| switch_named(row, BOOST_NAME, on));

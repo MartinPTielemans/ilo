@@ -9,8 +9,11 @@
 //! without "www.", as the core reads it. Agents get no path to any of it: what a Boost changes is
 //! the user's own view of their pages (principle 3, decision 8).
 //!
-//! This first slice is CSS and Zap. Scripts come in a slice of their own, as they run code in the
-//! user's pages.
+//! A Boost's script, `Boosts/<site>.js` (#2297), runs in its site's pages only while its bytes are
+//! the ones the user last turned on in the browser's own dialog, which the core keeps a record of.
+//! The app reads the file, gives the core its bytes while the Boost is on (ScriptChange), and
+//! shows the state the core answers. It keeps a copy of the text last turned on, in the profile
+//! beside the record and outside the Boosts folder, so the dialog can show what changed since.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -114,6 +117,240 @@ impl Summary {
     }
 }
 
+/// What the turn-on dialog asks about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Asking {
+    /// A script never turned on here: its whole text.
+    New,
+    /// A changed script, with what changed since the copy turned on.
+    Changed,
+    /// A changed script with no copy of the text turned on to compare: its whole text.
+    ChangedWhole,
+}
+
+/// The dialog that turns on `site`'s script, which only the user's click on Turn On Script…
+/// opens (#2297). It names the site and says what a script can do, and shows the script whole, or
+/// what changed since the version last turned on. Turn On is never what ↩ does, and it takes the
+/// dialog's moment on screen before a click counts, as a device's request does: a key or a click
+/// meant for the page can't turn on code that acts as the user.
+pub fn script_question(
+    site: &str,
+    code: crate::dialog::Code,
+    asking: Asking,
+) -> crate::dialog::Question {
+    let message = match asking {
+        Asking::New => format!("Turn on the script for {site}?"),
+        Asking::Changed | Asking::ChangedWhole => {
+            format!("Turn the changed script for {site} back on?")
+        }
+    };
+    let detail = match asking {
+        Asking::New => format!(
+            "It runs on {site}'s pages as you: it can read and change them, use your login \
+             there, and send what it reads to other sites. Turn it on only if you know what it \
+             does."
+        ),
+        Asking::Changed => format!(
+            "Its file changed outside ilo, so it's off. Here's what changed since you turned it \
+             on. It runs on {site}'s pages as you, and can send what it reads to other sites."
+        ),
+        Asking::ChangedWhole => format!(
+            "Its file changed outside ilo, so it's off. Here's all of it, as ilo has no copy of \
+             the version you turned on. It runs on {site}'s pages as you, and can send what it \
+             reads to other sites."
+        ),
+    };
+    crate::dialog::Question {
+        icon: None,
+        message: message.into(),
+        detail: detail.into(),
+        list: Vec::new(),
+        action: "Turn On".into(),
+        cancel: "Cancel".into(),
+        tone: crate::dialog::Tone::Accent,
+        also: None,
+        fields: Vec::new(),
+        check: None,
+        on_return: crate::dialog::Return::Nothing,
+        code: Some(code),
+    }
+}
+
+/// `text`'s lines as the file has them: split at each newline only, so a carriage return stays
+/// in its line and shows, and with no empty line after a last newline.
+fn file_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
+}
+
+/// A new script's whole text, for its dialog.
+pub fn script_text(site: &str, script: &str) -> crate::dialog::Code {
+    use crate::dialog::{CodeLine, LineKind};
+    let lines: Vec<CodeLine> = (file_lines(script).into_iter().enumerate())
+        .map(|(index, line)| CodeLine {
+            kind: LineKind::Same,
+            number: Some(index + 1),
+            text: shown_line(line).into(),
+        })
+        .collect();
+    let count = match lines.len() {
+        1 => "1 line".to_string(),
+        count => format!("{count} lines"),
+    };
+    crate::dialog::Code {
+        caption: format!("{FOLDER}/{site}.js · {count}").into(),
+        lines,
+    }
+}
+
+/// What changed from `before`, the version last turned on, to `after`, with this many unchanged
+/// lines around each change, for the changed script's dialog.
+pub fn script_diff(site: &str, before: &str, after: &str) -> crate::dialog::Code {
+    use crate::dialog::{CodeLine, LineKind};
+    const CONTEXT: usize = 2;
+    // Past this many cells, the lines between the common ends show as all removed, then all
+    // added: still what changed, without a table the size of two 256 KB files' lines.
+    const MOST_CELLS: usize = 4_000_000;
+    let old = file_lines(before);
+    let new = file_lines(after);
+    let head = (old.iter().zip(&new)).take_while(|(a, b)| a == b).count();
+    let tail = (old[head..].iter().rev().zip(new[head..].iter().rev()))
+        .take_while(|(a, b)| a == b)
+        .count();
+    let (old_mid, new_mid) = (&old[head..old.len() - tail], &new[head..new.len() - tail]);
+    let mut all: Vec<(LineKind, Option<usize>, &str)> = Vec::new();
+    for (index, line) in new[..head].iter().enumerate() {
+        all.push((LineKind::Same, Some(index + 1), line));
+    }
+    if old_mid.len().saturating_mul(new_mid.len()) <= MOST_CELLS {
+        // The longest common subsequence of lines, from the ends.
+        let width = new_mid.len() + 1;
+        let mut common = vec![0u32; (old_mid.len() + 1) * width];
+        for i in (0..old_mid.len()).rev() {
+            for j in (0..new_mid.len()).rev() {
+                common[i * width + j] = match old_mid[i] == new_mid[j] {
+                    true => common[(i + 1) * width + j + 1] + 1,
+                    false => common[(i + 1) * width + j].max(common[i * width + j + 1]),
+                };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < old_mid.len() || j < new_mid.len() {
+            if i < old_mid.len() && j < new_mid.len() && old_mid[i] == new_mid[j] {
+                all.push((LineKind::Same, Some(head + j + 1), new_mid[j]));
+                (i, j) = (i + 1, j + 1);
+            } else if i < old_mid.len()
+                && (j == new_mid.len() || common[(i + 1) * width + j] >= common[i * width + j + 1])
+            {
+                // What went before what came, as a diff reads.
+                all.push((LineKind::Removed, None, old_mid[i]));
+                i += 1;
+            } else {
+                all.push((LineKind::Added, Some(head + j + 1), new_mid[j]));
+                j += 1;
+            }
+        }
+    } else {
+        all.extend(old_mid.iter().map(|line| (LineKind::Removed, None, *line)));
+        all.extend(
+            (new_mid.iter().enumerate())
+                .map(|(index, line)| (LineKind::Added, Some(head + index + 1), *line)),
+        );
+    }
+    for (index, line) in new[new.len() - tail..].iter().enumerate() {
+        all.push((LineKind::Same, Some(new.len() - tail + index + 1), line));
+    }
+    let near = |index: usize| {
+        let from = index.saturating_sub(CONTEXT);
+        let to = (index + CONTEXT + 1).min(all.len());
+        all[from..to].iter().any(|line| line.0 != LineKind::Same)
+    };
+    let mut lines = Vec::new();
+    let mut skipped = 0;
+    for (index, &(kind, number, text)) in all.iter().enumerate() {
+        if near(index) {
+            if skipped > 0 {
+                lines.push(CodeLine {
+                    kind: LineKind::Gap,
+                    number: None,
+                    text: unchanged(skipped).into(),
+                });
+                skipped = 0;
+            }
+            lines.push(CodeLine {
+                kind,
+                number,
+                text: shown_line(text).into(),
+            });
+        } else {
+            skipped += 1;
+        }
+    }
+    if skipped > 0 {
+        lines.push(CodeLine {
+            kind: LineKind::Gap,
+            number: None,
+            text: unchanged(skipped).into(),
+        });
+    }
+    let count = |kind| all.iter().filter(|line| line.0 == kind).count();
+    let (added, removed) = (count(LineKind::Added), count(LineKind::Removed));
+    // Bytes that differ in no line, such as a last newline, leave no line to show.
+    if added + removed == 0 {
+        return script_text(site, after);
+    }
+    let lines_of = |count: usize| match count {
+        1 => "1 line".to_string(),
+        _ => format!("{count} lines"),
+    };
+    crate::dialog::Code {
+        caption: format!(
+            "{FOLDER}/{site}.js · {} added, {} removed",
+            lines_of(added),
+            lines_of(removed)
+        )
+        .into(),
+        lines,
+    }
+}
+
+fn unchanged(count: usize) -> String {
+    match count {
+        1 => "1 line unchanged".into(),
+        _ => format!("{count} lines unchanged"),
+    }
+}
+
+/// A line of a script as the dialog shows it: tabs as spaces, and a control or direction
+/// character as its code, so nothing in the file hides what the line does.
+fn shown_line(line: &str) -> String {
+    let mut shown = String::new();
+    for c in line.chars() {
+        match c {
+            '\t' => shown.push_str("    "),
+            c if c.is_control()
+                || matches!(
+                    c,
+                    '\u{00ad}'
+                        | '\u{061c}'
+                        | '\u{180e}'
+                        | '\u{200b}'..='\u{200f}'
+                        | '\u{2028}'..='\u{202e}'
+                        | '\u{2060}'..='\u{2069}'
+                        | '\u{feff}'
+                ) =>
+            {
+                shown.push_str(&format!("\\u{{{:x}}}", c as u32))
+            }
+            c => shown.push(c),
+        }
+    }
+    shown
+}
+
 /// A site's CSS as the core should show it now: empty to show none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
@@ -129,6 +366,64 @@ pub struct Boost {
     pub summary: Summary,
     /// The user hasn't turned it off on its site.
     pub on: bool,
+    /// Its script, `Boosts/<site>.js`, where it has one (#2297).
+    pub script: Option<Script>,
+}
+
+/// The largest script that runs, in bytes, as the core's BC_BOOST_SCRIPT_MAX_BYTES: one past it is
+/// off, and the states say so in this figure.
+pub const SCRIPT_LIMIT: usize = 256 * 1024;
+/// The folder in a profile's folder, beside FOLDER and never in it, with the copy of each script
+/// as the user last turned it on, for the dialog's diff. Nothing copies or syncs it with the Boosts,
+/// and the dialog trusts a copy only while the core says it's the text turned on.
+pub const TURNED_ON: &str = "Boost scripts turned on";
+
+/// What a Boost's script does, as the core's record says (#2297).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Script {
+    /// Its bytes are the ones the user turned on, and it runs.
+    On,
+    /// It was never turned on here, so it's off until the user turns it on.
+    New,
+    /// Its file changed since the user turned it on, so it's off until they turn it on again.
+    Changed,
+    /// It's over SCRIPT_LIMIT, so it's off whatever the user says.
+    TooLarge,
+}
+
+impl Script {
+    /// Why it's off, in the same words in the card, Site Controls and the Library, or None while
+    /// it runs.
+    pub fn off_reason(self) -> Option<&'static str> {
+        match self {
+            Script::On => None,
+            Script::New => Some("New script, off"),
+            Script::Changed => Some("Script changed, off"),
+            Script::TooLarge => Some("Script over 256 KB, off"),
+        }
+    }
+
+    /// Whether Turn On Script… can turn it on: one too large can't run whatever the user says.
+    pub fn can_turn_on(self) -> bool {
+        matches!(self, Script::New | Script::Changed)
+    }
+}
+
+/// A site's script as the core should have it now: its bytes while the Boost is on, none to run
+/// none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptChange {
+    pub profile: u64,
+    pub site: String,
+    pub script: Option<Vec<u8>>,
+}
+
+/// A site's script file as read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ScriptFile {
+    Bytes(Vec<u8>),
+    /// Over SCRIPT_LIMIT, so it isn't read at all.
+    TooLarge,
 }
 
 /// Each loaded profile's Boosts, and whether Settings has them all off.
@@ -155,6 +450,12 @@ struct Kept {
     off: BTreeSet<String>,
     /// What the core was last given, by site, to give it only what changed.
     shown: BTreeMap<String, String>,
+    /// Each site's script file, where it has one.
+    scripts: BTreeMap<String, ScriptFile>,
+    /// What the core was last given of each site's script, as `shown` is of its CSS.
+    given: BTreeMap<String, Vec<u8>>,
+    /// The state the core answered for each script given.
+    states: BTreeMap<String, Script>,
 }
 
 impl Kept {
@@ -166,8 +467,26 @@ impl Kept {
         self.boosts().join(format!("{site}.css"))
     }
 
+    fn script_path(&self, site: &str) -> PathBuf {
+        self.boosts().join(format!("{site}.js"))
+    }
+
+    fn copy_path(&self, site: &str) -> PathBuf {
+        self.folder.join(TURNED_ON).join(format!("{site}.js"))
+    }
+
+    /// The state of `site`'s script, where it has one: too large as read, else as the core said,
+    /// and new until it has.
+    fn script(&self, site: &str) -> Option<Script> {
+        match self.scripts.get(site)? {
+            ScriptFile::TooLarge => Some(Script::TooLarge),
+            ScriptFile::Bytes(_) => Some(self.states.get(site).copied().unwrap_or(Script::New)),
+        }
+    }
+
     fn read(&mut self) {
         self.sites = read_folder(&self.boosts());
+        self.scripts = read_scripts(&self.boosts());
         let off = std::fs::read_to_string(self.folder.join(OFF_FILE)).unwrap_or_default();
         self.off = off.lines().filter_map(site_of_line).collect();
     }
@@ -217,6 +536,28 @@ fn first_line(site: &str) -> String {
 fn site_of_line(line: &str) -> Option<String> {
     let line = line.trim();
     site_of(&format!("https://{line}/")).filter(|site| site == line)
+}
+
+/// The scripts in `folder`, by site: each `<site>.js` that names one, unread if it's too large.
+fn read_scripts(folder: &Path) -> BTreeMap<String, ScriptFile> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return BTreeMap::new();
+    };
+    (entries.flatten())
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let site = site_of_line(name.strip_suffix(".js")?)?;
+            if entry.metadata().ok()?.len() > SCRIPT_LIMIT as u64 {
+                return Some((site, ScriptFile::TooLarge));
+            }
+            let bytes = std::fs::read(entry.path()).ok()?;
+            // It may have grown since its size was read.
+            Some(match bytes.len() > SCRIPT_LIMIT {
+                true => (site, ScriptFile::TooLarge),
+                false => (site, ScriptFile::Bytes(bytes)),
+            })
+        })
+        .collect()
 }
 
 /// The Boosts in `folder`, by site: each `<site>.css` that names one.
@@ -278,12 +619,135 @@ impl Boosts {
     /// `site`'s Boost in `profile`, if it has one.
     pub fn get(&self, profile: u64, site: &str) -> Option<Boost> {
         let kept = self.profiles.get(&profile)?;
-        let css = kept.sites.get(site)?;
+        let css = kept.sites.get(site);
+        if css.is_none() && !kept.scripts.contains_key(site) {
+            return None;
+        }
         Some(Boost {
             site: site.to_owned().into(),
-            summary: Summary::of(css),
+            summary: Summary::of(css.map_or("", String::as_str)),
             on: !kept.off.contains(site),
+            script: kept.script(site),
         })
+    }
+
+    /// What the core should have of each script that it doesn't yet: a site's bytes while its
+    /// Boost is on, and none for one turned off, too large, or there no more. The core answers
+    /// each with its state, for `set_script_state`.
+    pub fn script_changes(&mut self, profile: u64) -> Vec<ScriptChange> {
+        let all_off = self.all_off;
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        let sites: BTreeSet<String> =
+            (kept.scripts.keys().chain(kept.given.keys()).cloned()).collect();
+        let mut changes = Vec::new();
+        for site in sites {
+            let script = match kept.scripts.get(&site) {
+                Some(ScriptFile::Bytes(bytes)) if !all_off && !kept.off.contains(&site) => {
+                    Some(bytes.clone())
+                }
+                _ => None,
+            };
+            if kept.given.get(&site) == script.as_ref() {
+                continue;
+            }
+            match &script {
+                Some(bytes) => kept.given.insert(site.clone(), bytes.clone()),
+                None => {
+                    kept.states.remove(&site);
+                    kept.given.remove(&site)
+                }
+            };
+            changes.push(ScriptChange {
+                profile,
+                site,
+                script,
+            });
+        }
+        changes
+    }
+
+    /// `script_changes` for every profile read.
+    pub fn all_script_changes(&mut self) -> Vec<ScriptChange> {
+        let profiles: Vec<u64> = self.profiles.keys().copied().collect();
+        (profiles.into_iter())
+            .flat_map(|profile| self.script_changes(profile))
+            .collect()
+    }
+
+    /// Every script the core has of `profile`, to ask its state again, as once the profile has
+    /// loaded: the core says new until it has.
+    pub fn given_scripts(&self, profile: u64) -> Vec<ScriptChange> {
+        let Some(kept) = self.profiles.get(&profile) else {
+            return Vec::new();
+        };
+        (kept.given.iter())
+            .map(|(site, bytes)| ScriptChange {
+                profile,
+                site: site.clone(),
+                script: Some(bytes.clone()),
+            })
+            .collect()
+    }
+
+    /// The core's answer for a script it was given.
+    pub fn set_script_state(&mut self, profile: u64, site: &str, state: Script) {
+        if let Some(kept) = self.profiles.get_mut(&profile)
+            && kept.given.contains_key(site)
+        {
+            kept.states.insert(site.to_owned(), state);
+        }
+    }
+
+    /// The bytes of `site`'s script as read, for the turn-on dialog, unless it's too large.
+    pub fn script_bytes(&self, profile: u64, site: &str) -> Option<Vec<u8>> {
+        match self.profiles.get(&profile)?.scripts.get(site)? {
+            ScriptFile::Bytes(bytes) => Some(bytes.clone()),
+            ScriptFile::TooLarge => None,
+        }
+    }
+
+    /// The copy of `site`'s script as the user last turned it on, if there's one, which the dialog
+    /// shows only while the core says it's that text.
+    pub fn turned_on_copy(&self, profile: u64, site: &str) -> Option<Vec<u8>> {
+        let path = self.profiles.get(&profile)?.copy_path(site);
+        std::fs::read(path)
+            .ok()
+            .filter(|bytes| bytes.len() <= SCRIPT_LIMIT)
+    }
+
+    /// The user turned on `bytes` as `site`'s script, which the core now has and runs: keeps the
+    /// copy for the next diff.
+    pub fn turned_on(&mut self, profile: u64, site: &str, bytes: &[u8]) {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return;
+        };
+        let path = kept.copy_path(site);
+        let written = (path.parent())
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(&path, bytes));
+        if let Err(error) = written {
+            crate::log!("couldn't keep the script turned on for {site}: {error}");
+        }
+        kept.given.insert(site.to_owned(), bytes.to_owned());
+        kept.states.insert(site.to_owned(), Script::On);
+    }
+
+    /// The user turned `site`'s script off, which the core forgot: it's new again, and its copy
+    /// goes.
+    pub fn turned_off(&mut self, profile: u64, site: &str) {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return;
+        };
+        if let Err(error) = std::fs::remove_file(kept.copy_path(site))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            crate::log!("couldn't remove the script turned on for {site}: {error}");
+        }
+        if kept.given.contains_key(site) {
+            kept.states.insert(site.to_owned(), Script::New);
+        }
     }
 
     /// `profile`'s Boosts, by site.
@@ -291,7 +755,8 @@ impl Boosts {
         let Some(kept) = self.profiles.get(&profile) else {
             return Vec::new();
         };
-        (kept.sites.keys())
+        let sites: BTreeSet<&String> = kept.sites.keys().chain(kept.scripts.keys()).collect();
+        (sites.into_iter())
             .filter_map(|site| self.get(profile, site))
             .collect()
     }
@@ -383,6 +848,17 @@ impl Boosts {
             return Vec::new();
         }
         kept.sites.remove(site);
+        // Its script goes with it, and the copy of the text turned on: the caller has the core
+        // forget the record.
+        for path in [kept.script_path(site), kept.copy_path(site)] {
+            if let Err(error) = std::fs::remove_file(path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                crate::log!("couldn't delete the Boost script for {site}: {error}");
+            }
+        }
+        kept.scripts.remove(site);
+        kept.states.remove(site);
         if kept.off.remove(site) {
             kept.save_off();
         }
@@ -509,7 +985,10 @@ fn watch_on_thread(folder: &Path, changed: impl Fn()) {
     loop {
         let files = (std::fs::read_dir(folder).into_iter().flatten().flatten())
             .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "css"));
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "css" || extension == "js")
+            });
         let fds: Vec<i32> = std::iter::once(folder.to_path_buf())
             .chain(files)
             .filter_map(|path| open(&path))

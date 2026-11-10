@@ -401,6 +401,24 @@ pub trait Browser {
     /// Has the core show each site's Boost CSS as it changed, in its profile's pages. The user's
     /// alone: agents get no path to a Boost.
     fn show_boosts(&self, _changes: Vec<crate::boosts::Change>, _cx: &mut App) {}
+    /// The core's state for `bytes` as `site`'s Boost script in `profile` (#2297), without giving
+    /// them to its pages: what lets the turn-on dialog trust its copy of the text turned on.
+    fn boost_script_state(
+        &self,
+        _profile: u64,
+        _site: &str,
+        _bytes: &[u8],
+    ) -> crate::boosts::Script {
+        crate::boosts::Script::New
+    }
+    /// Turn On in the turn-on dialog, which only the user's click on Turn On Script… opens:
+    /// records `bytes`, the ones it showed, as `site`'s script and runs them from its pages' next
+    /// load. Whether it did. Never an agent's, a page's or a file's.
+    fn turn_on_boost_script(&self, _profile: u64, _site: &str, _bytes: &[u8]) -> bool {
+        false
+    }
+    /// Turn Off Script and Delete…: forgets `site`'s script turned on, which is then new, and off.
+    fn forget_boost_script(&self, _profile: u64, _site: &str) {}
     /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
     /// which comes back in `Shell::boost_zapped`. The user's alone.
     fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}

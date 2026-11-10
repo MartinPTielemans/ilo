@@ -86,6 +86,7 @@ pub(crate) unsafe extern "C" fn window_downloads_question(
         fields: Vec::new(),
         check: None,
         on_return: dialog::Return::Cancel,
+        code: None,
     };
     let answered = Box::new(move |cancel, _: &mut App| unsafe {
         bc::bc_window_answer_downloads(window, cancel)
