@@ -396,6 +396,7 @@ source_set("browser_core") {
 
   deps = [
     ":archive_rule",
+    ":boost_script",
     ":drm_request",
     ":mini_player_place",
     ":other_tabs",
