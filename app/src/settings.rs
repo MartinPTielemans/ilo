@@ -4295,7 +4295,7 @@ impl Settings {
         // The Mac's and Windows' own updater's: a Flatpak's updates are the system's, and the
         // Store's are the Store's.
         let checks = (cfg!(not(target_os = "linux")) && updates::own_updater(cx)).then(|| {
-            let on = automatic_update_checks();
+            let on = automatic_update_checks(cx);
             let switch = self.toggle(
                 "automatic update checks",
                 "Check for updates automatically",
@@ -4552,8 +4552,12 @@ fn set_dock_icon_color(colored: bool, cx: &mut App) {
     browser::dock_dot::set_plain(!colored, cx);
 }
 
-/// About's "Check for updates automatically", which only the Mac and Windows show.
-fn automatic_update_checks() -> bool {
+/// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
+/// updates' own state first, so it shows what the update banner's Update Automatically set.
+fn automatic_update_checks(cx: &App) -> bool {
+    if let Some(on) = updates::automatic(cx) {
+        return on;
+    }
     #[cfg(not(target_os = "linux"))]
     return crate::updates_host::automatic_checks();
     #[cfg(target_os = "linux")]
