@@ -26,10 +26,10 @@ fn measure(text: &SharedString, size: f32, _: FontWeight) -> f32 {
     text.chars().count() as f32 * size / 10.
 }
 
-fn button(label: &str, key: Option<&str>, primary: bool, enabled: bool) -> Button {
+fn button(label: &str, key: Option<&'static str>, primary: bool, enabled: bool) -> Button {
     Button {
         label: label.to_owned().into(),
-        key: key.map(|key| key.to_owned().into()),
+        key,
         primary,
         enabled,
         name: "test",
@@ -44,9 +44,9 @@ fn arrange() -> Bar {
         words: "Click what to change".into(),
         hint: None,
         buttons: vec![
-            button("Undo", Some("⌘Z"), false, false),
+            button("Undo", Some("cmd-z"), false, false),
             button("Reset", None, false, true),
-            button("Done", Some("esc"), true, true),
+            button("Done", Some("escape"), true, true),
         ],
     }
 }
@@ -61,8 +61,8 @@ fn ask(question: &str) -> Bar {
         words: question.to_owned().into(),
         hint: Some("Click what you mean".into()),
         buttons: vec![
-            button("Not Now", Some("esc"), false, true),
-            button("Send", Some("⌘↩"), true, false),
+            button("Not Now", Some("escape"), false, true),
+            button("Send", Some("cmd-enter"), true, false),
         ],
     }
 }
@@ -72,7 +72,20 @@ fn width(text: &str, size: f32) -> f32 {
 }
 
 fn button_width(label: &str, key: Option<&str>) -> f32 {
-    BUTTON_PAD * 2. + width(label, TEXT) + key.map_or(0., |key| KEY_GAP + width(key, TEXT))
+    BUTTON_PAD * 2.
+        + width(label, TEXT)
+        + key.map_or(0., |key| KEY_GAP + width(&key_text(key), TEXT))
+}
+
+/// Keys read as the menus write them on this OS, and escape as "esc".
+#[test]
+fn keys_are_named_as_menus_name_them() {
+    assert_eq!(key_text("escape"), "esc");
+    assert_eq!(
+        key_text("cmd-enter"),
+        crate::shell::keystroke_label("cmd-enter")
+    );
+    assert_eq!(key_text("cmd-z"), crate::shell::keystroke_label("cmd-z"));
 }
 
 /// Whether two widths are the same, but for float rounding.
@@ -88,9 +101,9 @@ fn whole(content: f32, words: f32) -> (f32, f32) {
 #[test]
 fn one_line_is_its_words_then_its_buttons() {
     let laid = layout(&arrange(), 2000., &measure);
-    let buttons = button_width("Undo", Some("⌘Z"))
+    let buttons = button_width("Undo", Some("cmd-z"))
         + button_width("Reset", None)
-        + button_width("Done", Some("esc"));
+        + button_width("Done", Some("escape"));
     let words = width("Click what to change", TEXT);
     let (bar, words) = whole(LEFT + words + LINE_GAP + GAP * 3. + buttons + RIGHT, words);
     assert_eq!(laid.lines, 1);
@@ -105,8 +118,8 @@ fn two_lines_are_who_asks_over_the_words() {
     let laid = layout(&ask(question), 2000., &measure);
     let after = TALL_GAP * 3.
         + width("Click what you mean", HINT)
-        + button_width("Not Now", Some("esc"))
-        + button_width("Send", Some("⌘↩"));
+        + button_width("Not Now", Some("escape"))
+        + button_width("Send", Some("cmd-enter"));
     let words = width(question, TEXT);
     let (bar, words) = whole(TALL_LEFT + words + after + TALL_RIGHT, words);
     assert_eq!(laid.lines, 1);

@@ -2976,44 +2976,8 @@ fn preview_foot_bar(
     }) else {
         return;
     };
-    let button = |label: &str, key: Option<&str>, primary, enabled| foot_bar::Button {
-        label: label.to_owned().into(),
-        key: key.map(|key| key.to_owned().into()),
-        primary,
-        enabled,
-        name: "preview",
-        run: Rc::new(|_| {}),
-    };
-    let question = match kind {
-        "long" => {
-            "Which one is “the box on the right”, the one with the recipes, or the video above \
-             it, or the panel that slides in when the page scrolls past the comments? Show me."
-        }
-        _ => "Which one is “the box on the right”? Show me.",
-    };
-    let bar = match kind {
-        "arrange" => foot_bar::Bar {
-            lead: None,
-            words: "Traded the video with Trending".into(),
-            hint: None,
-            buttons: vec![
-                button("Undo", Some("⌘Z"), false, true),
-                button("Reset", None, false, true),
-                button("Done", Some("esc"), true, true),
-            ],
-        },
-        _ => foot_bar::Bar {
-            lead: Some(foot_bar::Lead {
-                glyph: Some("icons/terminal.svg"),
-                text: "Claude asks".into(),
-            }),
-            words: question.into(),
-            hint: Some("Click what you mean".into()),
-            buttons: vec![
-                button("Not Now", Some("esc"), false, true),
-                button("Send", Some("⌘↩"), true, false),
-            ],
-        },
+    let Some(bar) = foot_bar::sample(kind) else {
+        return;
     };
     let look = move |_, _: &App| palette;
     let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));

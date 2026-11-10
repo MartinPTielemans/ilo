@@ -64,13 +64,69 @@ pub struct Lead {
 #[derive(Clone)]
 pub struct Button {
     pub label: SharedString,
-    pub key: Option<SharedString>,
+    /// Its key as the bindings write it, such as "cmd-enter", which the bar names as menus do:
+    /// Ctrl+Enter off the Mac.
+    pub key: Option<&'static str>,
     /// The mode's main button, in the accent, as Done and Send.
     pub primary: bool,
     pub enabled: bool,
     /// For the logs and the checks.
     pub name: &'static str,
     pub run: Rc<dyn Fn(&mut App)>,
+}
+
+/// Made-up bars as each mode will show them, for the preview and the checks: "arrange", one line,
+/// as Arrange's; "point", two, as pointing's; and "long", a question past its two lines.
+pub fn sample(kind: &str) -> Option<Bar> {
+    let button = |label: &str, key, primary, enabled| Button {
+        label: label.to_owned().into(),
+        key,
+        primary,
+        enabled,
+        name: "sample",
+        run: Rc::new(|_: &mut App| {}),
+    };
+    let question = match kind {
+        "long" => {
+            "Which one is “the box on the right”, the one with the recipes, or the video above \
+             it, or the panel that slides in when the page scrolls past the comments? Show me."
+        }
+        _ => "Which one is “the box on the right”? Show me.",
+    };
+    match kind {
+        "arrange" => Some(Bar {
+            lead: None,
+            words: "Traded the video with Trending".into(),
+            hint: None,
+            buttons: vec![
+                button("Undo", Some("cmd-z"), false, true),
+                button("Reset", None, false, true),
+                button("Done", Some("escape"), true, true),
+            ],
+        }),
+        "point" | "long" => Some(Bar {
+            lead: Some(Lead {
+                glyph: Some("icons/terminal.svg"),
+                text: "Claude asks".into(),
+            }),
+            words: question.into(),
+            hint: Some("Click what you mean".into()),
+            buttons: vec![
+                button("Not Now", Some("escape"), false, true),
+                button("Send", Some("cmd-enter"), true, false),
+            ],
+        }),
+        _ => None,
+    }
+}
+
+/// How a button names `key`: escape as "esc", as the offer's and the onboarding's chips do, and
+/// any other as a menu shows it.
+fn key_text(key: &str) -> SharedString {
+    match key {
+        "escape" => "esc".into(),
+        key => crate::shell::keystroke_label(key).into(),
+    }
 }
 
 /// How the bar is laid out: its size, how wide its words may be, how many lines they take, and
@@ -91,8 +147,9 @@ type Measure<'a> = &'a dyn Fn(&SharedString, f32, FontWeight) -> f32;
 fn layout(bar: &Bar, room: f32, measure: Measure) -> Layout {
     let button = |button: &Button| {
         let label = measure(&button.label, TEXT, FontWeight::MEDIUM);
-        let key = (button.key.as_ref())
-            .map_or(0., |key| KEY_GAP + measure(key, TEXT, FontWeight::NORMAL));
+        let key = (button.key).map_or(0., |key| {
+            KEY_GAP + measure(&key_text(key), TEXT, FontWeight::NORMAL)
+        });
         BUTTON_PAD * 2. + label + key
     };
     let tall = bar.lead.is_some();
@@ -147,6 +204,8 @@ struct Shown {
     window: u64,
     bar: Bar,
     layout: Layout,
+    /// Whether it has drawn on screen, which the log says once, for the checks.
+    drawn: bool,
 }
 
 pub struct FootBar {
@@ -234,6 +293,7 @@ pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, 
             window,
             bar,
             layout,
+            drawn: false,
         });
         foot_bar.host.show(window, place);
         cx.notify();
@@ -283,9 +343,19 @@ impl FootBar {
 impl Render for FootBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let root = div().size_full().font_family(crate::face::UI);
-        let Some(shown) = &self.shown else {
+        let Some(shown) = &mut self.shown else {
             return root;
         };
+        // GPUI draws a window only once the system reports it visible, some frames after the host
+        // shows it, so the line comes with the first frame that's seen. check.sh reads it.
+        if !shown.drawn {
+            match window.is_visible() {
+                true => log!("browser: foot bar drawn over {}", shown.window),
+                false => window.request_animation_frame(),
+            }
+            shown.drawn = window.is_visible();
+        }
+        let shown = &*shown;
         let palette = (self.look)(shown.window, cx);
         let a11y = window.is_a11y_active();
         let (bar, layout) = (&shown.bar, shown.layout);
@@ -375,11 +445,11 @@ impl Render for FootBar {
                 })
                 .on_click(cx.listener(move |bar, _, _, cx| bar.press(index, cx)))
                 .child(button.label.clone())
-                .children(button.key.clone().map(|key| {
+                .children(button.key.map(|key| {
                     div()
                         .font_weight(FontWeight::NORMAL)
                         .text_color(key_ink)
-                        .child(key)
+                        .child(key_text(key))
                 }))
         });
         root.child(
