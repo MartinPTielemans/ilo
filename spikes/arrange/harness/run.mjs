@@ -175,8 +175,12 @@ function flashes(stats) {
   for (const [id, c] of Object.entries(stats.changes || {})) {
     if (c.applied == null) { out[id] = { applied: false }; continue; }
     // Frames that began after the element was seen and before the one its placement landed in.
-    const between = stats.frames.filter((f) => f > c.seen && f < (c.frame != null ? c.frame : c.applied)).length;
-    out[id] = { applied: true, framesBetween: between, seenMs: Math.round(c.seen), appliedMs: Math.round(c.applied) };
+    const end = c.frame != null ? c.frame : c.applied;
+    // A held element shows nothing of the site's own layout once it's hidden, only a gap.
+    const shownTill = c.held != null ? (c.heldFrame != null ? c.heldFrame : c.held) : end;
+    const between = stats.frames.filter((f) => f > c.seen && f < shownTill).length;
+    const gap = c.held != null ? stats.frames.filter((f) => f >= shownTill && f < end).length : 0;
+    out[id] = { applied: true, framesBetween: between, framesHidden: gap, seenMs: Math.round(c.seen), appliedMs: Math.round(c.applied) };
   }
   return out;
 }
@@ -349,6 +353,8 @@ async function measure() {
   results.runs.push(await scenario('all/place-sync', { strategy: 'place', sync: true, finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   // The same by fingerprint, which finds each element by what it says rather than where it sits.
   results.runs.push(await scenario('all/place-fp', { strategy: 'place', finder: 'fp', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
+  // Hiding an element until the one it goes beside arrives, for the frames that show it in place.
+  results.runs.push(await scenario('all/place-hold', { strategy: 'place', hold: 1500, finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   writeFileSync(join(out, 'measure.json'), JSON.stringify(results, null, 2));
   log('done', results.runs.length, 'runs');
 }
