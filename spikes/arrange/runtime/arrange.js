@@ -73,15 +73,13 @@
   }
 
   const rect = (el) => { if (T) T.geometryReads++; return el.getBoundingClientRect(); };
-  // Where an absolutely placed |el| measures from: its containing block's padding box, in the
-  // viewport's coordinates, plus that box's scroll.
+  // Where an absolutely placed |el| measures from, in the viewport's coordinates: found by putting
+  // it at 0, 0 and looking, since offsetParent misses containing blocks that contain, transform,
+  // filter or a shadow slot makes (MDN's <details> put an element 289 by 340 px off).
   function origin(el) {
-    const cb = el.offsetParent;
-    if (!cb || (cb === document.body && getComputedStyle(cb).position === 'static')) {
-      return { x: -scrollX, y: -scrollY, cb: null };
-    }
-    const r = rect(cb);
-    return { x: r.left + cb.clientLeft - cb.scrollLeft, y: r.top + cb.clientTop - cb.scrollTop, cb };
+    set(el, 'left', '0px'); set(el, 'top', '0px');
+    const r = rect(el);
+    return { x: r.left, y: r.top };
   }
   const px = (n) => Math.round(n * 100) / 100 + 'px';
 
@@ -124,7 +122,21 @@
   function place(s) {
     const { c, el, ref } = s;
     if (!el) { s.why = s.n > 1 ? 'target matches ' + s.n : 'target not found'; return; }
-    if ((c.kind === 'settle' || c.kind === 'trade') && !ref) { s.why = s.refN > 1 ? 'ref matches ' + s.refN : 'ref not found'; return; }
+    if ((c.kind === 'settle' || c.kind === 'trade') && !ref) {
+      s.why = s.refN > 1 ? 'ref matches ' + s.refN : 'ref not found';
+      // |hold|: rather than show the element in the site's own place while the page has yet to add
+      // the one it goes beside, it's hidden, keeping its room, for at most |hold| ms. One timer, at
+      // load, ends the wait if the page adds nothing more.
+      if (A.hold && !s.heldOut) {
+        if (s.heldSince == null) {
+          s.heldSince = performance.now();
+          setTimeout(() => { s.heldOut = true; if (s.held) { restore(el); s.held = false; } }, A.hold);
+        }
+        if (!s.held) { set(el, 'visibility', 'hidden'); s.held = true; if (T && T.changes[c.id]) T.changes[c.id].held = performance.now(); }
+      }
+      return;
+    }
+    if (s.held) { restore(el); s.held = false; }
     if (ref && (el.contains(ref) || ref.contains(el))) { s.why = 'target and ref nest'; return; }
     s.why = '';
     const strat = A.strategy;
@@ -276,6 +288,7 @@
           T.changes[s.c.id].applied = performance.now();
           if (frame != null) T.changes[s.c.id].frame = frame;
         }
+        if (T && s.held && T.changes[s.c.id] && T.changes[s.c.id].heldFrame == null && frame != null) T.changes[s.c.id].heldFrame = frame;
         if (T && s.el) observeSizes(s);
       }
     } finally {
