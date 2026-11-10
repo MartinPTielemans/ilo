@@ -100,7 +100,6 @@ pub(crate) unsafe extern "C" fn history_listed(
             visited: page.last_visit as f64 / 1000.,
         })
         .collect();
-    // check.sh reads this line.
     log!(
         "browser: history listed {} for request {request} of profile {profile}, more {more}",
         pages.len()

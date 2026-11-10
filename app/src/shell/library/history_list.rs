@@ -424,7 +424,6 @@ impl Shell {
     /// Opens a visited page in a new tab of the Space shown, and closes the Library. The page isn't
     /// logged: it's the user's.
     fn open_visited(&mut self, url: &str, cx: &mut Context<Self>) {
-        // check.sh waits for this line.
         log!("browser: history open");
         self.browser.open_at(&[url.to_string()], false, 0, 0, cx);
         self.set_library(false, cx);
@@ -483,7 +482,6 @@ impl Shell {
         history
             .pages
             .retain(|visit| !(visit.page.url == url && visit.day == day));
-        // check.sh waits for this line.
         log!("browser: history removed a page");
         self.filter(true, cx);
     }
