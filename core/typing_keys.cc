@@ -86,19 +86,21 @@ std::vector<base::DictValue> TypingKeys(const std::u16string& text) {
     const char16_t only = character.size() == 1 ? character[0] : 0;
     if (base::IsAsciiAlpha(only)) {
       const char upper = static_cast<char>(base::ToUpperASCII(only));
-      key.Set("code", base::StrCat({"Key", std::string(1, upper)}))
-          .Set("windowsVirtualKeyCode", upper);
+      key.Set("code", base::StrCat({"Key", std::string(1, upper)}));
+      key.Set("windowsVirtualKeyCode", upper);
       if (base::IsAsciiUpper(only)) {
         key.Set("modifiers", 8);
       }
     } else if (base::IsAsciiDigit(only)) {
-      key.Set("code", base::StrCat({"Digit", std::string(1, static_cast<char>(only))}))
-          .Set("windowsVirtualKeyCode", static_cast<int>(only));
+      key.Set("code", base::StrCat({"Digit", std::string(1, static_cast<char>(only))}));
+      key.Set("windowsVirtualKeyCode", static_cast<int>(only));
     } else if (only == u' ') {
-      key.Set("code", "Space").Set("windowsVirtualKeyCode", 32);
+      key.Set("code", "Space");
+      key.Set("windowsVirtualKeyCode", 32);
     }
     keys.push_back(key.Clone().Set("type", "keyDown"));
-    keys.push_back(std::move(key.Set("type", "keyUp")));
+    key.Set("type", "keyUp");
+    keys.push_back(std::move(key));
   }
   return keys;
 }
