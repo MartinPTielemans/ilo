@@ -136,8 +136,21 @@ pub(crate) unsafe extern "C" fn tab_site_controls(
             removable: device.removable,
         })
         .collect(),
+        boostable: false,
+        boost: None,
     };
-    update_app(|cx| site_controls::changed(tab, site, cx));
+    update_app(|cx| {
+        // The app keeps the Boosts, so its window says what the core can't.
+        let shell = tab_window(tab, cx).and_then(|window| window.shell.upgrade());
+        let (boostable, boost) =
+            shell.map_or((false, None), |shell| shell.read(cx).boost_state(tab));
+        let site = site_controls::Site {
+            boostable,
+            boost,
+            ..site
+        };
+        site_controls::changed(tab, site, cx)
+    });
 }
 
 pub(crate) unsafe extern "C" fn tab_offer_changed(

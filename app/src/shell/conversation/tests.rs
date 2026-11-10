@@ -795,3 +795,21 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
     );
     assert_eq!(colours[0], colours[2]);
 }
+
+/// A page the user holds from the agent says why under its picture, over the agent's step: taken
+/// over, that they drive it; handed to them, what the agent asked of them (#1080).
+#[test]
+fn a_held_pages_picture_says_why() {
+    use super::picture_status;
+    let step = || Some("Clicking “Tickets”".into());
+    assert_eq!(picture_status(None, step()), step());
+    assert_eq!(picture_status(None, None), None);
+    assert_eq!(
+        picture_status(Some(&"".into()), step()),
+        Some("You're driving".into())
+    );
+    assert_eq!(
+        picture_status(Some(&"Sign in to github.com".into()), None),
+        Some("Needs you · Sign in to github.com".into())
+    );
+}

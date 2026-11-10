@@ -5,9 +5,10 @@
 # and hide its ad. The run reports how long that first launch let requests through. Its own lists
 # take fbclid out of an address. The Site Controls' Block ads and trackers says how many requests
 # it blocked on the page, and turns it off for the site, reloading the page, which then shows the
-# ad, and on again, by clicks and then by Tab's ring and space and return. Off for the site,
-# Settings › Ad Blocking lists it, and its Turn On turns it on there again. Its Block ads and
-# trackers turns it off in every profile, which takes it out of the Site Controls, and on again.
+# ad, and on again, counting afresh, by clicks and then by Tab's ring and space and return. Off
+# for the site, Settings › Ad Blocking lists it, and its Turn On turns it on there again. Its Block
+# ads and trackers turns it off in every profile, which takes it out of the Site Controls, and on
+# again.
 # A filter list switched on there, found by Settings' search, blocks at once: uBlock filters –
 # Annoyances, off as it comes, which --ad-block-lists makes a list on the check's server. A rule
 # added in My filters hides an element, and its Remove shows it again. A private window blocks
@@ -186,6 +187,9 @@ expect "${controls}Ad blocking Off" "the Site Controls didn't show ad blocking a
 send click 207 262
 expect '^browser: site controls set ad blocking on$' "a second click didn't turn it on again"
 expect "^browser: title $tab $blocked\$" "on again, the page didn't block its ad"
+# The open panel hears the badge of the page it reloaded, which counts afresh.
+expect "${controls}Ad blocking On ([0-9>][0-9k]* blocked)" \
+  "on again, the open Site Controls didn't say what the reloaded page blocked"
 # From the keyboard: Tab takes the ring down the tiles to the row, however many tiles the system
 # has, and space and return turn it off and on as clicks do (#1382).
 keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
@@ -406,4 +410,4 @@ quit
 [ ! -e "$profile_dir/Ad Blocking" ] ||
   fail "without --ad-block-engine=native, the profile has the native engine's folder:" \
     "$(ls "$profile_dir/Ad Blocking")"
-echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' Block ads and trackers, first in its rows, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png"
+echo "ok: a new profile blocks ads from its first page, with uBlock Origin in no extension list: My filters given through its managed settings block the page's ad script and hide its ad; its own lists take fbclid out of an address. The Site Controls' Block ads and trackers, first in its rows, says it blocked $blocked_count on the page, and turns it off for the site and on again, reloading the page and counting it afresh, and Settings › Ad Blocking lists the site while it's off, with a Turn On that lets it block there again; its switch turns it off everywhere, taking it out of the Site Controls, and on again. A rule added in My filters hides an element, and its Remove shows it again; uBlock filters – Annoyances, switched on from Settings' search, is fetched and blocks its script. A private window blocks too, and uBlock Origin ships at ublock.ini's $pinned_version without the timers that woke an idle browser, trusting no site, YouTube neither. The browser's own engine never loaded. Launched again three times, the existing profile blocks from each first page. The first launch blocked within $first_block s. Windows: $out/adblock-blocked.png, $out/adblock-off-for-site.png, $out/adblock-off-sites.png, $out/adblock-settings.png, $out/adblock-my-filters.png, $out/adblock-list-on.png, $out/adblock-private.png, $out/adblock-existing.png"

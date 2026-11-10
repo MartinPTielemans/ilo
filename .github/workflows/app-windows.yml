@@ -5,28 +5,62 @@
 name: UI on Windows
 
 on:
-  # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
+  # Main alone: a branch runs this at queue:ready, below (#2199). An engine release's tag, pushed
+  # with the owner's token, starts nothing here.
   push:
-    branches: ['**']
+    branches: [main]
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
+  # A pull request as it's labelled queue:ready, and each push to it after; a fork's on each push.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths: [app/**, core/public/**, tools/parity.sh, tools/window-capture.ps1, .github/workflows/app-windows.yml, '!**/*.md']
-  # A branch's head whose last push skipped this, as a push runs it only when its own diff matched (#1834).
+  # A branch's head before its pull request is ready, such as a lane's Windows code.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A branch's newer push cancels its older run. Main's runs, and pull requests', each get a group of
-# their own, so none is cancelled, or replaced while it waits.
+# A pull request's newer push cancels its older run, as does a branch's newer dispatch. Main's runs
+# each get a group of their own, so none is cancelled, or replaced while it waits. So does a run
+# another label started, which skips its job: in the pull request's group it would cancel the run
+# in progress, which the merge queue reads as a failure (#1506).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.label && github.event.label.name != 'queue:ready' && github.run_id || github.event.pull_request.number || github.ref != 'refs/heads/main' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  # A push to main whose tree a pull request or a dispatch already passed the tests on skips them,
+  # saying which run passed them (#2198). The tests record the tree they passed on at their end.
+  proven:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      test: ${{ steps.look.outputs.test }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/tree-proven.sh
+          sparse-checkout-cone-mode: false
+      - id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+        run: echo "test=$(.github/scripts/tree-proven.sh app-windows-test "$TREE")" >> "$GITHUB_OUTPUT"
+
   test:
-    # A pull request from a branch here already ran on its push, or on a dispatch on its head.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    needs: proven
+    # 10.9 minutes of a Windows runner, so a pull request from a branch here runs it once it's
+    # labelled queue:ready, not at each push before (#2199).
+    if: >-
+      !cancelled() && !needs.proven.outputs.test && (
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'queue:ready') ||
+      (github.event.action != 'labeled' && (contains(github.event.pull_request.labels.*.name, 'queue:ready') ||
+        github.event.pull_request.head.repo.full_name != github.repository)))
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -41,7 +75,10 @@ jobs:
 
       - run: rustup update stable --no-self-update
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -57,17 +94,30 @@ jobs:
       - run: cargo build --release --bin mcp-bridge
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
       - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
+      # What follows decides nothing, so this tree has passed.
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: app-windows-test
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
       # The screens tools/parity.sh captures on Linux, here on the runner's desktop, which GPUI draws
       # on with Direct3D's software adapter. The desktop starts at 1024 by 768, smaller than the
-      # preview's window. It only reports: nothing here fails the job.
+      # preview's window. It only reports: nothing here fails the job. The sheet is ImageMagick's, which
+      # the runner's image has (actions/runner-images, its Windows toolset).
       - name: Capture the parity screens
         continue-on-error: true
         run: |
           powershell.exe -NoProfile -Command 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' ||
             echo "::warning title=Parity captures::The desktop stays at its own size"
-          choco install imagemagick -y --no-progress >/dev/null
-          PATH=$(ls -d /c/Program\ Files/ImageMagick-* | head -1):$PATH
+          command -v magick >/dev/null || echo "::warning title=Parity captures::The image has no ImageMagick, so there's no sheet"
           ../tools/parity.sh target/release/preview.exe ../parity
 
       - uses: actions/upload-artifact@v4

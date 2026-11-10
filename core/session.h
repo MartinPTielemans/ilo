@@ -226,10 +226,18 @@ struct Settings {
   bool ask_where_to_save = false;
   double page_zoom = 1;
   bool notification_prompts = true;
+  // View › Appearance's choice, as bc_appearance has it, and whether Show Space Header keeps a lone
+  // unnamed Space's name row. The app draws both; the core keeps them so they follow the account.
+  int appearance = 0;
+  bool space_header = false;
 };
 
 // The user's settings. Call SessionChanged after changing them.
 Settings& UserSettings();
+
+// Gives pages View › Appearance's choice as their prefers-color-scheme. Not on the Mac, where they
+// follow the app's NSAppearance, which the app sets.
+void ApplyAppearance();
 
 // Puts the favorites and Spaces the last launch saved in |window|, which shows what the front
 // window showed (RestoreSavedWindow), unless there are Spaces already. Returns whether it did.

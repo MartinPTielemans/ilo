@@ -7,7 +7,9 @@
 //! from their arrows, the theme picker shrinks back to it, and the folder preview grows a little
 //! and fades, as on the Mac, drawn by GPUI (motion.rs).
 //!
-//! shortcut: no blur under them.
+//! The icon and theme pickers blur what's behind them at rest, as on the Mac, where the compositor
+//! can (gpui_linux::overlays_blur), and their card is translucent there (palette.rs, card_drawn).
+//! The command bar's and the folder preview's fill is opaque on every OS, so no blur would show.
 
 use std::{
     cell::{Cell, RefCell},
@@ -122,6 +124,9 @@ pub(crate) fn keyboard_lent_to_another(window: bc::bc_id, view: *mut c_void) -> 
 }
 
 /// The overlays by index, as check.sh reads them in the log.
+/// The icon and theme pickers, host.h's HOST_ICON_PICKER and HOST_THEME_PICKER.
+const PICKERS: [c_int; 2] = [1, 2];
+
 const NAMES: [&str; 4] = [
     "command bar",
     "icon picker",
@@ -173,6 +178,9 @@ pub extern "C" fn host_add_overlay(
     });
     shadows::attach(overlay, view);
     motion::attach(view);
+    if PICKERS.contains(&overlay) {
+        motion::blur(view);
+    }
 }
 
 #[unsafe(no_mangle)]

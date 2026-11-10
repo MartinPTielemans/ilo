@@ -3663,6 +3663,26 @@ mod tests {
         );
     }
 
+    /// Arc's ⌘} and ⌘{ show the next and previous tab, as ⌥⌘↓ and ⌥⌘↑ do, either way GPUI names them.
+    #[gpui::test]
+    fn the_brace_keys_show_the_next_and_previous_tab(cx: &mut TestAppContext) {
+        cx.update(bind_keys);
+        let (shell, cx, host) = window(cx, vec![2, 3], vec![4], 3);
+        cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+        for (key, tab) in [
+            ("shift-cmd-}", 4),
+            ("shift-cmd-]", 4),
+            ("shift-cmd-{", 2),
+            ("shift-cmd-[", 2),
+        ] {
+            shell.update(cx, |shell, cx| shell.set_selected(3, cx));
+            host.take();
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert!(host.take().contains(&format!("select {tab}")), "{key}");
+        }
+    }
+
     /// How the user goes back to the tab they came from.
     #[derive(Clone, Copy, Debug)]
     enum Back {

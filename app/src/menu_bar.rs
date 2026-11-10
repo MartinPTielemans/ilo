@@ -117,6 +117,15 @@ pub(crate) fn menus(
                 item("Restore Last Closed Tab", Command::ReopenClosedTab),
                 MenuItem::separator(),
                 item("Open Command Bar", Command::EditUrl),
+            ])
+            // Arc's place for it. As Change Profile's, only an empty Space takes a new profile, and
+            // a private window has none.
+            .chain(
+                bar.profiles.as_ref().map(|(_, new)| {
+                    item("New Profile", Command::ChangeProfile(None)).disabled(!new)
+                }),
+            )
+            .chain([
                 MenuItem::separator(),
                 item("Close Window", Command::CloseWindow),
                 item("Archive Tab", Command::CloseTab),
@@ -227,6 +236,7 @@ pub(crate) fn menus(
             "Spaces",
             [
                 item("New Space…", Command::NewSpace),
+                item("Edit Theme…", Command::EditTheme),
                 item("Rename Space", Command::RenameSpace),
             ]
             .into_iter()
@@ -343,19 +353,21 @@ pub(crate) fn appearance_title(appearance: Appearance) -> &'static str {
     }
 }
 
-/// Gives the host View › Appearance's choice, for the app's native parts and its pages.
-pub(crate) fn give_host_appearance(appearance: Appearance) {
-    let code = match appearance {
+/// View › Appearance's choice as the core has it (bc_appearance).
+pub(crate) fn appearance_code(appearance: Appearance) -> i32 {
+    match appearance {
         Appearance::Automatic => 0,
         Appearance::Light => 1,
         Appearance::Dark => 2,
-    };
+    }
+}
+
+/// Gives the host View › Appearance's choice, for the app's native parts, and the core, which keeps
+/// it and gives it to pages.
+pub(crate) fn give_host_appearance(appearance: Appearance) {
+    let code = appearance_code(appearance);
     unsafe { platform::host_set_app_appearance(code) };
-    // The Mac's pages follow NSApp's appearance, which the host sets.
-    #[cfg(not(target_os = "macos"))]
-    unsafe {
-        bc::bc_set_appearance(code)
-    };
+    unsafe { bc::bc_set_appearance(code) };
 }
 
 /// Help › Restore Earlier Sidebar: the shown Space's profile's sidebar backups, newest first, each

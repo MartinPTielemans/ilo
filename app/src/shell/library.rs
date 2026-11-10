@@ -4,7 +4,9 @@
 //! or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
 use std::{
+    cell::RefCell,
     hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -367,6 +369,8 @@ pub(super) enum Section {
     Archive,
     /// The past tasks and sessions of the window's profile's agents (#1080).
     Agents,
+    /// The window's profile's Boosts (#695).
+    Boosts,
 }
 
 impl Section {
@@ -377,6 +381,7 @@ impl Section {
             Section::Spaces => "spaces",
             Section::Archive => "archive",
             Section::Agents => "agents",
+            Section::Boosts => "boosts",
         }
     }
 }
@@ -418,6 +423,13 @@ pub(super) struct Library {
     only: Only,
     /// The downloads the log last said Downloads lists, for check.sh.
     logged: Option<String>,
+    /// The past task whose page Agents shows in its list's place, by its id (#1080).
+    opened: Option<String>,
+    /// That page's sites, each with the agent's answer there for good: true for Always Allow,
+    /// false for Never, None while it asks first.
+    sites: Vec<(String, Option<bool>)>,
+    /// Where the page's controls were drawn, as the log said, for check.sh to click them.
+    drawn: Rc<RefCell<Vec<String>>>,
     _search: Subscription,
 }
 
@@ -456,6 +468,14 @@ enum Item {
     Past(usize),
     /// Agents' Clear, over its list.
     Clear,
+    /// A past task's page, opened from its row: the way back, its title, and what it did.
+    PastHead(usize),
+    /// The page's site at this index of `Library::sites`.
+    PastSite(usize),
+    /// The step of the past task at the first index, at the second of its steps.
+    PastStep(usize, usize),
+    /// The Boost at this index of `Shell::boost_list`.
+    Boost(usize),
     /// The download at this index of `Shell::downloads`.
     Download(usize),
     /// A row of Media's tiles, from its left.
@@ -530,6 +550,10 @@ impl Shell {
     /// The Library's sections the window has: a private window's own downloads and their media,
     /// but none of the Spaces or archived tabs the regular windows keep (#669).
     pub(super) fn has_section(&self, section: Section) -> bool {
+        // Settings' switch off takes away every way into Boosts, the list too.
+        if section == Section::Boosts && crate::boosts::with(|boosts| boosts.all_off()) {
+            return false;
+        }
         !self.private || matches!(section, Section::Media | Section::Downloads)
     }
 
@@ -856,6 +880,7 @@ impl Shell {
             Section::Spaces => "",
             Section::Archive => "Search Archive…",
             Section::Agents => "Search Agents…",
+            Section::Boosts => "Search Boosts…",
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
@@ -871,6 +896,9 @@ impl Shell {
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
             only: Only::All,
             logged: None,
+            opened: None,
+            sites: Vec::new(),
+            drawn: Rc::default(),
             _search: observe,
         });
         // check.sh waits for these lines.
@@ -953,12 +981,78 @@ impl Shell {
         if self.section == Section::Agents && self.library.is_some() {
             self.read_agent_history();
         }
+        if self.section == Section::Boosts && self.library.is_some() {
+            self.read_boosts(cx);
+        }
         let Some(library) = &mut self.library else {
             return;
         };
         let query = library.search.read(cx).text().trim().to_lowercase();
         if !changed && query == library.query {
             return;
+        }
+        // A search goes back to the list, to find in it.
+        if query != library.query {
+            library.opened = None;
+        }
+        if self.section == Section::Agents
+            && let Some(id) = library.opened.clone()
+        {
+            match self.agent_history.iter().position(|past| past.id == id) {
+                Some(index) => {
+                    let past = &self.agent_history[index];
+                    let answers = match past.answers.is_empty() {
+                        true => Vec::new(),
+                        false => self.browser.agent_answers(&past.answers, cx),
+                    };
+                    library.sites = (past.sites().into_iter())
+                        .map(|site| {
+                            let answer = answers.iter().find(|(each, _)| *each == site);
+                            (site, answer.map(|(_, may)| *may))
+                        })
+                        .collect();
+                    let mut items = vec![Item::PastHead(index)];
+                    if !library.sites.is_empty() {
+                        items.push(Item::Heading("Sites"));
+                        items.extend((0..library.sites.len()).map(Item::PastSite));
+                    }
+                    if !past.steps.is_empty() {
+                        items.push(Item::Heading("Steps"));
+                        items.extend(
+                            (0..past.steps.len())
+                                .rev()
+                                .map(|step| Item::PastStep(index, step)),
+                        );
+                    }
+                    let allowed: Vec<String> = (library.sites.iter())
+                        .filter_map(|(site, answer)| match answer {
+                            Some(true) => Some(format!("{site} allowed")),
+                            Some(false) => Some(format!("{site} never")),
+                            None => None,
+                        })
+                        .collect();
+                    // check.sh reads this line.
+                    log!(
+                        "browser: agents history shows {id}: {} steps, {} sites, answers {}",
+                        past.steps.len(),
+                        library.sites.len(),
+                        if allowed.is_empty() {
+                            "none".to_string()
+                        } else {
+                            allowed.join(", ")
+                        }
+                    );
+                    if items != library.items {
+                        library.list.reset(items.len());
+                        library.items = items;
+                    }
+                    library.query = query;
+                    cx.notify();
+                    return;
+                }
+                // Deleted, or gone with history: back to the list.
+                None => library.opened = None,
+            }
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
         let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
@@ -993,6 +1087,11 @@ impl Shell {
                 })
                 .map(|(index, past)| (Item::Past(index), past.ended as f64 * 1000.)) // The Library's times are milliseconds.
                 .collect(),
+            // By site, without headings, as none is newer than another.
+            Section::Boosts => (self.boost_list.iter().enumerate())
+                .filter(|(_, boost)| query.is_empty() || found(&boost.site))
+                .map(|(index, _)| (Item::Boost(index), 0.))
+                .collect(),
             Section::Downloads => (self.downloads.iter().enumerate())
                 .filter(|(_, each)| query.is_empty() || found(&each.name) || found(&each.url))
                 .map(|(index, download)| (Item::Download(index), download.started))
@@ -1022,7 +1121,7 @@ impl Shell {
         let mut heading = None;
         for (item, time) in found {
             let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
-            if heading != Some(day) {
+            if self.section != Section::Boosts && heading != Some(day) {
                 heading = Some(day);
                 items.push(Item::Heading(HEADINGS[day]));
             }
@@ -1341,6 +1440,8 @@ impl Shell {
             (Section::Archive, false) => "No archived tabs match.",
             (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
             (Section::Agents, false) => "No tasks match.",
+            (Section::Boosts, true) => "New Boost makes one for the page shown.",
+            (Section::Boosts, false) => "No Boosts match.",
             (Section::Downloads, true) => "Files you download show here.",
             (Section::Downloads, false) => "No downloads match.",
             (Section::Media, true) => "Saved captures and downloaded media show here.",
@@ -1379,6 +1480,10 @@ impl Shell {
             .children(
                 self.has_section(Section::Agents)
                     .then(|| self.section_button(Section::Agents, color, cx)),
+            )
+            .children(
+                self.has_section(Section::Boosts)
+                    .then(|| self.section_button(Section::Boosts, color, cx)),
             );
         // Taken on past where it opens, the column's fill reaches back to the window's edge, so
         // the window's own background never shows left of it.
@@ -2134,6 +2239,10 @@ impl Shell {
             Item::Task(task) => return self.archived_task_item(task, cx),
             Item::Past(past) => return self.past_task_item(past, cx),
             Item::Clear => return self.agents_clear_item(cx),
+            Item::PastHead(past) => return self.past_head_item(past, cx),
+            Item::PastSite(site) => return self.past_site_item(site, cx),
+            Item::PastStep(past, step) => return self.past_step_item(past, step),
+            Item::Boost(boost) => return self.boost_item(boost, cx),
             Item::Download(download) => return self.download_item(download, cx),
             Item::Media(row) => return self.media_row(row, window, cx),
         };
@@ -2337,6 +2446,10 @@ impl Shell {
             return div().into_any_element();
         };
         let id = past.id.clone();
+        let opened = id.clone();
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
+        });
         let group: SharedString = format!("past-{index}").into();
         let mark = self.status_mark(crate::agents::task::Dot::Done);
         let close = div()
@@ -2372,6 +2485,8 @@ impl Shell {
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .children(drawn)
+                    .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_task(&opened, cx)))
                     .child(
                         div()
                             .absolute()
@@ -2408,6 +2523,405 @@ impl Shell {
             .into_any_element()
     }
 
+    /// A click on a past task's row: its page, in the list's place, with its steps and the sites
+    /// it went to, each with its agent's answer there for good and Revoke (#1080).
+    pub(super) fn open_past_task(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        library.opened = Some(id.to_string());
+        self.filter(true, cx);
+    }
+
+    /// The page's way back: Agents' list again.
+    pub(super) fn close_past_task(&mut self, cx: &mut Context<Self>) {
+        let Some(library) = &mut self.library else {
+            return;
+        };
+        if library.opened.take().is_some() {
+            // check.sh reads this line.
+            log!("browser: agents history lists");
+        }
+        self.filter(true, cx);
+    }
+
+    /// Revoke on the page's site at `index`: the agent's answer there for good goes, as Settings ›
+    /// Agents' Revoke has it go, and the activity log says so, so what asks first there asks
+    /// again.
+    pub(super) fn revoke_past_site(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(library) = &self.library else {
+            return;
+        };
+        let opened = library.opened.as_deref();
+        let past = self
+            .agent_history
+            .iter()
+            .find(|past| Some(past.id.as_str()) == opened);
+        let (Some(past), Some((site, Some(_)))) = (past, library.sites.get(index)) else {
+            return;
+        };
+        let (answers, site) = (past.answers.clone(), site.clone());
+        self.browser.revoke_agent_answer(&answers, &site, cx);
+        self.filter(true, cx);
+    }
+
+    /// A small button of the Library's lists, as Agents' Clear.
+    fn list_button(&self, id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .px(px(8.))
+            .py(px(3.))
+            .rounded(px(ARCHIVED_RADIUS))
+            .text_size(px(text::SMALL))
+            .text_color(self.palette.text(SECONDARY))
+            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .child(label)
+    }
+
+    /// The past task's page's head: Back in its mark's place, which goes back to the list, and its
+    /// title over its agent, how long it ran, when it ended and what it did.
+    fn past_head_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(past) = self.agent_history.get(index) else {
+            return div().into_any_element();
+        };
+        let drawn = (self.library.as_ref()).map(|library| {
+            crate::settings_rows::drawn("library back".into(), library.drawn.clone())
+        });
+        let back = div()
+            .id("past-back")
+            .absolute()
+            .left(px(ARCHIVED_FAVICON_X + FAVICON_SIZE / 2. - 12.))
+            .top(px((ARCHIVED_PLATE - 24.) / 2.))
+            .size(px(24.))
+            .rounded(px(ARCHIVED_RADIUS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .children(drawn)
+            .child(
+                svg()
+                    .path("icons/arrow-left.svg")
+                    .size(px(FAVICON_SIZE))
+                    .text_color(self.palette.text(SECONDARY)),
+            )
+            .on_click(cx.listener(|shell, _, _, cx| shell.close_past_task(cx)));
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .size_full()
+                    .relative()
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(8.))
+                            .child(text_line(
+                                past.title.clone().into(),
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                past.page_about().into(),
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    )
+                    .child(back),
+            )
+            .into_any_element()
+    }
+
+    /// A site the past task went to, over its agent's answer there for good, with Revoke at its
+    /// end while it has one.
+    fn past_site_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some((site, answer)) =
+            (self.library.as_ref()).and_then(|library| library.sites.get(index))
+        else {
+            return div().into_any_element();
+        };
+        let answer_words = match answer {
+            Some(true) => "Always Allow",
+            Some(false) => "Never",
+            None => "Asks first",
+        };
+        let revoke = answer.is_some().then(|| {
+            let drawn = (self.library.as_ref()).map(|library| {
+                crate::settings_rows::drawn(format!("library revoke {site}"), library.drawn.clone())
+            });
+            self.list_button(("past-revoke", index), "Revoke")
+                .relative()
+                .children(drawn)
+                .on_click(cx.listener(move |shell, _, _, cx| shell.revoke_past_site(index, cx)))
+        });
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT + 8.))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .pl(px(ARCHIVED_TEXT_X))
+                    .child(text_line(
+                        site.clone().into(),
+                        text::BODY,
+                        17.,
+                        self.palette.text(UNSELECTED_TITLE),
+                    ))
+                    .child(text_line(
+                        answer_words.into(),
+                        text::SMALL,
+                        15.,
+                        self.palette.text(SECONDARY),
+                    )),
+            )
+            .children(revoke)
+            .into_any_element()
+    }
+
+    /// A step of the past task, in the words Settings › Agents' activity log has, over when it
+    /// came and why it was refused, if it was.
+    fn past_step_item(&mut self, index: usize, step: usize) -> AnyElement {
+        let Some(step) = (self.agent_history.get(index)).and_then(|past| past.steps.get(step))
+        else {
+            return div().into_any_element();
+        };
+        let did = crate::agents::tools::Did {
+            tool: step.action.clone(),
+            site: step.site.clone(),
+            ..Default::default()
+        };
+        let tense = match step.refused.is_empty() {
+            true => crate::agents::tools::Tense::Done,
+            false => crate::agents::tools::Tense::Failed,
+        };
+        let when = crate::agents::local_time(step.at);
+        let under = match step.refused.is_empty() {
+            true => when,
+            false => format!("{when} · Refused: {}", step.refused),
+        };
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .pl(px(ARCHIVED_TEXT_X))
+                    .pr(px(8.))
+                    .child(text_line(
+                        crate::agents::tools::step_title(&did, tense).into(),
+                        text::BODY,
+                        17.,
+                        self.palette.text(UNSELECTED_TITLE),
+                    ))
+                    .child(text_line(
+                        under.into(),
+                        text::SMALL,
+                        15.,
+                        self.palette.text(SECONDARY),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// Reads the window's profile's Boosts, as Library › Boosts lists them.
+    fn read_boosts(&mut self, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            self.boost_list = Vec::new();
+            return;
+        };
+        if !crate::boosts::with(|boosts| boosts.loaded(profile)) {
+            self.browser.load_boosts(profile, cx);
+        }
+        self.boost_list = crate::boosts::with(|boosts| boosts.list(profile));
+    }
+
+    /// Lists the Boosts again, as one changed.
+    pub(super) fn list_boosts(&mut self, cx: &mut Context<Self>) {
+        self.filter(true, cx);
+    }
+
+    /// A Boost's row: its site over what it does, dimmed while it's off. A click or right-click
+    /// opens its menu: Edit CSS…, Turn Off or On, Show in Finder and Delete….
+    fn boost_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(boost) = self.boost_list.get(index) else {
+            return div().into_any_element();
+        };
+        let site = boost.site.clone();
+        let about = match boost.on {
+            true => boost.summary.describe(),
+            false => format!("Off. {}", boost.summary.describe()),
+        };
+        let menu = |site: SharedString| {
+            move |shell: &mut Shell,
+                  event: &MouseDownEvent,
+                  _: &mut Window,
+                  cx: &mut Context<Shell>| {
+                cx.stop_propagation();
+                shell.boost_menu(site.clone(), event.position, cx)
+            }
+        };
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("boost", index))
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .when(!boost.on, |row| row.opacity(0.5))
+                    .on_mouse_down(MouseButton::Left, cx.listener(menu(site.clone())))
+                    .on_mouse_down(MouseButton::Right, cx.listener(menu(site.clone())))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(
+                                svg()
+                                    .path("icons/globe.svg")
+                                    .size(px(FAVICON_SIZE))
+                                    .text_color(self.palette.text(SECONDARY)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(12.))
+                            .child(text_line(
+                                site,
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                about.into(),
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// A Boost's menu in Library › Boosts.
+    fn boost_menu(&mut self, site: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(profile) = self.learning_profile() else {
+            return;
+        };
+        let Some(on) =
+            crate::boosts::with(|boosts| boosts.get(profile, &site)).map(|boost| boost.on)
+        else {
+            return;
+        };
+        let show = match super::OFF_THE_MAC {
+            true => "Show in Folder",
+            false => "Show in Finder",
+        };
+        let entries = vec![
+            MenuEntry::new("Edit CSS…", true),
+            MenuEntry::new(if on { "Turn Off" } else { "Turn On" }, true),
+            MenuEntry::new(show, true),
+            MenuEntry::line(),
+            MenuEntry::new("Delete…", true).destructive(),
+        ];
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            Look {
+                light: false,
+                ..self.menu_look()
+            },
+            Box::new(move |chosen, cx| {
+                shell
+                    .update(cx, |shell, cx| match chosen {
+                        Some(0) => shell.edit_boost_file(profile, &site, cx),
+                        Some(1) => shell.set_boost_on(profile, &site, !on, cx),
+                        Some(2) => shell.show_boost_file(profile, &site, cx),
+                        Some(4) => shell.delete_boost(profile, &site, cx),
+                        _ => {}
+                    })
+                    .ok();
+            }),
+            cx,
+        );
+    }
+
+    /// Turns `site`'s Boost on or off there, from its row or Site Controls' switch.
+    pub fn set_boost_on(&mut self, profile: u64, site: &str, on: bool, cx: &mut Context<Self>) {
+        // check.sh reads this line.
+        log!("browser: boost {site} {}", if on { "on" } else { "off" });
+        let changes = crate::boosts::with(|boosts| boosts.set_on(profile, site, on));
+        self.browser.show_boosts(changes, cx);
+        self.list_boosts(cx);
+    }
+
+    fn show_boost_file(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
+        let folder = crate::boosts::with(|boosts| boosts.folder(profile));
+        if let Some(folder) = folder {
+            self.browser
+                .show_file(&folder.join(format!("{site}.css")), cx);
+        }
+    }
+
+    /// Delete…: the Boost's file goes, once the user says so.
+    fn delete_boost(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
+        let shell = cx.weak_entity();
+        let site = site.to_owned();
+        self.browser.confirm(
+            format!("Delete the Boost for {site}?"),
+            "Its file goes from the Boosts folder, and the site shows as it made itself.".into(),
+            "Delete",
+            Box::new(move |cx| {
+                shell
+                    .update(cx, |shell, cx| {
+                        // check.sh reads this line.
+                        log!("browser: boost {site} deleted");
+                        let changes = crate::boosts::with(|boosts| boosts.delete(profile, &site));
+                        shell.browser.show_boosts(changes, cx);
+                        shell.list_boosts(cx);
+                    })
+                    .ok();
+            }),
+            cx,
+        );
+    }
+
     /// Agents' Clear, at the end of a line over its list.
     fn agents_clear_item(&mut self, cx: &mut Context<Self>) -> AnyElement {
         div()
@@ -2418,15 +2932,7 @@ impl Shell {
             .items_center()
             .justify_end()
             .child(
-                div()
-                    .id("agents-clear")
-                    .px(px(8.))
-                    .py(px(3.))
-                    .rounded(px(ARCHIVED_RADIUS))
-                    .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .child("Clear")
+                self.list_button("agents-clear", "Clear")
                     .on_click(cx.listener(|shell, _, _, cx| shell.clear_agent_history(cx))),
             )
             .into_any_element()
@@ -2694,6 +3200,7 @@ impl Shell {
             Section::Spaces => ("icons/spaces.svg", "Spaces"),
             Section::Archive => ("icons/archive.svg", "Archived Tabs"),
             Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
+            Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
         };
         div()
             .id(label)
@@ -3490,8 +3997,8 @@ mod tests {
         });
         cx.run_until_parked();
         let height = cx.update(|window, _| f32::from(window.viewport_size().height));
-        // The fourth button, Archived Tabs, the column's five centred 5 above its middle, 100 apart.
-        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 95.));
+        // The fourth button, Archived Tabs, the column's six centred 5 above its middle, 100 apart.
+        let section = point(px(SECTION_X + SECTION_WIDTH / 2.), px(height / 2. + 45.));
         let menu = |cx: &mut gpui::VisualTestContext| {
             cx.simulate_mouse_down(section, MouseButton::Right, Modifiers::none());
             cx.simulate_mouse_up(section, MouseButton::Right, Modifiers::none());

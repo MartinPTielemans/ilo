@@ -20,11 +20,15 @@ const JOBS = {
   ],
 };
 
-// The gate itself: a change to it could hide what it skips.
+// The gate itself: a change to it could hide what it skips. core-same.sh takes out the core's
+// changes to comments alone before this reads the paths.
 const RUNS_EVERYTHING = [
   /^\.github\/workflows\/ci\.yml$/,
+  /^\.github\/scripts\/tree-proven\.sh$/,
+  /^\.github\/actions\/tree-proof\//,
   /^\.github\/scripts\/ci-changes\.cjs$/,
   /^\.github\/actions\/ci-changes\//,
+  /^tools\/core-same\.sh$/,
 ];
 
 // Nothing a job builds reads these, nor Markdown anywhere. Spikes stand alone (AGENTS.md), and

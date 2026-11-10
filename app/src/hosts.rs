@@ -173,6 +173,14 @@ impl site_controls::Host for SiteControlsHost {
         unsafe { bc::bc_tab_set_developer_mode(tab, on) };
     }
 
+    fn set_boost(&self, tab: u64, on: bool) {
+        update_app_later(move |cx| {
+            if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+                shell.update(cx, |shell, cx| shell.set_tab_boost_on(tab, on, cx));
+            }
+        });
+    }
+
     fn set_ad_blocking(&self, tab: u64, on: bool) {
         unsafe { bc::bc_tab_set_ad_blocking(tab, on) };
         // Settings lists the sites it's off on.

@@ -8,10 +8,11 @@
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
+#   pictures boosts
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
-# the same with the browser's own, and widevine,
+# the same with the browser's own, adblock-cost them with ad blocking on and off, and widevine,
 # Linux's alone, downloads Google's Widevine module, so they need the network and run only when
 # named: ./check.sh store.
 # Updates runs only when named too, until it passes on the Mac, and so do nightly and update-checks,
@@ -42,7 +43,8 @@
 # load and history pass there so far; the others stop where they need what Linux hasn't yet, such
 # as Japanese input in a page (keys), ilo's menu over the command bar (tabs) and IME (spaces),
 # which the driver says it can't do. Captures are the session's whole output.
-# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has. BROWSER_WAYLAND=1 runs it
+# BROWSER_XVFB=1 runs it under Xvfb and openbox instead, which CI has, and BROWSER_XVFB=kwin under
+# Xvfb and KWin, which composites and blurs under the overlays that ask. BROWSER_WAYLAND=1 runs it
 # on the sway session's Wayland, where the driver's input is sway's virtual pointer and keyboard
 # (platform/linux/drive_wayland.rs), which it refuses outside that session.
 set -e
@@ -62,12 +64,33 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
     # shellcheck disable=SC2016 # expanded by the session's shell
     exec xvfb-run -a -s "-screen 0 1280x800x24" sh -c '
       ready=$(mktemp -u)
-      openbox --startup "touch $ready" &
-      while [ ! -e "$ready" ]; do
-        kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
-        sleep 0.1
-      done
-      rm -f "$ready"
+      if [ "$BROWSER_XVFB" = kwin ]; then
+        # With OpenGL in Mesa'"'"'s software driver, which KWin composites with only when told to,
+        # and its blur, which it leaves off there unless its config turns it on. Ready once the blur
+        # names its property on the root window (#2134).
+        config=$(mktemp -d)
+        printf "[Plugins]\nblurEnabled=true\n" > "$config/kwinrc"
+        XDG_CONFIG_HOME=$config KWIN_COMPOSE=O2 dbus-run-session -- kwin_x11 > "$ready.log" 2>&1 &
+        tries=0
+        until xprop -root _KDE_NET_WM_BLUR_BEHIND_REGION 2> /dev/null |
+          grep -q "^_KDE_NET_WM_BLUR_BEHIND_REGION("; do
+          tries=$((tries + 1))
+          if ! kill -0 $! 2> /dev/null || [ "$tries" -gt 600 ]; then
+            echo "kwin: no blur; the effects it says on the root window:" >&2
+            xprop -root | grep "^_KDE" >&2
+            cat "$ready.log" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+      else
+        openbox --startup "touch $ready" &
+        while [ ! -e "$ready" ]; do
+          kill -0 $! 2> /dev/null || { echo "openbox exited" >&2; exit 1; }
+          sleep 0.1
+        done
+        rm -f "$ready"
+      fi
       # The real pointer starts mid-screen, over the app, where the X server tells GPUI it left as
       # the page views of Chromium change under it, mid-drag too. The driver sends a pointer of its
       # own, so the real one waits in the corner the window leaves.
@@ -84,8 +107,8 @@ runs="$runs split favorites cards extensions adblock adblock-lists adblock-cosme
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate"
-named="store sync-extensions adblock-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf perf-native"
+runs="$runs handback webrtc count translate pictures boosts"
+named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf perf-native"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -262,8 +285,6 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
-  # And without Hide Space Header's choice, which spaces' makes and takes back.
-  rm -f "$profile_dir/Space Header"
   # And without the command bar's picks, which put a command picked first among equal matches
   # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
   # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).

@@ -1,5 +1,6 @@
-# Labels each pull request with its author's standing in .github/VOUCHED.td. The label is context
-# for triage, not a gate (CONTRIBUTING.md). Adapted from T3 Code
+# Labels a fork's pull request with its author's standing in .github/VOUCHED.td. The label is
+# context for triage, not a gate (CONTRIBUTING.md). A pull request from a branch here is by someone
+# who can push to the repository, a collaborator, so it's labelled only on a /recheck-vouch (#2199). Adapted from T3 Code
 # (https://github.com/pingdotgg/t3code, MIT) at commit 570d4b03eef879bd60be3d74444046858c94dacd.
 #
 # It runs on pull_request_target, so it never checks out or runs the pull request's code: vouch
@@ -7,8 +8,9 @@
 name: PR Vouch
 
 on:
+  # The author is the pull request's from the start, so a push or a draft change can't change it.
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    types: [opened, reopened]
   issue_comment:
     types: [created]
   push:
@@ -21,9 +23,13 @@ jobs:
   collect-targets:
     name: Collect PR targets
     # Anyone can ask for a recheck with a /recheck-vouch comment on a pull request.
+    # A trigger can't pick a comment, so every comment starts a run, which skips this.
     if: >-
-      github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request && contains(github.event.comment.body, '/recheck-vouch'))
+      (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name != github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        contains(github.event.comment.body, '/recheck-vouch')) ||
+      github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -47,16 +53,17 @@ jobs:
               return;
             }
 
-            // A change to VOUCHED.td on main relabels every open pull request.
+            // A change to VOUCHED.td on main relabels every open pull request from a fork.
             const pulls = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: "open",
               per_page: 100,
             });
+            const forks = pulls.filter((pull) => pull.head.repo?.full_name !== pull.base.repo.full_name);
             core.setOutput(
               "targets",
-              JSON.stringify(pulls.map((pull) => ({ number: pull.number, user: pull.user.login }))),
+              JSON.stringify(forks.map((pull) => ({ number: pull.number, user: pull.user.login }))),
             );
 
   label:

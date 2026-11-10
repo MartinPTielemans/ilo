@@ -6,7 +6,7 @@ use std::rc::Rc;
 use gpui::{Entity, TestAppContext, VisualTestContext};
 
 use super::Item;
-use crate::agent_history::{Past, read, write};
+use crate::agent_history::{Past, Step, read, write};
 use crate::shell::commands::ShellHandle;
 use crate::shell::recorder::Recorder;
 use crate::shell::{Command, Folders, HistoryDeleted, Section, Shell, history_deleted};
@@ -23,6 +23,13 @@ fn past(id: &str, ended: u64) -> Past {
         pages: vec![("Booking".into(), "https://taberna.example/booking".into())],
         orders: 1,
         messages: 0,
+        steps: vec![Step {
+            at: ended - 30,
+            action: "click".into(),
+            site: "taberna.example".into(),
+            refused: String::new(),
+        }],
+        answers: "claude-code".into(),
     }
 }
 
@@ -151,4 +158,88 @@ fn a_private_window_lists_no_past_tasks(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert!(shell.read_with(cx, |shell, _| shell.agent_history.is_empty()));
+}
+
+fn page(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
+    shell.read_with(cx, |shell, _| {
+        let library = shell.library.as_ref().unwrap();
+        (library.items.iter())
+            .map(|item| match *item {
+                Item::PastHead(index) => format!("head {}", shell.agent_history[index].id),
+                Item::Heading(heading) => heading.to_string(),
+                Item::PastSite(index) => {
+                    let (site, answer) = &library.sites[index];
+                    format!("{site} {answer:?}")
+                }
+                Item::PastStep(index, step) => {
+                    format!("step {}", shell.agent_history[index].steps[step].action)
+                }
+                _ => "list".to_string(),
+            })
+            .collect()
+    })
+}
+
+/// A row opens its task's page in the list's place: its sites, each with its agent's answer there
+/// for good, then its steps, newest first. Revoke takes an answer, as Settings › Agents' does, and
+/// Back, or a search, goes back to the list (#1080).
+#[gpui::test]
+fn a_past_tasks_page_lists_its_steps_and_sites_with_revoke(cx: &mut TestAppContext) {
+    let (shell, host, cx) = agents(cx);
+    host.agent_answers.borrow_mut().insert(
+        "claude-code".into(),
+        vec![
+            ("taberna.example".into(), true),
+            ("elsewhere.example".into(), false),
+        ],
+    );
+    shell.update(cx, |shell, cx| {
+        let past = &mut shell.agent_history[0];
+        past.steps.push(Step {
+            at: past.ended - 10,
+            action: "read_page".into(),
+            site: "menu.example".into(),
+            refused: String::new(),
+        });
+        let entries = shell.agent_history.clone();
+        shell.browser.set_agent_history(0, &write(&entries));
+        shell.open_past_task("2", cx);
+    });
+    assert_eq!(
+        page(&shell, cx),
+        [
+            "head 2",
+            "Sites",
+            "taberna.example Some(true)",
+            "menu.example None",
+            "Steps",
+            "step read_page",
+            "step click",
+        ],
+        "a site it didn't go to was listed, or its steps weren't newest first"
+    );
+    shell.update(cx, |shell, cx| shell.revoke_past_site(0, cx));
+    assert_eq!(
+        host.agent_answers.borrow()["claude-code"],
+        [("elsewhere.example".to_string(), false)]
+    );
+    assert_eq!(page(&shell, cx)[2], "taberna.example None");
+    // Revoke on a site that asks first does nothing.
+    shell.update(cx, |shell, cx| shell.revoke_past_site(1, cx));
+    assert_eq!(host.agent_answers.borrow()["claude-code"].len(), 1);
+    shell.update(cx, |shell, cx| shell.close_past_task(cx));
+    assert_eq!(listed(&shell, cx), ["clear", "2", "1"]);
+    // A search from the page goes back to the list, to find in it.
+    shell.update(cx, |shell, cx| shell.open_past_task("1", cx));
+    assert_eq!(page(&shell, cx)[0], "head 1");
+    let search = shell.read_with(cx, |shell, _| {
+        shell.library.as_ref().unwrap().search.clone()
+    });
+    cx.update(|window, cx| {
+        search.update(cx, |search, cx| {
+            search.set_text("Task".into(), 4, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(listed(&shell, cx), ["clear", "2", "1"]);
 }

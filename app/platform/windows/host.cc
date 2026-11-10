@@ -1030,6 +1030,12 @@ void AppActivating(bool active, DWORD thread) {
       g_resigning_active();
     }
   }
+  // The foreground event says so too, but an out-of-context WinEvent doesn't wake Chromium's
+  // message pump, so an idle browser hears it only at its next message, seconds on. This one,
+  // sent, wakes it.
+  if (!active && !OurThread(thread)) {
+    OtherAppInFront();
+  }
 }
 
 void WatchForeground() {
@@ -5310,6 +5316,19 @@ bool host_drive_little_tray_click(void) {
   }
   SendMessageW(g_tray, kTrayMessage, 0, MAKELPARAM(NIN_SELECT, kTrayId));
   return true;
+}
+
+// Where Explorer draws the icon, in |icon|, and its notification area, in |area|, in the screen's
+// pixels, for drive.cc's statusitem place: false while it's off or Explorer has no taskbar. An
+// icon in the overflow is drawn in its flyout, outside the area.
+bool host_drive_little_tray_place(RECT* icon, RECT* area) {
+  NOTIFYICONIDENTIFIER id = {sizeof(id)};
+  id.hWnd = g_tray;
+  id.uID = kTrayId;
+  HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+  HWND notify = taskbar ? FindWindowExW(taskbar, nullptr, L"TrayNotifyWnd", nullptr) : nullptr;
+  return g_tray_clicked && g_tray && notify && SUCCEEDED(Shell_NotifyIconGetRect(&id, icon)) &&
+         GetWindowRect(notify, area);
 }
 
 }  // extern "C"

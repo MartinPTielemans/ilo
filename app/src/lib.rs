@@ -95,6 +95,7 @@ pub mod account;
 pub mod ad_block;
 pub mod agent_history;
 pub mod agents;
+pub mod boosts;
 pub mod build_info;
 pub mod capture;
 pub mod child;
