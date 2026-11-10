@@ -6,7 +6,9 @@ just before it and the Unix ms its page said it was shown. The page marks each s
 performance.mark, which the trace has with blink.user_timing, so each switch's span is the one that
 began after the switch before was shown and before this one was. Without the marks, the spans are
 taken in order. For ilo, LOG gives the core's "selected N in X ms" after each step and, on the Mac,
-"switch let the page it left go after X ms".
+the let-go of the hold that step's "switch keeps the page it left" began: its ms, "limit" for one
+let go at the limit, or "merged" for none before the next hold began, which took it over, as when
+the next key comes before every page the hold waits on has drawn.
 
 It prints a tab-separated row a switch: BROWSER, its kind, page, count, key ms, shown ms, the span's
 tab_state and ms, the selected ms and the let-go ms, "-" for none. Each loaded switch without a span
@@ -65,6 +67,34 @@ def after(step, pattern):
     return "-"
 
 
+def hold(step):
+    """The let-go of the hold step STEP began, up to the next hold, on the Mac."""
+    if step == "-":
+        return "-"
+    start = next((i for i, line in enumerate(log) if line.startswith("browser: drive %s: " % step)),
+                 None)
+    if start is None:
+        return "-"
+    held = None
+    for i in range(start + 1, len(log)):
+        if log[i].startswith("browser: drive "):
+            break
+        if log[i] == "browser: switch keeps the page it left":
+            held = i
+            break
+    if held is None:
+        return "-"
+    for line in log[held + 1:]:
+        if line == "browser: switch keeps the page it left":
+            return "merged"
+        found = re.match(r"^browser: switch let the page it left go after ([0-9.]+) ms$", line)
+        if found:
+            return found.group(1)
+        if line == "browser: switch let the page it left go at the limit":
+            return "limit"
+    return "merged"
+
+
 rows = [line.split() for line in open(rows_path, encoding="utf-8") if line.strip()]
 missing = []
 previous = None
@@ -83,7 +113,7 @@ for kind, step, page, count, key, shown in rows:
         missing.append("%s shown %s" % (page, count))
     state, ms = (span[1], "%.1f" % span[2]) if span else ("-", "-")
     selected = after(step, r"^browser: selected \d+ in ([0-9.]+) ms$")
-    let_go = after(step, r"^browser: switch let the page it left go after ([0-9.]+) ms$")
+    let_go = hold(step)
     print("\t".join([browser, kind, page, count, key, shown, state, ms, selected, let_go]))
 for switch in missing:
     print("no TabSwitching::Latency span for the switch to %s" % switch, file=sys.stderr)
