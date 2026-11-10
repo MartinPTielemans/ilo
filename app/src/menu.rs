@@ -304,7 +304,8 @@ fn panel_width(
     let pages = items.iter().any(|&at| entries[at].page);
     let lead = lead + if pages { FAVICON + GAP } else { 0. };
     let chevron = if submenus { GAP + CHEVRON } else { 0. };
-    (2. * (PADDING + ROW_X) + lead + widest + chevron).clamp(MIN_WIDTH, MAX_WIDTH)
+    // The panel's 1 pt border is inside its width, so the rows have that much less on each side.
+    (2. * (PADDING + ROW_X + 1.) + lead + widest + chevron).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
 /// The item shown in place of `item` while ⌥ is held, as AppKit's alternates are: the one after it,
