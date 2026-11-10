@@ -57,9 +57,7 @@ impl Shell {
         cx: &mut gpui::App,
     ) -> Option<(u64, String, Option<boosts::Boost>)> {
         let (profile, site) = self.boost_site(self.field_tab())?;
-        if !boosts::with(|boosts| boosts.loaded(profile)) {
-            self.browser.load_boosts(profile, cx);
-        }
+        self.read_profile_boosts(profile, cx);
         let (off, boost) = boosts::with(|boosts| (boosts.all_off(), boosts.get(profile, &site)));
         (!off).then_some((profile, site, boost))
     }
@@ -98,6 +96,42 @@ impl Shell {
             Command::ViewBoosts => !self.private && self.browser.space_agent(self.space).is_empty(),
             _ => false,
         }
+    }
+
+    /// Reads `profile`'s Boosts the first time, so what's offered knows the ones it has.
+    fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
+        if !boosts::with(|boosts| boosts.loaded(profile)) {
+            self.browser.load_boosts(profile, cx);
+        }
+    }
+
+    /// Reads the Boosts of the profile of `tab`'s page the first time, before a menu offers its
+    /// Boost.
+    pub(super) fn read_boosts_of(&self, tab: u64, cx: &mut gpui::App) {
+        if let Some((profile, _)) = self.boost_site(tab) {
+            self.read_profile_boosts(profile, cx);
+        }
+    }
+
+    /// The sidebar's menus' item for the Boost of `tab`'s site: New Boost… without one, Edit
+    /// Boost… with one, and none where its page can't have one or Settings' switch is off.
+    pub(super) fn boost_entry(&self, tab: u64) -> Option<&'static str> {
+        let (profile, site) = self.boost_site(tab)?;
+        boosts::with(|boosts| match boosts.all_off() {
+            true => None,
+            false if boosts.get(profile, &site).is_some() => Some("Edit Boost…"),
+            false => Some("New Boost…"),
+        })
+    }
+
+    /// The card for the site of `tab`'s page, from its row's menu: a tab not shown is shown first,
+    /// and its card opens once it is, as the card hangs under the URL field.
+    pub(super) fn open_boost_for(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if tab == self.field_tab() {
+            return self.open_boost(cx);
+        }
+        self.boost_pending = Some(tab);
+        self.browser.select(tab, cx);
     }
 
     /// New Boost and Edit Boost: the card for the site of the page shown.
