@@ -33,7 +33,10 @@ perf_dir="$out/perf"
 perf_debuggers="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
 if [ -n "${MSYSTEM:-}" ]; then
   if [ -x "$perf_debuggers/gflags.exe" ]; then
-    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe +ust /tracedb 512 || echo "perf: gflags failed"
+    # Two calls: gflags takes a flag or the database's size, not both. The default database
+    # filled before 20 tabs.
+    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe +ust || echo "perf: gflags failed"
+    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe /tracedb 512 || echo "perf: gflags tracedb failed"
   else
     echo "perf: no Debugging Tools in $perf_debuggers: $(ls "/c/Program Files (x86)/Windows Kits/10" 2>&1 | tr '\n' ' ')"
   fi
