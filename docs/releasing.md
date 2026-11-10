@@ -51,7 +51,7 @@ Turn the track off by removing `app/branding/update-feed-nightly` from main. The
 
    `--cleanup=verbatim` keeps the notes' `##` headings, which git's default cleanup strips as comment lines.
 
-   The notes' Known gaps name each quarantined line by its issue. `app/check/quarantine.sh notes` drafts them from the issues' titles. The release run lists the quarantine in its summary, and warns about a quarantined issue that the notes don't name.
+   A quarantined line that is a bug a user can meet goes in the notes' Known gaps, and a check's own flake doesn't. The release run's summary lists both.
 
    A lightweight tag fails the run, since the notes come from the message. Running the workflow by hand before the tag exists tries the release: it builds everything, its notes say it isn't for publishing, and it makes no release.
 6. **Check the draft release's files, then publish it.**
