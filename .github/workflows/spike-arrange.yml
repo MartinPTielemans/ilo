@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        site: [news, docs, spa, video, shop, shop2, article]
+        site: [news, docs, spa, video, video-yt, shop, shop2, article]
     defaults:
       run:
         working-directory: spikes/arrange
