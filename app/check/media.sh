@@ -37,7 +37,13 @@ answer_macos() {
   [ -x "$out/alert" ] ||
     clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
     fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-  asked=$("$out/alert" 2>&1) || fail "ilo lost its activation $2, to no question: $asked"
+  # The job on GitHub's hosted Mac answers the local network's question as it comes
+  # (check-mac.yml), and ilo has its activation back.
+  asked=$("$out/alert" 2>&1) || {
+    send state
+    [ "$active" = 1 ] && return 0
+    fail "ilo lost its activation $2, to no question: $asked"
+  }
   echo "macOS asked $2, and the run answers Allow: $asked"
   "$out/alert" "" Allow > "$out/alert.txt" 2>&1 || true
   for _ in $(seq 50); do

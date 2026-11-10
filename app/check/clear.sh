@@ -1406,6 +1406,7 @@ focused() {
 }
 for _ in $(seq 100); do
   [ "$(focused)" = Cancel ] && break
+  sleep 0.1
 done
 [ "$(focused)" = Cancel ] ||
   fail "Clear browsing data's dialog didn't give its Cancel the keyboard: $(focused)"
