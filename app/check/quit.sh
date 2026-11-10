@@ -6,7 +6,8 @@
 # as it shuts down, the regular window's alone, which quits as the last regular window closes, or
 # the last window's with no Little ilo. One of those crashed (#1425). So, on Linux, does a quit by
 # signal just after a switch to a coloured Space, ten times, which crashed one launch in two
-# (#1478). So does a quit with a page playing music, and one with a link preview open. None
+# (#1478), and on the Mac a quit through the app just after one, as the window still holds the page
+# the switch let go (#2248). So does a quit with a page playing music, and one with a link preview open. None
 # leaves a crash report, where on Linux a crash as the window closed once left one at every quit
 # (#474). A quit by signal, as the other runs' is, never closes the window as the user does, so
 # only a quit the user makes finds that one.
@@ -134,8 +135,9 @@ fi
 
 # On Linux, quits by signal as a switch to a coloured Space cross-fades the window's colours: as
 # Chromium quits it closes every window before the core lets its window go, and the app setting
-# the colours of the closed one crashed about one launch in two (#1478), so ten launches.
-if [ "$(uname)" = Linux ]; then
+# the colours of the closed one crashed about one launch in two (#1478), so ten launches. On the
+# Mac the window closes while the page the switch left is still in it, transparent (#2248).
+if [ "$(uname)" = Linux ] || [ "$(uname)" = Darwin ]; then
   printf '%s' '<title>two</title><p style="font:24px system-ui">Space two</p>' \
     > "$out/site/quit-two.html"
   start space-switch "$site"
@@ -246,4 +248,5 @@ closed=
 ! windows || closed=", and on Windows the close buttons of every window with Little ilo open, of the regular window alone under it, and of the last window"
 switched=
 [ "$(uname)" != Linux ] || switched=", and on Linux ten quits by signal just after a switch to a coloured Space"
+[ "$(uname)" != Darwin ] || switched=", and on the Mac ten quits just after a switch to a coloured Space"
 echo "ok: quitting through the menu and with ⌘Q, answering Quit, through the menu as the window comes on screen, and through both with a Little ilo window open$closed$switched, with music playing$previewed, ends every Chromium process with status 0 after Chromium stops, and leaves no crash report"

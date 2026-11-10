@@ -1,4 +1,3 @@
 # Runs of check.sh, or a step of one, whose failure doesn't fail Check on macOS while their issue is
 # open (check/quarantine.sh says how). A line lasts 14 days:
 # <run> #<issue> <YYYY-MM-DD> [<its FAIL line's start, as the summary shows it>]
-switch-frames #2248 2026-11-10 the page area showed no page through a switch

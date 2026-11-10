@@ -264,14 +264,26 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
-              [ ! -d build/check ] || mv build/check "$out/$run"
-              pkill -9 -f "$PWD/build/Browser.app/" || true
+              # Switch-frames five times, all five needed: its hole came in one run in two, so one
+              # pass says too little (#2248).
+              times=1
+              repeated=
+              [ "$run" != switch-frames ] || { times=5; repeated=1; }
+              for time in $(seq "$times"); do
+                [ "$time" = 1 ] && name=$run || name=$run-$time
+                ${limit:+$limit 20m} ./check.sh "$run" > "$out/$name.log" 2>&1 || status=$?
+                [ ! -d build/check ] || mv build/check "$out/$name"
+                pkill -9 -f "$PWD/build/Browser.app/" || true
+                if [ "$status" != 0 ]; then
+                  [ "$name" = "$run" ] || cp "$out/$name.log" "$out/$run.log"
+                  break
+                fi
+              done
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
               if [ "$status" = 0 ]; then
-                result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
+                result="passed${repeated:+ $times times} in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true
                 result="failed ($status): $said"
