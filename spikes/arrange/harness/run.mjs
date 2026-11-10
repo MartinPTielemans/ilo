@@ -100,13 +100,21 @@ async function metrics(cdp) {
   return Object.fromEntries(metrics.map((m) => [m.name, m.value]));
 }
 
+// Scrolls |desc|'s element to the middle of the window at once, past any smooth scrolling the
+// site asks for, and waits for the page to settle there before anything measures it.
+async function settleOn(p, desc) {
+  await p.inWorld(`(() => { const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(desc))});
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' }); return true; })()`);
+  await sleep(600);
+}
+
 // Clicks the link |desc| finds where it's drawn now, and says whether the page went somewhere.
 async function clickLink(p, desc) {
   if (!desc) return { tried: false };
+  await settleOn(p, desc);
   const at = await p.inWorld(`(() => {
     const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(desc))});
     if (!el) return null;
-    el.scrollIntoView({ block: 'center' });
     const r = el.getClientRects()[0] || el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 40), y = r.top + r.height / 2;
     const hit = document.elementFromPoint(x, y);
     return { x, y, hits: !!hit && (el === hit || el.contains(hit) || hit.contains(el)), href: el.href };
@@ -124,8 +132,9 @@ async function clickLink(p, desc) {
 // Types into the field |desc| finds where it's drawn now.
 async function typeInto(p, desc) {
   if (!desc) return { tried: false };
+  await settleOn(p, desc);
   const at = await p.inWorld(`(() => { const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(desc))});
-    if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getClientRects()[0] || el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 30), y = r.top + r.height / 2;
+    if (!el) return null; const r = el.getClientRects()[0] || el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 30), y = r.top + r.height / 2;
     const hit = document.elementFromPoint(x, y); return { x, y, hits: !!hit && (el === hit || el.contains(hit)) }; })()`);
   if (!at) return { tried: true, found: false };
   await p.page.mouse.click(at.x, at.y);
@@ -237,6 +246,10 @@ async function scenario(name, arrangement, rec, opts = {}) {
   const t = await load(p, site.url);
   const r = { name, strategy: arrangement?.strategy || 'none', loadMs: t };
   try {
+    // What the renderer did through load and 3 s after, whoever asked for it: the runtime's cost
+    // is this against the control's.
+    const m = await metrics(p.cdp);
+    r.loadWork = { taskMs: Math.round(m.TaskDuration * 1000), scriptMs: Math.round(m.ScriptDuration * 1000), layoutMs: Math.round(m.LayoutDuration * 1000), styleMs: Math.round(m.RecalcStyleDuration * 1000), layouts: m.LayoutCount, styles: m.RecalcStyleCount };
     r.fcp = await p.page.evaluate(() => (performance.getEntriesByType('paint').find((e) => e.name === 'first-contentful-paint') || {}).startTime || null);
     r.mainWorldSeesRuntime = await p.page.evaluate(() => typeof window.__ILO_ARRANGE__ !== 'undefined' || typeof window.__ILO_ARRANGEMENT__ !== 'undefined');
     r.styleSheets = await p.page.evaluate(() => document.styleSheets.length);
@@ -275,6 +288,8 @@ async function scenario(name, arrangement, rec, opts = {}) {
         layouts: m1.LayoutCount - m0.LayoutCount,
         pageMutations: ww1.child - ww0.child + ww1.other - ww0.other + ww1.style - ww0.style,
         runtimeCallbacks: s0 && Object.fromEntries(Object.keys(s1).map((k) => [k, s1[k] - s0[k]])),
+        // A video the arrangement brought on screen may play there, which is the page's work.
+        videosPlaying: await p.page.evaluate(() => [...document.querySelectorAll('video')].filter((v) => !v.paused).length),
       };
     }
     if (opts.capture) await shot(p, opts.capture);
