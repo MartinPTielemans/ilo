@@ -13,6 +13,16 @@
 # active, window captures, IME, keys and focus work, but scrolling drew 35-41 frames a second: it
 # checks behaviour, never the performance gate (docs/roadmap.md), whose numbers come from the
 # owner's Mac.
+# Its default runs, the night's and a train's, are every run check.sh does unnamed but VM_RUNS, the
+# runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
+# - switch-frames: a Space or tab switch here showed the empty page area in one picture, in 3 of 4
+#   runs, where the VM showed a page in every one.
+# Of the runs check.sh does only when named, the runner passes store, adblock-live, adblock-parity,
+# adblock-native, passwords-live, updates, nightly, update-checks, shots, and keychain asked for
+# alone, which builds the prod build it needs. perf measures, so it stays on the owner's Mac (here
+# ilo's memory came 48 to 103 % over Chrome's); widevine and tab-drag are Linux's; and
+# sync-extensions needs the Mac's clipboard and two copies of the app at once, which its Mac half
+# doesn't have yet.
 name: Check on macOS
 
 on:
@@ -61,7 +71,8 @@ jobs:
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
     name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
     runs-on: macos-26
-    timeout-minutes: 120
+    # The default runs take about 100 min here, after about 10 of setting up.
+    timeout-minutes: 240
     permissions:
       contents: read
       # A re-run reads the run's earlier attempts (main-check.sh rerun).
@@ -72,8 +83,9 @@ jobs:
       run:
         working-directory: app
     env:
-      # The runs to start with, whose parts the trial found working. A run joins once it passes here.
-      MAC_RUNS: load keys tabs quit scripting favorites links preview import notifications
+      # The runs a release still needs from the check VM, as the header says why: a run here joins
+      # the default ones once it passes on the runner.
+      VM_RUNS: switch-frames
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -263,9 +275,15 @@ jobs:
           out=$RUNNER_TEMP/check
           mkdir -p "$out"
           # check.sh's own list, the runs it does with no names and the ones it does only when named.
-          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' check.sh | tr '\n' ' ')
+          unnamed=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p' check.sh | tr '\n' ' ')
+          all="$unnamed $(sed -n 's/^named="\(.*\)"$/\1/p' check.sh)"
           case $RUNS in
-          '') runs=$MAC_RUNS ;;
+          '')
+            runs=
+            for run in $unnamed; do
+              case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
+            done
+            ;;
           all) runs=$all ;;
           *) runs=$RUNS ;;
           esac
@@ -280,9 +298,15 @@ jobs:
           # which came later in the same job (#2205). Local Network can't be granted ahead like the
           # others, a check VM answered once, and reaching that address from the job didn't make it
           # ask, so through every run the job answers that question alone with Allow, through
-          # System Events with the Accessibility granted above.
+          # System Events with the Accessibility granted above, once the question has made
+          # UserNotificationCenter the active app, so the runs keep the runner's 3 cores between.
           (
             while :; do
+              sleep 0.5
+              case $(lsappinfo info -only bundleid "$(lsappinfo front)" 2> /dev/null) in
+              *UserNotificationCenter*) ;;
+              *) continue ;;
+              esac
               asked=$(osascript -e 'tell application "System Events"
                 if not (exists process "UserNotificationCenter") then return ""
                 tell process "UserNotificationCenter"
@@ -294,7 +318,6 @@ jobs:
                 end tell
               end tell' 2> /dev/null) || true
               [ -z "$asked" ] || echo "$(date -u +%T) allowed: $asked" >> "$out/local-network.log"
-              sleep 0.5
             done
           ) &
           answering=$!
@@ -320,7 +343,12 @@ jobs:
                 echo "::error::The $run run failed. Its log: $run.log in the artifact."
               fi
               ;;
-            *) result="skipped: not in the runs the Mac runner passes yet" ;;
+            *)
+              case " $VM_RUNS " in
+              *" $run "*) result="skipped: the check VM does it, as the workflow's header says why" ;;
+              *) result="skipped: not asked for" ;;
+              esac
+              ;;
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
