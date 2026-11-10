@@ -6,7 +6,9 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/apple/foundation_util.h"
 #include "base/functional/callback.h"
@@ -14,6 +16,8 @@
 #include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
 #include "ui/gfx/geometry/rect.h"
@@ -221,6 +225,63 @@ namespace browser_core::platform {
 
 namespace {
 
+// #2248, not for merge: a page view's layers, to see what the left page's going does to the one
+// shown.
+NSString* DescribeLayer(CALayer* layer, int depth) {
+  NSMutableString* s = [NSMutableString stringWithString:NSStringFromClass([layer class])];
+  if (layer.hidden) {
+    [s appendString:@" hidden"];
+  }
+  if (layer.opacity < 1) {
+    [s appendFormat:@" opacity=%.2f", layer.opacity];
+  }
+  [s appendFormat:@" %.0fx%.0f", layer.bounds.size.width, layer.bounds.size.height];
+  if ([layer respondsToSelector:NSSelectorFromString(@"contextId")]) {
+    [s appendFormat:@" context=%@", [layer valueForKey:@"contextId"]];
+  }
+  if (id contents = layer.contents) {
+    [s appendFormat:@" contents=%@", NSStringFromClass([contents class])];
+  }
+  if (CGColorRef color = layer.backgroundColor) {
+    const CGFloat* c = CGColorGetComponents(color);
+    if (CGColorGetNumberOfComponents(color) == 4) {
+      [s appendFormat:@" bg=%.2f,%.2f,%.2f,%.2f", c[0], c[1], c[2], c[3]];
+    }
+  }
+  if (layer.sublayers.count && depth < 8) {
+    NSMutableArray<NSString*>* children = [NSMutableArray array];
+    for (CALayer* child in layer.sublayers) {
+      [children addObject:DescribeLayer(child, depth + 1)];
+    }
+    [s appendFormat:@" [%@]", [children componentsJoinedByString:@", "]];
+  }
+  return s;
+}
+
+void LogLayers(NSUInteger hold, const char* when, const char* which, NSView* page) {
+  if (!page) {
+    return;
+  }
+  NSView* holder = page.superview;
+  fprintf(stderr, "browser: switch hold %lu layers %s at %.4f %s %p in=%d index=%lu hidden=%d alpha=%.2f %s\n",
+          static_cast<unsigned long>(hold), when, base::Time::Now().InSecondsFSinceUnixEpoch(),
+          which, (__bridge void*)page, holder != nil,
+          static_cast<unsigned long>(holder ? [holder.subviews indexOfObject:page] : 0),
+          page.hidden, page.alphaValue,
+          page.layer ? DescribeLayer(page.layer, 0).UTF8String : "no layer");
+}
+
+void LogShowing(NSUInteger hold, const char* when, const std::vector<std::pair<int, int>>& ids) {
+  for (const auto& [process, routing] : ids) {
+    content::RenderWidgetHost* host = content::RenderWidgetHost::FromID(process, routing);
+    content::RenderWidgetHostView* widget = host ? host->GetView() : nullptr;
+    fprintf(stderr, "browser: switch hold %lu widget %s at %.4f %d/%d %s\n",
+            static_cast<unsigned long>(hold), when, base::Time::Now().InSecondsFSinceUnixEpoch(),
+            process, routing,
+            !widget ? "gone" : widget->IsShowing() ? "showing" : "not showing");
+  }
+}
+
 BridgedContentView* ContentView(views::Widget* widget) {
   return base::apple::ObjCCastStrict<BridgedContentView>(
       widget->GetNativeWindow().GetNativeNSWindow().contentView);
@@ -299,6 +360,20 @@ void HoldLeaving(BrowserCoreWindowView* view,
           static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch(),
           static_cast<unsigned long>(view.leaving.count),
           static_cast<unsigned long>(arrivals.count));
+  for (NSView* page in view.leaving) {
+    LogLayers(hold, "held", "leaving", page);
+  }
+  for (NSView* page in arrivals) {
+    LogLayers(hold, "held", "arriving", page);
+  }
+  std::vector<std::pair<int, int>> ids;
+  for (const Pane& pane : panes) {
+    if (content::RenderWidgetHost* host =
+            pane.widget ? pane.widget->GetRenderWidgetHost() : nullptr) {
+      ids.emplace_back(host->GetProcess()->GetDeprecatedID(), host->GetRoutingID());
+    }
+  }
+  LogShowing(hold, "held", ids);
   __weak BrowserCoreWindowView* weak_view = view;
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
@@ -317,11 +392,30 @@ void HoldLeaving(BrowserCoreWindowView* view,
         [shown_in.awaited removeObject:drawn];
       }
       if (shown_in.awaited.count == 0 && shown_in.leaving.count > 0) {
+        for (NSView* page in shown_in.leaving) {
+          LogLayers(hold, "before", "leaving", page);
+        }
+        for (BrowserCorePane* pane in shown_in.panes) {
+          LogLayers(hold, "before", "arriving", pane.page);
+        }
+        LogShowing(hold, "before", ids);
         fprintf(stderr, "browser: switch hold %lu let go at %.4f by frame\n",
                 static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch());
         fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
                 (base::TimeTicks::Now() - since).InMillisecondsF());
         [shown_in letLeavingGo];
+        // The shown page's layers once the left one has gone, through the next few frames.
+        for (int after : {0, 8, 17, 33, 50}) {
+          base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+              FROM_HERE, base::BindOnce(^{
+                const std::string when = "after" + std::to_string(after);
+                for (BrowserCorePane* pane in weak_view.panes) {
+                  LogLayers(hold, when.c_str(), "arriving", pane.page);
+                }
+                LogShowing(hold, when.c_str(), ids);
+              }),
+              base::Milliseconds(after));
+        }
       }
     }));
   }
