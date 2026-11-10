@@ -118,9 +118,11 @@ expect '^browser: boost editor drawn$' "the Boost editor didn't draw itself on s
 # A click in the field, at (0.6, -0.6) of it, places the ground's dot, and both pages take its
 # colour at once.
 send clickkey 293.5 83.2
-expect "^browser: boost editor set $host ground 0.600 -0.600 dragged\$" \
+# Within a point's rounding, as the window's points can be a fraction off its pixels.
+near='ground 0\.60[0-9] -0\.60[0-9]; dragged'
+expect "^browser: boost editor set $host $near\$" \
   "a click in the editor's field didn't place the ground's dot"
-grep -q "^/\* ground 0.600 -0.600 dragged \*/\$" "$file" ||
+grep -q "^/\* $near \*/\$" "$file" ||
   fail "the editor didn't keep its change in the Boost's file: $(cat "$file")"
 grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
   fail "the editor's change took Zap's line away: $(cat "$file")"
