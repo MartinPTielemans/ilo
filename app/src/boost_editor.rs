@@ -1609,9 +1609,11 @@ fn slider_line(
         .text_size(px(text::SMALL))
         .text_color(palette.on_overlay(DIM))
         .child(adjust.title());
+    // The track as it is, not raised to the overlay's text floor as the fill is, or it reads as
+    // bright as the fill and the fill from 100 % can't be seen.
     let track = line(TRACK.0, width, MEDIA_SLIDER_TRACK)
         .rounded_full()
-        .bg(palette.on_overlay(SLIDER_TRACK_INK));
+        .bg(palette.faint(SLIDER_TRACK_INK));
     let fill = line(knob.min(middle), (knob - middle).abs(), MEDIA_SLIDER_TRACK)
         .rounded_full()
         .bg(palette.on_overlay(SLIDER_FILL_INK));

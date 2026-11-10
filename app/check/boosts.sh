@@ -177,12 +177,16 @@ expect "^browser: boost editor set $host contrast 125; advanced; dragged\$" \
 send key right
 expect "^browser: boost editor set $host contrast 130; advanced; dragged\$" \
   "→ didn't move the focused slider a step"
-grep -q '^html { filter: contrast(130%) !important; }$' "$file" ||
-  fail "Contrast didn't filter the page in the Boost's file: $(cat "$file")"
+# A click at a quarter of Brightness's track sets 75 %, so the capture shows a fill each way.
+send clickkey 143.25 312
+expect "^browser: boost editor set $host contrast 130; brightness 75; advanced; dragged\$" \
+  "a click on Brightness's track didn't set it where it was"
+grep -q '^html { filter: contrast(130%) brightness(75%) !important; }$' "$file" ||
+  fail "Contrast and Brightness didn't filter the page in the Boost's file: $(cat "$file")"
 ../tools/window-screenshot.sh "$pid" "$out/boost-advanced.png" || fail "no window to capture"
 # Reset, left of Advanced, puts the three back; Advanced again closes them, and the card shrinks.
 send clickkey 222 244
-expect "^browser: boost editor set $host advanced; dragged\$" "Reset didn't put Contrast back"
+expect "^browser: boost editor set $host advanced; dragged\$" "Reset didn't put the sliders back"
 send clickkey 306 244
 expect '^browser: boost editor advanced false$' "Advanced didn't close"
 expect '^browser: boost editor height 496$' "the card didn't shrink as Advanced closed"
@@ -209,7 +213,7 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
-  "Advanced grew the card, Contrast's click and → filtered the page and Reset put it back;" \
+  "Advanced grew the card, Contrast's and Brightness's filtered the page and Reset put them back;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
