@@ -241,10 +241,8 @@ void Unhide(NSView* view, bool hidden) {
   view.wantsLayer = YES;
 }
 
-// On the continuous curve the Mac rounds its windows with, so the card's corners, the window's
-// radius less the frame, are concentric with the window's (the app's window-radius-mac token).
+// Test for #2248: the page views' corners on Core Animation's default curve, as in 0.1.12.
 void RoundCorners(NSView* view, double radius, CACornerMask corners) {
-  view.layer.cornerCurve = kCACornerCurveContinuous;
   view.layer.cornerRadius = radius;
   view.layer.maskedCorners = corners;
   view.layer.masksToBounds = radius > 0 && corners;
