@@ -158,37 +158,19 @@
     s.applied = false;
   }
 
-  // What the user is looking at stays still across the runtime's own changes. The browser's
-  // scroll anchoring does it when an element above the view leaves the flow, but not when it comes
-  // back, since changing its position suppresses the adjustment: Wikipedia's view jumped 195 px on
-  // a preview taken away. So an element in view that no change touches is held where it was, and
-  // a preview taken away scrolls back by exactly what it scrolled.
-  function viewAnchor() {
-    const touched = [];
-    for (const s of live) touched.push(s.el, s.ref, ...(s.keepers || []));
-    for (const fy of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]) for (const fx of [0.5, 0.3, 0.7]) {
-      const el = document.elementFromPoint(innerWidth * fx, innerHeight * fy);
-      if (!el || el === document.documentElement || el === document.body) continue;
-      if (touched.some((m) => m && (m.contains(el) || el.contains(m)))) continue;
-      return { el, top: el.getBoundingClientRect().top };
-    }
-    return null;
-  }
-  function holdView(a) {
-    if (!a || !a.el.isConnected) return;
-    const d = a.el.getBoundingClientRect().top - a.top;
-    if (Math.abs(d) >= 0.5) scrollBy(0, d);
-  }
+  // Taking a preview away scrolls back by exactly what showing it scrolled. The browser's scroll
+  // anchoring keeps the view still when an element above it leaves the flow, but not when it
+  // comes back, since changing its position suppresses the adjustment: Wikipedia's view was left
+  // 195 px off. Scrolling more than that, to hold the view through every change, drifted on reset
+  // and woke pages that react to scrolling (IKEA's header folded).
 
   // The site's own layout comes back at once: every inline style the runtime set goes back.
   // Off until reapply: the size it changes would otherwise place everything again.
   let on = true;
   function reset() {
     on = false;
-    const a = viewAnchor();
     for (const s of live) unplace(s);
     for (const el of [...saved.keys()]) restore(el);
-    holdView(a);
   }
 
   function place(s) {
@@ -545,12 +527,11 @@
       live.push(s);
       const t = performance.now();
       resolveAll();
-      const a = viewAnchor();
       const mine = moved(s);
       for (const o of live) if (o !== s && !o.preview && !o.suspendedBy && moved(o).some((e) => mine.includes(e))) { unplace(o); o.suspendedBy = c.id; }
       const y0 = scrollY;
       layoutAll('preview');
-      holdView(a);
+      document.documentElement.getBoundingClientRect();
       s.scrolled = scrollY - y0;
       return { ms: performance.now() - t, applied: s.applied, why: s.why, fitMs: s.fitMs, waiting: live.filter((o) => o.suspendedBy === c.id).map((o) => o.c.id) };
     },
