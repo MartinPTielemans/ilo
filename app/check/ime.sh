@@ -10,11 +10,12 @@
 # It checks:
 # - The page's textarea composes "abc" (its title follows its composition events and value), and
 #   Enter commits it.
-# - Ctrl+T's command bar, with what the page composed committed in the page, composes "xyz", which
-#   it draws; Escape cancels it and leaves the bar open, taking the next key, "q"; composing again
-#   and Enter commits "qxyz" without opening anything, and the bar takes the next key, "w".
-# - A click in the page while the bar composes leaves no composition behind: the page composes
-#   "fg" on its own.
+# - Ctrl+T's command bar opens over the composing page, which commits what it composed. Under
+#   Wayland the bar then composes "xyz", which it draws; Escape cancels it and leaves the bar open,
+#   taking the next key, "q"; composing again and Enter commits "qxyz" without opening anything,
+#   and the bar takes the next key, "w". Under X11 those steps are skipped, as below.
+# - Under Wayland, a click in the page while the bar composes leaves no composition behind: the
+#   page composes "fg" on its own.
 # - On X11, Settings' search field (Ctrl+, then Ctrl+F) composes "pip", which it draws and
 #   searches for only once Enter commits it; Escape cancels a composition there and leaves the
 #   search, and the next Escape empties it. Under Wayland Settings' window takes no input method,
@@ -103,30 +104,43 @@ if [ "${1:-}" = --steps ]; then
   at=$(mark); key '^t'
   await "title [0-9]* value abcde$" "$at"
   await "command bar shown" "$at"
-  at=$(mark); compose xyz
-  await 'command bar drew "xyz"' "$at"
-  shot bar-preedit
-  at=$(mark); key $'\e'
-  await 'command bar drew ""' "$at"
-  key q
-  await 'command bar drew "q"' "$at"
-  at=$(mark); compose xyz
-  await 'command bar drew "qxyz"' "$at"
-  key $'\n'
-  key w
-  await 'command bar drew "qxyzw"' "$at"
-  ! tail -n "+$((at + 1))" "$LOG" | grep -q "command bar go" || fail "Enter while composing opened the URL"
+  # The bar is a child window of the browser window's, and under X11 this leg runs in sway's
+  # Xwayland, whose window manager sends a child window's X focus back to the browser window
+  # (#1646). The bar lost it once, just as it opened over the composing page, and closed (#2365).
+  # So under X11 the leg checks only that the page kept what it composed. check.sh's keys run
+  # composes in the bar under Xvfb's X11, through the driver's input method.
+  if [ "$mode" = x11 ]; then
+    echo "skip (x11): composing in the command bar: sway's Xwayland sends child windows' X focus back (#1646)" |
+      tee "$out/$mode.skipped" >&2
+    # Escape closes the bar if it's still open, and does nothing in the page if it isn't.
+    key $'\e'
+    await "command bar hidden" "$at"
+  else
+    at=$(mark); compose xyz
+    await 'command bar drew "xyz"' "$at"
+    shot bar-preedit
+    at=$(mark); key $'\e'
+    await 'command bar drew ""' "$at"
+    key q
+    await 'command bar drew "q"' "$at"
+    at=$(mark); compose xyz
+    await 'command bar drew "qxyz"' "$at"
+    key $'\n'
+    key w
+    await 'command bar drew "qxyzw"' "$at"
+    ! tail -n "+$((at + 1))" "$LOG" | grep -q "command bar go" || fail "Enter while composing opened the URL"
 
-  # A click in the page while the bar composes.
-  at=$(mark); compose zz
-  await 'command bar drew "qxyzwzz"' "$at"
-  clicked=$(mark); click 330 60
-  await "title [0-9]* clicked" "$clicked"
-  at=$(mark); compose fg
-  await "title [0-9]* composing [a-z]*fg[a-z]*$" "$at"
-  ! tail -n "+$((clicked + 1))" "$LOG" | grep -q 'command bar drew ".*zzz' || fail "the bar committed its composition twice"
-  ! tail -n "+$((at + 1))" "$LOG" | grep -q "title [0-9]* composing .*zz" || fail "the bar's composition went to the page"
-  key $'\e'
+    # A click in the page while the bar composes.
+    at=$(mark); compose zz
+    await 'command bar drew "qxyzwzz"' "$at"
+    clicked=$(mark); click 330 60
+    await "title [0-9]* clicked" "$clicked"
+    at=$(mark); compose fg
+    await "title [0-9]* composing [a-z]*fg[a-z]*$" "$at"
+    ! tail -n "+$((clicked + 1))" "$LOG" | grep -q 'command bar drew ".*zzz' || fail "the bar committed its composition twice"
+    ! tail -n "+$((at + 1))" "$LOG" | grep -q "title [0-9]* composing .*zz" || fail "the bar's composition went to the page"
+    key $'\e'
+  fi
 
   # Settings' search (#1636): Ctrl+F gives its field the keyboard, the composition shows in the
   # field and finds nothing until it commits, then the word committed finds its rows. Escape while
