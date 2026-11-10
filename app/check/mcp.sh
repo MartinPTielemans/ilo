@@ -85,7 +85,8 @@ cat > "$extension/manifest.json" << 'EOF'
   "name": "Frame check",
   "version": "1",
   "content_scripts": [
-    {"matches": ["http://localhost/frames.html*", "http://localhost/withheld.html*"], "js": ["content.js"]},
+    {"matches": ["http://localhost/frames.html*"], "js": ["content.js"]},
+    {"matches": ["http://localhost/withheld.html*"], "js": ["withheld.js"]},
     {"matches": ["http://localhost/covered.html*"], "js": ["covered.js"]},
     {"matches": ["http://127.0.0.1/covered-inner.html*"], "js": ["covered-inner.js"], "all_frames": true}
   ],
@@ -94,18 +95,9 @@ cat > "$extension/manifest.json" << 'EOF'
   ]
 }
 EOF
-printf '%s' 'if (location.pathname == "/withheld.html") {
-  for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
-    const frame = document.createElement("iframe");
-    frame.src = chrome.runtime.getURL("shown.html");
-    frame.style = style + "; width: 25vw; height: 15vh; border: 0";
-    document.body.append(frame);
-  }
-} else {
-  const frame = document.createElement("iframe");
-  frame.src = chrome.runtime.getURL("frame.html");
-  document.body.append(frame);
-}' > "$extension/content.js"
+printf '%s' 'const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
 # On the covered page it adds a button of its own, a frame of its page over the page's button, as a
@@ -125,6 +117,12 @@ printf '%s' 'const frame = document.createElement("iframe");
 frame.src = chrome.runtime.getURL("frame.html");
 frame.style = "position: fixed; left: 0; top: 0; width: 100%; height: 100%; border: 0";
 document.body.append(frame);' > "$extension/covered-inner.js"
+printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
+  const frame = document.createElement("iframe");
+  frame.src = chrome.runtime.getURL("shown.html");
+  frame.style = style + "; width: 25vw; height: 15vh; border: 0";
+  document.body.append(frame);
+}' > "$extension/withheld.js"
 printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; overflow: hidden }
