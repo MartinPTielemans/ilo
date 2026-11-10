@@ -32,6 +32,7 @@ old_browser() {
   for name in $(env | sed -n 's/^\(BROWSER_[A-Z0-9_]*\)=.*/\1/p'); do
     eval "set -- \"--env=$name=\${$name}\" \"\$@\""
   done
+  count_off "$BROWSER_PROFILE_DIR"
   set -- flatpak run --user --cwd="$PWD" --filesystem="$PWD" \
     --filesystem="$BROWSER_PROFILE_DIR:create" "$@"
   # flatpak run proxies the session bus into the sandbox: the job's steps have none of their own.

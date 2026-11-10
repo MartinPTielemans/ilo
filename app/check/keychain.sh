@@ -121,6 +121,7 @@ run_copy() {
   since=$(($(wc -l < "$out/site.log") + 1))
   request="^GET chromium 127.0.0.1:$port/$3 cookie $4\$"
   sent() { tail -n "+$since" "$out/site.log" | grep -q "$request"; }
+  count_off "$dir/profile"
   BROWSER_PROFILE_DIR="$dir/profile" BROWSER_URL="$site$3" \
     "$dir/$1/$check_name.app/Contents/MacOS/Browser" < /dev/null > "$log" 2>&1 &
   pid=$!
