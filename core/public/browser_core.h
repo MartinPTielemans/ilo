@@ -2284,6 +2284,13 @@ BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
+// Whether the ad blocker also hides cookie notices, with the cookie-notice lists uBlock Origin
+// comes with and leaves off (EasyList's and its own): on unless the user turned it off. It goes
+// with ad blocking, so it's off wherever that is, a site the user turned blocking off on too. A
+// change has uBlock Origin in each profile read its lists again, the first turn on fetching the
+// two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
+BC_EXPORT bool bc_cookie_notices_hidden(void);
+BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
