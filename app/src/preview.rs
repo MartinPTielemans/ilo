@@ -2235,6 +2235,12 @@ fn main() {
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
+            // Mock (#2351): PREVIEW_PRIVACY=1 shows Settings › Privacy's first rows with Copy links
+            // without tracking among them.
+            if std::env::var_os("PREVIEW_PRIVACY").is_some() {
+                preview_privacy(cx);
+                return;
+            }
             let account = std::env::var("PREVIEW_ACCOUNT").ok();
             if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
                 preview_account(state, cx);
@@ -3378,4 +3384,160 @@ fn preview_update(update: &str, cx: &mut App) {
         _ => Stage::Ready(version),
     };
     updates::changed(stage, cx);
+}
+
+/// Mock (#2351): Settings › Privacy, in a window of Settings' size.
+fn preview_privacy(cx: &mut App) {
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(WIDTH), px(HEIGHT)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            let dark = preview_tone() != Some(Tone::Light);
+            let look = browser::settings_rows::Look::settings(dark);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            PrivacyPage {
+                card: Card::default(),
+                search,
+            }
+        })
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open privacy: {error}");
+    }
+}
+
+struct PrivacyPage {
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+}
+
+impl gpui::Render for PrivacyPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::{Look, button, end, frame, group_lined, switch, text};
+        use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, STAND_IN};
+        use browser::tokens::settings::{
+            DETAIL, FIRST_GROUP, GROUP_GAP, LEDE_LINE, LEDE_TOP, NAME, ROW_X, TEXT_X, TITLE,
+        };
+        use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
+        use browser::tokens::text;
+        use gpui::{ParentElement, Styled, div, rgb};
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        log!("preview: privacy drawn");
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let field = browser::settings_search::field(
+            &self.search,
+            base,
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let column = settings_column::column(
+            Section::Privacy,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            window.is_a11y_active(),
+        );
+        let accent = rgb(NO_THEME_ACCENT);
+        let row = |name: &'static str, line: &'static str, on: bool| {
+            let control = gpui::IntoElement::into_any_element(switch(&look, on, 1., accent));
+            let row = frame()
+                .child(text(&look, name, Some(line.into())))
+                .child(end([control]));
+            div().child(row)
+        };
+        let rows =
+            |rows: Vec<gpui::Div>| group_lined(&look, rows.into_iter().map(|row| (row, ROW_X)));
+        let ad_blocking = row(
+            "Block ads and trackers",
+            "uBlock Origin, built in. A site's Site Controls turn it off there.",
+            true,
+        );
+        let copy = row(
+            "Copy links without tracking",
+            "Copied and shared links leave out what only tells a site where a click came from. \
+             A video's time stays. The URL field's own text copies whole.",
+            true,
+        );
+        let prompts = row(
+            "Let sites ask to send notifications",
+            "Calls and chat need it. A site you allowed or blocked keeps its choice.",
+            true,
+        );
+        let relay = row(
+            "Relay calls",
+            "Calls always go through a relay. Some apps won't connect, and calls may lag.",
+            false,
+        );
+        let clear = frame()
+            .child(text(
+                &look,
+                "Browsing data",
+                Some("History, cookies and cache, for one profile.".into()),
+            ))
+            .child(end([gpui::IntoElement::into_any_element(button(
+                &look, "clear", "Clear…",
+            ))]));
+        let title = shell::display_text("Privacy", TITLE_SIZE, TITLE_LINE, cx)
+            .text_color(base.opacity(TITLE));
+        let lede = div()
+            .mt(px(LEDE_TOP))
+            .line_height(px(LEDE_LINE))
+            .text_color(base.opacity(DETAIL))
+            .child("What sites may do, and what ilo sends.");
+        let head = div().px(px(TEXT_X)).child(title).child(lede);
+        let blocks = [
+            rows(vec![ad_blocking]),
+            rows(vec![copy]),
+            rows(vec![prompts]),
+            rows(vec![relay]),
+            rows(vec![clear]),
+        ];
+        let page = div().w_full().flex().flex_col().child(head).children(
+            blocks.into_iter().enumerate().map(|(index, block)| {
+                let top = if index == 0 { FIRST_GROUP } else { GROUP_GAP };
+                div().mt(px(top)).child(block)
+            }),
+        );
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw("", page, dark, colors);
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
+    }
 }
