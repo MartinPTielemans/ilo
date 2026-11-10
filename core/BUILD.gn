@@ -682,6 +682,7 @@ test("browser_core_unittests") {
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
+    "sync_updates_unittest.cc",
     "window_frames_unittest.cc",
   ]
   deps = [
@@ -707,6 +708,7 @@ test("browser_core_unittests") {
     "//components/search_engines:test_support",
     "//components/sync",
     "//components/sync/protocol",
+    "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
     "//testing/gmock",
