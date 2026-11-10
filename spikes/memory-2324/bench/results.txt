@@ -1,0 +1,52 @@
+# quits-runner-1 (8 cores, shared with a CI runner), SQLite 3.45.1, ICU 74.2, OpenSSL AES-256-GCM, zlib 6
+# Corpus: Common Crawl CC-MAIN-2024-33, segment 1722640353668.0, WET file 00000, the first 10,000 pages with 200 bytes of text or more
+
+## With fsync (synchronous=FULL, as sql::Database), 8-byte terms, prefixes
+pages 1000: file 12.2 MB (12.2 MB per 1,000 pages)
+pages 5000: file 68.4 MB (13.7 MB per 1,000 pages)
+pages 10000: file 139.5 MB (13.9 MB per 1,000 pages)
+skipped 573 pages under 200 bytes of text
+text per page: mean 7.6 KB, median 4.2 KB, p95 26.9 KB; sealed mean 2.7 KB
+terms per page: mean 587, median 451, p95 1511
+index a page, ms: median 42.52, p95 121.43, p99 208.99, max 3408.90 (words 1.18, seal 0.11, write 40.96, medians)
+warm, 1000 queries at 10000 pages, ms: median 5.10, p95 33.60, p99 44.34, max 50.63; 947 found a page; candidates opened, mean 8.3
+fresh connection, 1000 queries at 10000 pages, ms: median 5.13, p95 34.12, p99 44.80, max 51.37; 947 found a page; candidates opened, mean 8.3
+
+## Without fsync (BENCH_SYNC=OFF), to time the work apart from this disk's flushes
+== term bytes 8, prefixes 1
+pages 1000: file 12.3 MB (12.3 MB per 1,000 pages)
+pages 5000: file 68.4 MB (13.7 MB per 1,000 pages)
+pages 10000: file 139.6 MB (14.0 MB per 1,000 pages)
+skipped 573 pages under 200 bytes of text
+text per page: mean 7.6 KB, median 4.2 KB, p95 26.9 KB; sealed mean 2.7 KB
+terms per page: mean 587, median 451, p95 1511
+index a page, ms: median 4.76, p95 15.84, p99 27.77, max 61.78 (words 1.20, seal 0.12, write 3.41, medians)
+warm, 1000 queries at 10000 pages, ms: median 5.19, p95 34.24, p99 46.53, max 146.90; 947 found a page; candidates opened, mean 8.3
+  of which SQLite 4.07 ms and opening candidates 5.11 ms a query, mean
+fresh connection, 1000 queries at 10000 pages, ms: median 5.18, p95 33.98, p99 45.49, max 52.27; 947 found a page; candidates opened, mean 8.3
+  of which SQLite 3.98 ms and opening candidates 5.02 ms a query, mean
+== term bytes 4, prefixes 1
+pages 1000: file 9.9 MB (9.9 MB per 1,000 pages)
+pages 5000: file 55.1 MB (11.0 MB per 1,000 pages)
+pages 10000: file 112.5 MB (11.3 MB per 1,000 pages)
+skipped 573 pages under 200 bytes of text
+text per page: mean 7.6 KB, median 4.2 KB, p95 26.9 KB; sealed mean 2.7 KB
+terms per page: mean 587, median 451, p95 1511
+index a page, ms: median 4.62, p95 15.51, p99 26.68, max 55.95 (words 1.20, seal 0.12, write 3.28, medians)
+warm, 1000 queries at 10000 pages, ms: median 5.18, p95 33.67, p99 44.40, max 50.76; 947 found a page; candidates opened, mean 8.3
+  of which SQLite 3.82 ms and opening candidates 5.01 ms a query, mean
+fresh connection, 1000 queries at 10000 pages, ms: median 5.18, p95 34.15, p99 45.56, max 61.52; 947 found a page; candidates opened, mean 8.3
+  of which SQLite 4.01 ms and opening candidates 5.02 ms a query, mean
+== term bytes 4, prefixes 0
+pages 1000: file 7.7 MB (7.7 MB per 1,000 pages)
+pages 5000: file 42.3 MB (8.5 MB per 1,000 pages)
+pages 10000: file 84.6 MB (8.5 MB per 1,000 pages)
+skipped 573 pages under 200 bytes of text
+text per page: mean 7.6 KB, median 4.2 KB, p95 26.9 KB; sealed mean 2.7 KB
+terms per page: mean 382, median 285, p95 1021
+index a page, ms: median 2.95, p95 10.98, p99 21.38, max 93.05 (words 0.80, seal 0.11, write 2.00, medians)
+warm, 1000 queries at 10000 pages, ms: median 0.16, p95 10.44, p99 28.42, max 37.64; 344 found a page; candidates opened, mean 1.4
+  of which SQLite 1.16 ms and opening candidates 1.12 ms a query, mean
+fresh connection, 1000 queries at 10000 pages, ms: median 0.15, p95 10.93, p99 29.57, max 37.09; 344 found a page; candidates opened, mean 1.4
+  of which SQLite 1.21 ms and opening candidates 1.16 ms a query, mean
+

@@ -112,6 +112,8 @@ bool IsReadable(std::string_view url, const std::set<std::string, std::less<>>& 
                              [url](const std::string& each) { return each.starts_with(url); });
 }
 
+}  // namespace
+
 // The URLs of the frames an agent may read: each one IsWebFrame admits, inside frames it admits, as
 // agent_page.cc outlines them. A URL a frame it doesn't admit has too is left out, as the snapshot
 // can't tell those frames apart.
@@ -137,6 +139,8 @@ std::set<std::string, std::less<>> ReadableUrls(content::WebContents& contents) 
   }
   return readable;
 }
+
+namespace {
 
 void Report(bc_id tab, uint64_t request, std::optional<std::string> text) {
   if (Host().tab_text) {

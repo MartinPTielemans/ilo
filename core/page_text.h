@@ -66,6 +66,9 @@ class PageText : public content::WebContentsObserver,
 std::string TextOf(const ui::AXTreeUpdate& update,
                    const std::set<std::string, std::less<>>& readable);
 
+// The URLs of the frames an agent may read, which TextOf takes, as the memory reads the same text.
+std::set<std::string, std::less<>> ReadableUrls(content::WebContents& contents);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_PAGE_TEXT_H_
