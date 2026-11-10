@@ -184,6 +184,9 @@
 //                                         <agent> and the name <name>, as agent code will once
 //                                         there is some, logging "browser: made space <space> for
 //                                         agent <agent>"
+//   agentopen <agent> <url>               the agent opens <url> in a tab of its Space, as its
+//                                         MCP tool does, logging "browser: agent <agent> opened
+//                                         <tab>"
 //   agentmayact <agent> <tab> [action]    logs whether the agent may do the action, "navigate" if none,
 //                                         to the tab, as "browser: agent <agent> may act on
 //                                         <tab>: <0|1>", and if not "browser: agent <agent>
@@ -1723,6 +1726,19 @@ bool Run(const std::string& line, void (^done)(void)) {
     const bc_id space = bc_space_create_for_agent(name.c_str(), agent.c_str(), name.c_str());
     fprintf(stderr, "browser: made space %llu for agent %s\n", (unsigned long long)space,
             agent.c_str());
+    done();
+    return true;
+  }
+  if (action == "agentopen") {
+    std::string agent, url;
+    if (!(words >> agent >> url)) {
+      return false;
+    }
+    const bc_id tab = bc_agent_open_tab(agent.c_str(), url.c_str());
+    if (!tab) {
+      return false;
+    }
+    fprintf(stderr, "browser: agent %s opened %llu\n", agent.c_str(), (unsigned long long)tab);
     done();
     return true;
   }
