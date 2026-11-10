@@ -102,6 +102,13 @@ namespace browser_core {
 
 namespace {
 
+// Whether |contents| is a tab in a Browser's tab strip. One Chrome is taking out isn't, from
+// within its change to the tabs, where Chrome tells its observers once the tab has left.
+bool InTabStrip(content::WebContents* contents) {
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  return tab && tab->GetBrowserWindowInterface();
+}
+
 std::map<bc_id, std::unique_ptr<Window>>& Windows() {
   static base::NoDestructor<std::map<bc_id, std::unique_ptr<Window>>> windows;
   return *windows;
@@ -1556,6 +1563,11 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener, const GU
 }
 
 void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
+  // A tab that has left its Browser has no strip to be active in, nor a window to be shown in.
+  if (!InTabStrip(contents)) {
+    page_frame_ = frame;
+    return;
+  }
   // The Browser's active tab is the one Chrome's keyboard shortcuts, find and fullscreen act on.
   TabStripModel* tabs =
       tabs::TabInterface::GetFromContents(contents)->GetBrowserWindowInterface()->GetTabStripModel();
@@ -1818,6 +1830,22 @@ void Window::SetPageFrame(const gfx::Rect& frame, double corner_radius) {
   // The app's frame at the window's size, so pages held for its resize are laid out here, which
   // lets them go, though a tab switch's Show leaves them waiting for it.
   const bool held = platform::PagesHeldForResize(widget_.get());
+  // Off the Mac, a full-screen page's tab leaving the window, as closing it or all the window's
+  // tabs does, takes the window out of full screen at once, so this frame comes from within
+  // Chrome's change to the tabs, after the tab has left them (#2068). The window shows what's left
+  // of the split, if anything, and the app shows the next tab: the frame never comes again for it,
+  // so the pages held for the resize go now.
+  if (!InTabStrip(shown_.get())) {
+    std::erase_if(panes_, [](bc_id pane) {
+      content::WebContents* contents = Tab::FromId(pane);
+      return !contents || !InTabStrip(contents);
+    });
+    shown_ = nullptr;
+    if (held) {
+      LayOutPage();
+    }
+    return;
+  }
   Show(shown_.get(), frame);
   if (held) {
     LayOutPage();
