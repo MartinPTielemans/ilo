@@ -23,8 +23,10 @@
 #   ilo is from it on each.
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
-# the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
-# process of its own, so each time from a key includes one process start, which the run says.
+# the browser, as check/usage.py says for each OS. Each browser's first launch waits for its CRLSet,
+# which it then keeps parsed in memory, and each memory sample says whether it was in (#2317). On
+# Linux and the Mac the shell's clock is a process of its own, so each time from a key includes one
+# process start, which the run says.
 
 serve
 perf_dir="$out/perf"
@@ -111,6 +113,43 @@ perf_row() {
   echo "perf: $2: $3; target $4"
   printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$perf_dir/rows.tsv"
 }
+# The CRLSet, Google's list of revoked certificates, comes from the component updater a minute or
+# more after a profile's first launch, and from then on the browser keeps it parsed, about 27 MiB
+# for the set of 2026-11 (#2317). So each browser's warm launch, not measured, checks for updates
+# 10 s in rather than a minute and waits for its set, and each memory sample says whether the set
+# was in, as a slow download would otherwise make one browser's figure the smaller by its size.
+# Chromium logs nothing at the parse, but at VLOG 1 its component installer logs each component's
+# version and folder as it hands it over, at launch or once downloaded, and the CRLSet's policy
+# then reads and parses it at once.
+crlset_wait=300
+# The flags that have a browser log that to $1, with --component-updater=fast-update if $2 is fast.
+# Logging to a file still puts errors on stderr, as the checks read them there.
+crlset_flags() {
+  crlset_file=$1
+  ! windows || crlset_file="$(cygpath -w "$crlset_file")"
+  echo "${2:+--component-updater=fast-update }--enable-logging --vmodule=component_installer=1" \
+    "--log-file=$crlset_file"
+}
+# The version of the CRLSet that log $1 says was handed over, with its file in user data folder $2.
+crlset_in() {
+  [ -f "$1" ] || return 0
+  v=$(tr -d '\r' < "$1" |
+    sed -n 's|^.*Component ready, version \([0-9][0-9]*\) in .*CertificateRevocation[/\\]\1$|\1|p' | tail -1)
+  [ -z "$v" ] || [ ! -f "$2/CertificateRevocation/$v/crl-set" ] || echo "$v"
+}
+# Waits, until $crlset_wait s after $3 in Unix seconds, for the CRLSet of $4, which logs to $1 with
+# user data folder $2, checking $pid is still there.
+crlset_await() {
+  until [ -n "$(crlset_in "$1" "$2")" ]; do
+    if [ "$(date +%s)" -ge $(($3 + crlset_wait)) ]; then
+      echo "perf: $4 CRLSet never arrived in the $crlset_wait s its first launch waited"
+      return 0
+    fi
+    kill -0 "$pid" 2> /dev/null || fail "$4 first launch ended while it waited for its CRLSet"
+    sleep 1
+  done
+  echo "perf: $4 CRLSet $(crlset_in "$1" "$2") arrived $(($(date +%s) - $3)) s into its first launch"
+}
 # Snapshots what the browser's processes use, or those of $snap_procs, as $1.
 perf_snap() {
   # shellcheck disable=SC2086 # kinds, or nothing
@@ -124,11 +163,18 @@ perf_until() {
     sleep 1
   done
 }
-# The memory now, in $memory: "MiB processes", and by kind of process in $kinds.
+# The memory now, in $memory: "MiB processes", and by kind of process in $kinds; whether the
+# browser had its CRLSet in, which $crlset_log and $crlset_dir say, in $settled.
 perf_memory() {
   perf_snap "memory-$1" kinds
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
+  crlset_in "$crlset_log" "$crlset_dir" > "$perf_dir/crlset-$1"
+  if [ -s "$perf_dir/crlset-$1" ]; then
+    settled="; CRLSet $(cat "$perf_dir/crlset-$1") in"
+  else
+    settled="; not settled: $crlset_who CRLSet never arrived"
+  fi
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
@@ -166,7 +212,10 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    # shellcheck disable=SC2046 # the flags, a word each
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+      $([ "$3" != warm ] || crlset_flags "$PWD/$perf_dir/crlset-warm.log" fast) \
+      < /dev/null > "$log" 2>&1 &
   else
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
   fi
@@ -184,6 +233,7 @@ perf_launch() {
   on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
   # The core holds a launch's first page until uBlock Origin is ready (core/ad_block.cc).
   held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
+  [ "$3" != warm ] || crlset_await "$PWD/$perf_dir/crlset-warm.log" "$profile_dir" $((launched / 1000)) "ilo's"
   quit
 }
 : > "$perf_dir/link"
@@ -218,8 +268,12 @@ log="$perf_dir/session.log"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
+crlset_log="$PWD/$perf_dir/crlset-session.log"
+crlset_dir=$profile_dir
+crlset_who="ilo's"
+# shellcheck disable=SC2046 # the flags, a word each
 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-  < "$out/drive" > "$log" 2>&1 &
+  $(crlset_flags "$crlset_log") < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
@@ -229,7 +283,7 @@ send click $page_point
 perf_session() {
   perf_until $((started + 30))
   perf_memory 1
-  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-1 "Memory, 1 tab" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 298 MB, Chrome 370 MB (gate: ≤ Chrome)"
   perf_idle idle-1
   perf_row idle-cpu-1 "Idle CPU, 1 tab" "$cpu" "Ardia 0.16 %, Chrome 0.2 %"
@@ -257,14 +311,14 @@ perf_session() {
   done
   perf_until $((loaded + 10))
   perf_memory 10
-  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 714 MB, Chrome 692 MB (gate: ≤ Chrome)"
   for n in 11 12 13 14 15 16 17 18 19 20; do
     perf_open "p$n"
   done
   perf_until $((loaded + 15))
   perf_memory 20
-  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 1082 MB, Chrome 919 MB (gate: ≤ Chrome)"
   perf_row newtab "New tab, ↩ in ⌘T's bar to page painted" \
     "$(perf_stats '%.0f' < "$perf_dir/newtab") ms" "Ardia 54.9 ms, Chrome 54.3 ms (gate: ≤ Chrome)"
@@ -324,7 +378,7 @@ perf_session() {
   [ "$(today | wc -w | tr -d ' ')" = 1 ] || fail "⌘W 19 times didn't leave 1 tab: $(today)"
   perf_until $(($(date +%s) + 30))
   perf_memory closed
-  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
+  perf_row memory-closed "Memory, back to 1 tab after 20" "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" \
     "Ardia 358 MB, Chrome 406 MB"
 }
 if [ "$active" = 1 ]; then
@@ -349,12 +403,15 @@ else
   chrome=/opt/google/chrome/chrome
   chrome_procs=/opt/google/chrome/chrome
 fi
-chrome_profile="$PWD/$perf_dir/chrome-profile"
+chrome_dir="$PWD/$perf_dir/chrome-profile"
+chrome_profile=$chrome_dir
 ! windows || chrome_profile="$(cygpath -w "$chrome_profile")"
-# Opens page $1 in Chrome, which a running Chrome takes as a new tab.
+# Opens page $1 in Chrome, which a running Chrome takes as a new tab, with $chrome_flags.
 chrome_open() {
+  # shellcheck disable=SC2086 # the flags, a word each
   "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic "$page?$1" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+    --use-mock-keychain --password-store=basic $chrome_flags "$page?$1" < /dev/null \
+    >> "$perf_dir/chrome.log" 2>&1 &
 }
 # Quits Chrome as quit_app does the app, then ends what's left of it.
 chrome_quit() {
@@ -398,17 +455,24 @@ elif [ ! -x "$chrome" ]; then
 else
   snap_procs=$chrome_procs
   : > "$perf_dir/chrome.log"
+  chrome_flags=$(crlset_flags "$PWD/$perf_dir/crlset-chrome-warm.log" fast)
+  warmed=$(date +%s)
   if ! chrome_launch warm; then
     echo "skip: perf's Chrome on this runner. It didn't stay open: $(tail -3 "$perf_dir/chrome.log")"
   else
     sleep 15 # Chrome's first 15 s, which warm its caches for the runs measured
+    crlset_await "$PWD/$perf_dir/crlset-chrome-warm.log" "$chrome_dir" "$warmed" "Chrome's"
     chrome_quit
+    crlset_log="$PWD/$perf_dir/crlset-chrome.log"
+    crlset_dir=$chrome_dir
+    crlset_who="Chrome's"
+    chrome_flags=$(crlset_flags "$crlset_log")
     chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
     started=$(($(date +%s) - 5))
     perf_until $((started + 30))
     perf_memory chrome-1
     perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     perf_idle chrome-idle-1
     perf_row chrome-idle-cpu-1 "Chrome here, idle CPU, 1 tab" "$cpu" "ilo's"
     perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" "$wakeups /s" "ilo's"
@@ -419,7 +483,7 @@ else
     perf_until $(($(date +%s) + 10))
     perf_memory chrome-10
     perf_row chrome-memory-10 "Chrome here, memory, 10 tabs" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     for n in 11 12 13 14 15 16 17 18 19 20; do
       chrome_open "c$n"
       perf_until $(($(date +%s) + 2))
@@ -427,7 +491,7 @@ else
     perf_until $(($(date +%s) + 15))
     perf_memory chrome-20
     perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
-      "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+      "${memory% *} MiB, ${memory#* } processes ($kinds)$settled" "ilo's, the gate"
     perf_idle chrome-idle-20
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
     perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
@@ -436,7 +500,8 @@ else
     # under 5 % from run to run, so ilo more than 10 % over Chrome's fails the run. At 1 tab, 30 s
     # after launch, uBlock Origin is still taking in its lists, and ilo's moved by 70 % from one run
     # to the next, and idle moves 2 to 5 times from one 10 s window to the next on a hosted runner,
-    # so those only report.
+    # so those only report. A memory row where either browser's sample hadn't its CRLSet in isn't a
+    # fair comparison either way, so it reports that and doesn't decide.
     python3 -I - "$perf_dir" << 'PY' | tee "$perf_dir/gate.txt"
 import json, os, statistics, sys
 
@@ -444,20 +509,32 @@ d = sys.argv[1]
 def memory(name):
     with open(os.path.join(d, f"memory-{name}.json")) as f:
         return sum(p[3] for p in json.load(f)["procs"].values()) / 1048576
+def unsettled(*samples):
+    for who, name in samples:
+        with open(os.path.join(d, f"crlset-{name}")) as f:
+            if not f.read().strip():
+                yield f"{who} CRLSet never arrived"
 def idle(name, column):
     with open(os.path.join(d, f"{name}.txt")) as f:
         return statistics.median(float(line.split()[column]) for line in f)
-for label, ilo, chrome, unit, fails in [
-    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False),
-    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True),
-    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True),
-    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False),
-    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%", False),
-    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s", False),
-    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s", False),
+def sets(n):
+    return list(unsettled(("ilo's", n), ("Chrome's", f"chrome-{n}")))
+for label, ilo, chrome, unit, fails, apart in [
+    ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False, sets("1")),
+    ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True, sets("10")),
+    ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True, sets("20")),
+    ("idle CPU, 1 tab", idle("idle-1", 0), idle("chrome-idle-1", 0), "%", False, []),
+    ("idle CPU, 20 tabs", idle("idle-20", 0), idle("chrome-idle-20", 0), "%", False, []),
+    ("idle wakeups, 1 tab", idle("idle-1", 1), idle("chrome-idle-1", 1), "/s", False, []),
+    ("idle wakeups, 20 tabs", idle("idle-20", 1), idle("chrome-idle-20", 1), "/s", False, []),
 ]:
     by = f"{(ilo / chrome - 1) * 100:+.0f} %" if chrome else "Chrome none"
-    missed = "missed" if fails and chrome and ilo > chrome * 1.1 else "fails over +10 %" if fails else "reports"
+    if apart:
+        missed = "not settled: " + ", ".join(apart)
+    elif fails and chrome and ilo > chrome * 1.1:
+        missed = "missed"
+    else:
+        missed = "fails over +10 %" if fails else "reports"
     print(f"perf: gate, {label}: ilo {ilo:.2f} {unit}, Chrome here {chrome:.2f} {unit} ({by}), {missed}")
 PY
   fi
@@ -466,7 +543,13 @@ fi
 missed=$(grep ', missed$' "$perf_dir/gate.txt" 2> /dev/null | sed 's/^perf: gate, //; s/: ilo .*(\(.*\)), missed$/ \1/' |
   tr '\n' ';' | sed 's/;$//; s/;/; /g')
 [ -z "$missed" ] || fail "ilo took more than 10 % over Chrome on this runner: $missed (#456)"
+apart=$(grep -E '^perf: gate, memory, (10|20) tabs: .*, not settled: ' "$perf_dir/gate.txt" 2> /dev/null |
+  sed 's/^perf: gate, memory, \([0-9]*\) tabs: .*, not settled: /\1 tabs, /' | tr '\n' ';' |
+  sed 's/;$//; s/;/; /g')
+[ -z "$apart" ] || echo "skip: the gate on memory, as a browser's CRLSet hadn't arrived: $apart"
+within="ilo's memory at 10 and 20 tabs within 10 % of Chrome's here"
+[ -z "$apart" ] || within="ilo's memory within 10 % of Chrome's where both had their CRLSet"
 echo "ok: perf measured $(wc -l < "$perf_dir/rows.tsv" | tr -d ' ') rows against #456's targets," \
-  "and ilo's memory at 10 and 20 tabs within 10 % of Chrome's here; each time from a key" \
+  "and $within; each time from a key" \
   "includes the shell's clock ($perf_clock), $clock ms. Rows:" \
   "$perf_dir/rows.tsv, usage snapshots: $perf_dir/"
