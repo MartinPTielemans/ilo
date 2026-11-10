@@ -72,6 +72,7 @@ ours/chromium-policy-windows-key.patch
 ours/chromium-core-clear-history-element.patch
 ours/chromium-freezing-measure-on-battery-saver.patch
 ours/chromium-no-page-resource-monitor.patch
+ours/chromium-leveldb-release-evicts.patch
 ours/chromium-private-downloads-save.patch
 ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
