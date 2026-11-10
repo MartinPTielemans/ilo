@@ -1636,8 +1636,11 @@ impl Shell {
             ("New Space…", Command::NewSpace),
             ("New Folder…", Command::NewFolder),
             ("New Split View", Command::AddSplit),
-            ("New Note", Command::NewNote),
         ];
+        // Off in Settings › Features, it has no item.
+        if self.new_note {
+            items.push(("New Note", Command::NewNote));
+        }
         self.read_boosts_of(self.field_tab(), cx);
         if let Some(title) = self.boost_entry(self.field_tab()) {
             let command = match title {

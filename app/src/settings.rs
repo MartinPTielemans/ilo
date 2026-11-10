@@ -2270,19 +2270,40 @@ impl Settings {
             Some("A playing video or call floats over your work when you leave its tab.".into()),
             vec![mini_player],
         );
+        let note_on = new_note_on(cx);
+        let note_switch = self.toggle("new note", "New Note", note_on, set_new_note, accent, cx);
         let note_keys = shell::user_keys(cx).label(Command::NewNote);
-        let note_line: SharedString = match note_keys {
-            Some(keys) => format!("{keys} opens a new document in the service you pick.").into(),
-            None => "New Note opens a new document in the service you pick.".into(),
+        // Off, the line is the receipt, as Little ilo's is.
+        let note_line: SharedString = match (note_on, note_keys) {
+            (true, Some(keys)) => {
+                format!("{keys} opens a new document in the service you pick.").into()
+            }
+            (true, None) => "New Note opens a new document in the service you pick.".into(),
+            (false, Some(keys)) => format!(
+                "Off: {keys} does nothing, and the + menu and the command bar have no New Note. \
+                 The documents it opened stay."
+            )
+            .into(),
+            (false, None) => "Off: the + menu and the command bar have no New Note. The \
+                              documents it opened stay."
+                .into(),
         };
-        // One profile's service on the feature's row, else each profile's under it.
+        // One profile's service on the feature's row, else each profile's under it, and its
+        // services only while it's on.
         let note = match profiles {
+            _ if !note_on => vec![feature(
+                look,
+                "icons/pencil.svg",
+                "New Note",
+                Some(note_line),
+                vec![note_switch],
+            )],
             [profile] => vec![feature(
                 look,
                 "icons/pencil.svg",
                 "New Note",
                 Some(note_line),
-                vec![self.notes_popup(profile.id, cx)],
+                vec![self.notes_popup(profile.id, cx), note_switch],
             )],
             _ => {
                 let services = profiles.iter().map(|profile| {
@@ -2298,7 +2319,7 @@ impl Settings {
                     "icons/pencil.svg",
                     "New Note",
                     Some(note_line),
-                    Vec::new(),
+                    vec![note_switch],
                 );
                 [head].into_iter().chain(services).collect()
             }
@@ -4025,17 +4046,16 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
-        // Little ilo's commands have no row while it's off.
+        // Little ilo's commands and New Note's have no row while it's off.
         let little = unsafe { bc::bc_little_windows() };
+        let note = new_note_on(cx);
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
-                .filter(|(_, keys)| {
-                    little
-                        || !matches!(
-                            keys,
-                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
-                        )
+                .filter(|(_, keys)| match keys {
+                    Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow) => little,
+                    Keys::Of(Command::NewNote | Command::NewNoteSplit) => note,
+                    _ => true,
                 })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
@@ -4456,6 +4476,33 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
 
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
+}
+
+/// Where New Note's switch is kept: there while it's off. The app's, not a profile's, as its keys
+/// and the command bar are.
+fn new_note_off_path() -> String {
+    format!("{}/new-note-off", crate::profile_dir())
+}
+
+/// Reads New Note's switch, before the windows open and read it.
+pub fn read_new_note(cx: &mut App) {
+    let on = !std::path::Path::new(&new_note_off_path()).exists();
+    cx.set_global(shell::NewNoteOn(on));
+}
+
+fn new_note_on(cx: &App) -> bool {
+    cx.try_global::<shell::NewNoteOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once; the tabs New Note opened stay.
+fn set_new_note(on: bool, cx: &mut App) {
+    let path = new_note_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::NewNoteOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
