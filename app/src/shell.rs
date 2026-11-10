@@ -55,10 +55,10 @@ mod chosen;
 mod clean_link;
 #[cfg(test)]
 mod close_tab;
-#[cfg(test)]
-mod copy_tests;
 mod commands;
 mod conversation;
+#[cfg(test)]
+mod copy_tests;
 #[cfg(test)]
 mod corner_tests;
 mod display_face;
