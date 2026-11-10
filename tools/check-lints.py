@@ -25,14 +25,6 @@ MARKER = re.compile(r"(//|#).*\b(reads|waits for|can wait for) this line")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 # Rust's {...} and C's %s and the like.
 PLACEHOLDER = re.compile(r"\{[^{}]*\}|%[-+ #0-9.*]*(?:ll|l|z|h|j)?[a-zA-Z@]")
-# The core's stale markers, which go with its next change: a change to core/ alone builds the
-# engine on Linux and Windows. The file and the words its line's marker is over.
-CORE_LATER = {
-    ("core/browser_window_stand_in.cc", "page full screen ended, its display gone"),
-    ("core/held_keys.cc", "keys went to the page"),
-    ("core/main_delegate.cc", "terminating,"),
-    ("core/platform/mac/system_page.mm", "system page gone at"),
-}
 # The driver's commands that ask it something rather than send the app input.
 QUERIES = {"state", "layout", "screen", "order", "title", "pasteboard", "pip", "front", "stack",
            "menubar"}
@@ -134,7 +126,7 @@ def unread_markers():
         p for p, variable in read_by
         if variable or sum(bool(p.match(line)) for line in logged.values()) <= 3
     ]
-    found, later = [], set()
+    found = []
     for path, n, text in marked:
         if text is None:
             found.append((path, n, "a marker over no log line"))
@@ -144,12 +136,7 @@ def unread_markers():
             continue
         if any(matches(p, logged[path, n], readers) for p in read_by):
             continue
-        if (path, words) in CORE_LATER:
-            later.add((path, words))
-            continue
         found.append((path, n, f"no run reads this line ({words!r}): take its marker away"))
-    for path, words in sorted(CORE_LATER - later):
-        found.append((SELF, 1, f"CORE_LATER lists {path}'s {words!r}, whose marker is gone or read"))
     return found
 
 
