@@ -4114,6 +4114,26 @@ impl Focusable for Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Probe (#2179): how often the shell renders, a line a second while it does.
+        {
+            use std::cell::Cell;
+            thread_local!(static PROBE: Cell<(Option<std::time::Instant>, u32)> = Cell::new((None, 0)));
+            PROBE.with(|probe| {
+                let (start, count) = probe.get();
+                let now = std::time::Instant::now();
+                match start {
+                    Some(start) if now.duration_since(start).as_secs_f32() < 1. => {
+                        probe.set((Some(start), count + 1))
+                    }
+                    _ => {
+                        if count > 2 {
+                            eprintln!("browser: probe shell rendered {count} times in 1 s");
+                        }
+                        probe.set((Some(now), 1));
+                    }
+                }
+            });
+        }
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.lone_header = cx
