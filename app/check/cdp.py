@@ -37,6 +37,14 @@ takes a command a line on its standard input:
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
                   logs "cdp: recording requests"
+For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
+  titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
+                  changes, where perf's page stamps its paint and each time it's shown
+  open URL        opens URL in a new tab in front, as a link from another app does, and logs
+                  "cdp: opened TARGET"
+  activate TARGET shows the tab, through its window's tab strip, as a click on it or ⌘1–⌘8 do
+  histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
+                  browser has none by that name, such as Chrome's startup times
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -120,6 +128,8 @@ else:
                 yield raw
 
 lock = threading.Lock()
+# Whether page titles are logged as they change, once titles asks.
+titles = False
 replies = {}
 answered = threading.Condition(lock)
 events = []
@@ -132,6 +142,11 @@ passkeys = {}
 
 def log(line):
     print("cdp: " + line, flush=True)
+
+
+def log_title(info):
+    if info["type"] == "page":
+        log("title %s %s" % (info["targetId"], info["title"]))
 
 
 def call(method, params=None, session=None):
@@ -204,6 +219,9 @@ def read():
                     # With its private key and count, for the authenticators after.
                     credential = message["params"]["credential"]
                     passkeys[credential["credentialId"]] = credential
+                if titles and message["method"] in ("Target.targetCreated",
+                                                    "Target.targetInfoChanged"):
+                    log_title(message["params"]["targetInfo"])
                 if message["method"] == "WebAuthn.credentialAdded":
                     log("credential added")
                 elif message["method"] == "WebAuthn.credentialAsserted":
@@ -366,3 +384,25 @@ for line in sys.stdin:
         log("recording requests")
     elif words[:1] == ["shows"] and len(words) == 3:
         log("shows " + shows(words[1], words[2]))
+    elif words == ["titles"]:
+        with answered:
+            titles = True
+            # The pages' titles now, the last each event said, as the reader logs those after.
+            now = {}
+            for event in events:
+                if event and event["method"] in ("Target.targetCreated",
+                                                 "Target.targetInfoChanged"):
+                    now[event["params"]["targetInfo"]["targetId"]] = event["params"]["targetInfo"]
+            for info in now.values():
+                log_title(info)
+    elif words[:1] == ["open"] and len(words) == 2:
+        log("opened " + call("Target.createTarget", {"url": words[1]})["targetId"])
+    elif words[:1] == ["activate"] and len(words) == 2:
+        call("Target.activateTarget", {"targetId": words[1]})
+    elif words[:1] == ["histogram"] and len(words) == 2:
+        try:
+            histogram = call("Browser.getHistogram", {"name": words[1]})["histogram"]
+            log("histogram %s %d %d" % (words[1], histogram["sum"], histogram["count"]))
+        except SystemExit:
+            # DevTools answers an error for a histogram nothing has recorded yet.
+            log("histogram %s none" % words[1])

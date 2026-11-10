@@ -18,9 +18,13 @@
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
 #   tabs and settled at 20; 16 switches by ⌘1–⌘8, the key to the page shown; 3 new windows, ⌘N to
 #   their first frame; and memory back at 1 tab, 30 s after closing the others.
-# - Then Google Chrome, where the runner has it, on the same page on the same machine: memory at 1,
-#   10 and 20 tabs and idle at 1 and 20, which the gate compares ilo with, and the run says how far
-#   ilo is from it on each.
+# - Then Google Chrome, where the runner has it, on the same page on the same machine, through
+#   DevTools, as it has no driver: 5 launches with a link, to the page painted and the window on
+#   screen, then the same session, its tabs opened and shown by DevTools, and the run says how far
+#   ilo is from it on each row. Of those, memory at 10 and 20 tabs can fail the run.
+# - With CHECK_TRACE_CATEGORIES (check/lib.sh), each browser's 16 switches again at 20 tabs, in a
+#   launch of their own traced with those, as in #2377: perf/trace-ilo.json and trace-chrome.json,
+#   and the Unix ms of each switch's key in traced-switch-keys and chrome-traced-switch-keys.
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
 # the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
@@ -225,6 +229,42 @@ exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
 
+# Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint in the file $2.
+perf_open() {
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for $1"
+  send type "$page?$1"
+  perf_stamp
+  typed=$stamp
+  send key return
+  expect_late "^browser: title [0-9]* $1 fcp " "$1 didn't paint in its new tab"
+  echo $(($(perf_painted "$1" "$step") - typed)) >> "$perf_dir/$2"
+  loaded=$(date +%s)
+}
+# 16 switches by ⌘1–⌘8 at 20 tabs, keeping the ms from the key to the page shown in the file $1,
+# to the core's report in $1-core and each key's Unix ms in $1-keys. ⌘1 is the newest Today tab,
+# which shows, so each key goes to another tab.
+perf_switches() {
+  : > "$perf_dir/$1"
+  : > "$perf_dir/$1-core"
+  : > "$perf_dir/$1-keys"
+  for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
+    perf_stamp
+    pressed=$stamp
+    send key "$k" cmd
+    echo "$pressed" >> "$perf_dir/$1-keys"
+    expect "^browser: selected [0-9]* in " "⌘$k didn't switch tabs"
+    since=$(sed -n "/^browser: drive $step: /,\$p" "$log")
+    tab=$(echo "$since" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
+    echo "$since" | sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' | head -1 \
+      >> "$perf_dir/$1-core"
+    expect "^browser: title $tab [^ ]* shown " "tab $tab didn't say it was shown after ⌘$k"
+    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n "s/^browser: title $tab [^ ]* shown [0-9]* //p" | tail -1)
+    echo $((shown - pressed)) >> "$perf_dir/$1"
+  done
+}
+
 # The session, once the page has the active app's keyboard.
 perf_session() {
   perf_until $((started + 30))
@@ -239,28 +279,16 @@ perf_session() {
   perf_row settled-cpu-1 "Idle CPU, 1 tab, settled" "$cpu" "Ardia 0.05 %"
   perf_row settled-wakeups-1 "Idle wakeups, 1 tab, settled" "$wakeups /s" "Ardia 3.11 /s"
 
-  # Opens page $1 from ⌘T's bar and keeps the ms from ↩ to its first paint.
-  perf_open() {
-    send key t cmd
-    expect '^browser: command bar shown$' "⌘T didn't open the command bar for $1"
-    send type "$page?$1"
-    perf_stamp
-  typed=$stamp
-    send key return
-    expect_late "^browser: title [0-9]* $1 fcp " "$1 didn't paint in its new tab"
-    echo $(($(perf_painted "$1" "$step") - typed)) >> "$perf_dir/newtab"
-    loaded=$(date +%s)
-  }
   : > "$perf_dir/newtab"
   for n in 2 3 4 5 6 7 8 9 10; do
-    perf_open "p$n"
+    perf_open "p$n" newtab
   done
   perf_until $((loaded + 10))
   perf_memory 10
   perf_row memory-10 "Memory, 10 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 714 MB, Chrome 692 MB (gate: ≤ Chrome)"
   for n in 11 12 13 14 15 16 17 18 19 20; do
-    perf_open "p$n"
+    perf_open "p$n" newtab
   done
   perf_until $((loaded + 15))
   perf_memory 20
@@ -277,23 +305,7 @@ perf_session() {
   perf_row settled-cpu-20 "Idle CPU, 20 tabs, settled" "$cpu" "Ardia 0.31 %"
   perf_row settled-wakeups-20 "Idle wakeups, 20 tabs, settled" "$wakeups /s" "Ardia 11.82 /s"
 
-  # ⌘1 is the newest Today tab, p20, which shows, so each key goes to another tab.
-  : > "$perf_dir/switch"
-  : > "$perf_dir/switch-core"
-  for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
-    perf_stamp
-    pressed=$stamp
-    send key "$k" cmd
-    expect "^browser: selected [0-9]* in " "⌘$k didn't switch tabs"
-    since=$(sed -n "/^browser: drive $step: /,\$p" "$log")
-    tab=$(echo "$since" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
-    echo "$since" | sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' | head -1 \
-      >> "$perf_dir/switch-core"
-    expect "^browser: title $tab [^ ]* shown " "tab $tab didn't say it was shown after ⌘$k"
-    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-      sed -n "s/^browser: title $tab [^ ]* shown [0-9]* //p" | tail -1)
-    echo $((shown - pressed)) >> "$perf_dir/switch"
-  done
+  perf_switches switch
   perf_row switch "Tab switch, key to page shown" "$(perf_stats '%.0f' < "$perf_dir/switch") ms" \
     "Ardia 14 ms, Chrome 8 ms (gate: 16 ms)"
   perf_row switch-core "Tab switch, key to the core's report" \
@@ -335,10 +347,46 @@ fi
 exec 3>&-
 quit
 
+# With CHECK_TRACE_CATEGORIES, the 16 switches again at 20 tabs, in a launch of their own, traced
+# with those categories, as Chrome's are after: tracing costs memory and time, so the session's rows
+# stay untraced. Each browser writes its trace as it quits, perf/trace-ilo.json here.
+perf_traced_rows() {
+  perf_row "$1" "$2, traced, to page shown" "$(perf_stats '%.0f' < "$perf_dir/$1") ms" "untraced's"
+  perf_row "$1-span" "$2, traced, Chrome's span, tab strip to frame shown" \
+    "$(python3 -I check/tab_switches.py "$3" | grep -v incomplete | perf_stats '%.1f') ms" \
+    "Chrome 8 ms (gate: 16 ms)"
+}
+if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
+  log="$perf_dir/traced.log"
+  step=0
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  # shellcheck disable=SC2086 # the record mode, or nothing
+  BROWSER_DRIVE=1 BROWSER_URL="$page?t1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+    --enable-tracing="$trace_categories" $trace_mode --enable-tracing-format=json \
+    --trace-startup-file="$PWD/$perf_dir/trace-ilo.json" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await "^browser: title [0-9]* t1 fcp " || fail "the traced launch's first page didn't paint"
+  send click $page_point
+  [ "$active" = 1 ] || fail "Browser wasn't the active app for the traced switches"
+  : > "$perf_dir/traced-newtab"
+  for n in $(seq 2 20); do
+    perf_open "t$n" traced-newtab
+  done
+  perf_until $((loaded + 15))
+  perf_switches traced-switch
+  exec 3>&-
+  # As tabs' does, Chrome writes the trace once every process has started tracing or 10 s passed.
+  quit 60
+  [ -s "$perf_dir/trace-ilo.json" ] || fail "the traced launch wrote no trace"
+  perf_traced_rows traced-switch "Tab switch" "$perf_dir/trace-ilo.json"
+fi
+
 # Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
-# for the gate's rows that compare with it: memory at 1, 10 and 20 tabs and idle at 1 and 20, on the
-# same page, its tabs opened from the command line, as a link from another app opens them, a couple
-# of seconds apart. A profile of its own, launched once first, as ilo's was.
+# for each of the gate's rows that compares with it, on the same page. Chrome has no driver, so
+# DevTools opens its tabs in front, as a link from another app does, a couple of seconds apart, and
+# shows them through the tab strip, as ⌘1–⌘8 do; ilo's are timed from ↩ in ⌘T's bar and from the
+# key. A profile of its own, launched once first, as ilo's was.
 if [ "$(uname)" = Darwin ]; then
   chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   chrome_procs="/Applications/Google Chrome.app/Contents"
@@ -349,15 +397,101 @@ else
   chrome=/opt/google/chrome/chrome
   chrome_procs=/opt/google/chrome/chrome
 fi
-chrome_profile="$PWD/$perf_dir/chrome-profile"
+chrome_dir="$PWD/$perf_dir/chrome-profile"
+chrome_profile=$chrome_dir
 ! windows || chrome_profile="$(cygpath -w "$chrome_profile")"
-# Opens page $1 in Chrome, which a running Chrome takes as a new tab.
-chrome_open() {
+chrome_launches=0
+# Launches Chrome on page $1, with the arguments after, and check/cdp.py on the DevTools port it
+# picks, which logs its pages' titles to $log, as the app's log has its own, and takes commands on
+# fd 5. Sets $pid and $launched, the Unix ms just before, or says Chrome didn't stay.
+chrome_launch() {
+  chrome_url="$page?$1"
+  shift
+  chrome_launches=$((chrome_launches + 1))
+  log="$perf_dir/chrome-$chrome_launches.log"
+  rm -f "$chrome_dir/DevToolsActivePort"
+  perf_stamp
+  launched=$stamp
   "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic "$page?$1" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+    --use-mock-keychain --password-store=basic --remote-debugging-port=0 "$@" "$chrome_url" \
+    < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+  pid=$!
+  # Its port, then the browser's path, once DevTools listens.
+  for _ in $(seq 150); do
+    [ "$(wc -l < "$chrome_dir/DevToolsActivePort" 2> /dev/null || echo 0)" -ge 2 ] && break
+    kill -0 "$pid" 2> /dev/null || return 1
+    sleep 0.1
+  done
+  chrome_socket="ws://127.0.0.1:$(tr -d '\r' < "$chrome_dir/DevToolsActivePort" | sed -n 1p)$(
+    tr -d '\r' < "$chrome_dir/DevToolsActivePort" | sed -n 2p)"
+  case $chrome_socket in
+  ws://127.0.0.1:[0-9]*/devtools/browser/*) ;;
+  *) fail "Chrome's DevToolsActivePort didn't say where it listens: $chrome_socket" ;;
+  esac
+  rm -f "$perf_dir/chrome-cdp"
+  mkfifo "$perf_dir/chrome-cdp"
+  # A native program can't read Git Bash's fifo, so cat passes cdp.py its commands, as lib.sh's
+  # start_with_cdp does.
+  cat "$perf_dir/chrome-cdp" | python3 -I -u check/cdp.py --socket "$chrome_socket" > "$log" 2>&1 &
+  exec 5> "$perf_dir/chrome-cdp"
+  echo titles >&5
 }
-# Quits Chrome as quit_app does the app, then ends what's left of it.
+# Waits for a line matching $1 in Chrome's log after its line $3, or any, failing with $2.
+chrome_await() {
+  for _ in $(seq 300); do
+    tail -n +$((${3:-0} + 1)) "$log" | grep -q "$1" && return 0
+    kill -0 "$pid" 2> /dev/null || fail "Chrome exited, waiting for: $2"
+    sleep 0.1
+  done
+  fail "$2"
+}
+# The Unix ms page $1's title says it $2 ("fcp" or "shown"), first after Chrome's log line $3.
+chrome_stamp() {
+  tail -n +$((${3:-0} + 1)) "$log" | sed -n "s/^cdp: title [^ ]* $1 $2 \([0-9]* \)\{0,1\}//p" | head -1
+}
+# Chrome's histogram $1's sum, once it has one, or none after 5 s.
+chrome_histogram() {
+  for _ in $(seq 50); do
+    since=$(wc -l < "$log")
+    echo "histogram $1" >&5
+    chrome_await "^cdp: histogram $1 " "Chrome's DevTools didn't answer for $1" "$since"
+    sum=$(tail -n +$((since + 1)) "$log" | sed -n "s/^cdp: histogram $1 \([0-9]*\) [0-9]*$/\1/p" | head -1)
+    [ -z "$sum" ] || { echo "$sum"; return; }
+    sleep 0.1
+  done
+}
+# Opens page $1 in a new tab in front, as a link from another app does, and keeps the ms from just
+# before to its first paint in the file $2, as the app's are kept from ↩ in ⌘T's bar.
+chrome_open() {
+  since=$(wc -l < "$log")
+  perf_stamp
+  typed=$stamp
+  echo "open $page?$1" >&5
+  chrome_await "^cdp: title [^ ]* $1 fcp " "Chrome's $1 didn't paint in its new tab" "$since"
+  echo $(($(chrome_stamp "$1" fcp "$since") - typed)) >> "$perf_dir/$2"
+  loaded=$(date +%s)
+}
+# The app's 16 switches by ⌘1–⌘8, of pages $1<n>: here the first eight tabs, as Chrome's ⌘1–⌘8
+# are, shown through the tab strip, keeping the ms from just before to the page shown in the file
+# $2 and each Unix ms before in $2-keys. The tab opened last shows, so each goes to another tab.
+chrome_switches() {
+  : > "$perf_dir/$2"
+  : > "$perf_dir/$2-keys"
+  for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
+    tab=$(sed -n "s/^cdp: title \([^ ]*\) $1$k fcp .*/\1/p" "$log" | head -1)
+    since=$(wc -l < "$log")
+    perf_stamp
+    pressed=$stamp
+    echo "activate $tab" >&5
+    echo "$pressed" >> "$perf_dir/$2-keys"
+    chrome_await "^cdp: title $tab $1$k shown " "Chrome's $1$k didn't say it was shown" "$since"
+    echo $(($(chrome_stamp "$1$k" shown "$since") - pressed)) >> "$perf_dir/$2"
+  done
+}
+# Quits Chrome as quit_app does the app, then ends what's left of it after $1 s, or 20.
 chrome_quit() {
+  # cdp.py ends as its commands do, and as Chrome closes its socket.
+  exec 5>&-
   if windows; then
     # Without /F, taskkill asks its windows to close, as their close button does.
     taskkill //PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
@@ -366,12 +500,12 @@ chrome_quit() {
   else
     kill -INT "$pid" 2> /dev/null || true
   fi
-  for _ in $(seq 40); do
+  for _ in $(seq $((${1:-20} * 2))); do
     perf_snap chrome-left
     python3 -I check/usage.py memory "$perf_dir/chrome-left.json" | grep -q ' 0$' && return 0
     sleep 0.5
   done
-  echo "Chrome didn't quit in 20 s, so it's ended"
+  echo "Chrome didn't quit in ${1:-20} s, so it's ended"
   python3 -I -c 'import json, sys; print("\n".join(json.load(open(sys.argv[1]))["procs"]))' \
     "$perf_dir/chrome-left.json" | while read -r left; do
     if windows; then taskkill //F //PID "$left" > /dev/null 2>&1; else kill -9 "$left" 2> /dev/null; fi
@@ -384,13 +518,6 @@ chrome_quit() {
   done
   fail "Chrome's processes outlived it: $(python3 -I check/usage.py kinds "$perf_dir/chrome-left.json")"
 }
-# Launches Chrome on page $1 and sets $pid, or says it didn't stay.
-chrome_launch() {
-  chrome_open "$1"
-  pid=$!
-  sleep 5 # the 5 s a Chrome that won't stay takes to go
-  kill -0 "$pid" 2> /dev/null
-}
 if [ "$active" != 1 ]; then
   :
 elif [ ! -x "$chrome" ]; then
@@ -398,13 +525,38 @@ elif [ ! -x "$chrome" ]; then
 else
   snap_procs=$chrome_procs
   : > "$perf_dir/chrome.log"
-  if ! chrome_launch warm; then
+  # The 5 s a Chrome that won't stay takes to go, in its first 15 s, which warm its caches for the
+  # launches measured.
+  if ! chrome_launch warm || ! sleep 15 || ! kill -0 "$pid" 2> /dev/null; then
     echo "skip: perf's Chrome on this runner. It didn't stay open: $(tail -3 "$perf_dir/chrome.log")"
   else
-    sleep 15 # Chrome's first 15 s, which warm its caches for the runs measured
     chrome_quit
-    chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
-    started=$(($(date +%s) - 5))
+    # Five launches with a link, as the app's: to the page painted, and to the window on screen,
+    # which Chrome times from its main to its window shown (Startup.BrowserWindowDisplay), and from
+    # its process's start to its main, as the app's log times its own from its process's start.
+    : > "$perf_dir/chrome-link"
+    : > "$perf_dir/chrome-on-screen"
+    for n in 1 2 3 4 5; do
+      chrome_launch "cl$n" || fail "Chrome didn't stay open for launch $n: $(tail -3 "$perf_dir/chrome.log")"
+      chrome_await "^cdp: title [^ ]* cl$n fcp " "Chrome's launch $n didn't paint its page"
+      echo $(($(chrome_stamp "cl$n" fcp) - launched)) >> "$perf_dir/chrome-link"
+      shown=$(chrome_histogram Startup.BrowserWindowDisplay)
+      [ -n "$shown" ] || fail "Chrome's launch $n timed no window shown"
+      main=$(chrome_histogram Startup.LoadTime.ProcessCreateToApplicationStart)
+      [ -n "$main" ] || fail "Chrome's launch $n timed no start to its main"
+      echo $((main + shown)) >> "$perf_dir/chrome-on-screen"
+      chrome_quit
+    done
+    perf_row chrome-launch-link "Chrome here, launch, link to page painted" \
+      "$(perf_stats '%.0f' < "$perf_dir/chrome-link") ms" "ilo's"
+    perf_row chrome-launch-window "Chrome here, launch, window on screen" \
+      "$(perf_stats '%.0f' < "$perf_dir/chrome-on-screen") ms" "ilo's, the gate"
+
+    # Then the app's session, as the app's: the same rows at the same times, its tabs opened by
+    # DevTools, as Chrome has no driver.
+    chrome_launch c1 || fail "Chrome didn't stay open for its session: $(tail -3 "$perf_dir/chrome.log")"
+    chrome_await "^cdp: title [^ ]* c1 fcp " "Chrome's session's first page didn't paint"
+    started=$((launched / 1000))
     perf_until $((started + 30))
     perf_memory chrome-1
     perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
@@ -412,26 +564,59 @@ else
     perf_idle chrome-idle-1
     perf_row chrome-idle-cpu-1 "Chrome here, idle CPU, 1 tab" "$cpu" "ilo's"
     perf_row chrome-idle-wakeups-1 "Chrome here, idle wakeups, 1 tab" "$wakeups /s" "ilo's"
+    perf_until $((started + 120))
+    perf_idle chrome-settled-1
+    perf_row chrome-settled-cpu-1 "Chrome here, idle CPU, 1 tab, settled" "$cpu" "ilo's"
+    perf_row chrome-settled-wakeups-1 "Chrome here, idle wakeups, 1 tab, settled" "$wakeups /s" "ilo's"
+    # A couple of seconds apart, as before Chrome's new tabs were timed.
+    : > "$perf_dir/chrome-newtab"
     for n in 2 3 4 5 6 7 8 9 10; do
-      chrome_open "c$n"
-      perf_until $(($(date +%s) + 2))
+      chrome_open "c$n" chrome-newtab
+      perf_until $((typed / 1000 + 2))
     done
     perf_until $(($(date +%s) + 10))
     perf_memory chrome-10
     perf_row chrome-memory-10 "Chrome here, memory, 10 tabs" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
     for n in 11 12 13 14 15 16 17 18 19 20; do
-      chrome_open "c$n"
-      perf_until $(($(date +%s) + 2))
+      chrome_open "c$n" chrome-newtab
+      perf_until $((typed / 1000 + 2))
     done
     perf_until $(($(date +%s) + 15))
     perf_memory chrome-20
     perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
+    perf_row chrome-newtab "Chrome here, new tab, opened to page painted" \
+      "$(perf_stats '%.0f' < "$perf_dir/chrome-newtab") ms" "ilo's, the gate"
     perf_idle chrome-idle-20
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
     perf_row chrome-idle-wakeups-20 "Chrome here, idle wakeups, 20 tabs" "$wakeups /s" "ilo's, the gate"
+    perf_until $((loaded + 120))
+    perf_idle chrome-settled-20
+    perf_row chrome-settled-cpu-20 "Chrome here, idle CPU, 20 tabs, settled" "$cpu" "ilo's"
+    perf_row chrome-settled-wakeups-20 "Chrome here, idle wakeups, 20 tabs, settled" "$wakeups /s" "ilo's"
+    chrome_switches c chrome-switch
+    perf_row chrome-switch "Chrome here, tab switch, to page shown" \
+      "$(perf_stats '%.0f' < "$perf_dir/chrome-switch") ms" "ilo's, the gate"
     chrome_quit
+    # ilo's traced switches, in Chrome, its trace perf/trace-chrome.json.
+    if [ -n "${CHECK_TRACE_CATEGORIES:-}" ]; then
+      # shellcheck disable=SC2086 # the record mode, or nothing
+      chrome_launch t1 --enable-tracing="$trace_categories" $trace_mode --enable-tracing-format=json \
+        --trace-startup-file="$PWD/$perf_dir/trace-chrome.json" ||
+        fail "Chrome didn't stay open, traced: $(tail -3 "$perf_dir/chrome.log")"
+      chrome_await "^cdp: title [^ ]* t1 fcp " "Chrome's traced launch didn't paint its page"
+      : > "$perf_dir/chrome-traced-newtab"
+      for n in $(seq 2 20); do
+        chrome_open "t$n" chrome-traced-newtab
+        perf_until $((typed / 1000 + 2))
+      done
+      perf_until $((loaded + 15))
+      chrome_switches t chrome-traced-switch
+      chrome_quit 60
+      [ -s "$perf_dir/trace-chrome.json" ] || fail "Chrome's traced launch wrote no trace"
+      perf_traced_rows chrome-traced-switch "Chrome here, tab switch" "$perf_dir/trace-chrome.json"
+    fi
     # ilo against Chrome on this machine, for each of the gate's rows. Memory at 10 and 20 tabs moves
     # under 5 % from run to run, so ilo more than 10 % over Chrome's fails the run. At 1 tab, 30 s
     # after launch, uBlock Origin is still taking in its lists, and ilo's moved by 70 % from one run
@@ -447,7 +632,19 @@ def memory(name):
 def idle(name, column):
     with open(os.path.join(d, f"{name}.txt")) as f:
         return statistics.median(float(line.split()[column]) for line in f)
+def median(name):
+    with open(os.path.join(d, name)) as f:
+        return statistics.median(float(line) for line in f if line.strip())
 for label, ilo, chrome, unit, fails in [
+    ("launch, link to page painted", median("link"), median("chrome-link"), "ms", False),
+    ("launch, window on screen", median("on-screen"), median("chrome-on-screen"), "ms", False),
+    ("new tab to page painted", median("newtab"), median("chrome-newtab"), "ms", False),
+    ("tab switch to page shown", median("switch"), median("chrome-switch"), "ms", False),
+    ("idle CPU, 1 tab, settled", idle("settled-1", 0), idle("chrome-settled-1", 0), "%", False),
+    ("idle CPU, 20 tabs, settled", idle("settled-20", 0), idle("chrome-settled-20", 0), "%", False),
+    ("idle wakeups, 1 tab, settled", idle("settled-1", 1), idle("chrome-settled-1", 1), "/s", False),
+    ("idle wakeups, 20 tabs, settled", idle("settled-20", 1), idle("chrome-settled-20", 1), "/s",
+     False),
     ("memory, 1 tab", memory("1"), memory("chrome-1"), "MiB", False),
     ("memory, 10 tabs", memory("10"), memory("chrome-10"), "MiB", True),
     ("memory, 20 tabs", memory("20"), memory("chrome-20"), "MiB", True),
