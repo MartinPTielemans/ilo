@@ -5,6 +5,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_util.h"
@@ -65,7 +67,7 @@ class MemoryIndexTest : public testing::Test {
 
   std::vector<std::string> Found(std::string_view query) {
     std::vector<std::string> urls;
-    for (const MemoryMatch& match : index_->Search(query, 5)) {
+    for (const MemoryMatch& match : index_->Search(std::string(query), 5)) {
       urls.push_back(match.url);
     }
     return urls;
@@ -218,8 +220,7 @@ TEST_F(MemoryIndexTest, Timing) {
   }
   std::ranges::sort(adds);
   std::ranges::sort(searches);
-  int64_t size = 0;
-  base::GetFileSize(path_, &size);
+  int64_t size = base::GetFileSize(path_).value_or(0);
   LOG(ERROR) << "browser: memory timing " << kPages << " pages, file " << size / 1000
              << " KB; add median " << adds[adds.size() / 2].InMicrosecondsF() / 1000 << " ms, p95 "
              << adds[adds.size() * 95 / 100].InMicrosecondsF() / 1000 << " ms; search median "
