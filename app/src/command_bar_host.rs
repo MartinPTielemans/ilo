@@ -207,6 +207,25 @@ impl command_bar::Host for Bar {
         }
     }
 
+    fn archived(&self, url: &str, cx: &App) -> Option<(u64, f64)> {
+        // Only a window of the user's Spaces reopens a tab from the archive, as only it has the
+        // Library: a private, Little ilo or Blank Window shows a Space of its own.
+        let front = front().0;
+        let shell = WINDOWS.with_borrow(|windows| {
+            (windows.iter())
+                .find(|window| window.id == front && window.regular())
+                .map(|window| window.shell.clone())
+        })?;
+        shell.upgrade()?.read(cx).archived_at(url)
+    }
+
+    fn restore_archived(&self, archived: u64, cx: &mut App) -> bool {
+        update_window_in(front().0, cx, |shell, cx| {
+            shell.reopen_archived(archived, cx)
+        })
+        .unwrap_or(false)
+    }
+
     fn asking(&self, shown: bool, cx: &mut App) {
         if shown {
             agents_core::update(|agents, cx| agents.task_ask_shown(cx));
