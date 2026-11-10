@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boosts.h"
 #include "browser_core/browser_window_stand_in.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
@@ -1757,6 +1758,8 @@ void Window::ShowSpace(bc_id space, bool page) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](base::WeakPtr<Window> window, bc_id space) {
+                       // The window's favorites are in the Space it shows now.
+                       Boosts::SpacesChanged();
                        if (window && Host().window_space_shown) {
                          Host().window_space_shown(Host().context, window->id(), space);
                        }

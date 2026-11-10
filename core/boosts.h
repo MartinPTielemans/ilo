@@ -37,6 +37,12 @@ class Boosts : public content::WebContentsObserver,
   // Gives |site| |css| in the profile, empty to take it away, and shows it on the pages of it that
   // are open.
   static void Set(bc_id profile, std::string_view site, std::string_view css);
+  // Gives the Space's tabs |properties|, CSS declarations of ilo's custom properties for its theme,
+  // at the root of each page that takes a Boost, or takes them away for none.
+  static void SetSpaceColors(bc_id space, std::string_view properties);
+  // Gives each Boosted tab its Space's colours again where they aren't those it has: a tab moved to
+  // another Space, or a favorite whose window shows another. Posted after the change.
+  static void SpacesChanged();
 
   // Turns Zap on or off on the tab's page: while it's on, a left press on the page goes to Zap
   // instead of the page, and tab_boost_zapped says what was under it.
@@ -47,8 +53,12 @@ class Boosts : public content::WebContentsObserver,
 
   Boosts(content::WebContents* contents, bc_id tab);
 
-  // Shows the profile's CSS for its site in |frame|, or takes it away.
+  // Shows the profile's CSS for its site in |frame|, after its Space's colours, or takes it away.
   void Apply(content::RenderFrameHost* frame);
+  // The colours of the Space the tab is in, as SetSpaceColors gave them.
+  std::string_view SpaceColors();
+  // Gives every Boosted frame of the tab its CSS again.
+  void Reapply();
   void Hook(content::RenderWidgetHost* widget);
   void Unhook();
   bool OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEvent& event);
@@ -65,6 +75,9 @@ class Boosts : public content::WebContentsObserver,
 
   const bc_id tab_;
   bool zapping_ = false;
+  // Whether a frame of the tab took a Boost, and the Space colours it took them with.
+  bool boosted_ = false;
+  std::string colors_;
   std::map<raw_ptr<content::RenderWidgetHost>, content::RenderWidgetHost::MouseEventCallback>
       hooked_;
   base::ScopedMultiSourceObservation<content::RenderWidgetHost, content::RenderWidgetHostObserver>

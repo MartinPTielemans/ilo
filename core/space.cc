@@ -15,6 +15,7 @@
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/boosts.h"
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 
@@ -928,6 +929,8 @@ void Space::ReportChanged() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(
                      [](bc_id id) {
+                       // A tab that moved takes its new Space's colours in its Boost.
+                       Boosts::SpacesChanged();
                        if (FromId(id) && Host().space_changed) {
                          Host().space_changed(Host().context, id);
                        }
