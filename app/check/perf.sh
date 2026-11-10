@@ -10,9 +10,12 @@
 # own site, which puts in its title when it first painted ("<id> fcp <ms>") and, each time it's
 # shown, two frames after it became visible ("<id> shown <n> <ms>"), both in Unix ms.
 #
-# - Launch to the page painted, 5 times, with BROWSER_URL, as a link from another app opens it.
-# - Launch to the restored page painted, 5 times, with no URL, its last tab put back.
-# - The window on screen, as each of those 10 launches logged it.
+# - Launch to the page painted, with BROWSER_URL, as a link from another app opens it, and how long
+#   uBlock Origin held it: a new profile's first launch 3 times, then 5 with no selfie of its filters,
+#   then a launch 90 s on that says whether the selfie comes to a user who quits quickly, then 5 on
+#   the selfie, a user's launch.
+# - Launch to the restored page painted, 5 times on the selfie, with no URL, its last tab put back.
+# - The window on screen, as each of those last 10 launches logged it.
 # - Then one session, as Ardia's: memory at 1 tab, 30 s after launch; idle CPU and wakeups over
 #   the minute after, and again 2 minutes after the page loaded (settled); 19 new tabs opened from
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
@@ -184,14 +187,95 @@ perf_launch() {
   on_screen=$(sed -n 's/^browser: window on screen at \([0-9.]*\) ms$/\1/p' "$log" | head -1)
   # The core holds a launch's first page until uBlock Origin is ready (core/ad_block.cc).
   held=$(sed -n 's/^.*browser: ad blocking held a page \([0-9]*\) ms.*$/\1/p' "$log" | head -1)
+  [ -z "${perf_before_quit:-}" ] || "$perf_before_quit"
   quit
 }
+# Whether uBlock Origin ever wrote its selfie, its compiled filters, in this profile: it writes it to
+# its IndexedDB and its extension storage. A key it later takes out stays in their files until they
+# compact, so this says only that one was written, which is all the launches below need.
+perf_ublock=oghkpboejbohceocapipmnjifoklonij
+perf_selfie() {
+  for store in "$profile_dir/Default/IndexedDB/chrome-extension_${perf_ublock}_0.indexeddb.leveldb" \
+    "$profile_dir/Default/Local Extension Settings/$perf_ublock"; do
+    cat "$store"/*.log "$store"/*.ldb 2> /dev/null | LC_ALL=C tr -d '\000' |
+      grep -q 'selfie/staticNetFilteringEngine' || return 1
+  done
+}
+# Keeps the launched app until uBlock Origin writes its selfie, or 180 s, and says when it came. It
+# runs only where none was ever written, so the first is the one kept: a list update as uBlock
+# Origin starts puts off the write by 53 s from the update, and has nothing to take out.
+perf_await_selfie() {
+  selfie_at=
+  for _ in $(seq 180); do
+    perf_selfie && selfie_at=$(($(date +%s) - launched / 1000)) && return
+    kill -0 "$pid" 2> /dev/null || gone
+    sleep 1
+  done
+}
+# uBlock Origin holds a launch's page as it takes in its filters, three ways (core/ad_block.cc): a
+# new profile's first launch compiles the lists it ships; a launch with no selfie reads the lists
+# it compiled; and a launch with one reads that. It takes the selfie out as a list changes and
+# writes it again 53 s after the last change, in the session then, so a launch after a list update
+# has none, as has each launch while no session has lasted the 53 s.
+: > "$perf_dir/new"
+: > "$perf_dir/new-held"
+: > "$perf_dir/unselfied"
+: > "$perf_dir/unselfied-held"
 : > "$perf_dir/link"
 : > "$perf_dir/restore"
 : > "$perf_dir/on-screen"
 : > "$perf_dir/held"
-# The first launch makes the profile, which the others find, as a user's, so it isn't counted.
-perf_launch "$page?warm" warm warm
+# A new profile's first launch, three times. The last profile is the one every launch after uses.
+for n in 1 2 3; do
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir"
+  perf_launch "$page?new$n" "new$n" "new$n"
+  echo "$painted" >> "$perf_dir/new"
+  echo "${held:-0}" >> "$perf_dir/new-held"
+done
+# With no hold, as with no uBlock Origin, there's no selfie to wait for.
+ublock_held=$held
+# Launches that quit seconds in, as one after a list update, or a user's who opens and closes it
+# quickly: five, each before any session lasted the 53 s.
+for n in 1 2 3 4 5; do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  perf_launch "$page?quick$n" "quick$n" "quick$n"
+  echo "$painted" >> "$perf_dir/unselfied"
+  echo "${held:-0}" >> "$perf_dir/unselfied-held"
+done
+selfie="uBlock Origin held no launch"
+if [ -n "$ublock_held" ]; then
+  if perf_selfie; then
+    selfie="uBlock Origin wrote its selfie during five launches that quit seconds in"
+  else
+    # Each of those launches also set it an alarm 70 s after it took in its lists, which writes the
+    # selfie if it comes as uBlock Origin starts, and one for its list update 75 s after. Whether a
+    # user who always quits inside the 53 s ever gets one, then, is whether Chromium keeps the
+    # alarm for the next launch: the time the app stays closed is what's measured, so this waits
+    # until both alarms are due, then launches once more and quits as quickly.
+    while [ "$(date +%s)" -lt $((launched / 1000 + 90)) ]; do
+      sleep 1
+    done
+    rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+    perf_launch "$page?late" late late
+    if perf_selfie; then
+      selfie="uBlock Origin wrote no selfie in five launches that quit seconds in, then wrote it in one launched after their alarm's time, which quit as quickly ($painted ms to paint, held ${held:-0} ms)"
+    else
+      selfie="uBlock Origin wrote no selfie in five launches that quit seconds in, nor in one launched after their alarm's time ($painted ms to paint, held ${held:-0} ms): a user who quits inside 53 s never gets one"
+      rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+      perf_before_quit=perf_await_selfie
+      perf_launch "$page?stay" stay stay
+      perf_before_quit=
+      if [ -n "$selfie_at" ]; then
+        selfie="$selfie; one that stayed got it ${selfie_at} s in"
+      else
+        selfie="$selfie; nor did one that stayed 180 s"
+      fi
+    fi
+  fi
+fi
+echo "perf: $selfie"
+# Then a user's launches, on the selfie.
 for n in 1 2 3 4 5; do
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
   perf_launch "$page?link$n" "link$n" "link$n"
@@ -205,13 +289,20 @@ for n in 1 2 3 4 5; do
   echo "$on_screen" >> "$perf_dir/on-screen"
   echo "${held:-0}" >> "$perf_dir/held"
 done
+echo "perf: each launch's page held for uBlock Origin, in ms: a new profile's $(tr '\n' ' ' < "$perf_dir/new-held"); with no selfie $(tr '\n' ' ' < "$perf_dir/unselfied-held"); on the selfie $(tr '\n' ' ' < "$perf_dir/held")"
+perf_row launch-new "Launch, a new profile's first, link to page painted" \
+  "$(perf_stats '%.0f' < "$perf_dir/new") ms, held $(perf_stats '%.0f' < "$perf_dir/new-held") ms" \
+  "none: once a profile"
+perf_row launch-unselfied "Launch with no selfie, link to page painted" \
+  "$(perf_stats '%.0f' < "$perf_dir/unselfied") ms, held $(perf_stats '%.0f' < "$perf_dir/unselfied-held") ms" \
+  "none: after a list update, until a session lasts 53 s"
 perf_row launch-link "Launch, link to page painted" "$(perf_stats '%.0f' < "$perf_dir/link") ms" \
   "Ardia 413 ms, Chrome 484 ms"
 perf_row launch-window "Launch, window on screen" "$(perf_stats '%.0f' < "$perf_dir/on-screen") ms" \
   "Ardia 280 ms, Chrome 424 ms (gate: ≤ Chrome)"
 perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
-perf_row launch-held "Launch, the page held for uBlock Origin" \
+perf_row launch-held "Launch, the page held for uBlock Origin on its selfie" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
