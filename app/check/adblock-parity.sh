@@ -121,7 +121,7 @@ while read -r url <&4; do
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
-[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8 # the last site's ads, which the loop skipped waiting for
 [ -s "$starts" ] || fail "no site opened"
 # The most memory a process took, in MB.
 peak() {
