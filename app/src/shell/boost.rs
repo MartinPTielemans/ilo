@@ -225,6 +225,8 @@ impl Shell {
         let Some(tab) = self.boost_card.take() else {
             return false;
         };
+        // check.sh reads this line.
+        log!("browser: boost card {tab} closed");
         if self.zapping == Some(tab) {
             self.stop_zap(cx);
         }

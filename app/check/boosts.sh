@@ -78,6 +78,13 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
+# The card's ×, 7 inside its top right corner and 22 square, closes it, as it covers the tab's row.
+send layout
+read -r bx by bw bh << EOF
+$(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+send click $((bx + bw - 18)) $((by + 18))
+expect "^browser: boost card $tab closed\$" "the card's × didn't close it"
 # A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the +'s menu
 # after New Note; each opens the card.
 post rightclick $(row 0)
