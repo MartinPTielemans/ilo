@@ -96,6 +96,58 @@ fn the_lists_and_filters_block_except_where_an_exception_lets_go() {
 }
 
 #[test]
+fn a_bare_hostname_blocks_its_host_and_its_pages_as_ublock_origin_reads_it() {
+    let folder = folder("hostnames");
+    let malware = folder.join("assets/thirdparties/malware.txt");
+    fs::write(&malware, "! Title: URLhaus\n1.2.3.44\nBad.example\n@@ok.bad.example\n").unwrap();
+    let mut setup = setup(&folder, "mine.example\n");
+    setup.lists.push(malware);
+    let engine = compile(&setup);
+    let page = "https://news.example/";
+    let verdict = |url: &str, kind: &str| check(&engine, url, page, kind);
+    assert_eq!(verdict("http://1.2.3.44/x.js", "script"), Verdict::Block);
+    assert_eq!(verdict("http://11.2.3.44/x.js", "script"), Verdict::Allow);
+    assert_eq!(verdict("https://cdn.bad.example/x.js", "script"), Verdict::Block);
+    assert_eq!(verdict("https://ok.bad.example/x.js", "script"), Verdict::Allow);
+    // The page itself, as a link opens it, from no page.
+    let opened = |url: &str| check(&engine, url, url, "document");
+    assert_eq!(opened("http://1.2.3.44/"), Verdict::Block);
+    assert_eq!(opened("https://bad.example/login"), Verdict::Block);
+    assert_eq!(opened("https://ok.bad.example/"), Verdict::Allow);
+    assert_eq!(opened("https://mine.example/"), Verdict::Block);
+    // A hosts file's, and a filter as EasyList writes one, block their pages as they did.
+    assert_eq!(opened("https://hosted.example/"), Verdict::Block);
+    assert_eq!(opened("https://ads.example/"), Verdict::Block);
+    assert_eq!(opened("https://news.example/"), Verdict::Allow);
+}
+
+#[test]
+fn only_a_whole_hostname_is_read_as_one() {
+    for (pattern, hostname) in [
+        ("example.com", true),
+        ("1.2.3.44", true),
+        // A last label of one character isn't, in uBlock Origin's pattern, so it stays a pattern.
+        ("1.2.3.4", false),
+        ("a_b.example-1.org", true),
+        ("localhost", true),
+        ("UPPER.Example", true),
+        ("_chartbeat.js", false),
+        ("-didomi.js", false),
+        ("example.c", false),
+        ("example.com_", false),
+        ("example..com", false),
+        (".example.com", false),
+        ("||example.com^", false),
+        ("example.com$doc", false),
+        ("example.com/ads", false),
+        ("example.com##.ad", false),
+        ("", false),
+    ] {
+        assert_eq!(is_hostname(pattern), hostname, "{pattern}");
+    }
+}
+
+#[test]
 fn a_redirect_answers_with_its_stand_in_and_removeparam_rewrites() {
     let folder = folder("redirect");
     let engine = compile(&setup(&folder, "$removeparam=utm_source\n"));

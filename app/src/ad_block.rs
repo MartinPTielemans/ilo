@@ -69,6 +69,52 @@ fn options(folder: &Path, list: &Path, text: &str) -> ParseOptions {
     }
 }
 
+/// Whether `pattern` is a hostname as uBlock Origin's filter parser takes one, its reHostnameAscii,
+/// in any case: labels of letters, digits, `-` and `_` that start with a letter or digit, the last
+/// with no `_`, ending in a letter or digit and at least two long.
+fn is_hostname(pattern: &str) -> bool {
+    let edge = |byte: &u8| byte.is_ascii_alphanumeric();
+    let mut labels = pattern.split('.').map(str::as_bytes).rev();
+    let Some(last) = labels.next() else {
+        return false;
+    };
+    last.len() >= 2
+        && edge(&last[0])
+        && edge(&last[last.len() - 1])
+        && last.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        && labels.all(|label| {
+            label.first().is_some_and(edge)
+                && label
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
+
+/// `text` with each line that is only a hostname, as URLhaus's are, read as uBlock Origin reads it:
+/// that host and its subdomains, `||host^`, which blocks a page there too. adblock-rust reads one as
+/// part of any address, so `1.2.3.44` matched `11.2.3.44` and never the page at `1.2.3.44`.
+fn hostnames_anchored(text: String) -> String {
+    let anchored = |line: &str| {
+        let (exception, pattern) = match line.strip_prefix("@@") {
+            Some(pattern) => ("@@", pattern),
+            None => ("", line),
+        };
+        is_hostname(pattern).then(|| format!("{exception}||{}^", pattern.to_ascii_lowercase()))
+    };
+    if !text.lines().any(|line| anchored(line).is_some()) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    for line in text.lines() {
+        match anchored(line) {
+            Some(line) => out.push_str(&line),
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Compiles `setup`'s lists and the user's filters, about 0.25 s for the lists uBlock Origin turns
 /// on, and gives it uBlock Origin's stand-ins and scriptlets. A list that can't be read is left out.
 pub fn compile(setup: &Setup) -> Engine {
@@ -77,12 +123,16 @@ pub fn compile(setup: &Setup) -> Engine {
         match fs::read_to_string(list) {
             Ok(text) => {
                 let options = options(&setup.folder, list, &text);
+                let text = match options.format {
+                    FilterFormat::Standard => hostnames_anchored(text),
+                    FilterFormat::Hosts => text,
+                };
                 set.add_filter_list(text, options);
             }
             Err(error) => crate::log!("browser: ad block list {}: {error}", list.display()),
         }
     }
-    set.add_filter_list(setup.filters.clone(), ParseOptions::default());
+    set.add_filter_list(hostnames_anchored(setup.filters.clone()), ParseOptions::default());
     let mut engine = Engine::new_with_filter_set(set);
     engine.use_resources(resources(&setup.folder));
     engine
@@ -207,12 +257,17 @@ pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[S
     serde_json::Value::from(selectors).to_string()
 }
 
+/// What `compile` makes of the same lists: one more each time it reads them differently, so an
+/// engine the last compile made isn't loaded. 2: bare hostnames anchored.
+const COMPILED: u32 = 2;
+
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
-/// a list, the filters or adblock-rust's version names another.
+/// a list, the filters, adblock-rust's version or COMPILED names another.
 fn cache_name(setup: &Setup) -> String {
     let mut hasher = DefaultHasher::new();
     setup.hash(&mut hasher);
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    COMPILED.hash(&mut hasher);
     for list in &setup.lists {
         let meta = fs::metadata(list).ok();
         meta.as_ref().map(|meta| meta.len()).hash(&mut hasher);
