@@ -241,6 +241,13 @@ call() {
   mcp "$(request "$1" "$2")" | answered
 }
 
+# What the user has before the agent's first call: the window with the keyboard, the view with
+# focus in it, their Today and its shown tab, and the Space shown. The agent's whole run, up to
+# the user's first click below, changes none of them (decision 8).
+send state
+user_key=$key user_focus=$focus before_today=$(today)
+user_selects=$(grep -c '^browser: selected ' "$log" || true)
+user_spaces=$(grep -c '^browser: space [0-9]* in ' "$log" || true)
 mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
   > "$out/mcp-initialize.json"
 grep -q '"protocolVersion":"2025-06-18"' "$out/mcp-initialize.json" ||
@@ -465,6 +472,20 @@ hand_back_pressed() {
   send key return cmd
   await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
 }
+send state
+# On Windows, Chrome showed the window for a tab an agent's page opens, which gave the window
+# itself the keyboard, until the core asked for no show (Window::AdjustNavigate). An engine from
+# before that still does.
+if [ "$key $focus" != "$user_key $user_focus" ] && windows && ! engine_has ../core/window.cc; then
+  keyboard_skip="$key, $focus"
+elif [ "$key $focus" != "$user_key $user_focus" ]; then
+  fail "the agent's run moved the keyboard from $user_key, $user_focus to $key, $focus"
+fi
+[ "$(grep -c '^browser: selected ' "$log" || true)" = "$user_selects" ] ||
+  fail "the agent's run showed another tab: $(grep '^browser: selected ' "$log" | tail -1)"
+[ "$(grep -c '^browser: space [0-9]* in ' "$log" || true)" = "$user_spaces" ] ||
+  fail "the agent's run showed another Space: $(grep '^browser: space [0-9]* in ' "$log" | tail -1)"
+[ "$(today)" = "$before_today" ] || fail "the agent's run changed the user's Today: $(today)"
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
 # go into the field.
@@ -474,8 +495,9 @@ if [ -n "$yours_step" ]; then
   shown=$(sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep '^browser: selected ' |
     grep -v "^browser: selected $user_tab\( in .*\)\{0,1\}\$" | head -1)
   [ -z "$shown" ] || fail "the agent's work showed another tab in the user's window: $shown"
-  if windows; then
-    # Quarantined: there a click of the agent's that opens a tab takes the keyboard (#2225).
+  if windows && ! engine_has ../core/window.cc; then
+    # Quarantined: there a click of the agent's that opens a tab took the keyboard (#2225), until
+    # the core asked for no show of the window for it (Window::AdjustNavigate).
     echo "skip: mcp: the user's keyboard through the agent's work on Windows (#2225)"
   else
     [ "$key $focus" = "$yours_key $yours_focus" ] ||
@@ -1695,9 +1717,12 @@ quit
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 if [ "$driven" = 1 ]; then
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
+  echo "ok: an MCP client's whole run leaves the user's keyboard, focus, tab, Today and Space as they were; its bridge gets in with its token only, on the user's own socket, gets a Space of its own, is refused the user's tab and reads its own, is answered that a link to an app opens nothing, its tab staying on its page, moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), the tabs its page opens kept in its Space, behind, without its fields' values, acts by ref but never in a password field, presses keys that reach the page alone, its Escape running no Stop of ilo's, closes its own tab, pins, unpins and removes its own tab but not the user's, sends requests to its tab's site with the tab's session it never sees, a change asking each time, keeps one whose page asks before it's left until it discards it, with no dialog, runs steps in one call, waits on a handoff until Hand Back, works on one card for both its connections, whose conversation watches its page, opens its tabs muted, is refused a tab the user took over with a press in its page until they hand it back and Keep answers its ask, is stopped by its conversation's Stop while its waiting step shimmers, which closes its connection once its call is answered, gets no saved login filled in or offered in its tab until the user takes it over, when it fills without a reload, its download asks first and answers with the file, a refused one leaving none, a bank's site asks first until Always Allow, which Settings › Agents lists$needs_said, and off takes the socket away; an action waits for its element and its page to settle ($settle), a tab's id from before a relaunch is refused as such, and a launch after the window quit in its Space shows the page it opens; a screenshot of a tab just opened out of sight answers ($fresh_picture), and with the UI holding the keyboard with its picture"
 else
-  echo "ok: an MCP client's bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: an MCP client's whole run leaves the user's keyboard, focus, tab, Today and Space as they were; its bridge gets in with its token only, on the user's own socket, gets a Space of its own and is refused the user's tab, is answered that a link to an app opens nothing, its tab staying on its page, and moves ten cases to Closed in tabs the user isn't looking at a step a turn, its calls on the ten answered at once ($cases), and its actions wait for their element and their page to settle ($settle), and the tabs its page opens are kept in its Space, behind. A tab's id from before a relaunch is refused as such. skip: reading a page in its Space. Browser wasn't the active app, so the page ignored the click."
+fi
+if [ -n "${keyboard_skip:-}" ]; then
+  echo "skip: the user's keyboard through the agent's run on Windows, which moved it to $keyboard_skip: the engine here is from before the core stopped showing the window for a tab an agent's page opens."
 fi
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."

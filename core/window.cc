@@ -805,6 +805,10 @@ void Window::AdjustNavigate(NavigateParams& params) {
                     params.disposition == WindowOpenDisposition::NEW_WINDOW ||
                     params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW)) {
     params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+    // Nor is its window shown, as Chrome shows one for a page's new tab
+    // (chrome::AddWebContents): on Windows, showing it again gave the window itself the user's
+    // keyboard.
+    params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
   }
   // ⌥⌘-click on a link opens it in a Little ilo window, as Arc's does in Little Arc (the owner's
