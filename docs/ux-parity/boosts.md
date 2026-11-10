@@ -10,4 +10,5 @@ Part of the [UX parity checklist](README.md), whose top says what the columns me
 | [ ] | Boosts: applying | 4 | CSS as the page loads and at once on each save, with no reload. Check on Linux `boosts` 42451371681 (X11) and 42451868002 (Wayland): `boosted.png`, `boost-card.png`, `zapped.png` | Flecha |
 | [ ] | Boosts: seeing and turning off | 4 | Site Controls' tile, switch row and "…" items; New, Edit and View Boosts in the command bar; Library › Boosts; all off in Settings, which takes every way in away; look: measure | Arc |
 | [ ] | Boosts: script changed outside the browser | 4 | stays off until the user turns it on again, with scripts | principle 3 |
+| [ ] | Boosts: View Boosts… in the Window menu | 4 | after View Media…, as Arc's; opens Library › Boosts and closes it from there; none in a private window or an agent's Space, nor with Settings' switch off | Arc |
 | [ ] | Boosts: no agent path | 4 | agents can't read, write or turn on a Boost; none in an agent's Space or a private window | decision 8 |

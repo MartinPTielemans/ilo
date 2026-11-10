@@ -218,6 +218,8 @@ impl Shell {
         if self.library.is_some() && self.section == super::library::Section::Boosts {
             self.list_boosts(cx);
         }
+        // Settings' switch takes Window › View Boosts… away, and gives it back.
+        self.update_menus(cx);
         cx.notify();
     }
 

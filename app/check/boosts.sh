@@ -78,6 +78,16 @@ send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
 
+# Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
+send menubar Window
+expect '^browser: menu bar Window: .*, View Media…, View Boosts…, ' \
+  "Window has no View Boosts… after View Media…"
+send menu 'View Boosts…'
+expect '^browser: command view-boosts via ui$' "Window › View Boosts… didn't run"
+expect '^browser: library section boosts$' "View Boosts… didn't open the Library on Boosts"
+send menu 'View Boosts…'
+expect '^browser: library hidden$' "View Boosts… didn't close the Library"
+
 # With its file gone, the page is its own again, as the core hears for a Boost turned off.
 rm -f "$file"
 expect "^browser: boost shown $host (0 bytes)\$" "the Boost's file going didn't take its CSS away"
@@ -86,5 +96,6 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
+  "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png"
