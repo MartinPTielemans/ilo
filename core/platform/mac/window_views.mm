@@ -186,6 +186,13 @@ constexpr base::TimeDelta kGoneAfter = base::Milliseconds(250);
           }
         }
         [holder.going removeAllObjects];
+        // check.sh's runs read this: what's left is the pages shown.
+        NSUInteger pages = 0;
+        for (NSView* subview in holder.subviews) {
+          pages += subview != holder.uiView && subview != holder.ring;
+        }
+        fprintf(stderr, "browser: switch's pages let go left the window, %lu views in it\n",
+                static_cast<unsigned long>(pages));
       }),
       kGoneAfter);
 }
@@ -749,6 +756,8 @@ void ShowPageIn(views::Widget*,
     return;
   }
   Unhide(page_view, /*hidden=*/false);
+  // A page a window let go a moment ago is still transparent there.
+  page_view.alphaValue = 1;
   RoundCorners(page_view, corner_radius, kAllCorners);
   if (page_view.superview != holder) {
     [holder addSubview:page_view];
