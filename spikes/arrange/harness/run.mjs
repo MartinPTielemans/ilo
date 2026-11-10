@@ -413,13 +413,13 @@ const TALL = `(() => { const D = globalThis.__ILO_ARRANGE__.describe, H = innerH
   return null; })()`;
 
 // Every element's inline style and box, in document order, with the scroll: what a preview taken
-// away must leave as it found.
+// away must leave as it found. An element with no box reads as at 0, 0, not at the scroll.
 const SNAP = `(() => { const els = [...document.querySelectorAll('body *')].slice(0, 6000);
   const q = (n) => Math.round(n * 2) / 2;
   return { sx: scrollX, sy: scrollY, sh: document.documentElement.scrollHeight, sw: document.documentElement.scrollWidth,
-    els: els.map((e) => { const r = e.getBoundingClientRect();
+    els: els.map((e) => { const boxed = e.getClientRects().length > 0, r = e.getBoundingClientRect();
       return [e.localName + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\\s+/)[0] : ''),
-        e.getAttribute('style') || '', e.hasAttribute('popover') ? 1 : 0, q(r.left), q(r.top + scrollY), q(r.width), q(r.height)]; }) }; })()`;
+        e.getAttribute('style') || '', e.hasAttribute('popover') ? 1 : 0, boxed ? q(r.left) : 0, boxed ? q(r.top + scrollY) : 0, q(r.width), q(r.height)]; }) }; })()`;
 
 function snapDiff(a, b, churn) {
   const d = { scroll: [b.sx - a.sx, b.sy - a.sy], size: [b.sw - a.sw, b.sh - a.sh], count: b.els.length - a.els.length, style: 0, geometry: 0, samples: [] };

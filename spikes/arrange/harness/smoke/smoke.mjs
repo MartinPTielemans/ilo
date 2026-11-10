@@ -187,6 +187,27 @@ for (const kind of ['settle', 'trade']) {
     }
   }
 }
+// A preview that takes an element above the view out of the flow: the browser keeps the view
+// still by scrolling, and taking the preview away must scroll back by the same, or what the user
+// was looking at jumps by the element's height.
+{
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('settle')] });
+  await page.evaluate((t) => { const b = document.createElement('div'); b.id = 'above'; b.textContent = 'Above';
+    const st = document.createElement('style'); st.textContent = '#above { height: 300px; background: #eee; } main { padding-bottom: 2000px; }'; document.head.append(st);
+    document.body.insertBefore(b, document.querySelector('main')); }, null);
+  await page.waitForTimeout(100);
+  await page.evaluate((t) => { const el = document.querySelector(t.path); scrollTo(0, el.getBoundingClientRect().top + scrollY - 300); }, rec.picks.settle.target);
+  await page.waitForTimeout(100);
+  const before = await page.evaluate(() => scrollY);
+  const r = await page.evaluate((t) => globalThis.__ILO_ARRANGE__.preview({ id: 'above', kind: 'settle', target: { path: '#above' }, ref: t, where: 'after' }), rec.picks.settle.target);
+  await page.waitForTimeout(100);
+  const during = await page.evaluate(() => scrollY);
+  await page.evaluate(() => globalThis.__ILO_ARRANGE__.unpreview('above'));
+  await page.waitForTimeout(100);
+  const after = await page.evaluate(() => scrollY);
+  check(r.applied && after === before && !errors.length, `a preview from above the view, put back: scroll ${before} → ${during} → ${after}`);
+  await ctx.close();
+}
 await browser.close();
 server.close();
 console.log(failed ? `${failed} failed` : 'all ok');
