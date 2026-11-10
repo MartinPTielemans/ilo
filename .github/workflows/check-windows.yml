@@ -52,11 +52,12 @@ jobs:
         run: .github/scripts/main-check.sh seen
 
   # Whether an engine fits, alone, so that a commit none fits shows its check as skipped, not as
-  # passed with nothing run.
+  # passed with nothing run. On Linux, so the answer costs no Windows runner (#2199): fetch.sh
+  # picks its engine by uname, which answers here as Git Bash on Windows does.
   engine:
     needs: gate
     if: needs.gate.outputs.check == 'true'
-    runs-on: windows-2022
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -70,8 +71,12 @@ jobs:
           fetch-depth: 0
       - id: engine
         run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\ncase "$1" in -s) echo MINGW64_NT-10.0-20348 ;; *) echo "MINGW64_NT-10.0-20348 x86_64" ;; esac\n' \
+            >"$RUNNER_TEMP/bin/uname"
+          chmod +x "$RUNNER_TEMP/bin/uname"
           status=0
-          ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
+          PATH=$RUNNER_TEMP/bin:$PATH ../engine/fetch.sh > /dev/null 2> "$RUNNER_TEMP/fetch.log" || status=$?
           cat "$RUNNER_TEMP/fetch.log" >&2
           case $status in
           0) echo "found=true" >> "$GITHUB_OUTPUT" ;;
@@ -377,9 +382,16 @@ jobs:
                 # A run that ends without a FAIL line, such as one whose tool is missing, mustn't
                 # end the loop: the step's shell is bash -eo pipefail.
                 said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7-) || said=$(tail -1 "$out/$run.log")
-                result="failed ($status): $(echo "$said" | tr '|' '/')"
-                failed=1
-                echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                said=$(echo "$said" | tr '|' '/')
+                result="failed ($status): $said"
+                # A quarantined failure shows, but doesn't fail the check (#2197).
+                if issue=$(sh check/quarantine.sh match windows "$run" "" "$said"); then
+                  result="quarantined, $issue: $result"
+                  echo "::warning::The $run run failed, quarantined under $issue. Its log: $run.log in the artifact."
+                else
+                  failed=1
+                  echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                fi
               fi
               ;;
             *)
@@ -388,6 +400,7 @@ jobs:
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          { echo; sh check/quarantine.sh list windows; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
       # Windows' own Microsoft sign-in, which Chromium logs on or off as it starts (#1345). The core
@@ -457,9 +470,12 @@ jobs:
       checks: read
       issues: write
     steps:
+      # With app/check, whose quarantine keeps a quarantined run's issue open.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.engine.result == 'failure' && 'failure' || needs.check.result }}

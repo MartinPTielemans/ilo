@@ -77,6 +77,25 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
+# A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the +'s menu
+# after New Note; each opens the card.
+post rightclick $(row 0)
+expect "^browser: menu shown .*, $(cased 'Mute (disabled), Edit Boost…, Add Split View'), " \
+  "the tab's menu didn't offer Edit Boost… after Mute"
+expect '^browser: menu drawn ' "the tab's menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-tab-menu.png" || fail "no window to capture"
+send choose "$(cased 'Edit Boost…')"
+expect "^browser: boost card $tab opened\$" "the tab menu's Edit Boost… opened no card"
+send layout
+height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
+  sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
+post click 204 $((height - 25))
+plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
+expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
+expect '^browser: menu drawn ' "the +'s menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
+send choose "$(cased 'Edit Boost…')"
+expect "^browser: boost card $tab opened\$" "the +'s Edit Boost… opened no card"
 
 # Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
 send menubar Window
@@ -96,6 +115,8 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
+  "the tab's menu and the +'s offered Edit Boost…, which opened the card;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png"
+  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png"

@@ -5,8 +5,11 @@
 # the run gives the time from Return in the command bar to the page's load, the requests it made,
 # and those blocked or answered with a stand-in, with their hosts, which DevTools records (check/
 # cdp.py), as it sees what an extension's webRequest blocks where the net log doesn't. It
-# captures the window 8 s after the load, to show the ads that got through. Off the Mac it gives the
-# most memory the browser's process took, where the native engine runs, and uBlock Origin's. With
+# captures the window 8 s after the load, to show the ads that got through. After the last, it gives
+# the memory of every process of the browser's (check/usage.py), and off the Mac the most the
+# browser's process took, where the native engine runs, and uBlock Origin's. Where engine is off,
+# as adblock-cost's second pass is, Settings' Block ads and trackers is turned off before the
+# first site, and the probe waits for the ad script to load rather than be blocked. With
 # ADBLOCK_PARITY_BASELINE naming the sites.tsv an earlier run left, it fails where this run is worse:
 #   - a site that loaded there and doesn't here;
 #   - a host blocked on a site there that this run let through on that site.
@@ -29,10 +32,10 @@ function loaded() {
 <script src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js" onload="loaded()"
   onerror="document.title = &quot;ad script blocked&quot;"></script>' > "$out/site/parity.html"
 dir="$out/adblock-parity"
-[ "$engine" = ublock ] || dir="$out/adblock-$engine"
+log="$out/adblock-parity.log"
+[ "$engine" = ublock ] || dir="$out/adblock-$engine" log="$out/adblock-$engine.log"
 rm -rf "$dir"
 mkdir -p "$dir/profile"
-log="$out/adblock-parity.log"
 cdp_log="$dir/cdp.log"
 requests="$dir/requests.jsonl"
 starts="$dir/starts.txt"
@@ -40,8 +43,10 @@ step=0
 ms() { perl -MTime::HiRes=time -e 'printf "%d\n", time * 1000'; }
 scratch=$(mktemp -d)
 engine_switch=
-[ "$engine" = ublock ] || engine_switch=--ad-block-engine=$engine
-start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html $engine_switch
+case $engine in ublock | off) ;; *) engine_switch=--ad-block-engine=$engine ;; esac
+# A site's ask to show notifications or the like would hold the keyboard from the next ⌘L, so
+# Chrome answers each with no; without uBlock Origin's lists, sites' scripts ask (nypost.com).
+start_with_cdp "${site}parity.html" "$PWD/$dir/profile" /parity.html --deny-permission-prompts $engine_switch
 await_load
 tab=$(today | cut -d' ' -f1)
 await "^browser: title $tab ad script " || fail "the probe didn't say whether the ad script loaded"
@@ -52,10 +57,25 @@ if [ "$active" != 1 ]; then
   echo "skip: adblock-parity. Browser wasn't the active app, so the page didn't get its keys."
   exit 0
 fi
+if [ "$engine" = off ]; then
+  # Off everywhere, as Settings' Privacy switch turns it off, and the probe's ad script loads.
+  send menu Settings…
+  expect '^browser: settings shown ' "Settings… didn't show Settings"
+  send clickkey $(drawn "toolbar Privacy")
+  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+  settings_drew Privacy
+  send clickkey $(drawn "switch ad blocking")
+  expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+  send click $page_point
+  send key r cmd
+  expect "^browser: title $tab ad script loaded\$" "turned off in Settings, the probe's ad script didn't load"
+fi
 # A new profile's lists block once they're compiled, so the probe reloads until they do, for up to
 # 120 s, as adblock-live's does.
 since=$(date +%s)
-while ! grep -q "^browser: title $tab ad script blocked" "$log"; do
+while [ "$engine" != off ] && ! grep -q "^browser: title $tab ad script blocked" "$log"; do
   [ $(($(date +%s) - since)) -lt 120 ] || fail "the lists didn't block Google's ad script within 120 s"
   send key r cmd
   expect "^browser: title $tab ad script " "the probe didn't report after ⌘R"
@@ -94,11 +114,14 @@ while read -r url <&4; do
     sleep 0.1
   done
   echo "$started $url $loaded" >> "$starts"
-  # Ads load after the page does, from its scripts.
+  # Ads load after the page does, from its scripts. adblock-cost, whose two passes have to fit a
+  # run's 20 minutes on Windows' Check, needs no pictures, so it waits only after the last site.
+  [ -n "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] && continue
   sleep 8
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
 # The most memory a process took, in MB.
 peak() {
@@ -109,9 +132,12 @@ peak() {
     awk '/^VmHWM:/ { print int($2 / 1024) }' "/proc/$1/status"
   fi
 }
-memory=
+python3 -I check/usage.py snap "$procs" "$dir/memory.json" kinds || fail "the browser's memory didn't read"
+summed=$(python3 -I check/usage.py memory "$dir/memory.json")
+memory=". Its processes held ${summed% *} MiB, ${summed#* } processes ($(python3 -I check/usage.py kinds "$dir/memory.json"))"
+echo "${summed% *}" > "$dir/memory.txt"
 if ! [ "$(uname)" = Darwin ]; then
-  memory=". The browser's process held at most $(peak "$pid") MB"
+  memory="$memory; the browser's process at most $(peak "$pid") MB"
   ublock=$(pgrep -f "$procs.*--extension-process" | head -1)
   [ -z "$ublock" ] || memory="$memory, uBlock Origin's at most $(peak "$ublock") MB"
 fi
@@ -192,4 +218,6 @@ PY
 echo "$run: $(cat "$result")$memory. Per site: $dir/sites.tsv"
 # uBlock Origin's, for adblock-native's to compare with in a check of its own.
 [ "$engine" != ublock ] || cp "$dir/sites.tsv" build/adblock-parity-sites.tsv
-echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }with the window captured 8 s after each site loaded in $dir"
+captured="with the window captured 8 s after each site loaded in $dir"
+[ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || captured="its sites in $dir"
+echo "ok: $run, ${ADBLOCK_PARITY_BASELINE:+no worse than $ADBLOCK_PARITY_BASELINE, }$captured"
