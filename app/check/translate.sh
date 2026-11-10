@@ -148,7 +148,7 @@ send dismiss
 exec 3>&-
 quit
 
-apple="hosted Macs before macOS 26, and Linux and Windows, have no Apple Translation"
+apple="no Apple Translation before macOS 26, or off the Mac"
 macos=0
 [ "$(uname)" != Darwin ] || macos=$(sw_vers -productVersion | cut -d. -f1)
 if [ "$macos" -ge 26 ]; then
@@ -180,14 +180,17 @@ if [ "$macos" -ge 26 ]; then
   quit
   case "$answer:$title" in
   missing:*)
-    apple="this Mac has no Spanish to English model. Add Spanish (and English) in System Settings ›"
-    apple="$apple General › Language & Region › Translation Languages…, then run translate again"
-    echo "skip: translate's Apple Translation step: $apple"
+    echo "skip: translate's Apple Translation step: this Mac has no Spanish to English model. Add" \
+      "Spanish (and English) in System Settings › General › Language & Region › Translation" \
+      "Languages…, then run translate again"
     ;;
   translated:"Hola mundo" | translated:"[en]"*)
     fail "Apple's Translation answered translated, and the page's title stayed \"$title\""
     ;;
-  translated:*) apple="Apple's Translation made \"Hola mundo\" \"$title\" ($out/translate-apple.png)" ;;
+  translated:*)
+    # A line of its own, short, so a log that keeps a line's start shows it.
+    echo "ok: Apple's Translation made \"Hola mundo\" \"$title\" ($out/translate-apple.png)"
+    ;;
   *) fail "Apple's Translation answered $answer for Spanish to English" ;;
   esac
 else
@@ -198,6 +201,6 @@ echo "ok: a page declaring Spanish got the URL field's mark, whose press opened 
   "an editable region; Use Original put the page's own back. The page's menu had Translate to" \
   "English after Cast…, then Use Original, each doing so. The card's Always Translate Spanish" \
   "translated the page and the reloaded page as it came, until Settings › Features' Remove took" \
-  "Spanish off. A page in Dutch, which the user reads, offered none. Apple's Translation: $apple." \
+  "Spanish off. A page in Dutch, which the user reads, offered none." \
   "Windows: $out/translate-offer.png, $out/translated.png, $out/translate-menu.png," \
   "$out/translate-always.png, $out/translate-settings.png"
