@@ -7,7 +7,7 @@ name: Sparkle Mac update proof
 
 on:
   push:
-    branches: ['test/sparkle-mac-0116-*', 'test/sparkle-mac-0117-*', 'test/sparkle-mac-0118-*', 'test/sparkle-mac-0119-*', 'test/sparkle-mac-01110-*', 'test/sparkle-mac-01111-*', 'test/sparkle-mac-01112-*']
+    branches: ['test/sparkle-mac-0116-*', 'test/sparkle-mac-0117-*', 'test/sparkle-mac-0118-*', 'test/sparkle-mac-0119-*', 'test/sparkle-mac-01110-*', 'test/sparkle-mac-01111-*', 'test/sparkle-mac-01112-*', 'test/sparkle-mac-01113-*']
 
 permissions:
   contents: read
