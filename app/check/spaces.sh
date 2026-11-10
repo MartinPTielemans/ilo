@@ -284,14 +284,15 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # But for the frames its hover card's picture draws. The tabs a switch hides are pictured once the
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
-# preview. How long that takes is the machine's: 607 ms once on a slow runner (#2239). So no time
-# is judged here, only order. Each frame the hidden page runs is in the log, and it has a reason
-# only once the app has asked for the tab's picture ("tab <a> picturing"). It keeps that reason
-# past the copy's answer until the page has been quiet for a whole tick of its 1 s timer, as the
-# copy's last frames reach the log after it. A frame with no picture asked for fails, and so does a
-# page that never goes quiet. The page counts afresh at each "hidden". The hidden stretch starts at whichever comes first, the core showing
-# another tab or the page's "hidden", which can reach the log after the picture (#1678), so a
-# picture between the two counts and one from before them doesn't.
+# preview. How long that takes is the machine's: 2 s once on a slow runner (#2239). So no time is
+# judged here, only order. Each frame the hidden page runs is in the log, and it has a reason only
+# once the app has asked for the tab's picture ("tab <a> picturing"). It keeps that reason past the
+# picture's answer ("tab <a> pictured"), which may come with no copy, until the page has been quiet
+# for a whole tick of its 1 s timer, as the copy's last frames can reach the log after it. A frame
+# with no picture asked for fails, and so does a page that never goes quiet. The page counts afresh
+# at each "hidden". The hidden stretch starts at whichever comes first, the core showing another
+# tab or the page's "hidden", which can reach the log after the picture (#1678), so a picture
+# between the two counts and one from before them doesn't.
 hidden_state() {
   awk -v a="$a" '
     function start() { asked = drawing = 0; why = ""; counts() }
@@ -301,7 +302,7 @@ hidden_state() {
     $0 == "browser: title " a " hidden" { if (shown) { shown = 0; start() } else counts() }
     index($0, "browser: title " a " visible ") == 1 { visible = 1; asked = 0 }
     index($0, "browser: tab " a " picturing ") == 1 { asked = drawing = 1; tick_frames = -1 }
-    /^browser: handover picture copied / && index($0, "(tab " a ")") { drawing = 0; tick_frames = -1 }
+    index($0, "browser: tab " a " pictured ") == 1 { drawing = 0; tick_frames = -1 }
     index($0, "browser: title " a " hidden f") == 1 {
       split(substr($0, length("browser: title " a " hidden f") + 1), n, " t")
       if (n[1] > frames && !asked && why == "")
@@ -329,7 +330,7 @@ hidden_quiet() {
     kill -0 "$pid" 2>/dev/null || gone
     sleep 0.1
   done
-  fail "$1: it didn't go quiet in 30 s, $state"
+  fail "$1: it didn't go quiet, $state"
 }
 # Once it shows: nothing ran between its going quiet and its showing.
 ran_hidden() {
