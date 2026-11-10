@@ -96,8 +96,16 @@ sign_in() {
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool or sway, as Settings' window is titled by its tab; the Mac's
 # AppKit gives it. On Windows and under Wayland the device's Settings takes the keyboard from
-# another copy's window, as a click on it would (#2114).
+# another copy's window, as a click on it would (#2114). On the Mac, with other copies running, the
+# device's copy is made the active app, and Settings… brings its Settings, GPUI's window, in front
+# of its browser window.
 settings_keyboard() {
+  if [ "$(uname)" = Darwin ]; then
+    [ -n "${others:-}" ] || return 0
+    take_activation
+    case $done in *" key GPUIWindow,"*) ;; *) send menu Settings… ;; esac
+    return 0
+  fi
   if windows; then
     python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
       fail "Settings couldn't have the keyboard again"
