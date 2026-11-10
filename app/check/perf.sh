@@ -234,7 +234,10 @@ perf_trace_config "$perf_dir/trace-ilo.config" 245 "$PWD/$perf_dir/trace-ilo.jso
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
-LP_NUM_THREADS=1 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+# #2138, not for merge: the browser process's heap, sampled about every 8 KiB with native stacks
+# and thread names, in the detailed dumps, to name the owner of Linux's 32 and 36 KiB blocks.
+BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
+  --memlog=browser --memlog-sampling-rate=8192 --memlog-stack-mode=native-with-thread-names \
   --trace-config-file="$(app_path "$PWD/$perf_dir/trace-ilo.config")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
