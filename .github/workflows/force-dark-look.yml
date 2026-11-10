@@ -11,7 +11,7 @@ permissions:
 jobs:
   look:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Capture
         run: |
@@ -42,16 +42,27 @@ jobs:
             for variant in "${variants[@]}"; do
               vname=${variant%%|*} flags=${variant#*|}
               profile=$(mktemp -d)
+              # The mock keychain keeps Chrome from waiting on the login keychain, and the
+              # watchdog gives up on a page that never settles rather than the whole run.
               # shellcheck disable=SC2086
               "$chrome" --headless=new --user-data-dir="$profile" --no-first-run \
-                --window-size=1280,900 --hide-scrollbars --virtual-time-budget=10000 \
+                --use-mock-keychain --password-store=basic --timeout=15000 \
+                --window-size=1280,900 --hide-scrollbars \
                 $flags --screenshot="$PWD/out/$name-$vname.png" "$url" \
-                > "out/$name-$vname.log" 2>&1 || echo "$name $vname failed"
+                > "out/$name-$vname.log" 2>&1 &
+              pid=$!
+              for _ in $(seq 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+              if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid"; pkill -9 -f "user-data-dir=$profile" || true
+                echo "$name $vname timed out"
+              fi
+              wait "$pid" || echo "$name $vname failed"
               rm -rf "$profile"
             done
           done
           ls -la out
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: force-dark-look
           path: out/
