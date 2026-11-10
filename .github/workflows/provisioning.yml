@@ -1,0 +1,185 @@
+# Temporary, for #2354, never for main: the Developer ID provisioning profile for app.ilo.browser,
+# made with the release's App Store Connect API key. It finds the bundle id (registering it for
+# macOS if it's missing), the Developer ID Application certificate in MAC_CERTIFICATE_P12, and a
+# MAC_APP_DIRECT profile for the two, which it reuses when one is active and makes otherwise. It
+# prints what the profile carries and uploads it: the profile ships inside every release, so it
+# isn't a secret. The key and the token made from it never leave the step's environment.
+name: Provisioning
+
+on:
+  push:
+    branches: ['check/provisioning-*']
+    paths: [.github/workflows/provisioning.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provisioning-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      BUNDLE_ID: app.ilo.browser
+      TEAM_ID: 938WK3V9K9
+      PROFILE_NAME: ilo Developer ID
+    steps:
+      # The certificate's serial, to pick the API's certificate that is the one the release signs
+      # with. Only the public certificate leaves the keychain.
+      - name: Certificate
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          out=$RUNNER_TEMP/out
+          mkdir -p "$out"
+          sw_vers | tee "$out/macos.txt"
+          keychain=$RUNNER_TEMP/release.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf %s "$MAC_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERTIFICATE_PASSWORD" > /dev/null
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security find-certificate -a -c "Developer ID Application" -p "$keychain" > "$out/developer-id.pem"
+          security delete-keychain "$keychain"
+          openssl x509 -in "$out/developer-id.pem" -noout -subject -serial -enddate -fingerprint -sha1 | tee "$out/certificate.txt"
+          echo "SERIAL=$(openssl x509 -in "$out/developer-id.pem" -noout -serial | sed 's/^serial=//')" >> "$GITHUB_ENV"
+
+      - name: Profile
+        env:
+          MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          out=$RUNNER_TEMP/out
+          key=$RUNNER_TEMP/asc.p8
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf %s "$MAC_NOTARY_KEY" | base64 --decode > "$key")
+          ASC_KEY=$key OUT=$out python3 -I - <<'PY' 2>&1 | tee "$out/api.txt"
+          import base64, json, os, subprocess, sys, time, urllib.error, urllib.request
+
+          API = "https://api.appstoreconnect.apple.com"
+          bundle, team, name = os.environ["BUNDLE_ID"], os.environ["TEAM_ID"], os.environ["PROFILE_NAME"]
+          serial = os.environ["SERIAL"].lstrip("0").upper()
+
+          def b64(data):
+              return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+          # ES256 over the header and claims; openssl gives the signature as DER, JWS wants r || s.
+          def token():
+              now = int(time.time())
+              head = b64(json.dumps({"alg": "ES256", "kid": os.environ["MAC_NOTARY_KEY_ID"], "typ": "JWT"}).encode())
+              claims = b64(json.dumps({"iss": os.environ["MAC_NOTARY_ISSUER_ID"], "iat": now, "exp": now + 900,
+                                       "aud": "appstoreconnect-v1"}).encode())
+              signed = (head + "." + claims).encode()
+              der = subprocess.run(["openssl", "dgst", "-sha256", "-sign", os.environ["ASC_KEY"]],
+                                   input=signed, capture_output=True, check=True).stdout
+              i = 2 if der[1] < 0x80 else 3
+              parts = []
+              for _ in range(2):
+                  n = der[i + 1]
+                  parts.append(int.from_bytes(der[i + 2:i + 2 + n], "big").to_bytes(32, "big"))
+                  i += 2 + n
+              return head + "." + claims + "." + b64(b"".join(parts))
+
+          jwt = token()
+
+          def call(method, path, body=None):
+              request = urllib.request.Request(API + path, method=method,
+                                               data=None if body is None else json.dumps(body).encode())
+              request.add_header("Authorization", "Bearer " + jwt)
+              request.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      print(f"{method} {path.split('?')[0]} -> {response.status}")
+                      return json.load(response)
+              except urllib.error.HTTPError as e:
+                  print(f"{method} {path} -> HTTP {e.code}")
+                  print(e.read().decode(errors="replace"))
+                  print(f"STOPPED: Apple answered {e.code}")
+                  sys.exit(1)
+
+          ids = [b for b in call("GET", f"/v1/bundleIds?filter[identifier]={bundle}&limit=200")["data"]
+                 if b["attributes"]["identifier"] == bundle]
+          for b in ids:
+              print("bundle id:", b["id"], json.dumps(b["attributes"]))
+          if ids:
+              bundle_id = ids[0]["id"]
+          else:
+              made = call("POST", "/v1/bundleIds", {"data": {"type": "bundleIds", "attributes": {
+                  "identifier": bundle, "name": "ilo", "platform": "MAC_OS"}}})["data"]
+              bundle_id = made["id"]
+              print("REGISTERED the bundle id for macOS:", bundle_id, json.dumps(made["attributes"]))
+          capabilities = call("GET", f"/v1/bundleIds/{bundle_id}/bundleIdCapabilities")["data"]
+          print("its capabilities:", json.dumps([c["attributes"] for c in capabilities]))
+
+          certificate = None
+          for c in call("GET", "/v1/certificates?limit=200")["data"]:
+              a = c["attributes"]
+              if not a["certificateType"].startswith("DEVELOPER_ID_APPLICATION"):
+                  continue
+              same = a["serialNumber"].lstrip("0").upper() == serial
+              print("certificate:", c["id"], a["certificateType"], a["name"], a["serialNumber"],
+                    a["expirationDate"], "<- MAC_CERTIFICATE_P12's" if same else "")
+              if same:
+                  certificate = c
+          if certificate is None:
+              print("STOPPED: no Developer ID Application certificate in the API has MAC_CERTIFICATE_P12's serial", serial)
+              sys.exit(1)
+
+          profile = None
+          for p in call("GET", f"/v1/bundleIds/{bundle_id}/profiles?limit=200")["data"]:
+              a = p["attributes"]
+              certs = [c["id"] for c in call("GET", f"/v1/profiles/{p['id']}/certificates?limit=200")["data"]]
+              usable = (a["profileType"] == "MAC_APP_DIRECT" and a["profileState"] == "ACTIVE"
+                        and certificate["id"] in certs)
+              print("profile:", p["id"], a["name"], a["profileType"], a["profileState"], a["uuid"],
+                    "created", a.get("createdDate"), "expires", a["expirationDate"],
+                    "<- reused" if usable and profile is None else "")
+              if usable and profile is None:
+                  profile = p
+          if profile is None:
+              profile = call("POST", "/v1/profiles", {"data": {"type": "profiles",
+                  "attributes": {"name": name, "profileType": "MAC_APP_DIRECT"},
+                  "relationships": {
+                      "bundleId": {"data": {"type": "bundleIds", "id": bundle_id}},
+                      "certificates": {"data": [{"type": "certificates", "id": certificate["id"]}]}}}})["data"]
+              a = profile["attributes"]
+              print("MADE profile:", profile["id"], a["name"], a["profileType"], a["profileState"], a["uuid"],
+                    "expires", a["expirationDate"])
+          with open(os.path.join(os.environ["OUT"], "ilo.provisionprofile"), "wb") as f:
+              f.write(base64.b64decode(profile["attributes"]["profileContent"]))
+          PY
+          test "${PIPESTATUS[0]}" = 0
+
+      - name: What it carries
+        run: |
+          out=$RUNNER_TEMP/out
+          security cms -D -i "$out/ilo.provisionprofile" > "$out/profile.plist"
+          {
+            for key in Name UUID TeamIdentifier TeamName AppIDName Platform CreationDate ExpirationDate \
+              TimeToLive ProvisionsAllDevices; do
+              printf '%s: ' "$key"; plutil -extract "$key" json -o - "$out/profile.plist" 2> /dev/null || echo '(none)'; echo
+            done
+            echo "== Entitlements"
+            plutil -extract Entitlements xml1 -o - "$out/profile.plist" | plutil -p -
+            echo "== DeveloperCertificates, SHA-1"
+            i=0
+            while plutil -extract "DeveloperCertificates.$i" raw -o - "$out/profile.plist" > "$out/cert.b64" 2> /dev/null; do
+              base64 --decode -i "$out/cert.b64" | openssl x509 -inform der -noout -subject -fingerprint -sha1
+              i=$((i + 1))
+            done
+            rm -f "$out/cert.b64"
+            echo "== MAC_CERTIFICATE_P12's"
+            cat "$out/certificate.txt"
+          } | tee "$out/profile.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: provisioning
+          path: ${{ runner.temp }}/out
