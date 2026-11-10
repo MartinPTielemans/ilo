@@ -96,6 +96,8 @@ impl Host for Recorder {
             Run::RemoveLogin(login) => format!("remove login {} {}", login.site, login.username),
             Run::Passwords => "passwords".into(),
             Run::ExtensionItem(id, item) => format!("extension {id} {item:?}"),
+            Run::OpenInProfile(profile) => format!("open in profile {profile}"),
+            Run::NewSpaceInProfile(profile) => format!("new space in profile {profile}"),
         };
         self.push(format!("run {run} {tab}"));
     }
@@ -210,6 +212,8 @@ fn window() -> Size<Pixels> {
 struct Panel {
     cx: VisualTestContext,
     host: Rc<Recorder>,
+    /// The tab's profile and the others, which the shell gives the panel as it opens.
+    profiles: Option<Profiles>,
 }
 
 impl Panel {
@@ -228,13 +232,24 @@ impl Panel {
         window: Size<Pixels>,
         site: Site,
     ) -> Self {
+        Panel::profiled(host, cx, place, window, site, None)
+    }
+
+    fn profiled(
+        host: Recorder,
+        cx: &mut TestAppContext,
+        place: Place,
+        window: Size<Pixels>,
+        site: Site,
+        profiles: Option<Profiles>,
+    ) -> Self {
         let host = Rc::new(host);
         let panel = cx.update(|cx| open(host.clone(), cx));
         let panel = panel.expect("no window for the Site Controls");
         let cx = VisualTestContext::from_window(panel.into(), cx);
         // As tall as the host makes it for the tallest panel here, so every part takes a click.
         cx.simulate_resize(size(px(WIDTH), px(400.)));
-        let mut panel = Panel { cx, host };
+        let mut panel = Panel { cx, host, profiles };
         panel.show(place, window);
         assert_eq!(panel.calls(), [format!("read {TAB}")]);
         panel.changed(site);
@@ -243,9 +258,10 @@ impl Panel {
 
     /// What the button's press does.
     fn show(&mut self, place: Place, window: Size<Pixels>) {
+        let profiles = self.profiles.clone();
         self.cx
             .cx
-            .update(|cx| show(TAB, place, window, vec![extension()], cx));
+            .update(|cx| show(TAB, place, window, vec![extension()], profiles, cx));
         self.cx.run_until_parked();
     }
 
@@ -945,6 +961,111 @@ fn the_more_menu_runs_what_it_lists(cx: &mut TestAppContext) {
     panel.host.answer.set(None);
     panel.click(MORE);
     assert_eq!(panel.calls(), [menu]);
+}
+
+/// The tab's profile while the user has two or more, and the others: Work has a Space, Side
+/// none (#2339).
+fn profiles() -> Profiles {
+    Profiles {
+        name: "Personal".into(),
+        others: vec![(2, "Work".into(), true), (3, "Side".into(), false)],
+    }
+}
+
+/// The profile's chip, against "…": the middle of its last 32 pt, the chevron's end.
+const PROFILE: (f32, f32) = (170., 368.5);
+
+fn profiled(cx: &mut TestAppContext, site: Site) -> Panel {
+    let host = Recorder::default();
+    let mut panel = Panel::profiled(host, cx, under_button(), window(), site, Some(profiles()));
+    panel.calls();
+    panel
+}
+
+/// The chip's menu opens the page in another profile's Space, or New Space in a profile with
+/// none, and closes the panel as the shell does either.
+#[gpui::test]
+fn the_profile_chip_opens_the_page_in_another_profile(cx: &mut TestAppContext) {
+    let mut panel = profiled(cx, site());
+    panel.host.answer.set(Some(0));
+    panel.click(PROFILE);
+    let calls = panel.calls();
+    assert_eq!(calls[0], "menu Open in Work, New Space in Side…");
+    assert_eq!(
+        calls[1..],
+        [
+            "release",
+            "stop",
+            &format!("run open in profile 2 {TAB}"),
+            "hide"
+        ]
+    );
+    let mut panel = profiled(cx, site());
+    panel.host.answer.set(Some(1));
+    panel.click(PROFILE);
+    let calls = panel.calls();
+    assert_eq!(
+        calls[1..],
+        [
+            "release",
+            "stop",
+            &format!("run new space in profile 3 {TAB}"),
+            "hide"
+        ]
+    );
+}
+
+/// Beside the chip a secure page's lock is its glyph alone, its words in its tooltip; a page
+/// that isn't secure keeps its words, and the chip gives way to its glyph, naming the profile
+/// in its tooltip instead.
+#[gpui::test]
+fn beside_the_chip_the_lock_or_the_chip_is_a_glyph_alone(cx: &mut TestAppContext) {
+    let mut panel = profiled(cx, site());
+    panel.hover(LOCK);
+    assert!(panel.host.tips.take()[0].starts_with("Secure at "));
+    panel.hover(PROFILE);
+    let tips = panel.host.tips.take();
+    assert!(
+        !tips.iter().any(|tip| tip.starts_with("Personal")),
+        "{tips:?}"
+    );
+    let mut panel = profiled(
+        cx,
+        Site {
+            connection: Connection::NotSecure,
+            connection_summary: "Not secure".into(),
+            certificate: false,
+            ..site()
+        },
+    );
+    panel.hover(LOCK);
+    let tips = panel.host.tips.take();
+    assert!(
+        !tips.iter().any(|tip| tip.starts_with("Not secure")),
+        "{tips:?}"
+    );
+    panel.hover(PROFILE);
+    assert!(panel.host.tips.take()[0].starts_with("Personal at "));
+}
+
+/// The keyboard reaches the chip after the lock, before "…", and space opens its menu.
+#[gpui::test]
+fn the_keyboard_reaches_the_profile_chip_before_more(cx: &mut TestAppContext) {
+    let mut panel = profiled(cx, site());
+    panel.keys("shift-tab shift-tab");
+    panel.host.tips.take();
+    panel.keys("space");
+    assert_eq!(panel.calls()[0], "menu Open in Work, New Space in Side…");
+}
+
+/// With one profile, or in a window with a Space of its own, the shell gives none, and the
+/// footer is the lock and "…" as before.
+#[gpui::test]
+fn with_one_profile_there_is_no_chip(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(cx, site());
+    panel.calls();
+    panel.click(PROFILE);
+    assert_eq!(panel.calls(), Vec::<String>::new());
 }
 
 #[gpui::test]

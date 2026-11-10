@@ -1669,10 +1669,11 @@ impl Browser for Engine {
         place: site_controls::Place,
         window: gpui::Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         with_overlays(
-            move |cx| site_controls::show(tab, place, window, extensions, cx),
+            move |cx| site_controls::show(tab, place, window, extensions, profiles, cx),
             cx,
         );
     }

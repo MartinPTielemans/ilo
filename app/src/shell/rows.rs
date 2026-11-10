@@ -42,6 +42,7 @@ use crate::{
     space_icon::has_icon,
     tokens::shell::{
         DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, NAME_HIDDEN, NAME_HIDDEN_UNDER_FAVORITES,
+        SPACE_PROFILE_GAP,
     },
     tokens::text,
     tooltip::{Anchor, Tip},
@@ -1508,6 +1509,11 @@ impl Shell {
             .shown_space()
             .map(|space| space.name.clone())
             .unwrap_or_default();
+        // VoiceOver reads the profile as it's seen, after the name.
+        let label: SharedString = match self.name_row_profile(&name) {
+            Some(profile) => format!("{name}, {profile}").into(),
+            None => name.clone(),
+        };
         // A heading VoiceOver can jump to, whose menu is the Space's.
         let row = name_box(&self.palette, room, self.blank)
             .id("space-name")
@@ -1518,7 +1524,7 @@ impl Shell {
             .when(self.a11y, |row| {
                 row.role(Role::Heading)
                     .accessibility_id("space-name")
-                    .aria_label(name.clone())
+                    .aria_label(label)
                     .aria_level(2)
                     .pressed_by_mouse_down(false, true)
             })
@@ -1645,9 +1651,39 @@ impl Shell {
         // The name ends before the ••• while it shows, as a tab's title does before its ✕.
         .when(shown, |row| row.pr(px(end + SPACE_MORE + 4.)))
         .children(caret_in_slot)
-        .child(div().truncate().child(name))
+        .child(self.name_and_profile(name))
         .children(caret_after)
         .child(more)
+    }
+
+    /// The Space's name, then its profile's in grey while there's more than one profile (#2339),
+    /// which gives way first. None where the names are the same, or in a private window, whose
+    /// session shares none of the profile's logins or cookies.
+    fn name_and_profile(&self, name: SharedString) -> Div {
+        let profile = self.name_row_profile(&name);
+        // Shrink-wrapped, so the pinned rows' caret still follows the names.
+        div()
+            .flex()
+            .min_w_0()
+            .child(div().flex_shrink_0().max_w_full().truncate().child(name))
+            .children(profile.map(|profile| {
+                div()
+                    .ml(px(SPACE_PROFILE_GAP))
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(self.palette.text(SECONDARY))
+                    .child(profile)
+            }))
+    }
+
+    /// The profile's name the name row shows after the Space's `name`, if any.
+    fn name_row_profile(&self, name: &str) -> Option<SharedString> {
+        (self.shown_space())
+            .filter(|_| self.profiles.len() > 1 && !self.private)
+            .and_then(|space| self.profiles.iter().find(|(id, _)| *id == space.profile))
+            .map(|(_, profile)| profile.clone())
+            .filter(|profile| profile != name)
     }
 
     /// The Space's menu from its name row, which keeps the row lit while it's up.

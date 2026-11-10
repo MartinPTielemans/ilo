@@ -760,13 +760,15 @@ pub trait Browser {
     /// Opens the tab's find bar with the keyboard.
     fn find(&self, tab: u64, cx: &mut App);
     /// Opens the Site Controls for the site of the tab's page, or closes them if they show:
-    /// hanging from `place` in a window of `window`'s size, listing `extensions`.
+    /// hanging from `place` in a window of `window`'s size, listing `extensions`, with the tab's
+    /// profile and the others while there's more than one.
     fn site_controls(
         &self,
         tab: u64,
         place: crate::site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<crate::site_controls::Extension>,
+        profiles: Option<crate::site_controls::Profiles>,
         cx: &mut App,
     );
     /// The extensions the Site Controls list, if they show for the tab, as the core reported them.
