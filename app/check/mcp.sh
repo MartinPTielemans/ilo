@@ -41,7 +41,8 @@
 # Its picture of a page paints over each field whose contents its outline withholds: one filled by
 # the page's script, as the user's or a password manager's fill is, one it typed into that changed
 # since, a password field made a text field and a card's field, in another site's frame and half
-# out of view too, while its own unchanged typing and the page's own values show.
+# out of view too, while its own unchanged typing and the page's own values show. An extension's
+# own frames, over the page and in its flow, are painted over whole, as its outline leaves them out.
 # Through all it does before the user first looks at its card, the user's Space, tab and focused
 # field stay as the user left them, and the user's next keys go into that field (decision 8).
 
@@ -68,7 +69,8 @@ token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
 chmod 600 "$agents_file"
 # An extension of the check's own, whose content script puts a frame of its page in the frames
-# page, as a password manager puts its own in pages. The frame tells the page it's there.
+# page, as a password manager puts its own in pages. The frame tells the page it's there. In the
+# page with fields it puts two frames showing red text, one over the page and one in its flow.
 extension="$PWD/$out/frame-extension"
 mkdir -p "$extension"
 cat > "$extension/manifest.json" << 'EOF'
@@ -76,15 +78,32 @@ cat > "$extension/manifest.json" << 'EOF'
   "manifest_version": 3,
   "name": "Frame check",
   "version": "1",
-  "content_scripts": [{"matches": ["http://localhost/frames.html*"], "js": ["content.js"]}],
-  "web_accessible_resources": [{"resources": ["frame.html"], "matches": ["http://localhost/*"]}]
+  "content_scripts": [{"matches": ["http://localhost/frames.html*", "http://localhost/withheld.html*"],
+    "js": ["content.js"]}],
+  "web_accessible_resources": [{"resources": ["frame.html", "shown.html"],
+    "matches": ["http://localhost/*"]}]
 }
 EOF
-printf '%s' 'const frame = document.createElement("iframe");
-frame.src = chrome.runtime.getURL("frame.html");
-document.body.append(frame);' > "$extension/content.js"
+printf '%s' 'if (location.pathname == "/withheld.html") {
+  for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
+    const frame = document.createElement("iframe");
+    frame.src = chrome.runtime.getURL("shown.html");
+    frame.style = style + "; width: 25vw; height: 15vh; border: 0";
+    document.body.append(frame);
+  }
+} else {
+  const frame = document.createElement("iframe");
+  frame.src = chrome.runtime.getURL("frame.html");
+  document.body.append(frame);
+}' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
+printf '%s' '<!doctype html><meta charset=utf-8><style>
+body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; overflow: hidden }
+</style><p style="margin: 20vh 5vw">██████</p><script src=shown.js></script>' > "$extension/shown.html"
+printf '%s' 'requestAnimationFrame(() => requestAnimationFrame(() =>
+  parent.postMessage("extension painted", "*")));' > "$extension/shown.js"
 # On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
 # bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
 # python3-gi, the run says it skips them.
@@ -1045,7 +1064,9 @@ CARD
   # page's script, as the user's typing or a password manager's fill would be, one the agent typed
   # into that changed since, a password field the page made a text field and a card's field, in a
   # frame of another site and half out of view too. Each field's text is red blocks: a field shown
-  # has red in the picture, and one withheld has none.
+  # has red in the picture, and one withheld has none. The check's extension puts two frames of its
+  # own with red text in the page, one over it and one in its flow below the fields, which the
+  # outline leaves out, so the picture has no red there either.
   printf '%s' '<!doctype html><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 40%; height: 40%; margin: 0;
@@ -1076,15 +1097,17 @@ button { position: absolute; left: 70vw; top: 50vh }
 <iframe src=http://127.0.0.1:$port/withheld-inner.html></iframe>
 <button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
 <input aria-label=Below style='left: 2vw; top: 94vh'>
+<div style='height: 76vh'></div>
 <script src=painted.js></script>
 <script>
 const field = label => document.querySelector('[aria-label=\"' + label + '\"]');
 for (const label of ['Filled', 'Fixed', 'Below']) field(label).value = '██████';
 field('Shown password').type = 'text';
 let ready = 0;
-const shown = () => ++ready == 2 && (document.title = 'fields');
+const shown = () => ++ready == 4 && (document.title = 'fields');
 painted(shown);
-addEventListener('message', event => event.data == 'painted' && shown());
+addEventListener('message', event =>
+  (event.data == 'painted' || event.data == 'extension painted') && shown());
 </script>" > "$out/site/withheld.html"
   outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
   fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
@@ -1151,6 +1174,8 @@ PY
   see_field "Frame default" 6 44 28 54 shown
   see_field "Frame filled" 36 44 58 54 withheld
   see_field Below 3 95 21 99 withheld
+  see_field "Extension frame over the page" 41 77 64 90 withheld
+  see_field "Extension frame in the page" 3 77 26 90 withheld
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.

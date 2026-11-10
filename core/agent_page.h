@@ -18,17 +18,18 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "url/gurl.h"
-
-class SkBitmap;
 
 namespace content {
 class DevToolsAgentHost;
@@ -67,6 +68,16 @@ class AgentPage : public content::WebContentsObserver,
   // the page: the request of the action running, or of one that answered while the download was
   // about to start, which then never answers. Else 0.
   static uint64_t TakeJob(content::WebContents* contents);
+
+  // A picture of |contents|' page, or of its |area| in the view's coordinates, as an agent is shown
+  // it: what the outline withholds, the picture withholds. Each field whose contents an agent
+  // doesn't see (Withheld) and each frame whose fields can't be read, as an extension's own, is
+  // hatched over in its own background, with no label. |done| hears, posted, the picture or why
+  // there's none. A page no agent acts on lets DevTools go once it's pictured.
+  using Pictured = base::OnceCallback<void(base::expected<SkBitmap, std::string>)>;
+  static void Picture(content::WebContents& contents,
+                      std::optional<gfx::Rect> area,
+                      Pictured done);
 
  private:
   friend class content::WebContentsUserData<AgentPage>;
@@ -110,6 +121,9 @@ class AgentPage : public content::WebContentsObserver,
     Withholding();
     ~Withholding();
     std::vector<Frame> frames;
+    // The frames below those whose fields it reads that it can't read, by the slot of the frame
+    // they're in and their DevTools id.
+    std::vector<std::pair<int, std::string>> unread;
     std::vector<std::pair<int64_t, FieldFacts>> fields;
     Boxes boxes;
     base::OnceCallback<void(std::optional<Boxes>)> then;
@@ -178,19 +192,28 @@ class AgentPage : public content::WebContentsObserver,
   void Scrolled(bool down);
   void ScrollTo();
   void History(bool forward);
-  // The page's picture, with each field whose contents an agent doesn't see (Withheld) painted
-  // over, in every frame.
+  // The page's picture, as Picture gives it, for the job.
   void Screenshot();
-  // Copies the page's surface once the fields' boxes before it are read, if they could be, then
-  // paints over each field from its box before to its box after (Paint).
-  void Picture(uint64_t request, std::optional<Boxes> before);
-  void Paint(uint64_t request, Boxes before, SkBitmap bitmap, std::optional<Boxes> after);
-  // The boxes of the fields whose contents an agent doesn't see, by element, in the main frame's
-  // viewport's CSS pixels, or none if a frame's fields couldn't be read: each frame's filled
-  // fields (ReadFields), then each one's attributes and markup (NextField), and a withheld one's
-  // box (Withhold).
+  // Picture's, once DevTools is attached to each level of the page's frames (Attach), so none is
+  // hatched only for being heard of late: the page's surface, copied once the boxes before it are
+  // read, if they could be (Copy), then painted over from each box before to its box after (Paint).
+  void Draw(std::optional<gfx::Rect> area, Pictured done);
+  void Attach(size_t slot, base::OnceClosure then);
+  void Copy(std::optional<gfx::Rect> area, Pictured done, std::optional<Boxes> before);
+  void Paint(gfx::Rect source,
+             Pictured done,
+             Boxes before,
+             SkBitmap bitmap,
+             std::optional<Boxes> after);
+  // Lets DevTools go from a page no agent acts on, once nothing pictures it.
+  void Rest();
+  // The boxes withheld from a picture, by element, in the main frame's viewport's CSS pixels, or
+  // none if a frame's fields couldn't be read: each frame's filled fields (ReadFields), each frame
+  // whose fields can't be read (Cover), then each field's attributes and markup (NextField), and a
+  // withheld one's box (Withhold).
   void WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> then);
   void ReadFields(std::unique_ptr<Withholding> withholding, size_t next);
+  void Cover(std::unique_ptr<Withholding> withholding, size_t next);
   void NextField(std::unique_ptr<Withholding> withholding, size_t next);
   void Withhold(std::unique_ptr<Withholding> withholding,
                 size_t next,
@@ -198,6 +221,14 @@ class AgentPage : public content::WebContentsObserver,
   // Moves |box|, in the session at |slot|, into the main frame's viewport as Offset does, but cut
   // to each frame it's seen through, and scrolling nothing.
   void Lift(int slot, gfx::RectF box, Then then);
+  // Keeps |box|, in the session at |slot|, lifted, for |element|, then goes on to |next| with
+  // |go_on|. One with no box isn't drawn; one that can't be lifted leaves no picture.
+  void Keep(std::unique_ptr<Withholding> withholding,
+            int slot,
+            int64_t element,
+            std::optional<gfx::RectF> box,
+            void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
+            size_t next);
   // Keeps what the agent's typing or choosing left in |element|, from the tree read after it
   // settled, so a field shows it only while it still holds exactly that.
   void KeepTyped(const base::ListValue& nodes, int64_t element);
@@ -313,6 +344,10 @@ class AgentPage : public content::WebContentsObserver,
   std::unique_ptr<WheelWatch> wheel_;
   // Keeps the page drawing while it's hidden, for the agent's input and screenshots.
   base::ScopedClosureRunner drawing_;
+  // Whether an agent acts on the page, from its first action until its session ends, and how many
+  // pictures are under way, so a page only pictured lets DevTools go after.
+  bool acted_ = false;
+  int pictures_ = 0;
   // The app link the job running followed, and the app the system opens it in, once it's found.
   std::optional<GURL> app_link_;
   std::u16string app_name_;
