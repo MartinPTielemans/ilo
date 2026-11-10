@@ -139,6 +139,22 @@ jobs:
       # the real Keychain: asked for alone, the job builds that.
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh ${{ inputs.runs == 'keychain' && 'prod' || '' }}
+      # And it adds its copies to the cookie key's partition with KEYCHAIN_PASSWORD, the login
+      # keychain's password, which on the runner isn't known: the job, on a runner thrown away after,
+      # makes the login keychain anew with one it knows.
+      - if: ${{ steps.engine.outputs.found == 'true' && inputs.runs == 'keychain' }}
+        run: |
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          keychain="$HOME/Library/Keychains/login.keychain-db"
+          security delete-keychain "$keychain" || true
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security login-keychain -d user -s "$keychain"
+          echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
@@ -239,36 +255,6 @@ jobs:
           launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
 
-      # macOS asks whether the runner's agent, which it holds responsible for the app, may find devices
-      # on the local network the first time anything the job started reaches the default route's
-      # address, as webrtc's STUN server is. Its question, in UserNotificationCenter, took the app's
-      # activation mid-run, and the run's keys went nowhere: in webrtc, and in handback, which came
-      # later in the same job (#2205). Local Network can't be granted ahead like the others, and a check
-      # VM answered once, so the job asks it now, reaching that address, and answers Allow through
-      # System Events with the Accessibility granted above.
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: |
-          address=$(ipconfig getifaddr "$(route -n get default | awk '/interface:/ { print $2 }')")
-          python3 -c 'import socket, sys
-          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-          s.sendto(b"ilo", (sys.argv[1], 9))' "$address"
-          for _ in $(seq 150); do
-            asked=$(osascript -e 'tell application "System Events"
-              if not (exists process "UserNotificationCenter") then return ""
-              tell process "UserNotificationCenter"
-                if (count of windows) is 0 then return ""
-                set asked to (value of every static text of window 1) as text
-                click button "Allow" of window 1
-                return asked
-              end tell
-            end tell') || true
-            if [ -n "$asked" ]; then
-              echo "allowed: $asked"
-              exit 0
-            fi
-            sleep 0.2
-          done
-          echo "::warning::macOS asked nothing after a datagram to $address in 30 s: a run that reaches the local network may meet its question"
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         if: ${{ steps.engine.outputs.found == 'true' }}
@@ -288,6 +274,31 @@ jobs:
             echo "| Run | Result |"
             echo "|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
+          # macOS asks whether the runner's agent, which it holds responsible for the app, may find
+          # devices on the local network, in UserNotificationCenter, at some point after anything the
+          # job started reaches the default route's address, as webrtc's STUN server is. It took the
+          # app's activation mid-run and the run's keys went nowhere: in webrtc, and in handback,
+          # which came later in the same job (#2205). Local Network can't be granted ahead like the
+          # others, a check VM answered once, and reaching that address from the job didn't make it
+          # ask, so through every run the job answers that question alone with Allow, through
+          # System Events with the Accessibility granted above.
+          (
+            while :; do
+              asked=$(osascript -e 'tell application "System Events"
+                if not (exists process "UserNotificationCenter") then return ""
+                tell process "UserNotificationCenter"
+                  if (count of windows) is 0 then return ""
+                  set asked to (value of every static text of window 1) as text
+                  if asked does not contain "local network" then return ""
+                  click button "Allow" of window 1
+                  return asked
+                end tell
+              end tell' 2> /dev/null) || true
+              [ -z "$asked" ] || echo "$(date -u +%T) allowed: $asked" >> "$out/local-network.log"
+              sleep 0.5
+            done
+          ) &
+          answering=$!
           # GNU's timeout, which macOS doesn't have under that name, if the runner has it.
           limit=$(command -v timeout || command -v gtimeout || true)
           failed=0
@@ -314,6 +325,8 @@ jobs:
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          kill "$answering" || true
+          [ ! -s "$out/local-network.log" ] || cat "$out/local-network.log"
           exit "$failed"
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
