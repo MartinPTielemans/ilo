@@ -1,11 +1,14 @@
 #include "browser_core/platform/linux/wayland.h"
 
+#include <unistd.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
+#include <xdg-activation-v1-client-protocol.h>
 
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <string>
 
 #include "base/auto_reset.h"
 #include "base/containers/flat_map.h"
@@ -156,6 +159,34 @@ wl_compositor* Compositor(wl_display* display) {
   return compositor;
 }
 
+// The globals an activation token of the core's own needs, bound on its queue.
+struct ActivationGlobals {
+  wl_seat* seat = nullptr;
+  xdg_activation_v1* activation = nullptr;
+};
+
+// Where the compositor's keyboard focus is, as a keyboard of the core's own hears it as it's made:
+// on one of this client's surfaces, with a serial the compositor gave it.
+struct KeyboardFocus {
+  wl_surface* surface = nullptr;
+  uint32_t serial = 0;
+};
+
+const wl_keyboard_listener kFocusListener = {
+    .keymap = [](void*, wl_keyboard*, uint32_t, int32_t fd, uint32_t) { close(fd); },
+    .enter =
+        [](void* data, wl_keyboard*, uint32_t serial, wl_surface* surface, wl_array*) {
+          *static_cast<KeyboardFocus*>(data) = {surface, serial};
+        },
+    .leave =
+        [](void* data, wl_keyboard*, uint32_t, wl_surface*) {
+          *static_cast<KeyboardFocus*>(data) = {};
+        },
+    .key = [](void*, wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t) {},
+    .modifiers = [](void*, wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {},
+    .repeat_info = [](void*, wl_keyboard*, int32_t, int32_t) {},
+};
+
 }  // namespace
 
 bool OnWayland() {
@@ -195,6 +226,90 @@ void* WaylandSurfaceOf(views::Widget* widget, gfx::Size* size) {
   *size = ContentSizeOf(widget);
   return proxy->GetWlSurfaceForAcceleratedWidget(
       widget->GetNativeWindow()->GetHost()->GetAcceleratedWidget());
+}
+
+bool TakeKeyboardBack(views::Widget* widget) {
+  gfx::Size size;
+  auto* surface = static_cast<wl_surface*>(WaylandSurfaceOf(widget, &size));
+  if (!surface) {
+    return false;
+  }
+  wl_display* display = wl_proxy_get_display(reinterpret_cast<wl_proxy*>(surface));
+  // On a queue of the core's own, as Compositor's, so its round trips dispatch none of Chromium's
+  // events, which Chromium's watcher dispatches as the message loop goes round.
+  static const wl_registry_listener listener = {
+      .global =
+          [](void* data, wl_registry* registry, uint32_t name, const char* interface,
+             uint32_t version) {
+            auto* found = static_cast<ActivationGlobals*>(data);
+            if (!found->seat && std::strcmp(interface, wl_seat_interface.name) == 0) {
+              found->seat = static_cast<wl_seat*>(
+                  wl_registry_bind(registry, name, &wl_seat_interface,
+                                   std::min<uint32_t>(version, WL_SEAT_RELEASE_SINCE_VERSION)));
+            } else if (!found->activation &&
+                       std::strcmp(interface, xdg_activation_v1_interface.name) == 0) {
+              found->activation = static_cast<xdg_activation_v1*>(
+                  wl_registry_bind(registry, name, &xdg_activation_v1_interface, 1));
+            }
+          },
+      .global_remove = [](void*, wl_registry*, uint32_t) {},
+  };
+  static const xdg_activation_token_v1_listener token_listener = {
+      .done =
+          [](void* data, xdg_activation_token_v1*, const char* token) {
+            *static_cast<std::string*>(data) = token;
+          },
+  };
+  wl_event_queue* queue = wl_display_create_queue(display);
+  auto* wrapped = static_cast<wl_display*>(wl_proxy_create_wrapper(display));
+  wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wrapped), queue);
+  wl_registry* registry = wl_display_get_registry(wrapped);
+  wl_proxy_wrapper_destroy(wrapped);
+  ActivationGlobals globals;
+  wl_registry_add_listener(registry, &listener, &globals);
+  wl_display_roundtrip_queue(display, queue);
+  bool asked = false;
+  if (globals.seat && globals.activation) {
+    // A keyboard made while the compositor's focus is on this client's surface hears it enter
+    // there at once, with a serial of its own.
+    KeyboardFocus focus;
+    wl_keyboard* keyboard = wl_seat_get_keyboard(globals.seat);
+    wl_keyboard_add_listener(keyboard, &kFocusListener, &focus);
+    wl_display_roundtrip_queue(display, queue);
+    if (focus.surface) {
+      std::string token;
+      xdg_activation_token_v1* request = xdg_activation_v1_get_activation_token(globals.activation);
+      xdg_activation_token_v1_add_listener(request, &token_listener, &token);
+      xdg_activation_token_v1_set_serial(request, focus.serial, globals.seat);
+      xdg_activation_token_v1_set_surface(request, focus.surface);
+      xdg_activation_token_v1_commit(request);
+      wl_display_roundtrip_queue(display, queue);
+      xdg_activation_token_v1_destroy(request);
+      if (!token.empty()) {
+        xdg_activation_v1_activate(globals.activation, token.c_str(), surface);
+        asked = true;
+      }
+    }
+    if (wl_keyboard_get_version(keyboard) >= WL_KEYBOARD_RELEASE_SINCE_VERSION) {
+      wl_keyboard_release(keyboard);
+    } else {
+      wl_keyboard_destroy(keyboard);
+    }
+  }
+  if (globals.seat) {
+    if (wl_seat_get_version(globals.seat) >= WL_SEAT_RELEASE_SINCE_VERSION) {
+      wl_seat_release(globals.seat);
+    } else {
+      wl_seat_destroy(globals.seat);
+    }
+  }
+  if (globals.activation) {
+    xdg_activation_v1_destroy(globals.activation);
+  }
+  wl_registry_destroy(registry);
+  wl_display_flush(display);
+  wl_event_queue_destroy(queue);
+  return asked;
 }
 
 void SetInputRegionNow(views::Widget* widget, const std::vector<gfx::Rect>& region, float scale) {

@@ -960,6 +960,64 @@ mod tests {
         cx.run_until_parked();
     }
 
+    /// A shortcut the page handed back hides the row under the pointer until it moves (#2133).
+    /// With the sidebar hidden, its panel's window hears that move: ⌘S from the page, then ⌥, and
+    /// the pointer over a row in the panel shows that row's hover.
+    #[gpui::test]
+    fn a_move_in_the_revealed_panel_shows_its_row_after_a_page_key(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        let reveal = shell.clone();
+        let window = cx.update(|_, cx| {
+            let bounds = Bounds::new(point(px(0.), px(0.)), size(px(SIDEBAR_WIDTH), px(600.)));
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            };
+            cx.open_window(options, |_, cx| cx.new(|_| Reveal(reveal)))
+                .unwrap()
+        });
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![2, 3],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_selected(2, cx);
+            shell.run_for_page(super::super::Command::ToggleSidebar, cx);
+            shell.sidebar_motion = None;
+            shell.option_tapped(cx);
+            shell.reveal_motion = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            shell.read_with(cx, |shell, _| shell.revealed),
+            "⌥ left it in"
+        );
+        let mut panel = VisualTestContext::from_window(window.into(), cx.deref_mut());
+        // Down the panel until the pointer is on a tab's row.
+        let mut hovered = None;
+        for y in (0..600).step_by(8) {
+            panel.simulate_mouse_move(point(px(100.), px(y as f32)), None, Modifiers::none());
+            hovered = shell.read_with(&panel, |shell, _| shell.hovered);
+            if hovered.is_some() {
+                break;
+            }
+        }
+        assert!(hovered.is_some(), "no row in the panel heard the pointer");
+        assert!(
+            shell.read_with(&panel, |shell, _| shell.pointer_row() == hovered),
+            "the panel's row under the pointer drew no hover"
+        );
+    }
+
     /// The selected tab's row scrolled out past the list's bottom, and then its top, puts a sliver
     /// of its plate at that edge, and a click on it scrolls the list back to the row, which takes
     /// it away.

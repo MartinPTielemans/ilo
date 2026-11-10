@@ -122,6 +122,8 @@ pub trait Browser {
     /// Shows `tab`'s video live at `frame` in the window, with corners of `corner_radius`, for
     /// its media card, or stops showing it with none.
     fn show_video(&self, tab: u64, frame: Option<Bounds<Pixels>>, corner_radius: f32, cx: &mut App);
+    /// Sets `tab`'s volume, 0 to 1, which scales its page's media (bc_tab_set_volume).
+    fn set_volume(&self, tab: u64, volume: f32, cx: &mut App);
     /// Opens `tab`'s Cast dialog, which the core reports with `Shell::set_cast`.
     fn cast(&self, tab: u64, cx: &mut App);
     /// Closes the Cast dialog.
@@ -285,10 +287,17 @@ pub trait Browser {
     fn translation_target(&self) -> Option<SharedString> {
         None
     }
+    /// Whether the user reads `language`, a language alone such as "es": one the system prefers,
+    /// which no page is offered translation from.
+    fn reads_language(&self, _language: &str) -> bool {
+        false
+    }
     /// `language`'s name as the user reads it, such as "Spanish" for "es".
     fn language_name(&self, language: &str) -> SharedString {
         SharedString::from(language.to_owned())
     }
+    /// Keeps the languages always translated for the next launch (`AlwaysTranslated`).
+    fn keep_always_translated(&self, _languages: &[SharedString], _cx: &mut App) {}
     /// Translates `tab`'s page from `from` to `to` on the computer, its words never leaving it.
     /// Then Shell::set_translation. The user's alone: agents read pages in their own words.
     fn translate(&self, _tab: u64, _from: &str, _to: &str, _cx: &mut App) {}
@@ -383,6 +392,34 @@ pub trait Browser {
     }
     /// Keeps `text` as `profile`'s past tasks, as `agent_history` reads them.
     fn set_agent_history(&self, _profile: u64, _text: &str) {}
+    /// Reads `profile`'s Boosts (crate::boosts) from its folder and has the core show them, and
+    /// shows each change to the folder as it's saved. The app does this for every profile at
+    /// launch; here for the profile of a window that comes before it.
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        if let Some(folder) = self.profile_folder(profile) {
+            let changes = crate::boosts::with(|boosts| boosts.load(profile, folder));
+            self.show_boosts(changes, cx);
+        }
+    }
+    /// Has the core show each site's Boost CSS as it changed, in its profile's pages. The user's
+    /// alone: agents get no path to a Boost.
+    fn show_boosts(&self, _changes: Vec<crate::boosts::Change>, _cx: &mut App) {}
+    /// Turns Zap on or off on `tab`'s page: while it's on, a click there hides what's under it,
+    /// which comes back in `Shell::boost_zapped`. The user's alone.
+    fn zap(&self, _tab: u64, _on: bool, _cx: &mut App) {}
+    /// Opens the file at `path` in the user's text editor.
+    fn edit_file(&self, _path: &std::path::Path, _cx: &mut App) {}
+    /// Shows the file at `path` in the system's file manager.
+    fn show_file(&self, _path: &std::path::Path, _cx: &mut App) {}
+    /// The sites where the user answered agents for good under `key`, a past task's
+    /// (`agent_history::Past::answers`), each true for Always Allow and false for Never, as
+    /// Settings › Agents lists them.
+    fn agent_answers(&self, _key: &str, _cx: &App) -> Vec<(String, bool)> {
+        Vec::new()
+    }
+    /// Revoke on a past task's page: the answer for good under `key` on `site` goes, as Settings ›
+    /// Agents' Revoke has it go, with its entry in the activity log.
+    fn revoke_agent_answer(&self, _key: &str, _site: &str, _cx: &mut App) {}
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;
@@ -757,6 +794,21 @@ pub trait Browser {
         look: crate::menu::Look,
         cx: &mut App,
     );
+    /// Captures `tab`'s page, at `frame` in the window with corners of `radius`, in Portrait Mode
+    /// on `background` and copies it, and keeps `background` for the next launch.
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        cx: &mut App,
+    );
+    /// Whether Portrait Mode can put a page on the desktop's picture, which only the Mac's host
+    /// reads.
+    fn desktop_picture_offered(&self) -> bool {
+        false
+    }
     /// The window's menus' `look` changed: capture mode over `tab`, if it's on, takes it, as it
     /// took the look it started in from `capture`.
     fn capture_look(&self, _tab: u64, _look: crate::menu::Look, _cx: &mut App) {}
@@ -868,6 +920,11 @@ pub trait Browser {
         _cx: &mut App,
     ) {
     }
+    /// `at` in this window as a point on the screen, in tab_to_new_window's terms, if the window
+    /// has a place there, as a full-screen one hasn't.
+    fn screen_point(&self, _at: Point<f32>) -> Option<Point<f32>> {
+        None
+    }
     /// The browser window that shows `tab`'s page, else 0.
     fn tab_window(&self, _tab: u64) -> u64 {
         0
@@ -945,6 +1002,8 @@ pub struct Page {
     /// The page is playing sound, muted or not, or was in the last 2 s.
     pub audible: bool,
     pub muted: bool,
+    /// The tab's volume, which scales its page's media.
+    pub volume: Volume,
     /// The emoji the user gave the tab to show in place of its page's favicon, or empty.
     pub icon: SharedString,
     pub trouble: Trouble,
@@ -960,13 +1019,15 @@ pub struct Page {
     /// Another page shares a tab, and `share_instead` would have it share this one.
     pub share_instead: bool,
     /// The page has media the browser can play, pause and skip, as Chrome's media controls do:
-    /// whether it's playing, its title and artist, each empty without one, whether it has a next
-    /// track, whether it can float in Picture in Picture while nothing of the page floats or its card
-    /// shows its video, and whether it has a video its card can show, which a call hasn't.
+    /// whether it's playing, its title and artist, each empty without one, whether it has a
+    /// previous and a next track, whether it can float in Picture in Picture while nothing of the
+    /// page floats or its card shows its video, and whether it has a video its card can show,
+    /// which a call hasn't.
     pub media: bool,
     pub media_playing: bool,
     pub media_title: SharedString,
     pub media_artist: SharedString,
+    pub media_previous: bool,
     pub media_next: bool,
     pub media_picture_in_picture: bool,
     pub media_video: bool,
@@ -979,8 +1040,19 @@ pub struct Page {
 pub enum MediaAction {
     Play,
     Pause,
+    Previous,
     Next,
     PictureInPicture,
+}
+
+/// A tab's volume, from 0 to 1: whole until the user turns it down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume(pub f32);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Volume(1.)
+    }
 }
 
 /// What's wrong with a tab's page, as the core says (BC_PAGE_ in browser_core.h). Agents read the

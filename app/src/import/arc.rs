@@ -1,6 +1,7 @@
 //! Arc's sidebar, read from its `StorableSidebar.json`: the Spaces with their names, icons,
-//! themes and profiles, each Space's pinned tabs and folders, and each profile's favorites; and
-//! its Air Traffic Control rules, from `StorableLinkRouting.json` beside it.
+//! themes and profiles, each Space's pinned tabs and folders and its Today tabs, and each
+//! profile's favorites; and its Air Traffic Control rules, from `StorableLinkRouting.json` beside
+//! it.
 //!
 //! The file is Swift's Codable encoding, as the public readers of it describe it (radian,
 //! notarc): a dictionary is a flat array of key, value, key, value; an enum is an object with one
@@ -12,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use super::found::{Found, FromProfile, LinkRule, Node, SPLIT_TABS, Space, Split, Tab, opens_here};
+use super::found::{
+    Destination, Found, FromProfile, LinkRule, Node, SPLIT_TABS, Space, Split, Tab, opens_here,
+};
 use crate::link_rules::Condition;
 use crate::theme::{Appearance, MAX_COLORS, Place, Texture, Theme, place_of};
 
@@ -52,28 +55,31 @@ pub fn parse(json: &str, routing: Option<&str>) -> Result<Found, String> {
             Some((profile, tabs))
         })
         .collect();
+    let (link_rules, link_otherwise) = routing
+        .map(|routing| link_rules(routing, &ids))
+        .unwrap_or_default();
     Ok(Found {
         spaces,
         favorites,
-        link_rules: routing
-            .map(|routing| link_rules(routing, &ids))
-            .unwrap_or_default(),
+        link_rules,
+        link_otherwise,
         ..Found::default()
     })
 }
 
-/// The rules of Arc's routing file `json` that can be ours, in its order, each to the Space of
-/// `spaces`, Arc's Spaces' ids, it names. Ours match a link's URL alone and open it in a Space, so
-/// a rule that matches the app a link came from, or sends it to Little Arc or the Space in front,
-/// stays out, as does a file that can't be read.
+/// The rules of Arc's routing file `json` that can be ours, in its order, and where it opens
+/// everything else if not in Little Arc, each to the Space of `spaces`, Arc's Spaces' ids, it
+/// names, Little Arc or the Space in front. Ours match a link's URL alone, so a rule that matches
+/// the app a link came from stays out, as does one to a Space that's gone and a file that can't
+/// be read.
 ///
 /// A rule is `{"sourceComponents": [{"componentType": {"urlMatch": {"_0": {"contains": {}}, "_1":
-/// "text"}}}], "destination": {"space": {"_0": …}}}`, as the public readers of it describe it
-/// (vane, notarc), who read a Space's id either as `{"specific": {"_0": id}}` or as the key itself
-/// and "is equal to" as `isEqualTo` or `exact`, so either comes.
-fn link_rules(json: &str, spaces: &[&str]) -> Vec<LinkRule> {
+/// "text"}}}], "destination": …}`, and everything else's is the file's `defaultDestination`, as
+/// the public readers of it describe it (vane, notarc), who read "is equal to" as `isEqualTo` or
+/// `exact`, so either comes.
+fn link_rules(json: &str, spaces: &[&str]) -> (Vec<LinkRule>, Option<Destination>) {
     let Ok(root) = serde_json::from_str::<Value>(json) else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
     let rule = |rule: &Value| -> Option<LinkRule> {
         let [component] = rule.get("sourceComponents")?.as_array()?.as_slice() else {
@@ -85,21 +91,10 @@ fn link_rules(json: &str, spaces: &[&str]) -> Vec<LinkRule> {
             "isEqualTo" | "exact" => Condition::Is,
             _ => return None,
         };
-        let text = url.get("_1")?.as_str()?.trim();
-        let to = rule.pointer("/destination/space/_0")?;
-        let id = match only_key(to)? {
-            "specific" => {
-                let id = to.pointer("/specific/_0")?;
-                id.as_str().or_else(|| id.get("_0")?.as_str())?
-            }
-            key => key,
-        };
         Some(LinkRule {
             condition,
-            text: text.into(),
-            space: spaces
-                .iter()
-                .position(|each| !each.is_empty() && *each == id)?,
+            text: url.get("_1")?.as_str()?.trim().into(),
+            to: destination(rule.get("destination")?, spaces)?,
         })
     };
     let rules = root
@@ -107,10 +102,40 @@ fn link_rules(json: &str, spaces: &[&str]) -> Vec<LinkRule> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten();
-    rules
+    let rules = rules
         .filter_map(rule)
         .filter(|rule| !rule.text.is_empty())
-        .collect()
+        .collect();
+    let otherwise = root
+        .get("defaultDestination")
+        .and_then(|to| destination(to, spaces))
+        .filter(|to| *to != Destination::Little);
+    (rules, otherwise)
+}
+
+/// Where Arc's destination `to` opens a link: `{"littleArc": …}`, whose Space ours leaves to the
+/// window in front, or `{"space": {"_0": …}}`, the Space in front as `{"mostRecent": {}}` and one
+/// of `spaces` by its id, either as `{"specific": {"_0": id}}` or as the key itself.
+fn destination(to: &Value, spaces: &[&str]) -> Option<Destination> {
+    match only_key(to)? {
+        "littleArc" => Some(Destination::Little),
+        "space" => {
+            let space = to.pointer("/space/_0")?;
+            let id = match only_key(space)? {
+                "mostRecent" => return Some(Destination::Front),
+                "specific" => {
+                    let id = space.pointer("/specific/_0")?;
+                    id.as_str().or_else(|| id.get("_0")?.as_str())?
+                }
+                key => key,
+            };
+            let at = spaces
+                .iter()
+                .position(|each| !each.is_empty() && *each == id)?;
+            Some(Destination::Space(at))
+        }
+        _ => None,
+    }
 }
 
 /// The one key of an enum's object, as Swift encodes a case.
@@ -165,11 +190,13 @@ impl Reader<'_> {
             theme: info
                 .and_then(|info| info.get("windowTheme"))
                 .and_then(theme),
-            pinned: pinned_container(space)
+            pinned: container(space, "pinned")
                 .map(|id| self.nodes(id, &mut HashSet::new()))
                 .unwrap_or_default(),
-            // Today tabs stay in Arc.
-            today: Vec::new(),
+            // A split view among them comes as its tabs, as the import adds Today tabs one by one.
+            today: container(space, "unpinned")
+                .map(|id| self.tabs(id))
+                .unwrap_or_default(),
         }
     }
 
@@ -249,7 +276,8 @@ impl Reader<'_> {
             .collect()
     }
 
-    /// The tabs under `id`, folders and split views flattened, as favorites have no folders.
+    /// The tabs under `id`, folders and split views flattened, as favorites have no folders and
+    /// Today tabs come one by one.
     fn tabs(&self, id: &str) -> Vec<Tab> {
         fn flatten(nodes: Vec<Node>, tabs: &mut Vec<Tab>) {
             for node in nodes {
@@ -285,16 +313,16 @@ impl Reader<'_> {
     }
 }
 
-/// The id of the item holding the Space's pinned tabs: after "pinned" in `containerIDs`, else
-/// after the object keyed "pinned" in `newContainerIDs`.
-fn pinned_container(space: &Value) -> Option<&str> {
+/// The id of the item holding the Space's `kind` of tabs, "pinned" or "unpinned" (its Today
+/// tabs): after `kind` in `containerIDs`, else after the object keyed `kind` in `newContainerIDs`.
+fn container<'a>(space: &'a Value, kind: &str) -> Option<&'a str> {
     let after = |key: &str, is: &dyn Fn(&Value) -> bool| {
         let ids = space.get(key)?.as_array()?;
         let at = ids.iter().position(is)?;
         ids.get(at + 1)?.as_str()
     };
-    after("containerIDs", &|each| each.as_str() == Some("pinned"))
-        .or_else(|| after("newContainerIDs", &|each| each.get("pinned").is_some()))
+    after("containerIDs", &|each| each.as_str() == Some(kind))
+        .or_else(|| after("newContainerIDs", &|each| each.get(kind).is_some()))
 }
 
 /// An emoji as it is; one of Arc's icons as the glyph of ours that draws the same thing, else none.

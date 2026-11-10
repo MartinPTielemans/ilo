@@ -30,18 +30,16 @@ shows you the issue before posting it.
 ## Vouching
 
 [.github/VOUCHED.td](.github/VOUCHED.td) lists the people ilo trusts, using
-[vouch](https://github.com/mitchellh/vouch). On every PR, a check labels its author
+[vouch](https://github.com/mitchellh/vouch). On a fork's PR, a check labels its author
 `vouch:trusted` (in the list, or a collaborator with write access), `vouch:unvouched`, or
-`vouch:denounced`. A comment of `/recheck-vouch` on the PR labels it again.
+`vouch:denounced`; on any PR, a comment of `/recheck-vouch` does.
 
-The label is context for triage, not a gate: an unvouched author's PR is triaged like anyone's, and
-a vouched author's still goes through triage. A denounced author's PRs and issues are closed
-without review.
+The label is context for triage, not a gate: every PR is triaged alike. A denounced author's PRs
+and issues are closed without review.
 
-Maintainers vouch. Once you've shown care here, in issues or a PR that landed, a maintainer adds
-you to the list in a commit to `main`, which relabels every open PR. You can't vouch for yourself
-in your own PR. A maintainer denounces the same way, with a reason, for bad faith such as spam or
-repeated low-effort PRs.
+Maintainers vouch. Once you've shown care here, in issues or a PR that landed, a maintainer adds you
+to the list in a commit to `main`. You can't vouch for yourself in your own PR. A maintainer
+denounces the same way, with a reason, for bad faith such as spam or repeated low-effort PRs.
 
 ## Before you start
 
@@ -88,11 +86,12 @@ Triage checks that the problem is established, any approval it needs is present,
 problem, and the evidence is enough. Passing it isn't approval of correctness, security or a
 merge; review does that.
 
-New issues get `needs-triage`. An issue a maintainer labels `needs more info` closes after 7 days
-without a reply, so answer before then. PRs get a `size:` label from their changed lines, tests
-left out. A PR that makes [AGENTS.md](AGENTS.md) and the docs it links to larger fails the agent
-context check, unless a maintainer accepts the growth with the `agent-context-increase` label:
-every byte there is read by every agent on every task.
+New issues get `needs-triage`, which a maintainer replaces with one status, never two: `ready`,
+`needs-repro` (waiting on a Linux reproduction), `needs-decision` or `needs-mac-repro` (macOS-only,
+waiting on a Mac reproduction). An issue labeled `needs more info` closes after 7 days without a
+reply. A PR that makes [AGENTS.md](AGENTS.md) and the docs it links to larger fails the agent
+context check, unless a maintainer accepts the growth with the `agent-context-increase` label: every
+byte there is read by every agent on every task.
 
 CI runs only the jobs a change touches (`.github/scripts/ci-changes.cjs`), on GitHub's runners.
 
@@ -124,7 +123,7 @@ Don't bring in assets from Arc, Dia or any other browser: icons, fonts, sounds, 
 
 ## Performance
 
-Speed is the product. Changes on hot paths (tab switch, new tab, command bar, launch) must not regress the benchmarks in `docs/roadmap.md`. A PR that does needs a stated reason.
+Speed is the product. A change that regresses a hot path's benchmark in `docs/roadmap.md` needs a stated reason.
 
 ## Portability
 

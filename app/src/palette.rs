@@ -575,11 +575,16 @@ impl Palette {
         window.samples(self.shade, self.layer_alpha)
     }
 
-    /// The pickers' card as they draw it. Only the Mac's host blurs what's behind a picker;
-    /// elsewhere what's behind shows sharp through the card and reads as noise, so there the card
-    /// is opaque over the dark overlay.
+    /// The pickers' card as they draw it: translucent where the host blurs what's behind a
+    /// picker, the Mac's always and Linux's where its compositor can. Elsewhere what's behind
+    /// shows sharp through the card and reads as noise, so there the card is opaque over the dark
+    /// overlay.
     pub fn card_drawn(&self) -> Rgba {
-        if cfg!(target_os = "macos") {
+        #[cfg(target_os = "linux")]
+        let blurred = gpui_linux::overlays_blur();
+        #[cfg(not(target_os = "linux"))]
+        let blurred = cfg!(target_os = "macos");
+        if blurred {
             return self.card;
         }
         over(rgb(OVERLAY_DARK), self.card, self.card.a)

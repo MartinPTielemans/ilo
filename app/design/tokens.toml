@@ -31,6 +31,30 @@ glyph = 14.0
 # The menu keeps this far inside the page, where what's chosen reaches its edge (ours).
 margin = 8.0
 
+[capture.portrait]
+# Portrait Mode's picture (#673), ours, as Arc's sizes weren't recorded: the page at its window's
+# corners, this far inside the picture's edge, over a shadow this far down, this soft and this dark.
+margin = 56.0
+shadow-y = 12.0
+shadow-blur = 40.0
+shadow = 0.3
+# The card's backgrounds, in rows: each a swatch this big, ringed in the accent when it's chosen.
+swatch = 18.0
+swatch-gap = 6.0
+swatch-ring = 2.0
+
+[capture.markup]
+# Edit's marks on what's chosen (#673), ours, as Arc's markup wasn't recorded: a stroke this wide
+# with round ends, an arrow's head this long each side, and the colours offered, first chosen.
+width = 4.0
+head = 14.0
+colours = [0xff3b30, 0xff9500, 0xffcc00, 0x34c759, 0x0a84ff, 0x000000, 0xffffff]
+# Its bar under what's chosen, or over it where there's no room: buttons this big, this far apart,
+# its colours' dots this big, inside the menu's panel.
+gap = 4.0
+button = 28.0
+dot = 16.0
+
 [command-bar]
 # The panel's measures, in points, from Arc's capture (docs/ux-spec.md › Command bar).
 width = 765.0
@@ -845,9 +869,20 @@ on-detail = 0.77
 sidebar-width = 228.0
 # The card's inset from the window's top, right and bottom edges.
 card-inset = 10.0
-# The radius of the card's corners and the page's in it: Arc's, a circle of 12 pixels in its
-# window at 2×.
+# The radius of the card's corners and the page's in it where the window's own corner is square
+# (full screen, maximized, Windows 10, Linux): Arc's, a circle of 12 pixels in its window at 2×.
 card-radius = 6.0
+# The corner the OS gives a browser window, which the card's corners follow where it rounds them:
+# the card's radius is this less card-inset, never under 0, so the frame between them is as thick
+# round the curve as along the sides (outer = inner + inset, as #361 has the chrome's own). The
+# Mac's is macOS 26's continuous corner on a window with no toolbar, measured in window captures
+# on GitHub's macos-26 runner (16.75) and the owner's Mac (16); the core rounds the page on a
+# circle until it takes the window's curve. Windows 11's is 8 points across, unless the window is
+# maximized or full screen.
+# Linux's compositors don't tell a window how they round it, so it's taken as square.
+window-radius-mac = 16.0
+window-radius-windows = 8.0
+window-radius-linux = 0.0
 # Between the pages of a split view, as in Arc. The core's is the same.
 split-gap = 10.0
 # The glow outside a split view's focused page, in its ring's colour (Arc: ≈ 8 pt).
@@ -914,6 +949,12 @@ media-title = 12.0
 media-button = 24.0
 media-control = 28.0
 media-glyph = 14.0
+# Arc 1.171's Adjust Tab Volume opens a drawer that grows the card media-drawer, its bottom staying
+# put, with a slider. Ours: the drawer sits between the title row and the controls, so they stay
+# under the pointer; the slider's track and knob.
+media-drawer = 33.0
+media-slider-track = 4.0
+media-slider-knob = 12.0
 # Ours, as Arc's card has no picture (#2100): open, the newest card whose page has a video shows it
 # live over its title row, media-open-gap in from the card's edges, this wide for its height.
 media-video-aspect = 1.7777778
@@ -1756,10 +1797,12 @@ check-stroke = 2.25
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
 # rested on it `wait` (ours, as the sidebar's reveal waits), and a card put away folds and fades
-# over `fold` as the ones above close up (ours).
+# over `fold` as the ones above close up (ours). A card's volume drawer opens and closes over
+# `drawer` (ours: Arc's isn't timed).
 open = 0.2
 wait = 0.1
 fold = 0.2
+drawer = 0.2
 
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media

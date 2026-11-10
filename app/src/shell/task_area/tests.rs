@@ -505,6 +505,78 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
     );
 }
 
+/// ⌘↩ reaches the strip before the agent's page does, as ⌘. does, so a form in the page can't
+/// keep it as its own Send (#1080): Take Over while the agent drives, Hand Back once the user
+/// holds the page. Without an agent's page, and from the UI's keys, where the command bar's ⌘↩
+/// is its own, it's left alone.
+#[gpui::test]
+fn take_over_and_hand_back_come_before_the_agents_page(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let page_key = |cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.run_agent_page_key("cmd-enter", cx))
+    };
+    let status = |held: Vec<(u64, SharedString)>| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Typed · flights.example".into(),
+            held,
+        }]
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    host.take();
+    assert!(!shell.update(cx, |shell, cx| shell.run_agent_key("cmd-enter", cx)));
+    assert!(page_key(cx));
+    assert_eq!(host.take(), ["take over task-1 30", "focus page"]);
+
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(status(vec![(30, "".into())]), cx)
+    });
+    assert!(page_key(cx));
+    assert_eq!(host.take(), ["hand back 30", "focus ui"]);
+
+    shell.update(cx, |shell, cx| shell.set_agent_status(Vec::new(), cx));
+    host.take();
+    assert!(!page_key(cx), "⌘↩ was kept from a page no agent works in");
+    assert!(host.take().is_empty());
+}
+
+/// Under Wayland GPUI gets the key the page had too, after the app answered it, and Hand Back has
+/// given the UI the keyboard by then: that copy of ⌘↩ isn't the UI's Back to Pinned URL as well,
+/// which would leave the agent's Space. A later ⌘↩ in the UI is.
+#[cfg(target_os = "linux")]
+#[gpui::test]
+fn hand_back_from_the_page_is_one_press_in_the_ui_too(cx: &mut TestAppContext) {
+    cx.update(crate::shell::commands::bind_keys);
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: vec![(30, "".into())],
+            }],
+            cx,
+        )
+    });
+    host.take();
+    assert!(shell.update(cx, |shell, cx| shell.run_agent_page_key("cmd-enter", cx)));
+    assert_eq!(host.take(), ["hand back 30", "focus ui"]);
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("cmd-enter");
+    assert!(host.take().is_empty(), "the page's ⌘↩ ran in the UI too");
+    cx.simulate_keystrokes("cmd-enter");
+    assert!(!host.take().is_empty(), "a ⌘↩ of the UI's own did nothing");
+}
+
 /// The strip under an agent's page shows its speaker only while the page plays, crossed while it's
 /// muted, as an agent's tabs start (#1080), and the speaker's click unmutes it as a row's does.
 #[gpui::test]

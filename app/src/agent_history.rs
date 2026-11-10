@@ -1,7 +1,9 @@
 //! Library › Agents (docs/ux-spec.md › Library): the past tasks and sessions of a profile's
 //! agents, as their receipts showed them. Only what a receipt shows is kept: the task's title, its
-//! agent, when it ran, its pages' titles and addresses, and the orders and messages the user
-//! allowed it. Never what a page said, what was typed, a cookie or the conversation. Kept on this
+//! agent, when it ran, its pages' titles and addresses, the orders and messages the user allowed
+//! it, and its activity log's entries, each what it did, on which site, when, and why it was
+//! refused. Never what a page said, what on it the agent acted on, what was typed, a cookie or the
+//! conversation. Kept on this
 //! computer only, in the profile's own folder as `FILE` (the owner, 2026-11-04), never synced, and
 //! never for a private window, which offers no tasks. Each lives 30 days from when it ended, and
 //! goes with the history the user deletes of its time.
@@ -13,6 +15,22 @@ pub const FILE: &str = "Agent sessions";
 
 /// How long an entry lives once its task ended: 30 days (the owner).
 pub const KEEP: u64 = 30 * 24 * 60 * 60;
+
+/// The most of a task's activity log an entry keeps, its last.
+pub const STEPS: usize = 200;
+
+/// An entry of a past task's activity log.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    /// When, in seconds since 1970.
+    pub at: u64,
+    /// The core's name for what it did, such as "read_page" (`agents::tools::describe`).
+    pub action: String,
+    /// The host of the page it did it to, or empty.
+    pub site: String,
+    /// Why it was refused, or empty if it wasn't.
+    pub refused: String,
+}
 
 /// A past task or session, as its receipt showed it.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +47,12 @@ pub struct Past {
     pub pages: Vec<(String, String)>,
     pub orders: usize,
     pub messages: usize,
+    /// Its activity log, oldest first.
+    pub steps: Vec<Step>,
+    /// Whose answers for good its agent's are, the key Settings › Agents lists them under: a
+    /// connected app's id, or a ⌘T CLI's (`agents::task_answers`). Empty for an entry from before
+    /// they were kept.
+    pub answers: String,
 }
 
 impl Past {
@@ -49,14 +73,60 @@ impl Past {
         parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
+    /// What its page says under its title: "Claude Code · 12 min · 14:02 · 1 order placed · 3
+    /// pages", as its row with how long it ran.
+    pub fn page_about(&self) -> String {
+        let about = self.about();
+        match about
+            .strip_prefix(&self.agent)
+            .filter(|_| !self.agent.is_empty())
+        {
+            Some(rest) => format!("{} · {}{rest}", self.agent, self.length()),
+            None => format!("{} · {about}", self.length()),
+        }
+    }
+
+    /// How long it ran, as its page says it: "Under a minute", "12 min", "1 h 5 min".
+    pub fn length(&self) -> String {
+        let minutes = self.ended.saturating_sub(self.started) / 60;
+        match (minutes / 60, minutes % 60) {
+            (0, 0) => "Under a minute".to_string(),
+            (0, minutes) => format!("{minutes} min"),
+            (hours, 0) => format!("{hours} h"),
+            (hours, minutes) => format!("{hours} h {minutes} min"),
+        }
+    }
+
+    /// The sites it acted on, as its log names them, then its pages', each once, in the order it
+    /// came to them.
+    pub fn sites(&self) -> Vec<String> {
+        let pages = self.pages.iter().map(|(_, url)| crate::agents::site(url));
+        let mut sites: Vec<String> = Vec::new();
+        for site in (self.steps.iter().map(|step| step.site.clone())).chain(pages) {
+            if !site.is_empty() && !sites.contains(&site) {
+                sites.push(site);
+            }
+        }
+        sites
+    }
+
     fn to_json(&self) -> Value {
         let pages: Vec<Value> = (self.pages.iter())
             .map(|(title, url)| json!({ "title": title, "url": url }))
             .collect();
+        let steps: Vec<Value> = (self.steps.iter())
+            .map(|step| {
+                json!({
+                    "at": step.at, "action": step.action, "site": step.site,
+                    "refused": step.refused,
+                })
+            })
+            .collect();
         json!({
             "id": self.id, "title": self.title, "agent": self.agent,
             "started": self.started, "ended": self.ended, "pages": pages,
-            "orders": self.orders, "messages": self.messages,
+            "orders": self.orders, "messages": self.messages, "steps": steps,
+            "answers": self.answers,
         })
     }
 
@@ -69,6 +139,22 @@ impl Past {
                 Some((field("title")?, field("url")?))
             })
             .collect();
+        // Entries from before steps and answers were kept have neither.
+        let steps = (value
+            .get("steps")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten())
+        .filter_map(|step| {
+            let field = |key: &str| step.get(key).and_then(Value::as_str).map(str::to_string);
+            Some(Step {
+                at: step.get("at")?.as_u64()?,
+                action: field("action")?,
+                site: field("site").unwrap_or_default(),
+                refused: field("refused").unwrap_or_default(),
+            })
+        })
+        .collect();
         Some(Past {
             id: text("id")?,
             title: text("title")?,
@@ -78,6 +164,8 @@ impl Past {
             pages,
             orders: number("orders")? as usize,
             messages: number("messages")? as usize,
+            steps,
+            answers: text("answers").unwrap_or_default(),
         })
     }
 }

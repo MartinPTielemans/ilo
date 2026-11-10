@@ -15,7 +15,7 @@ use crate::tokens::palette::DIALOG_LIGHT;
 use crate::tokens::settings::{
     CARD_RIM, CARD_RING, CARD_SHADOW, FADE, HELD_TITLE, PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
 };
-use crate::tokens::shell::{CARD_INSET, CARD_RADIUS};
+use crate::tokens::shell::CARD_INSET;
 
 #[cfg(test)]
 mod tests;
@@ -100,7 +100,8 @@ impl Card {
     /// What the card's top holds for `section`: nothing at the page's top; once scrolled, the
     /// section's name, and after it the last heading gone under the held title.
     pub fn held(&self, section: &str) -> Option<SharedString> {
-        if self.scroll.offset().y >= px(0.) {
+        // As numbers, not Pixels, which order -0 under 0: GPUI holds a page that fits at -0.
+        if f32::from(self.scroll.offset().y) >= 0. {
             return None;
         }
         let under = self.top.get() + HELD_TITLE;
@@ -120,6 +121,15 @@ impl Card {
         dark: bool,
         colors: Colors,
     ) -> gpui::Div {
+        // A wheel moves the offset as far as it's turned, and GPUI holds it to the page only as it
+        // lays the page out, after this: held to the page here, a page that fits never reads as
+        // scrolled in the wheel's frame, which is drawn last while nothing moves (#2102).
+        let offset = self.scroll.offset();
+        let most = f32::from(self.scroll.max_offset().y);
+        let kept = px(f32::from(offset.y).clamp(-most, 0.));
+        if kept != offset.y {
+            self.scroll.set_offset(point(offset.x, kept));
+        }
         let held = self.held(section);
         if *self.logged.borrow() != held {
             // check.sh waits for this line.
@@ -137,6 +147,23 @@ impl Card {
             rgb(DIALOG_LIGHT)
         };
         let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
+        // What this frame shows of the scroll, from the page's last layout: a page whose layout
+        // changes under it, as a resize does, is held to its new one only after, and is drawn
+        // again then if that changes what shows.
+        let shows = (held.is_some(), -offset < max - px(1.));
+        let scroll = self.scroll.clone();
+        let after = canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let (offset, max) = (scroll.offset().y, scroll.max_offset().y);
+                // Not refresh, which does nothing while the frame draws.
+                if (f32::from(offset) < 0., -offset < max - px(1.)) != shows {
+                    window.request_animation_frame();
+                }
+            },
+        )
+        .absolute()
+        .inset_0();
         let held = held.map(|held| {
             let (name, heading) = match held.split_once(" › ") {
                 Some((name, heading)) => (name.to_string(), Some(format!(" › {heading}"))),
@@ -170,7 +197,7 @@ impl Card {
                         .child(heading)
                 }))
         });
-        let fade = (-offset < max - px(1.)).then(|| {
+        let fade = shows.1.then(|| {
             div()
                 .absolute()
                 .left_0()
@@ -212,7 +239,8 @@ impl Card {
             .mr(px(CARD_INSET))
             .mb(px(CARD_INSET))
             .relative()
-            .rounded(px(CARD_RADIUS))
+            // A window of its own, whose corner it follows as the browser window's card does.
+            .rounded(px(crate::shell::card_radius(crate::shell::window_radius())))
             .bg(fill)
             .when(dark, |card| card.border_1().border_color(rgba(CARD_RIM)))
             .when(!dark, |card| {
@@ -243,6 +271,7 @@ impl Card {
                     .px(px(PAGE_X))
                     .child(page),
             )
+            .child(after)
             .children(held)
             .children(fade)
     }

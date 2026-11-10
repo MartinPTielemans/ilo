@@ -36,6 +36,8 @@
 # restarted.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled.
+# Through all it does before the user first looks at its card, the user's Space, tab and focused
+# field stay as the user left them, and the user's next keys go into that field (decision 8).
 
 log="$out/mcp.log"
 step=0
@@ -104,12 +106,31 @@ if [ "$(uname)" = Linux ] && command -v dbus-daemon > /dev/null &&
 fi
 # With motion, as the run clicks Stop while a step's shimmer draws, which a system that reduces
 # motion has none of, as GitHub's hosted Windows runner does (main.rs, set_reduce_motion).
-BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
+# The user's own page: a field over all of it, which says when it takes the keyboard, loses it or is
+# typed in, and names itself once it has drawn. A URL drops its line breaks, so a line that goes on
+# from an attribute starts with a space.
+yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset:0;width:100vw;height:100vh"
+ onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
+ oninput="document.title=`yours typed `+f.value"></textarea>
+<script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
+BROWSER_DRIVE=1 BROWSER_MOTION=full BROWSER_URL="$yours" \
   "$browser" --load-extension="$(app_path "$extension")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
 user_tab=$(today | cut -d' ' -f1)
+await "^browser: title $user_tab yours\$" || fail "the user's page didn't draw"
+# The user clicks into their field before the agent starts; where Browser isn't the active app, the
+# click reaches no field, and the check of their focus below says it skips.
+send click $page_point
+yours_step=
+if [ "$active" = 1 ]; then
+  expect "^browser: title $user_tab yours focused\$" "a click on the user's page didn't focus its field"
+  yours_step=$step
+  yours_key=$key
+  yours_focus=$focus
+  yours_space=$(space)
+fi
 # A socket only the user can open, or on Windows a named pipe only they can.
 case "$(uname -s)" in
   MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
@@ -389,6 +410,8 @@ for target in 'link "Open"' 'button "Pop up"'; do
     *) fail "the agent's click on its $target answered: $clicked" ;;
   esac
   call list_tabs '{}' | grep -q "^. $new_tab  " || fail "the tab its $target opened isn't in its Space"
+  # Beside the agent's tab, it's as quiet as the agent's own (#1080).
+  await_log "^browser: page $new_tab audible 0 muted 1\$" "the tab its $target opened has sound"
   grep -q "^browser: selected $new_tab\( in .*\)\{0,1\}\$" "$log" &&
     fail "the tab the agent's $target opened was shown"
   [ "$(today)" = "$user_today" ] || fail "the agent's $target changed the user's Today: $(today)"
@@ -420,9 +443,14 @@ watch() {
   read -r wx wy ww wh <<PICTURE
 $(picture "$1")
 PICTURE
+  # Counted, as a page watched before has its lines already.
+  watched=$(grep -c "^browser: task $session page $1\$" "$log" || true)
+  placed=$(grep -c "^browser: task page $1 in place\$" "$log" || true)
   send click $((wx + ww / 2)) $((wy + wh / 2))
-  await_log "^browser: task $session page $1\$" "a click on tab $1's picture didn't watch it"
-  await_log "^browser: task page $1 in place\$" "tab $1's page didn't come to rest in place"
+  await_more "^browser: task $session page $1\$" "$watched" ||
+    fail "a click on tab $1's picture didn't watch it"
+  await_more "^browser: task page $1 in place\$" "$placed" ||
+    fail "tab $1's page didn't come to rest in place"
 }
 # A click in an agent's page takes it over (#1080), where the driver's click reaches the host as a
 # hand's does: the Mac, Windows and Wayland, and not X11's sent click. After clicks that are there
@@ -435,6 +463,29 @@ hand_back_pressed() {
   send key return cmd
   await_log "^browser: agent mcp-client handed back $pressed\$" "⌘↩ didn't hand back the page a click took"
 }
+# Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
+# since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
+# go into the field.
+if [ -n "$yours_step" ]; then
+  send state
+  [ "$(space)" = "$yours_space" ] || fail "the agent's work moved the user to Space $(space)"
+  shown=$(sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep '^browser: selected ' |
+    grep -v "^browser: selected $user_tab\( in .*\)\{0,1\}\$" | head -1)
+  [ -z "$shown" ] || fail "the agent's work showed another tab in the user's window: $shown"
+  if windows; then
+    # Quarantined: there a click of the agent's that opens a tab takes the keyboard (#2225).
+    echo "skip: mcp: the user's keyboard through the agent's work on Windows (#2225)"
+  else
+    [ "$key $focus" = "$yours_key $yours_focus" ] ||
+      fail "the agent's work took the keyboard from $yours_key, on $yours_focus, to $key, on $focus"
+    sed -n "/^browser: drive $yours_step: /,\$p" "$log" | grep -q "^browser: title $user_tab yours left\$" &&
+      fail "the user's field lost the keyboard while the agent worked"
+    send type ok
+    expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
+  fi
+else
+  echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
+fi
 presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
 send click $page_point
 driven=$active
@@ -558,6 +609,13 @@ if [ "$driven" = 1 ]; then
 password.value = "hunter2-by-ada";
 email.value = "ada@example.com";
 typed.oninput = () => document.title = "typed";
+// A form'"'"'s Send on ⌘↩ or Ctrl+Enter, which would keep Hand Back'"'"'s key from ilo (#1080).
+onkeydown = (e) => {
+  if (e.key == "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.title = "sent";
+  }
+};
 note.oninput = () => document.title = "noted";
 painted(() => document.title = "fields");
 </script>' > "$out/site/fields.html"
@@ -571,7 +629,10 @@ painted(() => document.title = "fields");
   [ "$focus" = RenderWidgetHostViewCocoa ] || fail "a click on the fields page left focus on $focus"
   send type typed-by-ada
   expect "^browser: title $agent_tab typed\$" "typing didn't reach the page's field"
+  # The page keeps ⌘↩ as its form's Send, so Hand Back's key reaches ilo before it (#1080).
   hand_back_pressed "$presses"
+  grep -q "^browser: title $agent_tab sent\$" "$log" &&
+    fail "the page's form took ⌘↩, not Hand Back"
   read=$(call read_page "{\"tab\":$agent_tab}")
   printf '%s\n' "$read" > "$out/mcp-fields.txt"
   case "$read" in
@@ -627,7 +688,9 @@ painted(() => document.title = "fields");
   # other site's, a frame the page adds after it has loaded and one it fills by posting a form into
   # it, as SharePoint posts Word's editor into its frame, are in the outline and the text too, in
   # the page's order, and an empty helper frame is in neither. A click two frames deep lands
-  # (#1444).
+  # (#1444). The posted frame's editor, built as Word for the web's document body is, an editable
+  # region of paragraphs and text runs, is a field: the outline names it and neither the outline
+  # nor the text has what it holds, as with any field's value.
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
   printf '%s' '<p>Cross text</p>
@@ -642,8 +705,10 @@ painted(() => document.title = "fields");
     > "$out/site/deep.html"
   printf '%s' '<p>Late text</p><script>top.postMessage("late", "*")</script>' \
     > "$out/site/late.html"
-  printf '%s' '<p>Posted text</p><script>top.postMessage("posted", "*")</script>' \
-    > "$out/site/posted.html"
+  printf '%s' '<p>Posted text</p>
+<div contenteditable role=textbox aria-multiline=true aria-label="Document"><p class=Paragraph>
+<span class=TextRun><span class=NormalTextRun>Editor text</span></span></p></div>
+<script>top.postMessage("posted", "*")</script>' > "$out/site/posted.html"
   : > "$out/site/empty.html"
   printf '%s' "<title>loading</title><p>Top text</p><iframe src=inner.html></iframe>
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
@@ -706,13 +771,15 @@ addEventListener('message', (event) => {
   printf '%s\n' "$later" > "$out/mcp-frames-later.txt"
   case "$later" in
     *"Helper frame"*) fail "the outline had the empty helper frame: $later" ;;
-    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
+    *"Editor text"*) fail "the outline had what the posted frame's editor holds: $later" ;;
+    *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*'textbox "Document"'*"Late text"*) ;;
     *) fail "the frames page was outlined later as: $later" ;;
   esac
   read=$(call read_page "{\"tab\":$frames_tab}")
   printf '%s\n' "$read" > "$out/mcp-frames-text.txt"
   case "$read" in
     *"Extension text"*) fail "reading the frames page gave the extension's frame's text: $read" ;;
+    *"Editor text"*) fail "reading the frames page gave what the posted frame's editor holds: $read" ;;
     *"Top text"*"Inner text"*"Cross text"*"Deep text"*"Posted text"*"Late text"*) ;;
     *) fail "reading the frames page answered: $read" ;;
   esac
@@ -1078,6 +1145,19 @@ CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
   ../tools/window-screenshot.sh "$pid" "$out/agent-handoff.png" || fail "no window to capture"
+  # Back in the conversation's Pages, the page handed to the user says so under its picture, with
+  # why (#1080). Then its page is watched again, as before.
+  back="^browser: task page $agent_tab back\$"
+  thumbnail='^browser: task page in its thumbnail$'
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
+  send key escape
+  await_more "$back" "$before" || fail "Escape didn't step back to Pages"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
+  await_log "^browser: task picture $opened_tab says Needs you · Sign in for the check\$" \
+    "the handed page's picture didn't say it needs the user: $(grep "^browser: task picture $opened_tab says" "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-pages-needs-you.png" || fail "no window to capture"
+  watch "$agent_tab"
   # Hand Back, at the left of the card's buttons, Show Tab the primary at their right.
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
@@ -1091,9 +1171,11 @@ CARD
   # From the conversation, a press in the page watched takes the tab the agent is at work in over,
   # as the strip has no Take Over (#1080), and the agent's next action there is refused until the
   # user hands it back. The strip then says the user drives.
+  before=$(grep -c "$back" "$log" || true)
+  shrunk=$(grep -c "$thumbnail" "$log" || true)
   send key escape
-  await_log "^browser: task page $agent_tab back\$" "Escape didn't step back to the conversation"
-  await_log '^browser: task page in its thumbnail$' "the page watched didn't go back into its picture"
+  await_more "$back" "$before" || fail "Escape didn't step back to the conversation"
+  await_more "$thumbnail" "$shrunk" || fail "the page watched didn't go back into its picture"
   watch "$opened_tab"
   await_log "^browser: task strip $opened_tab at " "the page watched showed no strip"
   ../tools/window-screenshot.sh "$pid" "$out/agent-strip.png" || fail "no window to capture"
