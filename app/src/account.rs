@@ -269,7 +269,13 @@ pub fn copy_for(text: &str, kept: Duration, cx: &mut App) {
     cx.spawn(async move |cx| {
         cx.background_executor().timer(kept).await;
         cx.update(|cx| {
-            if cx.read_from_clipboard().and_then(|item| item.text()) == Some(text) {
+            let read = cx.read_from_clipboard().and_then(|item| item.text());
+            eprintln!(
+                "browser: probe clipboard at kept: read {}, matched {}",
+                read.as_ref().map_or(0, |read| read.len()),
+                read.as_deref() == Some(text.as_str())
+            );
+            if read == Some(text) {
                 cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
             }
         });
