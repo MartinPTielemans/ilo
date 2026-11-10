@@ -18,7 +18,7 @@ use gpui::{
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
     ARCHIVED_RIGHT, ARCHIVED_TEXT_X, MenuEntry, Only, SECONDARY, STATE_HOVERED, STATE_PRESSED,
-    Section, Shell, UNSELECTED_TITLE, clean_link, favicon, host, text, text_line,
+    Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
 };
 use crate::agent_history::{self, Past};
 
@@ -455,7 +455,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.open_visited(&url, cx),
-                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(1) => {
+                            let link = shell.copied_link(&url);
+                            shell.copy(&link, "Copied URL", cx)
+                        }
                         Some(3) => shell.remove_visited(&url, day, cx),
                         _ => {}
                     })
