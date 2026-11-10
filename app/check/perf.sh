@@ -66,6 +66,7 @@ new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
     if (entry.name == "first-contentful-paint") {
       document.title = `${id} fcp ${at(entry.startTime)}`;
+      performance.mark(document.title);
     }
   }
 }).observe({ type: "paint", buffered: true });

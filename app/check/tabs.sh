@@ -1520,7 +1520,12 @@ head -c 1 "$trace" | grep -q '[[{]' ||
   fail "the trace isn't JSON, so Chrome didn't get --enable-tracing-format=json"
 spans=$(python3 -I check/tab_switches.py "$trace")
 chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
-[ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+# With more than latency, a trace whose buffer ran out may keep none, and the product's not at fault.
+if [ "$trace_categories" = latency ]; then
+  [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+elif [ -z "$(echo "$spans" | grep -v incomplete | grep .)" ]; then
+  chrome_ms=none
+fi
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
 # With more than latency, the trace keeps the run's last part, where its buffer runs out, so the
