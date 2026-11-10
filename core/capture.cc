@@ -13,7 +13,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -25,7 +24,6 @@
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
-#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "skia/ext/image_operations.h"
@@ -141,13 +139,23 @@ void PictureOnWorker(bc_id tab, uint64_t request, base::OnceCallback<std::option
                                                base::BindOnce(&Pictured, tab, request));
 }
 
-// Copies the page's last frame, or with |wait| its next one when it has none yet.
-void CopyPage(base::WeakPtr<content::WebContents> contents,
-              bc_id tab,
-              uint64_t request,
-              gfx::Size at_most,
-              bool wait) {
-  content::RenderWidgetHostView* view = contents ? contents->GetRenderWidgetHostView() : nullptr;
+}  // namespace
+
+void PicturePage(content::WebContents* contents, uint64_t request, gfx::Size at_most) {
+  const bc_id tab = Tab::IdOf(contents);
+  // A page in the system's engine has nothing in Chromium's compositor: WebKit's snapshot of its
+  // view stands for it, as for bc_tab_capture.
+  Tab* owner = Tab::FromWebContents(contents);
+  if (platform::SystemPage* page = owner ? owner->system_page() : nullptr) {
+    page->Snapshot(base::BindOnce(
+        [](bc_id tab, uint64_t request, gfx::Size at_most,
+           std::optional<std::vector<uint8_t>> png) {
+          PictureOnWorker(tab, request, base::BindOnce(&PngToPixels, at_most, std::move(png)));
+        },
+        tab, request, at_most));
+    return;
+  }
+  content::RenderWidgetHostView* view = contents->GetRenderWidgetHostView();
   if (!view) {
     NoPicture(tab, request);
     return;
@@ -182,54 +190,16 @@ void CopyPage(base::WeakPtr<content::WebContents> contents,
   view->CopyFromSurface(
       copied, fitted == whole ? gfx::Size() : fitted, base::TimeDelta(),
       base::BindOnce(
-          [](base::WeakPtr<content::WebContents> contents, bc_id tab, uint64_t request,
-             gfx::Size at_most, bool wait, base::ScopedClosureRunner held,
+          [](bc_id tab, uint64_t request, base::ScopedClosureRunner held,
              base::ScopedClosureRunner drawing, const content::CopyFromSurfaceResult& result) {
             LogHandover("picture copied", "tab " + base::NumberToString(tab));
-            if (result.has_value() && !result->bitmap.drawsNothing()) {
-              PictureOnWorker(tab, request, base::BindOnce(&ToPixels, result->bitmap));
-              return;
-            }
-            // A page that has just loaded may have drawn no frame yet, as on Windows (#2190): its
-            // next frame is copied, the page held drawing until then. Once, so a page that never
-            // draws answers with no picture.
-            if (!wait || !contents) {
+            if (!result.has_value() || result->bitmap.drawsNothing()) {
               NoPicture(tab, request);
               return;
             }
-            contents->GetPrimaryMainFrame()->InsertVisualStateCallback(base::BindOnce(
-                [](base::WeakPtr<content::WebContents> contents, bc_id tab, uint64_t request,
-                   gfx::Size at_most, base::ScopedClosureRunner held,
-                   base::ScopedClosureRunner drawing, bool drew) {
-                  if (!drew || !contents) {
-                    NoPicture(tab, request);
-                    return;
-                  }
-                  // Its view looked up again, as a navigation can replace it.
-                  CopyPage(contents, tab, request, at_most, /*wait=*/false);
-                },
-                contents, tab, request, at_most, std::move(held), std::move(drawing)));
+            PictureOnWorker(tab, request, base::BindOnce(&ToPixels, result->bitmap));
           },
-          contents, tab, request, at_most, wait, std::move(held), std::move(drawing)));
-}
-
-}  // namespace
-
-void PicturePage(content::WebContents* contents, uint64_t request, gfx::Size at_most) {
-  const bc_id tab = Tab::IdOf(contents);
-  // A page in the system's engine has nothing in Chromium's compositor: WebKit's snapshot of its
-  // view stands for it, as for bc_tab_capture.
-  Tab* owner = Tab::FromWebContents(contents);
-  if (platform::SystemPage* page = owner ? owner->system_page() : nullptr) {
-    page->Snapshot(base::BindOnce(
-        [](bc_id tab, uint64_t request, gfx::Size at_most,
-           std::optional<std::vector<uint8_t>> png) {
-          PictureOnWorker(tab, request, base::BindOnce(&PngToPixels, at_most, std::move(png)));
-        },
-        tab, request, at_most));
-    return;
-  }
-  CopyPage(contents->GetWeakPtr(), tab, request, at_most, /*wait=*/true);
+          tab, request, std::move(held), std::move(drawing)));
 }
 
 PageCapture::PageCapture(content::WebContents* contents)
