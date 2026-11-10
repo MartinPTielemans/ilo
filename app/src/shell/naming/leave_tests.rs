@@ -13,7 +13,7 @@ use gpui::{
 use crate::{
     menu::Closed,
     shell::{
-        Folders, NAME_HEIGHT, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys,
+        Folders, NAME_HEIGHT, Naming, ROW_HEIGHT, Shell, Slot, commands::bind_keys, fields_opened,
         recorder::Recorder,
     },
     text_input::{self, Chosen, FieldMenu},
@@ -104,10 +104,37 @@ fn leave(shell: &Entity<Shell>, cx: &mut VisualTestContext, way: Way) {
             let at = row(shell, cx, 4);
             press(cx, at, MouseButton::Left, 1);
         }
-        Way::Page => shell.update_in(cx, |shell, window, cx| shell.keyboard_left(window, cx)),
+        Way::Page => shell.update_in(cx, |shell, window, cx| {
+            shell.keyboard_left(fields_opened(), window, cx)
+        }),
         Way::Window => cx.deactivate_window(),
     }
     cx.run_until_parked();
+}
+
+/// The host says the page took the keyboard as the press in it comes, and the field hears it after
+/// what's queued behind the press: a double-click's second press may have opened a field since. That
+/// field stays, and a press in the page after it opened still ends it (#2260).
+#[gpui::test]
+fn a_field_opened_after_a_press_in_the_page_stays(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    let pressed = fields_opened();
+    rename(&shell, cx, &host, 3);
+    shell.update_in(cx, |shell, window, cx| {
+        shell.keyboard_left(pressed, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        naming(&shell, cx) == Some(Naming::Tab(3)),
+        "a press in the page before the field opened ended it"
+    );
+    cx.simulate_input("Work");
+    leave(&shell, cx, Way::Page);
+    assert!(
+        naming(&shell, cx).is_none(),
+        "a press in the page left the field open"
+    );
+    assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
 }
 
 #[gpui::test]

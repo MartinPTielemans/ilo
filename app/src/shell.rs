@@ -6,7 +6,10 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -909,10 +912,28 @@ impl Naming {
     }
 }
 
+/// How many name fields have opened. The host says the page took the keyboard as the press comes,
+/// but a field hears it only after the events queued behind that press, a double-click's second
+/// press among them, which may have opened a field since (#2260). So the host's word counts the
+/// fields as the press comes (`fields_opened`), and a field opened after it stays.
+static FIELDS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// How many name fields have opened so far.
+pub(crate) fn fields_opened() -> u64 {
+    FIELDS_OPENED.load(Ordering::Relaxed)
+}
+
+/// Counts a field opening, giving its place among them.
+fn field_opens() -> u64 {
+    FIELDS_OPENED.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 /// The field a Space's name, a tab's title or a folder's name turns into for renaming it.
 struct Renaming {
     naming: Naming,
     name: Entity<TextInput>,
+    /// Its place among the fields opened (`fields_opened`).
+    opened: u64,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
     /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
