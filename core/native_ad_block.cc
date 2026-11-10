@@ -252,21 +252,42 @@ class Proxy : public network::mojom::URLLoaderFactory {
 struct Page {
   std::string css;
   std::string script;
+  std::string isolated;
   // Whether the page's generic rules apply, and those of them it doesn't hide, as a JSON array for
   // ad_block_hide.
   bool generic = false;
   std::string exceptions = "[]";
 };
 
+// Whether |text| can be part of one rule: nothing that could end it or start a comment over the
+// next.
+bool InOneRule(const std::string* text) {
+  return text && text->find_first_of("{}") == std::string::npos &&
+         text->find("/*") == std::string::npos;
+}
+
 // The rules that hide |selectors|, a JSON array of them, appended to |css|.
 void AppendRules(const base::ListValue& selectors, std::string& css) {
   for (const base::Value& selector : selectors) {
-    // A rule each, so one the page's engine can't read drops alone, and none that could end its
-    // rule or start a comment over the next.
+    // A rule each, so one the page's engine can't read drops alone.
     const std::string* text = selector.GetIfString();
-    if (text && text->find_first_of("{}") == std::string::npos &&
-        text->find("/*") == std::string::npos) {
+    if (InOneRule(text)) {
       base::StrAppend(&css, {*text, "{display:none!important}\n"});
+    }
+  }
+}
+
+// The rules of |styles|, a JSON array of selectors each with its declarations, appended to |css|.
+void AppendStyles(const base::ListValue& styles, std::string& css) {
+  for (const base::Value& style : styles) {
+    const base::ListValue* pair = style.GetIfList();
+    if (!pair || pair->size() != 2) {
+      continue;
+    }
+    const std::string* selector = (*pair)[0].GetIfString();
+    const std::string* declarations = (*pair)[1].GetIfString();
+    if (InOneRule(selector) && InOneRule(declarations)) {
+      base::StrAppend(&css, {*selector, "{", *declarations, "}\n"});
     }
   }
 }
@@ -287,8 +308,14 @@ Page PageOf(const GURL& url) {
   if (const base::ListValue* hide = fields->FindList("hide")) {
     AppendRules(*hide, page.css);
   }
+  if (const base::ListValue* styles = fields->FindList("styles")) {
+    AppendStyles(*styles, page.css);
+  }
   if (const std::string* script = fields->FindString("script")) {
     page.script = *script;
+  }
+  if (const std::string* isolated = fields->FindString("isolated")) {
+    page.isolated = *isolated;
   }
   page.generic = fields->FindBool("generic").value_or(false) && host.ad_block_hide;
   if (const base::ListValue* exceptions = fields->FindList("exceptions")) {
@@ -359,7 +386,7 @@ class PageSender : public content::WebContentsObserver,
     }
     Page page = std::move(it->second);
     pages_.erase(it);
-    if (page.css.empty() && page.script.empty() && !page.generic) {
+    if (page.css.empty() && page.script.empty() && page.isolated.empty() && !page.generic) {
       return;
     }
     // The document's own, which goes when the agent drops it for the next document.
@@ -370,7 +397,7 @@ class PageSender : public content::WebContentsObserver,
     // On the frame's own channel, as the commit is, so it comes first.
     mojo::AssociatedRemote<mojom::AdBlockPage> agent;
     navigation->GetRenderFrameHost()->GetRemoteAssociatedInterfaces()->GetInterface(&agent);
-    agent->UseForNextDocument(navigation->GetURL().spec(), page.css, page.script,
+    agent->UseForNextDocument(navigation->GetURL().spec(), page.css, page.script, page.isolated,
                               std::move(hide));
   }
   // One that doesn't commit, such as a download.
