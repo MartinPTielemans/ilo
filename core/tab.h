@@ -114,6 +114,10 @@ class Tab : public content::WebContentsObserver,
   Profile* profile() const { return profile_.get(); }
   // The URL of the page it's at, loaded or not, else of the one it's loading.
   GURL Url() const;
+  // Whether it's at |url|, or where loading |url| took it: through the redirects the load
+  // followed, such as a sign-in hop, or after the page replaced its own address. So a pinned tab
+  // that goes back to a pinned URL that always redirects is home, not away from it (#2338).
+  bool At(const GURL& url) const;
   // Its history, with its name, icon and mute, as the session keeps it.
   SavedTab Save() const;
   // The id of its page's sessionStorage in its profile, loaded or not, which the session file keeps
