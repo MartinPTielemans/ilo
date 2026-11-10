@@ -1,0 +1,28 @@
+bank	200	-	-	-	https://www.chase.com/
+bank	200	-	-	-	https://www.bankofamerica.com/
+bank	200	no-store	-	BankOrCreditUnion 	https://www.wellsfargo.com/
+bank	200	-	-	-	https://www.barclays.co.uk/
+bank	200	-	-	-	https://www.hsbc.co.uk/
+bank	200	no-store	-	BankOrCreditUnion 	https://www.danskebank.dk/privat
+bank	-	-	-	BankOrCreditUnion 	https://www.ing.nl/particulier
+bank	403	-	-	-	https://www.revolut.com/
+bank	200	-	-	-	https://monzo.com/
+bank	200	no-store	-	-	https://www.lloydsbank.com/
+bank	200	-	-	-	https://www.nordea.dk/privat
+bank	200	-	-	-	https://www.capitalone.com/
+health	403	-	-	-	https://www.mayoclinic.org/diseases-conditions/diabetes/symptoms-causes/syc-20371444
+health	200	-	-	HealthTopicContent MedicalWebPage 	https://www.nhs.uk/conditions/diabetes/
+health	200	no-store	-	-	https://www.webmd.com/diabetes/default.htm
+health	200	-	-	Drug DrugClass MedicalCause MedicalCondition MedicalConditionStage MedicalRiskFactor MedicalSymptom MedicalTest MedicalTherapy MedicalWebPage 	https://www.healthline.com/health/diabetes
+health	200	-	-	MedicalWebPage 	https://medlineplus.gov/diabetes.html
+health	200	-	-	MedicalOrganization MedicalWebPage 	https://my.clevelandclinic.org/health/diseases/7104-diabetes
+health	200	-	-	-	https://www.sundhed.dk/borger/
+health	200	-	-	-	https://www.mychart.org/
+health	403	-	-	-	https://www.cdc.gov/diabetes/index.html
+health	402	no-store	-	-	https://www.verywellhealth.com/diabetes-4014747
+other	200	-	-	-	https://en.wikipedia.org/wiki/Diabetes
+other	200	-	-	-	https://www.bbc.com/news
+other	200	-	-	-	https://github.com/
+other	200	-	-	-	https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
+other	403	no-store	-	-	https://www.nytimes.com/
+other	200	-	-	-	https://news.ycombinator.com/
