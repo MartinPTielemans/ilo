@@ -1,5 +1,6 @@
 // The core's API: what the app calls in Chrome's framework. Plain C, so the app binds it without
-// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included.
+// sharing a C++ toolchain with Chromium. Everything runs on the main thread, callbacks included,
+// but the three of bc_host's that ask the ad blocker about a page (ad_block_request).
 
 #ifndef BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
 #define BROWSER_CORE_PUBLIC_BROWSER_CORE_H_
@@ -796,6 +797,22 @@ typedef struct bc_history_page {
   int32_t typed;
 } bc_history_page;
 
+// What the ad blocker does with a request (bc_host's ad_block_request).
+// Lets it go ahead as it is.
+#define BC_AD_BLOCK_ALLOW 0
+// Fails it with net::ERR_BLOCKED_BY_CLIENT, as uBlock Origin's blocking does.
+#define BC_AD_BLOCK_BLOCK 1
+// Answers it in its place with a stand-in, a data: URL, as a filter's $redirect does: a script
+// that does nothing, say, for a page that breaks without the one blocked.
+#define BC_AD_BLOCK_REDIRECT 2
+// Sends it to another address instead: its own, with the tracking parameters a $removeparam
+// filter names taken out.
+#define BC_AD_BLOCK_REWRITE 3
+
+// Hands the core |size| bytes of UTF-8 a callback answers with, into |out|, which the callback
+// passes back as it was given. It may be called more than once, each adding to what came before.
+typedef void (*bc_writer)(void* out, const char* text, size_t size);
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -1289,6 +1306,41 @@ typedef struct bc_host {
   // The user's alone: agents get none.
   void (*history_listed)(void* context, bc_id profile, uint64_t request,
                          const bc_history_page* pages, size_t count, bool more);
+  // The browser's own ad blocker, which blocks in place of uBlock Origin with
+  // --ad-block-engine=native (#2111): the core finds the requests a page makes, and what it
+  // shows, and the app's engine says what to do with them. No call comes for a page that isn't
+  // http(s), on a site the user turned ad blocking off on, or with ad blocking off
+  // (bc_ad_blocking).
+  //
+  // On the main thread, before the first page and whenever Settings › Ad blocking changes:
+  // what to block with. |folder| is uBlock Origin's as the browser comes with it, whose
+  // web_accessible_resources and js/resources hold the stand-ins and scriptlets filters name.
+  // |lists| is the files of the filter lists turned on (bc_ad_block_lists), one a line, and
+  // |filters| the user's own (bc_ad_block_filters). The engine is ready for the next call to ask.
+  void (*ad_block_use)(void* context, const char* folder, const char* lists, const char* filters);
+  // The three that ask, alone of every callback, come on a sequence of the core's own, never the
+  // main thread, and at the same time as the main thread's: a page's requests never wait on the
+  // UI, nor the UI on matching. Each answers at once from the engine it has, never waiting for
+  // the main thread. The one ad_block_use asked for may still be loading, which the call waits
+  // for, as it then takes a moment.
+  //
+  // What to do with the request for |url|, of |type| as a filter's options name it ("document",
+  // "subdocument", "script", "stylesheet", "image", "font", "media", "object", "xmlhttprequest",
+  // "ping" or "other"), from the page at |source_url|: a BC_AD_BLOCK_ value. For
+  // BC_AD_BLOCK_REDIRECT it writes the stand-in's data: URL, for BC_AD_BLOCK_REWRITE the address
+  // the request goes to instead.
+  int (*ad_block_request)(void* context, const char* url, const char* source_url, const char* type,
+                          bc_writer write, void* out);
+  // What the page at |url| hides and runs from the start, written as a JSON object: "hide", the
+  // CSS selectors of what it hides; "procedural", the filters that hide or style by more than a
+  // selector, each a JSON string as adblock-rust gives it; "exceptions", the generic selectors it
+  // doesn't hide (for ad_block_hide); "script", the scriptlets' code, to run in the page's main
+  // world before its own scripts; and "generic", false where the page hides no generic selector.
+  void (*ad_block_page)(void* context, const char* url, bc_writer write, void* out);
+  // The generic selectors that hide the elements of a page with these classes and ids, JSON
+  // arrays of strings, but its |exceptions| (ad_block_page's), written as a JSON array.
+  void (*ad_block_hide)(void* context, const char* classes, const char* ids,
+                        const char* exceptions, bc_writer write, void* out);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
