@@ -1773,6 +1773,8 @@ pub struct Shell {
     /// out once.
     palette: Palette,
     palettes: RefCell<Vec<((Option<Theme>, Tone), Palette)>>,
+    /// What each Space's colours were last given to its tabs' Boosts from (themes.rs).
+    boost_colors: HashMap<u64, (Option<Theme>, Tone)>,
     /// The system's appearance as the window last drew, or the one View › Appearance chose in its
     /// place, which a Space without a theme, or with an automatic one, follows; the preview's own
     /// where it forces one; whether the window is the active one, as its texture shows; and the
@@ -2122,6 +2124,7 @@ impl Shell {
             background_pressed: false,
             palette: Palette::default(),
             palettes: RefCell::default(),
+            boost_colors: HashMap::new(),
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
             little_windows: true,
@@ -4330,6 +4333,7 @@ impl Render for Shell {
         self.show_page_dialog(cx);
         let card_left = self.card_left();
         self.update_palette(cx);
+        self.send_boost_colors(cx);
         let focus_color = packed(self.palette.accent.into());
         if self.focus_color != Some(focus_color) {
             self.focus_color = Some(focus_color);

@@ -454,6 +454,9 @@ pub trait Browser {
     /// Gives a Space `theme`, as `theme::Theme` writes it, which the core keeps for the UI, or
     /// takes it away for an empty one. Its main colour goes with `set_space_color`.
     fn set_space_theme(&self, space: u64, theme: &str, cx: &mut App);
+    /// Gives `space`'s colours to the Boosts of its tabs' pages, as CSS declarations of ilo's own
+    /// custom properties (`boost_colors`), or takes them away for an empty string.
+    fn set_space_boost_colors(&self, space: u64, properties: &str, cx: &mut App);
     /// Puts an empty Space in `profile`.
     fn set_space_profile(&self, space: u64, profile: u64, cx: &mut App);
     /// Makes a profile named `name`, and returns it. It's listed once it's made.

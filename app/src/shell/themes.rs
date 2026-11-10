@@ -158,6 +158,32 @@ impl Shell {
         palette
     }
 
+    /// Gives each Space's colours to its tabs' Boosts when what they're made of changes: at
+    /// launch, as a Space comes, and as its theme or the appearance changes. A frame that changes
+    /// none of them formats nothing.
+    pub(super) fn send_boost_colors(&mut self, cx: &mut Context<Self>) {
+        let changed: Vec<(u64, (Option<Theme>, Tone))> = (self.spaces.iter())
+            .map(|space| {
+                (
+                    space.id,
+                    (self.space_theme(space.id), self.tone_of(space.id)),
+                )
+            })
+            .filter(|(space, key)| self.boost_colors.get(space) != Some(key))
+            .collect();
+        for (space, key) in changed {
+            self.boost_colors.insert(space, key);
+            let properties = boost_colors(&self.palette_of(space), key.0.as_ref());
+            let tone = match key.1 {
+                Tone::Dark => "dark",
+                Tone::Light => "light",
+            };
+            // check.sh reads the colours a Boost is given from this line.
+            log!("browser: boost colors {space} {tone} {properties}");
+            self.browser.set_space_boost_colors(space, &properties, cx);
+        }
+    }
+
     /// The palette the chrome draws with: the shown Space's, or while the sidebar pages between
     /// two, going from one's to the other's as the window's colour does. The key window's is the
     /// one what floats over the page takes, and its accent the focused page's ring.
@@ -412,3 +438,23 @@ fn texture_layer(texture: Texture, opacity: f32) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests;
+
+/// A Space's colours as a Boost's CSS reads them with var() (docs/ux-spec.md › Boosts), in ilo's
+/// own names: the window's colour at its top left, opaque over the tone's own backdrop; its text;
+/// and its accent with the text that reads on it.
+pub(super) fn boost_colors(palette: &Palette, theme: Option<&Theme>) -> String {
+    let hex = |color: Rgba| format!("#{:06x}", theme::packed(color));
+    let backdrop = match palette.tone {
+        Tone::Dark => 0,
+        Tone::Light => 1,
+    };
+    let background = palette.window_at(theme, 0., 0.)[backdrop];
+    format!(
+        "--ilo-space-background: {}; --ilo-space-text: {}; --ilo-space-accent: {}; \
+         --ilo-space-accent-text: {}",
+        hex(background),
+        hex(palette.ink),
+        hex(palette.accent),
+        hex(palette.accent_label),
+    )
+}

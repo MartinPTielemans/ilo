@@ -458,3 +458,55 @@ fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
         }
     }
 }
+
+/// The colours the shell gave the core for its Boosts since the last time.
+fn boost_colors_given(host: &Recorder) -> Vec<String> {
+    std::mem::take(&mut host.boost_colors.borrow_mut())
+}
+
+/// A Space's colours go to its tabs' Boosts once at launch, and again only as its theme or the
+/// appearance changes them.
+#[gpui::test]
+fn boosts_take_a_space_s_colours_as_they_change(cx: &mut TestAppContext) {
+    use crate::shell::commands::{Command, ShellHandle};
+    use crate::theme::Appearance;
+    let (shell, host, cx) = recorded(None, None, cx);
+    cx.update(|_, cx| cx.set_global(ShellHandle(shell.downgrade())));
+    cx.run_until_parked();
+    let system = shell.read_with(cx, |shell, _| shell.palette.tone);
+    let launched = boost_colors(&Palette::of(None, system), None);
+    assert_eq!(boost_colors_given(&host), [format!("1 {launched}")]);
+    let flip = match system {
+        Tone::Dark => Appearance::Light,
+        Tone::Light => Appearance::Dark,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::Appearance(flip), "ui", cx)
+    });
+    cx.run_until_parked();
+    let tone = shell.read_with(cx, |shell, _| shell.palette.tone);
+    let none = boost_colors(&Palette::of(None, tone), None);
+    assert_ne!(none, launched);
+    assert_eq!(boost_colors_given(&host), [format!("1 {none}")]);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        boost_colors_given(&host),
+        Vec::<String>::new(),
+        "a frame sent them again"
+    );
+    let theme = Theme::at(0.5, 0.);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(vec![entry(Some(theme.main_color()), Some(theme))], cx)
+    });
+    cx.run_until_parked();
+    let themed = boost_colors(&Palette::of(Some(&theme), tone), Some(&theme));
+    assert_ne!(themed, none);
+    assert_eq!(boost_colors_given(&host), [format!("1 {themed}")]);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::Appearance(Appearance::Automatic), "ui", cx)
+    });
+    cx.run_until_parked();
+    let back = boost_colors(&Palette::of(Some(&theme), system), Some(&theme));
+    assert_eq!(boost_colors_given(&host), [format!("1 {back}")]);
+}
