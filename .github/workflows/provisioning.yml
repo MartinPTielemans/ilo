@@ -194,13 +194,14 @@ jobs:
           name: provisioning
           path: ${{ runner.temp }}/out
 
-  # The released 0.1.14, signed again by tools/release.sh with the release's Developer ID, the
-  # profile and app/entitlements/release.plist, then ad hoc, then by tools/install.sh, and each
-  # launched with a throwaway profile folder. Nothing is notarized: there's no notarytool profile,
-  # so release.sh stops after signing the DMG.
+  # The released 0.1.14 in place of app/build.sh prod's build, then release.yml's Mac steps from
+  # the Keychain on: the profile check, and tools/release.sh signing with the profile and
+  # app/entitlements/release.plist, notarizing and stapling the app and the DMG. Then the app
+  # from that DMG, the ad hoc signature and tools/install.sh's, each launched with a throwaway
+  # profile folder. The DMG stays on the runner: it's uploaded nowhere, not even as an artifact.
   resign:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: 0.1.14
@@ -219,11 +220,14 @@ jobs:
           ditto "$RUNNER_TEMP/mnt/ilo.app" build/Browser.app
           hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
 
-      # As release.yml's Keychain step, without the notarization key.
+      # release.yml's Keychain step.
       - name: Keychain
         env:
           MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
           MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
         run: |
           keychain=$RUNNER_TEMP/release.keychain-db
           password=$(uuidgen)
@@ -240,6 +244,14 @@ jobs:
             sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)
           [ -n "$identity" ]
           echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          printf %s "$MAC_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials notary --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$MAC_NOTARY_KEY_ID" --issuer "$MAC_NOTARY_ISSUER_ID"
+          rm "$RUNNER_TEMP/notary.p8"
+
+      # release.yml's step.
+      - name: Provisioning profile
+        run: ../tools/check-profile.sh "$SIGN_IDENTITY"
 
       # release.yml's step, as it runs it, then with the 30-day window widened past the
       # certificate's date and past the profile's own, and with another App ID expected.
@@ -282,17 +294,27 @@ jobs:
           grep -q '^exit 1$' "$out/refuse-passkey.txt"
           [ ! -e build/release ]
 
+      # release.yml's step.
+      - name: Sign and notarize
+        run: ../tools/release.sh
+
+      # The app as a user gets it, from the notarized DMG, and both staples checked.
       - name: Developer ID
         run: |
           out=$RUNNER_TEMP/out
-          set +e
-          ../tools/release.sh > "$out/release.txt" 2>&1
-          echo "exit $?" >> "$out/release.txt"
-          set -e
-          tail -n 25 "$out/release.txt"
-          grep -q "but not notarized" "$out/release.txt"
+          {
+            echo "== stapler validate"
+            xcrun stapler validate build/release/ilo.app
+            xcrun stapler validate build/release/ilo.dmg
+            echo "== spctl"
+            spctl -a -t open --context context:primary-signature -vv build/release/ilo.dmg 2>&1
+          } 2>&1 | tee "$out/notarized.txt"
           mkdir -p "$RUNNER_TEMP/apps/developer-id"
-          ditto build/release/ilo.app "$RUNNER_TEMP/apps/developer-id/ilo.app"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/signed" build/release/ilo.dmg > /dev/null
+          ditto "$RUNNER_TEMP/signed/ilo.app" "$RUNNER_TEMP/apps/developer-id/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/signed" > /dev/null
+          xcrun stapler validate "$RUNNER_TEMP/apps/developer-id/ilo.app" | tee -a "$out/notarized.txt"
+          spctl -a -t exec -vv "$RUNNER_TEMP/apps/developer-id/ilo.app" 2>&1 | tee -a "$out/notarized.txt"
 
       - name: Ad hoc
         env:
@@ -319,7 +341,15 @@ jobs:
               echo "== $kind: embedded.provisionprofile"
               if [ -e "$app/Contents/embedded.provisionprofile" ]; then
                 security cms -D -i "$app/Contents/embedded.provisionprofile" > "$RUNNER_TEMP/embedded.plist"
-                /usr/libexec/PlistBuddy -c 'Print :Name' -c 'Print :UUID' -c 'Print :ExpirationDate' -c 'Print :Entitlements' "$RUNNER_TEMP/embedded.plist"
+                /usr/libexec/PlistBuddy -c 'Print :Name' -c 'Print :UUID' -c 'Print :AppIDName' -c 'Print :TeamIdentifier' \
+                  -c 'Print :ExpirationDate' -c 'Print :Entitlements' "$RUNNER_TEMP/embedded.plist"
+                echo "App ID: $(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$RUNNER_TEMP/embedded.plist")"
+                i=0
+                while plutil -extract "DeveloperCertificates.$i" raw -o - "$RUNNER_TEMP/embedded.plist" > "$RUNNER_TEMP/cert.b64" 2> /dev/null; do
+                  echo "certificate $i: $(base64 -D -i "$RUNNER_TEMP/cert.b64" | openssl x509 -inform der -noout -subject -serial -fingerprint -sha1 | tr '\n' ' ')"
+                  i=$((i + 1))
+                done
+                cmp "$app/Contents/embedded.provisionprofile" entitlements/developer-id.provisionprofile && echo "the same file as app/entitlements/developer-id.provisionprofile"
               else
                 echo "(none)"
               fi
@@ -374,4 +404,87 @@ jobs:
         if: ${{ always() }}
         with:
           name: resign
+          path: ${{ runner.temp }}/out
+
+  # release.yml's Mac steps with the profile left out of the checkout: its Provisioning profile
+  # step fails, so Sign and notarize never runs. Here the failure is let through, and Sign and
+  # notarize skipped as the job's failure would skip it, to show what's left after it.
+  missing:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: 0.1.14
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Released app
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" "$RUNNER_TEMP/dmg" build
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          ditto "$RUNNER_TEMP/mnt/ilo.app" build/Browser.app
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+
+      - name: Keychain
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/release.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          printf %s "$MAC_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)
+          [ -n "$identity" ]
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Leave the profile out
+        run: rm entitlements/developer-id.provisionprofile
+
+      # release.yml's step.
+      - name: Provisioning profile
+        id: profile
+        continue-on-error: true
+        run: ../tools/check-profile.sh "$SIGN_IDENTITY"
+
+      # release.yml's step, which its job never reaches after a failed step.
+      - name: Sign and notarize
+        id: sign
+        if: ${{ steps.profile.outcome == 'success' }}
+        run: ../tools/release.sh
+
+      - name: Nothing signed
+        if: ${{ always() }}
+        env:
+          PROFILE: ${{ steps.profile.outcome }}
+          SIGN: ${{ steps.sign.outcome }}
+        run: |
+          echo "Provisioning profile: $PROFILE; Sign and notarize: $SIGN"
+          [ "$PROFILE" = failure ] && [ "$SIGN" = skipped ]
+          # release.sh's own check, for a run that would call it anyway.
+          status=0
+          ../tools/release.sh > "$RUNNER_TEMP/out/release.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/out/release.txt"
+          echo "tools/release.sh exited $status"
+          [ "$status" = 1 ]
+          grep -q "isn't a provisioning profile" "$RUNNER_TEMP/out/release.txt"
+          if [ -e build/release ]; then echo "build/release exists:"; ls -la build/release; exit 1; fi
+          echo "No build/release: no signed app, no DMG."
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: missing
           path: ${{ runner.temp }}/out
