@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Arrange fixture</title>
+<style>
+  body { font: 16px/1.4 sans-serif; margin: 0; }
+  header { height: 64px; background: #ddd; display: flex; align-items: center; padding: 0 16px; }
+  main { width: 760px; margin: 0 auto; }
+  .card { padding: 16px; margin: 12px 0; background: #f4f4f4; height: 140px; }
+  .row { display: flex; gap: 12px; }
+  .row .card { flex: 1; }
+  .moved { transform: translateZ(0); }
+  img { display: block; width: 600px; height: 300px; background: #bbb; }
+</style>
+<header><nav><a href="/next?from=nav">Home</a></nav></header>
+<main>
+  <form id="search" action="/next"><input name="q" type="search"><button>Go</button></form>
+  <div class="row">
+    <div class="card"><a href="/next?from=a">Story A</a><p>First card.</p></div>
+    <div class="card"><a href="/next?from=b">Story B</a><p>Second card.</p></div>
+  </div>
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='300'/%3E" alt="">
+  <div class="card"><a href="/next?from=c">Story C</a><p>Third card.</p></div>
+  <div class="card"><a href="/next?from=d">Story D</a><p>Fourth card.</p></div>
+  <div class="card"><a href="/next?from=e">Story E</a><p>Fifth card.</p></div>
+  <p><a href="/next?from=away">Elsewhere</a></p>
+</main>
+<script>
+  // The site's own code: holds its cards, and keeps adding to the page later.
+  const cards = document.querySelectorAll('.card');
+  setTimeout(() => { const d = document.createElement('div'); d.className = 'card'; d.textContent = 'Late card'; document.querySelector('main').append(d); }, 400);
+</script>

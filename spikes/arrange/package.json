@@ -1,0 +1,9 @@
+{
+  "name": "ilo-arrange-spike",
+  "private": true,
+  "type": "module",
+  "description": "#2347's spike: ilo's placement runtime, run on public sites",
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
+}
