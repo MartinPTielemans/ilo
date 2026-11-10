@@ -4560,11 +4560,9 @@ fn automatic_update_checks() -> bool {
     true
 }
 
-fn set_automatic_update_checks(on: bool, _: &mut App) {
-    #[cfg(not(target_os = "linux"))]
-    crate::updates_host::set_automatic_checks(on);
-    #[cfg(target_os = "linux")]
-    let _ = on;
+// Through the updates' own state, as the update banner reads it.
+fn set_automatic_update_checks(on: bool, cx: &mut App) {
+    updates::set_automatic(on, cx);
 }
 
 fn set_whats_new(shown: bool, _: &mut App) {

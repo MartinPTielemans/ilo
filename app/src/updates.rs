@@ -114,6 +114,9 @@ pub trait Host {
     fn restart(&self, cx: &mut App);
     /// Has the updater read `track`'s feed from its next check on, and keeps the choice.
     fn follow(&self, track: Track, cx: &mut App);
+    /// Turns the updater's checks on its schedule on or off, and keeps the choice, where the user
+    /// can turn them off.
+    fn check_automatically(&self, _on: bool, _cx: &mut App) {}
 }
 
 #[derive(Default)]
@@ -128,6 +131,8 @@ struct Updates {
     followed: Option<Track>,
     /// Restart to Update was asked, and the quit that installs the update hasn't gone ahead yet.
     restarting: bool,
+    /// Whether the updater checks on its schedule, where the user can turn that off.
+    automatic: Option<bool>,
 }
 
 impl Global for Updates {}
@@ -145,6 +150,30 @@ pub fn tracks(built: Track, followed: Option<Track>, cx: &mut App) {
     let updates = cx.default_global::<Updates>();
     updates.built = built;
     updates.followed = followed;
+}
+
+/// Whether the updater checks on its schedule, where the user can turn that off: on the Mac and
+/// Windows, not a Flatpak's.
+pub fn checks(automatic: Option<bool>, cx: &mut App) {
+    cx.default_global::<Updates>().automatic = automatic;
+}
+
+/// Whether the updater checks on its own, where the user can turn that off.
+pub fn automatic(cx: &App) -> Option<bool> {
+    cx.try_global::<Updates>()?.automatic
+}
+
+/// Turns the updater's checks on its schedule on or off, as Settings › About's switch and the
+/// update banner do.
+pub fn set_automatic(on: bool, cx: &mut App) {
+    let updates = cx.default_global::<Updates>();
+    if updates.automatic.is_none_or(|automatic| automatic == on) {
+        return;
+    }
+    updates.automatic = Some(on);
+    if let Some(host) = updates.host.clone() {
+        host.check_automatically(on, cx);
+    }
 }
 
 /// The builds this one is of, which About's first row names.

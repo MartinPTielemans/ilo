@@ -5,7 +5,9 @@
 //! version and the button that moves it on: Restart to Update, which says Restarting… until the
 //! quit goes ahead, or Show Update, which opens Sparkle's window. It's the window's, not a tab's,
 //! so it sits with the players, under them, and opens over them. It never pops up, has no toast and
-//! no badge, and the restart that installs the update takes it away.
+//! no badge, and the restart that installs the update takes it away. While the updater's checks are
+//! off, which makes every update a manual one, it offers under its button to turn them on, as
+//! Arc's does after a manual update.
 
 use std::time::Instant;
 
@@ -56,6 +58,12 @@ const DETAIL_TOP: f32 = 2.;
 const DETAIL_LINE: f32 = 14.;
 const BUTTON_TOP: f32 = 8.;
 const BUTTON_INSET: f32 = 10.;
+/// Update Automatically's line under the button, while the updater's checks are off.
+const OFFER_TOP: f32 = 6.;
+const OFFER: f32 = 16.;
+
+/// The offer's words, as check.sh and an assistive app name it.
+const UPDATE_AUTOMATICALLY: &str = "Update Automatically";
 
 impl Shell {
     /// The banner's state, as check.sh reads it: collapsed, open or restarting, or none.
@@ -92,9 +100,16 @@ impl Shell {
 
     fn update_banner_rest(&self) -> f32 {
         match self.update_open || self.update_restarting {
+            true if self.offers_automatic_updates() => UPDATE_BANNER_OPEN + OFFER_TOP + OFFER,
             true => UPDATE_BANNER_OPEN,
             false => UPDATE_BANNER,
         }
+    }
+
+    /// Whether the open banner offers Update Automatically: while the checks are off, and not
+    /// once a restart is under way.
+    fn offers_automatic_updates(&self) -> bool {
+        self.update_offer && !self.update_restarting
     }
 
     /// Draws the banner's opening or closing on.
@@ -138,7 +153,11 @@ impl Shell {
         let ready = matches!(waiting, Some(Waiting::Ready(_)));
         let restarting = ready && updates::restarting(cx);
         let stopped = self.update_restarting && !restarting && ready;
-        if self.update_banner == waiting && self.update_restarting == restarting {
+        let offer = updates::automatic(cx) == Some(false);
+        if self.update_banner == waiting
+            && self.update_restarting == restarting
+            && self.update_offer == offer
+        {
             return;
         }
         let appears = self.update_banner.is_none();
@@ -146,6 +165,7 @@ impl Shell {
             |shell| {
                 shell.update_banner = waiting;
                 shell.update_restarting = restarting;
+                shell.update_offer = offer;
                 shell.update_open = (shell.update_open || stopped) && shell.update_banner.is_some();
             },
             cx,
@@ -178,6 +198,23 @@ impl Shell {
             }
             _ => {}
         }
+    }
+
+    /// A click on Update Automatically: the updater's checks come on, as About's switch turns
+    /// them, and the offer goes.
+    pub(super) fn click_update_offer(&mut self, cx: &mut Context<Self>) {
+        if !self.offers_automatic_updates() {
+            return;
+        }
+        log!("browser: command update-automatically via sidebar");
+        updates::set_automatic(true, cx);
+        self.update_changed(cx);
+    }
+
+    /// The banner open, as under the pointer, for the preview.
+    pub fn preview_update_banner_open(&mut self, cx: &mut Context<Self>) {
+        self.update_banner_hovered(true, cx);
+        self.update_motion = None;
     }
 
     /// The banner, while an update waits.
@@ -306,7 +343,30 @@ impl Shell {
                             .hover(|style| style.bg(self.palette.accent_hovered())),
                     })
                     .child(button),
-            );
+            )
+            .when(self.offers_automatic_updates(), |opened| {
+                opened.child(
+                    div()
+                        .id("update-banner-offer")
+                        .when(self.a11y, |offer| offer.button_named(UPDATE_AUTOMATICALLY))
+                        .mt(px(OFFER_TOP))
+                        .mx(px(BUTTON_INSET))
+                        .h(px(OFFER))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(text::SMALL))
+                        .text_color(self.palette.text(SECONDARY))
+                        .hover(|style| style.text_color(self.palette.text(1.)))
+                        // check.sh clicks it where it's drawn.
+                        .child(card_listener("update offer", &self.update_offer_drawn, 0))
+                        .child(UPDATE_AUTOMATICALLY)
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            cx.stop_propagation();
+                            shell.click_update_offer(cx);
+                        })),
+                )
+            });
         let named = if open { button } else { rest_words };
         Some(
             div()
@@ -352,6 +412,7 @@ mod tests {
 
     use gpui::{App, AppContext, Entity, TestAppContext};
 
+    use super::{OFFER, OFFER_TOP};
     use crate::shell::{Folders, Shell, recorder::Recorder};
     use crate::tokens::shell::{UPDATE_BANNER, UPDATE_BANNER_OPEN};
     use crate::updates::{self, Host, Stage, Updater};
@@ -376,6 +437,12 @@ mod tests {
         }
 
         fn follow(&self, _: updates::Track, _: &mut App) {}
+
+        fn check_automatically(&self, on: bool, _: &mut App) {
+            self.asked
+                .borrow_mut()
+                .push(if on { "automatic on" } else { "automatic off" });
+        }
     }
 
     fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Asked>) {
@@ -511,5 +578,95 @@ mod tests {
         says(Stage::Idle, cx);
         assert_eq!(state(&shell, cx), None);
         assert_eq!(shell.update(cx, |shell, _| shell.update_banner_room()), 0.);
+    }
+
+    /// The open banner's height once its motion is done.
+    fn open_height(shell: &Entity<Shell>, cx: &mut TestAppContext) -> f32 {
+        shell.update(cx, |shell, _| {
+            shell.update_motion = None;
+            shell.update_banner_height()
+        })
+    }
+
+    /// With the updater's checks off, every update is a manual one: the open banner offers Update
+    /// Automatically under its button, which turns them on and goes, the banner staying open.
+    #[gpui::test]
+    fn with_checks_off_the_open_banner_offers_to_turn_them_on(cx: &mut TestAppContext) {
+        let (shell, updater) = shell(cx);
+        cx.update(|cx| updates::checks(Some(false), cx));
+        for stage in [
+            Stage::Available(Some("0.1.5".into())),
+            Stage::Ready(Some("0.1.5".into())),
+        ] {
+            says(stage, cx);
+            shell.update(cx, |shell, cx| shell.update_banner_hovered(true, cx));
+            assert_eq!(
+                open_height(&shell, cx),
+                UPDATE_BANNER_OPEN + OFFER_TOP + OFFER
+            );
+            shell.update(cx, |shell, cx| shell.update_banner_hovered(false, cx));
+            assert_eq!(open_height(&shell, cx), UPDATE_BANNER, "the offer opens it");
+        }
+        shell.update(cx, |shell, cx| shell.update_banner_hovered(true, cx));
+        shell.update(cx, |shell, cx| shell.click_update_offer(cx));
+        assert_eq!(*updater.asked.borrow(), ["automatic on"]);
+        assert_eq!(cx.update(|cx| updates::automatic(cx)), Some(true));
+        assert_eq!(state(&shell, cx), Some("open"));
+        assert_eq!(open_height(&shell, cx), UPDATE_BANNER_OPEN);
+        // Gone, a second click asks nothing.
+        shell.update(cx, |shell, cx| shell.click_update_offer(cx));
+        assert_eq!(*updater.asked.borrow(), ["automatic on"]);
+    }
+
+    /// Turned off in Settings while an update waits, the banner offers it at once, and turned on
+    /// there, the offer goes.
+    #[gpui::test]
+    fn the_offer_follows_settings_switch(cx: &mut TestAppContext) {
+        let (shell, _) = shell(cx);
+        cx.update(|cx| updates::checks(Some(true), cx));
+        says(Stage::Ready(Some("0.1.5".into())), cx);
+        shell.update(cx, |shell, cx| shell.update_banner_hovered(true, cx));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN,
+            "an offer with checks on"
+        );
+        cx.update(|cx| updates::set_automatic(false, cx));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN + OFFER_TOP + OFFER
+        );
+        cx.update(|cx| updates::set_automatic(true, cx));
+        assert_eq!(open_height(&shell, cx), UPDATE_BANNER_OPEN);
+    }
+
+    /// Where the user can't turn the checks off, as in a Flatpak, and once a restart is under way,
+    /// there's no offer.
+    #[gpui::test]
+    fn no_offer_without_a_switch_or_while_restarting(cx: &mut TestAppContext) {
+        let (shell, updater) = shell(cx);
+        says(Stage::Ready(Some("0.1.5".into())), cx);
+        shell.update(cx, |shell, cx| shell.update_banner_hovered(true, cx));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN,
+            "an offer with no switch"
+        );
+        cx.update(|cx| updates::checks(Some(false), cx));
+        cx.update(|cx| updates::changed(Stage::Ready(Some("0.1.5".into())), cx));
+        shell.update(cx, |shell, cx| shell.update_changed(cx));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN + OFFER_TOP + OFFER
+        );
+        shell.update(cx, |shell, cx| shell.click_update_banner(cx));
+        assert_eq!(state(&shell, cx), Some("restarting"));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN,
+            "an offer while restarting"
+        );
+        shell.update(cx, |shell, cx| shell.click_update_offer(cx));
+        assert_eq!(*updater.asked.borrow(), ["restart"]);
     }
 }
