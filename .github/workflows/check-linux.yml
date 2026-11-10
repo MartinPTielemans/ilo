@@ -356,7 +356,12 @@ jobs:
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
             skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
-            if [ "$status" = 0 ]; then
+            # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+            # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+            whole=$(grep -m1 '^skip all: ' "$dir/$run.log" | cut -c11- | tr '|\t' '/ ') || true
+            if [ "$status" = 0 ] && [ -n "$whole" ]; then
+              result="skip: $whole"
+            elif [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
               result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
@@ -583,7 +588,7 @@ jobs:
                 'any(.[]; .session == $s and ((" " + .runs + " ") | contains(" " + $r + " ")))' > /dev/null; then
                 result=$(result "$session" "$run")
                 case $result in
-                passed*) ;;
+                passed* | skip:*) ;;
                 failed*) failure "$session" "$run" "$result" "The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
                 *) unfinished "$result" ;;
                 esac

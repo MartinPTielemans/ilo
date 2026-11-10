@@ -91,8 +91,8 @@ if [ -n "$engine_switch" ] && ! grep -q "$engine_log" "$log"; then
   exec 3>&- 5>&-
   quit
   rm -rf "$scratch"
-  echo "skip: adblock-$engine. This build has no $engine ad block engine, so it blocked with" \
-    "uBlock Origin, which adblock-parity measures."
+  echo "skip all: no $engine engine in this build, so it blocked with uBlock Origin, which" \
+    "adblock-parity measures"
   exit 0
 fi
 echo "requests $(app_path "$PWD/$requests")" >&5

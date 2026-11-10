@@ -418,7 +418,12 @@ jobs:
                 cp -r build/check "$out/$run" || true
                 rm -rf build/check || true
               fi
-              if [ "$status" = 0 ]; then
+              # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+              # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+              whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
+              if [ "$status" = 0 ] && [ -n "$whole" ]; then
+                result="skip: $whole"
+              elif [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s"
               else
                 # A run that ends without a FAIL line, such as one whose tool is missing, mustn't
