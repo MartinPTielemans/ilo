@@ -151,6 +151,9 @@ class AgentPage : public content::WebContentsObserver,
   void EndChoosing();
   void Type(bool submit);
   void Focus(int64_t element, bool submit);
+  // Types the job's text into |element|, which has the keyboard, with what it held selected.
+  void TypeInto(int64_t element, bool submit);
+  void TypeKeys(std::u16string text, bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   // Hears the page's requests, then turns the wheel, so the answer waits for what the scroll
   // starts loading.
@@ -199,11 +202,19 @@ class AgentPage : public content::WebContentsObserver,
   void IsPassword(int64_t element, base::OnceCallback<void(std::optional<bool>)> then);
   // Closes Chrome's autofill and password suggestions, which the keys would otherwise pick from.
   void HideSuggestions();
-  // Whether an extension's control is what input at |at|, in the viewport of the frame of the
-  // session at |slot|, would land on: a frame that isn't a web page's, as an extension's own is,
-  // or what an extension's content script put in the page (engine/patches/ours/
+  // Whether an extension's control is what input at |at|, in the main frame's viewport, would
+  // land on, in whichever frame it lands: a frame that isn't a web page's, as an extension's own
+  // is, or what an extension's content script put in the page (engine/patches/ours/
   // chromium-agent-extension-nodes.patch). Agents never act on an extension's controls.
-  void Covered(int slot, gfx::PointF at, base::OnceCallback<void(bool)> then);
+  void Covered(gfx::PointF at, base::OnceCallback<void(bool)> then);
+  // The same, at |at| in the viewport of the frame of the session at |slot|, |depth| frames down.
+  void CoveredIn(int slot, gfx::PointF at, int depth, base::OnceCallback<void(bool)> then);
+  void CoveredBy(int slot,
+                 gfx::PointF at,
+                 int depth,
+                 int node,
+                 base::OnceCallback<void(bool)> then,
+                 const base::DictValue* described);
   // Whether the keyboard is in a frame that isn't a web page's, as an extension's menu is when it
   // has taken focus. An agent's keys go nowhere then.
   bool KeysInExtension();

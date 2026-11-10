@@ -23,6 +23,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/third_party/icu/icu_utf.h"
 #include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
@@ -797,8 +798,10 @@ void AgentPage::PressInView() {
                     return;
                   }
                   page->Point(*shown);
+                  // From the top frame down, as the click goes, so what an extension put over
+                  // the element in any frame above it is found.
                   page->Covered(
-                      slot, at,
+                      shown->CenterPoint(),
                       base::BindOnce(
                           [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
                              bool covered) {
@@ -1151,7 +1154,8 @@ void AgentPage::Focus(int64_t element, bool submit) {
   // Focus moves to the element's frame, where the main frame's keys then go.
   Send("DOM.focus", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* focused) {
+           [](base::WeakPtr<AgentPage> page, int64_t element, bool submit,
+              const base::DictValue* focused) {
              if (!page) {
                return;
              }
@@ -1177,27 +1181,93 @@ void AgentPage::Focus(int64_t element, bool submit) {
                         base::DoNothing());
              page->Send("Input.dispatchKeyEvent", select.Clone().Set("type", "keyUp"),
                         base::DoNothing());
-             page->Send(
-                 "Input.insertText", base::DictValue().Set("text", page->job_->text),
-                 base::BindOnce(
-                     [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* typed) {
-                       if (!page) {
-                         return;
-                       }
-                       if (!typed) {
-                         page->Fail("The page didn't take the text.");
-                         return;
-                       }
-                       if (submit) {
-                         page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
-                       } else {
-                         page->Settle();
-                       }
-                     },
-                     page, submit));
+             page->TypeInto(element, submit);
            },
-           weak_factory_.GetWeakPtr(), submit),
+           weak_factory_.GetWeakPtr(), element, submit),
        SlotOfElement(element));
+}
+
+void AgentPage::TypeInto(int64_t element, bool submit) {
+  std::u16string text = base::UTF8ToUTF16(job_->text);
+  base::ReplaceSubstringsAfterOffset(&text, 0, u"\r\n", u"\n");
+  std::ranges::replace(text, u'\r', u'\n');
+  if (text.find(u'\n') == std::u16string::npos) {
+    TypeKeys(std::move(text), submit);
+    return;
+  }
+  // An input holds one line, where Enter would submit its form: its line breaks go, as they
+  // would had the text been pasted.
+  Send("DOM.describeNode", base::DictValue().Set("backendNodeId", NodeOfElement(element)),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::u16string text, bool submit,
+              const base::DictValue* described) {
+             if (!page) {
+               return;
+             }
+             const std::string* name =
+                 described ? described->FindStringByDottedPath("node.nodeName") : nullptr;
+             if (name && base::EqualsCaseInsensitiveASCII(*name, "input")) {
+               std::erase(text, u'\n');
+             }
+             page->TypeKeys(std::move(text), submit);
+           },
+           weak_factory_.GetWeakPtr(), std::move(text), submit),
+       SlotOfElement(element));
+}
+
+void AgentPage::TypeKeys(std::u16string text, bool submit) {
+  auto typed = base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* typed) {
+        if (!page) {
+          return;
+        }
+        if (!typed) {
+          page->Fail("The page didn't take the text.");
+          return;
+        }
+        if (submit) {
+          page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
+        } else {
+          page->Settle();
+        }
+      },
+      weak_factory_.GetWeakPtr(), submit);
+  // Nothing to type clears what's selected, as Delete would.
+  if (text.empty()) {
+    const base::DictValue key = base::DictValue()
+                                    .Set("key", "Delete")
+                                    .Set("code", "Delete")
+                                    .Set("windowsVirtualKeyCode", 46);
+    Send("Input.dispatchKeyEvent", key.Clone().Set("type", "rawKeyDown"), base::DoNothing());
+    Send("Input.dispatchKeyEvent", key.Clone().Set("type", "keyUp"), std::move(typed));
+    return;
+  }
+  // A character a key, as a keyboard types it, rather than DevTools' insertText: a key carries
+  // DevTools' mark of input that isn't the user's, which keeps it from an extension's listeners
+  // (engine/patches/ours/chromium-agent-extension-listeners.patch), and an IME's commit doesn't.
+  // A line break is Enter's.
+  size_t at = 0;
+  while (at < text.size()) {
+    const size_t size =
+        CBU16_IS_LEAD(text[at]) && at + 1 < text.size() && CBU16_IS_TRAIL(text[at + 1]) ? 2 : 1;
+    const std::string piece = base::UTF16ToUTF8(text.substr(at, size));
+    at += size;
+    base::DictValue event = base::DictValue().Set("type", "char");
+    if (piece == "\n") {
+      event.Set("key", "Enter")
+          .Set("code", "Enter")
+          .Set("windowsVirtualKeyCode", 13)
+          .Set("text", "\r")
+          .Set("unmodifiedText", "\r");
+    } else {
+      event.Set("key", piece).Set("text", piece).Set("unmodifiedText", piece);
+    }
+    if (at < text.size()) {
+      Send("Input.dispatchKeyEvent", std::move(event), base::DoNothing());
+    } else {
+      Send("Input.dispatchKeyEvent", std::move(event), std::move(typed));
+    }
+  }
 }
 
 void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
@@ -1282,8 +1352,8 @@ void AgentPage::TurnWheel(bool down) {
 
 void AgentPage::Wheel(const gfx::RectF& area, bool down) {
   const gfx::PointF at = area.CenterPoint();
-  // The main frame's session, where the wheel goes, finds what's there as the wheel would.
-  Covered(0, at,
+  // From the main frame, where the wheel goes, down through the frames it goes into.
+  Covered(at,
           base::BindOnce(
               [](base::WeakPtr<AgentPage> page, gfx::PointF at, bool down, float height,
                  bool covered) {
@@ -1806,12 +1876,19 @@ void AgentPage::HideSuggestions() {
   }
 }
 
-void AgentPage::Covered(int slot, gfx::PointF at, base::OnceCallback<void(bool)> then) {
+void AgentPage::Covered(gfx::PointF at, base::OnceCallback<void(bool)> then) {
+  CoveredIn(0, at, 0, std::move(then));
+}
+
+void AgentPage::CoveredIn(int slot,
+                          gfx::PointF at,
+                          int depth,
+                          base::OnceCallback<void(bool)> then) {
   Send("DOM.getNodeForLocation",
        base::DictValue().Set("x", static_cast<int>(at.x())).Set("y", static_cast<int>(at.y())),
        base::BindOnce(
-           [](base::WeakPtr<AgentPage> page, int slot, base::OnceCallback<void(bool)> then,
-              const base::DictValue* found) {
+           [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at, int depth,
+              base::OnceCallback<void(bool)> then, const base::DictValue* found) {
              if (!page) {
                return;
              }
@@ -1823,55 +1900,78 @@ void AgentPage::Covered(int slot, gfx::PointF at, base::OnceCallback<void(bool)>
              }
              page->Send(
                  "DOM.describeNode", base::DictValue().Set("backendNodeId", *node),
-                 base::BindOnce(
-                     [](base::WeakPtr<AgentPage> page, int slot, int node,
-                        base::OnceCallback<void(bool)> then, const base::DictValue* described) {
-                       if (!page) {
-                         return;
-                       }
-                       // A frame's element: the frame it holds takes the input, and one that
-                       // isn't a web page's is an extension's, or the browser's.
-                       const std::string* frame =
-                           described ? described->FindStringByDottedPath("node.frameId") : nullptr;
-                       bool other = false;
-                       if (frame) {
-                         page->GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
-                             [&other, frame](content::RenderFrameHost* each) {
-                               if (each->GetDevToolsFrameToken().ToString() == *frame &&
-                                   !IsWebFrame(each)) {
-                                 other = true;
-                               }
-                             });
-                       }
-                       if (other) {
-                         std::move(then).Run(true);
-                         return;
-                       }
-                       page->Send(
-                           "Accessibility.getPartialAXTree",
-                           base::DictValue()
-                               .Set("backendNodeId", node)
-                               .Set("fetchRelatives", false),
-                           base::BindOnce(
-                               [](base::OnceCallback<void(bool)> then,
-                                  const base::DictValue* tree) {
-                                 const base::ListValue* nodes =
-                                     tree ? tree->FindList("nodes") : nullptr;
-                                 bool made = false;
-                                 for (size_t i = 0; nodes && i < nodes->size(); ++i) {
-                                   if (const base::DictValue* dict = (*nodes)[i].GetIfDict()) {
-                                     made = made || Has(*dict, "fromExtension");
-                                   }
-                                 }
-                                 std::move(then).Run(made);
-                               },
-                               std::move(then)),
-                           slot);
-                     },
-                     page, slot, *node, std::move(then)),
+                 base::BindOnce(&AgentPage::CoveredBy, page, slot, at, depth, *node,
+                                std::move(then)),
                  slot);
            },
-           weak_factory_.GetWeakPtr(), slot, std::move(then)),
+           weak_factory_.GetWeakPtr(), slot, at, depth, std::move(then)),
+       slot);
+}
+
+void AgentPage::CoveredBy(int slot,
+                          gfx::PointF at,
+                          int depth,
+                          int node,
+                          base::OnceCallback<void(bool)> then,
+                          const base::DictValue* described) {
+  // A frame's element: the frame it holds takes the input, and one that isn't a web page's is an
+  // extension's, or the browser's.
+  const std::string* frame =
+      described ? described->FindStringByDottedPath("node.frameId") : nullptr;
+  content::RenderFrameHost* inner = nullptr;
+  if (frame) {
+    GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+        [&inner, frame](content::RenderFrameHost* each) {
+          if (each->GetDevToolsFrameToken().ToString() == *frame) {
+            inner = each;
+          }
+        });
+  }
+  if (inner && !IsWebFrame(inner)) {
+    std::move(then).Run(true);
+    return;
+  }
+  // A page's frame in a process of its own, whose own session finds what's under the point there,
+  // which is its frame's element's content box's top left on. One in the same process the first
+  // look went into.
+  const int below = inner ? SlotOf(inner) : -1;
+  constexpr int kDeepest = 8;
+  if (below >= 0 && below != slot && depth < kDeepest) {
+    Send("DOM.getBoxModel", base::DictValue().Set("backendNodeId", node),
+         base::BindOnce(
+             [](base::WeakPtr<AgentPage> page, int below, gfx::PointF at, int depth,
+                base::OnceCallback<void(bool)> then, const base::DictValue* result) {
+               if (!page) {
+                 return;
+               }
+               const base::ListValue* content =
+                   result ? result->FindListByDottedPath("model.content") : nullptr;
+               if (!content || content->size() < 2) {
+                 std::move(then).Run(false);
+                 return;
+               }
+               at.Offset(-static_cast<float>((*content)[0].GetIfDouble().value_or(0)),
+                         -static_cast<float>((*content)[1].GetIfDouble().value_or(0)));
+               page->CoveredIn(below, at, depth + 1, std::move(then));
+             },
+             weak_factory_.GetWeakPtr(), below, at, depth, std::move(then)),
+         slot);
+    return;
+  }
+  Send("Accessibility.getPartialAXTree",
+       base::DictValue().Set("backendNodeId", node).Set("fetchRelatives", false),
+       base::BindOnce(
+           [](base::OnceCallback<void(bool)> then, const base::DictValue* tree) {
+             const base::ListValue* nodes = tree ? tree->FindList("nodes") : nullptr;
+             bool made = false;
+             for (size_t i = 0; nodes && i < nodes->size(); ++i) {
+               if (const base::DictValue* dict = (*nodes)[i].GetIfDict()) {
+                 made = made || Has(*dict, "fromExtension");
+               }
+             }
+             std::move(then).Run(made);
+           },
+           std::move(then)),
        slot);
 }
 

@@ -1,11 +1,12 @@
 Marks the nodes an extension's content script makes, for the core's agent (//browser_core/
 agent_page.cc): Blink sets a node's last free flag when it's made while script runs in an
-extension's isolated world, as a password manager's in-page button and menu are, and DevTools'
-accessibility tree gives such a node, and every node inside it, the property fromExtension. An
+extension's isolated world, as a password manager's in-page button and menu are. DevTools'
+accessibility tree gives such a node, and every node inside it, the property fromExtension, and an
+accessibility snapshot, which the core's read of a page takes, the HTML attribute fromExtension. An
 agent's outline and text leave them out, and the core refuses an agent's click that would land on
 one, so an agent never acts on an extension's controls as if they were the page's (#2355). Only a
 node made while script runs is checked, and only once a world other than the page's exists; the
-parser's never are. An extension that runs its scripts in the page's own world reads as the page.
+parser's never are.
 
 --- a/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
 +++ b/third_party/blink/renderer/platform/bindings/dom_wrapper_world.h
@@ -147,3 +148,21 @@ parser's never are. An extension that runs its scripts in the page's own world r
  
    const AXObject* parent = ax_object.ParentObjectIncludedInTree();
    if (parent) {
+--- a/third_party/blink/renderer/modules/accessibility/ax_object.cc
++++ b/third_party/blink/renderer/modules/accessibility/ax_object.cc
+@@ -1194,6 +1194,15 @@
+   }
+   node_data->id = AXObjectID();
+ 
++  // ilo: what an extension's content script made is the extension's, not the page's, and an
++  // agent's read of the page leaves it out (#2355). Only a snapshot, which is what that read
++  // takes, carries the mark, so assistive technology's tree is as it was.
++  if (is_snapshot) {
++    if (const Node* node = GetNode(); node && node->IsMadeByExtension()) {
++      node_data->html_attributes.emplace_back("fromExtension", "");
++    }
++  }
++
+   PreSerializationConsistencyCheck();
+ 
+   if (node_data->role == ax::mojom::blink::Role::kInlineTextBox) {
