@@ -225,11 +225,17 @@ perf_row launch-held "Launch, the page held for uBlock Origin" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
 
 log="$perf_dir/session.log"
+# #2138, not for merge: Chromium's memory-infra, a detailed dump every 20 s, for ilo and Chrome.
+perf_trace_config() { # <file> <seconds> <result>
+  printf '{"trace_config":{"included_categories":["disabled-by-default-memory-infra"],"excluded_categories":["*"],"record_mode":"record-until-full","trace_buffer_size_in_kb":400000,"memory_dump_config":{"triggers":[{"mode":"detailed","periodic_interval_ms":20000}]}},"startup_duration":%s,"result_file":"%s"}\n' \
+    "$2" "$(app_path "$3" | sed 's/\\/\\\\/g')" > "$1"
+}
+perf_trace_config "$perf_dir/trace-ilo.config" 245 "$PWD/$perf_dir/trace-ilo.json"
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-  < "$out/drive" > "$log" 2>&1 &
+  --trace-config-file="$(app_path "$PWD/$perf_dir/trace-ilo.config")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
@@ -365,7 +371,7 @@ chrome_profile="$PWD/$perf_dir/chrome-profile"
 # Opens page $1 in Chrome, which a running Chrome takes as a new tab.
 chrome_open() {
   "$chrome" --user-data-dir="$chrome_profile" --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic "$page?$1" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
+    --use-mock-keychain --password-store=basic ${chrome_trace:-} "$page?$1" < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
 }
 # Quits Chrome as quit_app does the app, then ends what's left of it.
 chrome_quit() {
@@ -414,9 +420,12 @@ else
   else
     sleep 15
     chrome_quit
+    perf_trace_config "$perf_dir/trace-chrome.config" 175 "$PWD/$perf_dir/trace-chrome.json"
+    chrome_trace="--trace-config-file=$(app_path "$PWD/$perf_dir/trace-chrome.config")"
     chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
     started=$(($(date +%s) - 5))
     perf_until $((started + 30))
+    chrome_trace=
     perf_memory chrome-1
     perf_row chrome-memory-1 "Chrome here, memory, 1 tab" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
