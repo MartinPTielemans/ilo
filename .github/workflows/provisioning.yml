@@ -49,6 +49,23 @@ jobs:
           openssl x509 -in "$out/developer-id.pem" -noout -subject -serial -enddate -fingerprint -sha1 | tee "$out/certificate.txt"
           echo "SERIAL=$(openssl x509 -in "$out/developer-id.pem" -noout -serial | sed 's/^serial=//')" >> "$GITHUB_ENV"
 
+      # Read-only: whether notarization answers this key, which the next release needs.
+      - name: Notarization
+        env:
+          MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          out=$RUNNER_TEMP/out
+          key=$RUNNER_TEMP/notary.p8
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf %s "$MAC_NOTARY_KEY" | base64 --decode > "$key")
+          status=0
+          xcrun notarytool history --key "$key" --key-id "$MAC_NOTARY_KEY_ID" --issuer "$MAC_NOTARY_ISSUER_ID" \
+            > "$out/notary.txt" 2>&1 || status=$?
+          echo "notarytool history exited $status"
+          head -40 "$out/notary.txt"
+
       - name: Profile
         env:
           MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
@@ -106,7 +123,7 @@ jobs:
           ids = [b for b in call("GET", f"/v1/bundleIds?filter[identifier]={bundle}&limit=200")["data"]
                  if b["attributes"]["identifier"] == bundle]
           for b in ids:
-              print("bundle id:", b["id"], json.dumps(b["attributes"]))
+              print("FOUND the bundle id, already registered:", b["id"], json.dumps(b["attributes"]))
           if ids:
               bundle_id = ids[0]["id"]
           else:
