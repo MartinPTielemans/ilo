@@ -1,0 +1,57 @@
+# #2358 step 1: how Chromium's forced dark renders eight public sites with no dark look of their
+# own, and one with its own (MDN) that it should leave alone. Google Chrome on the hosted runner,
+# the same Blink feature as ilo's engine, a new profile per capture and no accounts. Runs on this
+# branch alone and goes with it.
+name: Forced dark look
+on:
+  push:
+    branches: [feat/dark-for-site-2358-1]
+permissions:
+  contents: read
+jobs:
+  look:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Capture
+        run: |
+          chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          "$chrome" --version
+          mkdir -p out
+          sites=(
+            "news|https://apnews.com/"
+            "docs|https://www.gnu.org/software/bash/manual/bash.html"
+            "shop|https://books.toscrape.com/"
+            "forum|https://news.ycombinator.com/"
+            "article|https://www.paulgraham.com/greatwork.html"
+            "app|https://www.desmos.com/scientific"
+            "images|https://www.nasa.gov/image-of-the-day/"
+            "charts|https://ourworldindata.org/grapher/life-expectancy"
+            "own-dark|https://developer.mozilla.org/en-US/docs/Web/CSS/color-scheme"
+          )
+          dark=(--force-dark-mode --enable-features=WebContentsForceDark)
+          thresholds=foreground_lightness_threshold/150/background_lightness_threshold/205
+          variants=(
+            "plain|"
+            "default|${dark[*]}"
+            "selective-images|--force-dark-mode --enable-features=WebContentsForceDark:inversion_method/cielab_based/image_behavior/selective/$thresholds"
+            "text-contrast|--force-dark-mode --enable-features=WebContentsForceDark:inversion_method/cielab_based/image_behavior/none/$thresholds/increase_text_contrast/true"
+          )
+          for site in "${sites[@]}"; do
+            name=${site%%|*} url=${site#*|}
+            for variant in "${variants[@]}"; do
+              vname=${variant%%|*} flags=${variant#*|}
+              profile=$(mktemp -d)
+              # shellcheck disable=SC2086
+              "$chrome" --headless=new --user-data-dir="$profile" --no-first-run \
+                --window-size=1280,900 --hide-scrollbars --virtual-time-budget=10000 \
+                $flags --screenshot="$PWD/out/$name-$vname.png" "$url" \
+                > "out/$name-$vname.log" 2>&1 || echo "$name $vname failed"
+              rm -rf "$profile"
+            done
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: force-dark-look
+          path: out/
