@@ -2447,8 +2447,9 @@ fn main() {
                     // Mock (#2344): PREVIEW_GROUP=before, sorted or folders shows twelve Today
                     // tabs of four sites as they came, sorted by site (option 3), or in a folder
                     // a site among the Today tabs (option 1).
+                    let mut mock_last = MOCK_GROUP_FIRST;
                     if let Ok(group) = std::env::var("PREVIEW_GROUP") {
-                        mock_group(&mut shell, first_space, &group, cx);
+                        mock_last = mock_group(&mut shell, first_space, &group, cx);
                     }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
@@ -2547,8 +2548,7 @@ fn main() {
                     if let Ok(group) = std::env::var("PREVIEW_GROUP") {
                         shell.set_favorites(Vec::new(), cx);
                         if group.ends_with("-end") {
-                            let last = MOCK_GROUP_FIRST + MOCK_GROUP_TABS.len() as u64 - 1;
-                            shell.set_selected(last, cx);
+                            shell.set_selected(mock_last, cx);
                             let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
@@ -3448,7 +3448,8 @@ const MOCK_GROUP_SITES: [(&str, &str); 4] = [
 
 const MOCK_GROUP_FIRST: u64 = 9000;
 
-fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context<Shell>) {
+/// Lays out the mock's Today tabs as `group` says, and returns the tab on the list's last row.
+fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context<Shell>) -> u64 {
     const FIRST: u64 = MOCK_GROUP_FIRST;
     let ids: Vec<u64> = (FIRST..).take(MOCK_GROUP_TABS.len()).collect();
     for (&tab, (title, url)) in ids.iter().zip(MOCK_GROUP_TABS) {
@@ -3488,5 +3489,7 @@ fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context
         }
         _ => ids.clone(),
     };
+    let last = *today.last().expect("the mock's tabs");
     shell.set_tabs(space, Vec::new(), today, Vec::new(), folders, cx);
+    last
 }
