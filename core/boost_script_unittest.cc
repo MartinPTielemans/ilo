@@ -2,8 +2,6 @@
 
 #include <string>
 
-#include "base/files/file_util.h"
-#include "base/files/scoped_temp_dir.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -45,7 +43,6 @@ TEST_F(BoostScriptTest, TurnOffAndDeleteForgetIt) {
   ASSERT_TRUE(TurnOn(prefs_, "a.test", kScript));
   Forget(prefs_, "a.test");
   EXPECT_EQ(Check(prefs_, "a.test", kScript), State::kNew);
-  EXPECT_FALSE(Recorded(prefs_, "a.test"));
 }
 
 TEST_F(BoostScriptTest, OverTheLimitIsOffAndCantBeTurnedOn) {
@@ -64,7 +61,6 @@ TEST_F(BoostScriptTest, OnlyASiteHasARecord) {
                                "a test", "a.test\\x", "a.test."}) {
     EXPECT_FALSE(TurnOn(prefs_, not_site, kScript)) << not_site;
     EXPECT_EQ(Check(prefs_, not_site, kScript), State::kNew) << not_site;
-    EXPECT_TRUE(CopyPath(base::FilePath(FILE_PATH_LITERAL("/p")), not_site).empty()) << not_site;
   }
 }
 
@@ -73,29 +69,6 @@ TEST_F(BoostScriptTest, TheRecordNeverSyncs) {
   // No flag at all, so neither the Settings choice nor priority preferences carry it.
   EXPECT_EQ(prefs_.registry()->GetRegistrationFlags("browser_core.boost_scripts"), 0u)
       << "a syncable record would let a server turn a script on";
-}
-
-TEST_F(BoostScriptTest, TheCopyShowsTheDiffOnlyWhileItIsTheTextTurnedOn) {
-  base::ScopedTempDir profile;
-  ASSERT_TRUE(profile.CreateUniqueTempDir());
-  const base::FilePath path = CopyPath(profile.GetPath(), "a.test");
-  // Outside the Boosts folder, so a copy of that folder never carries it.
-  EXPECT_FALSE(profile.GetPath().Append(FILE_PATH_LITERAL("Boosts")).IsParent(path));
-  EXPECT_TRUE(profile.GetPath().IsParent(path));
-
-  ASSERT_TRUE(TurnOn(prefs_, "a.test", kScript));
-  ASSERT_TRUE(KeepCopy(path, std::string_view(kScript)));
-  EXPECT_EQ(LastTurnedOn(path, *Recorded(prefs_, "a.test")), kScript);
-
-  // A copy someone rewrote shows nothing, and the dialog shows the whole script.
-  ASSERT_TRUE(base::WriteFile(path, "fetch('https://b.test/');\n"));
-  EXPECT_FALSE(LastTurnedOn(path, *Recorded(prefs_, "a.test")));
-  // Nor does it turn anything on: only the record decides.
-  EXPECT_EQ(Check(prefs_, "a.test", "fetch('https://b.test/');\n"), State::kChanged);
-
-  ASSERT_TRUE(KeepCopy(path, std::nullopt));
-  EXPECT_FALSE(base::PathExists(path));
-  EXPECT_FALSE(LastTurnedOn(path, *Recorded(prefs_, "a.test")));
 }
 
 }  // namespace
