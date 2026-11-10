@@ -850,8 +850,10 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     let mut args: Vec<String> = vec![
         format!("--user-data-dir={profile}"),
         // Chrome would copy the app bundle to check its signature against, which an
-        // ad-hoc-signed build doesn't need.
-        "--disable-features=MacAppCodeSignClone".into(),
+        // ad-hoc-signed build doesn't need. And off the Mac, every switch would copy and encode
+        // the tab it leaves for the hover cards of Chrome's tab strip, which ilo never shows: its
+        // own hover card takes its own picture (core/capture.cc, #2377).
+        "--disable-features=MacAppCodeSignClone,TabHoverCardImages".into(),
         // An idle browser shouldn't wake: Chrome's stack sampling feeds metrics nobody receives,
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
