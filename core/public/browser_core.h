@@ -1821,6 +1821,16 @@ BC_EXPORT size_t bc_space_theme(bc_id space, char* theme, size_t capacity);
 // comes; empty takes the theme away. Then spaces_changed.
 BC_EXPORT void bc_space_set_theme(bc_id space, const char* theme);
 
+// Gives the Space's theme colours to Boosts (docs/ux-spec.md › Boosts), so a Boost can match a
+// site to the sidebar: |properties|, CSS declarations of ilo's own custom properties, such as
+// "--ilo-space-background: #1c2a3b; --ilo-space-text: #f4f4f4", for a Boost's CSS to read with
+// var(). They go only on pages that take a Boost, at the document's root with its style sheet, so
+// a page with none sees nothing of them, and a tab moved to another Space takes that Space's. The
+// core keeps them as they come and doesn't keep them across a relaunch: the app gives them again
+// at launch and as the theme or the appearance changes. Empty or null takes them away. The
+// user's: agents get none, as a Boost is.
+BC_EXPORT void bc_space_set_boost_colors(bc_id space, const char* properties);
+
 // Deletes the Space, unless it's the last, and returns whether it will. A window showing it shows
 // the Space before it, else the one after it. Its tabs close, and it goes with the last of them; a
 // page that keeps its tab open keeps the Space until it closes. Its Today tabs reopen with

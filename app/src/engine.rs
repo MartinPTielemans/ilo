@@ -1103,6 +1103,11 @@ impl Browser for Engine {
         unsafe { bc::bc_space_set_theme(space, theme.as_ptr()) };
     }
 
+    fn set_space_boost_colors(&self, space: u64, properties: &str, _: &mut App) {
+        let properties = CString::new(properties).unwrap_or_default();
+        unsafe { bc::bc_space_set_boost_colors(space, properties.as_ptr()) };
+    }
+
     fn set_space_profile(&self, space: u64, profile: u64, _: &mut App) {
         unsafe { bc::bc_space_set_profile(space, profile) };
     }

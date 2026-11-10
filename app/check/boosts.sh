@@ -46,6 +46,36 @@ await "^browser: title $tab ad block rgb(0, 128, 0)\$" ||
   fail "a save of the Boost's file didn't show on the page"
 ../tools/window-screenshot.sh "$pid" "$out/boosted.png" || fail "no window to capture"
 
+# A Boost reads its tab's Space's colours with var(), the ones the app gave the core, and takes the
+# new ones as the appearance changes them, with no reload.
+await '^browser: boost colors [0-9]* ' || fail "the app gave the core no Space's colours"
+system=$(grep '^browser: boost colors ' "$log" | tail -1 | cut -d' ' -f5)
+other=dark
+[ "$system" = light ] || other=light
+# The page's computed background for the last colours the app gave in `look`.
+space_background() {
+  hex=$(grep "^browser: boost colors [0-9]* $1 " "$log" | tail -1 |
+    sed 's/.*--ilo-space-background: #\([0-9a-f]*\);.*/\1/')
+  printf 'rgb(%d, %d, %d)' "0x$(echo "$hex" | cut -c1-2)" "0x$(echo "$hex" | cut -c3-4)" \
+    "0x$(echo "$hex" | cut -c5-6)"
+}
+printf '%s\n' 'body { background: var(--ilo-space-background) !important; }' > "$file"
+await "^browser: title $tab ad block $(space_background "$system")\$" ||
+  fail "the Boost didn't read the Space's colour: $(grep '^browser: title' "$log" | tail -1)"
+for look in $other $system; do
+  item=Dark
+  [ "$look" = dark ] || item=Light
+  [ "$look" = "$system" ] && item=Automatic
+  send menu "Appearance › $item"
+  expect "^browser: boost colors [0-9]* $look " "View › Appearance › $item gave Boosts no colours"
+  expect "^browser: title $tab ad block $(space_background "$look")\$" \
+    "the Boost didn't take the Space's $look colour: $(grep '^browser: title' "$log" | tail -1)"
+  ../tools/window-screenshot.sh "$pid" "$out/boost-space-colors-$look.png" ||
+    fail "no window to capture"
+done
+printf '%s\n' 'body { background: rgb(0, 128, 0) !important; }' > "$file"
+expect "^browser: title $tab ad block rgb(0, 128, 0)\$" "the Boost's file kept the Space's colour"
+
 send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
@@ -113,10 +143,13 @@ expect "^browser: boost shown $host (0 bytes)\$" "the Boost's file going didn't 
 expect "^browser: title $tab ad block rgb(51, 51, 51)\$" "the page kept the Boost's CSS"
 exec 3>&-
 quit
-echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
+echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed;" \
+  "its var(--ilo-space-background) took the Space's colour, dark and light; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card;" \
   "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
+  "Windows: $out/boosted.png, $out/boost-space-colors-dark.png," \
+  "$out/boost-space-colors-light.png," \
+  "$out/boost-card.png, $out/zapped.png," \
   "$out/boost-tab-menu.png, $out/boost-plus-menu.png"

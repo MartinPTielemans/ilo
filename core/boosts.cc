@@ -10,7 +10,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "browser_core/window.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "content/public/browser/host_zoom_map.h"
@@ -122,6 +124,12 @@ std::map<bc_id, std::map<std::string, std::string, std::less<>>>& Store() {
   return *store;
 }
 
+// Each Space's colours for its tabs' Boosts, by Space.
+std::map<bc_id, std::string>& SpaceColorStore() {
+  static base::NoDestructor<std::map<bc_id, std::string>> store;
+  return *store;
+}
+
 // The profile whose Boosts |contents| takes: a private window's takes its original's.
 bc_id ProfileIdOf(content::WebContents* contents) {
   Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
@@ -214,10 +222,65 @@ void Boosts::Set(bc_id profile, std::string_view site, std::string_view css) {
   }
 }
 
+// static
+void Boosts::SetSpaceColors(bc_id space, std::string_view properties) {
+  // Declarations only: a brace would end the rule they go in and drop the user's CSS with it.
+  if (properties.find_first_of("{}") != std::string_view::npos) {
+    LOG(ERROR) << "browser: boost colours of space " << space << " refused";
+    properties = {};
+  }
+  auto& store = SpaceColorStore();
+  auto it = store.find(space);
+  if (it != store.end() ? it->second == properties : properties.empty()) {
+    return;
+  }
+  if (properties.empty()) {
+    store.erase(it);
+  } else {
+    store.insert_or_assign(space, std::string(properties));
+  }
+  SpacesChanged();
+}
+
+// static
+void Boosts::SpacesChanged() {
+  for (Tab* tab : Tab::All()) {
+    content::WebContents* contents = tab->web_contents();
+    Boosts* each = contents ? Boosts::FromWebContents(contents) : nullptr;
+    if (each && each->boosted_ && each->SpaceColors() != each->colors_) {
+      each->Reapply();
+    }
+  }
+}
+
+std::string_view Boosts::SpaceColors() {
+  const Space* space = Window::SpaceOf(web_contents());
+  auto it = space ? SpaceColorStore().find(space->id()) : SpaceColorStore().end();
+  return it == SpaceColorStore().end() ? std::string_view() : std::string_view(it->second);
+}
+
+void Boosts::Reapply() {
+  const bc_id profile = ProfileIdOf(web_contents());
+  web_contents()->ForEachRenderFrameHost([&](content::RenderFrameHost* frame) {
+    if (!CssFor(profile, SiteOf(frame->GetLastCommittedURL())).empty()) {
+      Apply(frame);
+    }
+  });
+}
+
 void Boosts::Apply(content::RenderFrameHost* frame) {
   const std::string_view css =
       CssFor(ProfileIdOf(web_contents()), SiteOf(frame->GetLastCommittedURL()));
-  Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+  if (css.empty()) {
+    Run(frame, "css", css, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
+    return;
+  }
+  // The Space's colours first, so the user's CSS can read them with var() and set its own.
+  boosted_ = true;
+  colors_ = std::string(SpaceColors());
+  const std::string sheet =
+      colors_.empty() ? std::string(css) : ":root{" + colors_ + "}\n" + std::string(css);
+  Run(frame, "css", sheet, 0, 0, content::RenderFrameHost::JavaScriptResultCallback());
 }
 
 void Boosts::Zap(bool on) {

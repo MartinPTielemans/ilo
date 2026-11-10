@@ -119,6 +119,9 @@ pub(super) struct Recorder {
     pub(super) capture_look: Cell<Option<(u64, bool)>>,
     /// The appearance View › Appearance last chose.
     pub(super) appearance: Cell<Option<Appearance>>,
+    /// Each Space's colours given to Boosts, as "<space> <properties>", in order; kept apart from
+    /// the calls, as every window's first frame gives them.
+    pub(super) boost_colors: RefCell<Vec<String>>,
     /// Whether Show Space Header last kept a lone unnamed Space's name row, or Hide Space Header
     /// hid it.
     pub(super) lone_header: Cell<Option<bool>>,
@@ -1170,6 +1173,10 @@ impl Browser for Recorder {
         let theme = if theme.is_empty() { "none" } else { theme };
         self.edit(format!("theme {space} {theme}"));
         self.record(format!("space theme {space} {theme}"))
+    }
+
+    fn set_space_boost_colors(&self, space: u64, properties: &str, _: &mut App) {
+        (self.boost_colors.borrow_mut()).push(format!("{space} {properties}"))
     }
 
     fn set_space_profile(&self, space: u64, profile: u64, _: &mut App) {

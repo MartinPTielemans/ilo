@@ -2148,6 +2148,10 @@ void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
 }
 
+void bc_space_set_boost_colors(bc_id space, const char* properties) {
+  browser_core::Boosts::SetSpaceColors(space, properties ? properties : "");
+}
+
 void bc_tab_boost_zap(bc_id id, bool on) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   if (browser_core::Boosts* boosts =
