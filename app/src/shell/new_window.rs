@@ -65,7 +65,6 @@ impl Shell {
                 return;
             }
             let already = self.browser.enter_full_screen(cx);
-            // check.sh reads this line.
             log!(
                 "browser: new window asked for full screen, already {}",
                 already as u8

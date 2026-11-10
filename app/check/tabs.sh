@@ -512,10 +512,6 @@ panes_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   grep -o 'WebContentsViewCocoa [0-9]*' | cut -d' ' -f2)
 left_x=$(echo "$panes_x" | head -1)
 right_x=$(echo "$panes_x" | tail -1)
-# Lines logged since the driver's command $1.
-since() {
-  sed -n "/^browser: drive $1: /,\$p" "$log"
-}
 c_page=$(grep "^browser: page $c back" "$log" | tail -1)
 send age 7200
 aged=$step
@@ -1032,10 +1028,11 @@ expect '^browser: menu drawn back (favicon)$' \
   "holding back didn't draw the back page's row: $(grep '^browser: menu ' "$log" | tail -1)"
 expect '^browser: nav back at rest drawn$' "back held didn't grow back as its menu opened"
 ../tools/window-screenshot.sh "$pid" "$out/back-held.png" || fail "no window to capture"
+let_go=$((step + 1))
 send release $back_button
-none_since '^browser: command back via sidebar$' || fail "letting go of back held went back too"
 send choose back
 expect '^browser: command history -1 via sidebar$' "choosing the held menu's row didn't reach the UI"
+none_since '^browser: command back via sidebar$' "$let_go" || fail "letting go of back held went back too"
 expect "^browser: page $h back 0 forward 1 loading 0 ${site}back.html\$" "choosing the held menu's row didn't go back"
 expect "^browser: favicon $h [0-9]* bytes\$" "the back page's tab didn't get its favicon"
 # A press hits the button drawn last, which is stop until the window draws the loaded page.

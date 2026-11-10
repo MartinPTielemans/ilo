@@ -104,7 +104,7 @@ n=$(taken)
 go_from_bar "${page}?three"
 expect "^browser: loaded $a ${page}?three\$" "the page didn't load again from the command bar"
 taken_by $((n + 1)) "a page that loaded"
-sleep 10
+sleep 10 # settled 10 s, past the load's asks again, as the first picture was
 capture refreshed
 idle "refreshed picture"
 exec 3>&-

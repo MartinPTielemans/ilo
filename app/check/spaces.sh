@@ -137,8 +137,8 @@ send type nihongo
 send key space
 [ "$marked" = 8,3 ] || fail "the form's field didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/space-form-ime.png" || fail "no window to capture"
+committed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return while composing named the Space"
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
 # The form's Choose a Theme row opens the theme picker beside it, a child window with the
@@ -148,6 +148,7 @@ send click 100 299
 expect "^browser: theme picker for $second\$" "the form's Choose a Theme row didn't open the picker"
 expect '^browser: theme picker shown$' "the theme picker didn't show"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+none_since '^browser: create space' "$committed" || fail "return while composing named the Space"
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
   fail "the theme picker opened at $at, not 370 by 509"
@@ -330,7 +331,7 @@ send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto 220 $(row 0 | cut -d' ' -f2)
 send dragto $page_point
 expect "^browser: drop targets for $a\$" "a row dragged over the page didn't bring the targets"
-sleep 1
+sleep 1 # the row held over the page past a Space edge's paging delay
 none_since '^browser: drag paged to space' || fail "a row held over the page paged to the next Space"
 send dragto $(row 0)
 expect '^browser: drop targets gone$' "the targets stayed with the row back over the sidebar"
@@ -527,7 +528,8 @@ send dismiss
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
 # the window only the look of the Space it shows, the first. $1 is the appearance and $2 its
-# button's x in the picker's window, which holds the 13 wide arrow left of the card.
+# button's x in the picker's window, which holds the 13 wide arrow left of the card. With open as
+# $3 the picker stays open.
 appear() {
   send click $brush_x $card_y
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
@@ -539,6 +541,7 @@ appear() {
     ../tools/window-screenshot.sh "$pid" "$out/library-theme-picker.png" ||
       fail "no window to capture"
   fi
+  [ "${3:-}" != open ] || return 0
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the brush's theme picker"
   none_since '^browser: library hidden$' || fail "escape in the card's theme picker closed the Library"
@@ -559,7 +562,11 @@ rename_card() {
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
 appear light 191.3
-appear dark 231.7
+appear dark 231.7 open
+# Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
+# takes a click, as a press while it fades leaves the showing that goes, not the next (#2237).
+post key escape
+appear light 191.3
 rename_card library-rename.png
 appear automatic 150.9
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
@@ -801,9 +808,10 @@ else
 fi
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: space $third in " "the window didn't show the third Space"
+unnamed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return with no name named the Space"
 show_space "key 1 ctrl" select-space ui "$first" "$a"
+none_since '^browser: create space' "$unnamed" || fail "return with no name named the Space"
 # The footer's + offers New Space…, New Folder…, New Split View and New Note, then what adds
 # from the desktop, 8 in from the sidebar's edge.
 post click 204 $((${content#*x} - 25))

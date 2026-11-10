@@ -20,6 +20,10 @@ on:
       log:
         description: The app's debug log areas for this run, such as "keys,drag" (BROWSER_LOG, app/src/logging.rs); empty for none
         default: ''
+      rebuild:
+        description: Build the app, even if a check of this commit kept one
+        type: boolean
+        default: false
 
 concurrency:
   group: check-windows-${{ github.ref }}
@@ -156,9 +160,35 @@ jobs:
           Set-Item -Path $maps -Value 'URL:Maps'
           New-ItemProperty -Path $maps -Name 'URL Protocol' -Value '' -Force | Out-Null
 
+      # The app another check of this commit built, if one kept it (app-artifact.sh), unless a run
+      # asked for builds one of its own with build.sh updates, which needs the build's target/.
+      - id: kept
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.runs }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          run=
+          case " $RUNS " in
+          *" all "* | *" nightly "* | *" update-checks "*) ;;
+          *) [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-windows-$GITHUB_SHA") ;;
+          esac
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+      - if: ${{ steps.kept.outputs.run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: app-windows-${{ github.sha }}
+          path: ${{ runner.temp }}/app
+          run-id: ${{ steps.kept.outputs.run }}
+          github-token: ${{ github.token }}
+      - id: unpacked
+        if: ${{ steps.kept.outputs.run != '' }}
+        run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+
       # Every ref reads main's build cache, and main alone saves one: a copy saved by each
       # branch pushed main's out of the repository's 10 GB (#1969).
       - id: cache
+        if: ${{ steps.kept.outputs.run == '' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -171,7 +201,19 @@ jobs:
             app-windows-
 
       - id: build
+        if: ${{ steps.kept.outputs.run == '' }}
         run: ./setup.sh && ./build.sh
+
+      # For the next check of this commit, for 3 days.
+      - if: ${{ steps.build.outcome == 'success' }}
+        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
+      - if: ${{ steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-windows-${{ github.sha }}
+          path: ${{ runner.temp }}/app.tar
+          retention-days: 3
+          overwrite: true
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
@@ -286,7 +328,7 @@ jobs:
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit check-linux.yml builds, when the runs include one.
       - id: server
-        if: ${{ steps.build.outcome == 'success' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
+        if: ${{ (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -409,7 +451,7 @@ jobs:
       # ilo's key (docs/policies.md): Chromium's, which every other Chromium on the machine reads,
       # leaves it off (engine/patches/ours/chromium-policy-windows-key.patch).
       - name: Microsoft sign-in
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out"

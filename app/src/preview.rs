@@ -14,6 +14,8 @@ use browser::account::{self, Account};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
+use browser::boost_editor;
+use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::icon_picker::{self, Recents};
@@ -1649,7 +1651,7 @@ impl Browser for Fake {
     // And the folder preview's.
     fn folder_preview(&self, _: browser::folder_preview::Ask, _: &mut App) {}
 
-    fn card_picture(&self, _: u64, _: &mut App) {}
+    fn card_picture(&self, _: u64, _: f32, _: &mut App) {}
 
     // The same for the link target's, which the preview's made-up pages have no links for.
     fn link_target(
@@ -2695,6 +2697,37 @@ fn main() {
                     theme_picker::show(0, 1, preview_theme(), at, f32::MAX, changed, cx);
                 }
             }
+            // PREVIEW_BOOST_EDITOR=new shows the Boost editor for a site's new Boost, its hint up
+            // and its dots unplaced, and =edited for one with its edits made.
+            if let Some(kind) = std::env::var_os("PREVIEW_BOOST_EDITOR") {
+                let bounds = Bounds::new(
+                    point(px(x as f32 + 230.), px(y as f32 + 34.)),
+                    size(px(boost_editor::WIDTH), px(boost_editor::HEIGHT)),
+                );
+                if boost_editor::open_at(Rc::new(PreviewPicker), bounds, true, cx).is_some() {
+                    let style = match kind.to_str() {
+                        Some("edited") => Style {
+                            ground: Some(boost_style::Dot { x: -0.3, y: 0.86 }),
+                            links: Some(boost_style::Dot { x: 0.5, y: -0.2 }),
+                            face: Some(Face::Serif),
+                            size: 110,
+                            case: Some(Case::Lower),
+                            dragged: true,
+                            name: Some("Quiet news".into()),
+                            ..Style::default()
+                        },
+                        _ => Style::default(),
+                    };
+                    let requested: boost_editor::Requested = Rc::new(|_, _| {});
+                    let at = theme_picker::At::Row(point(0., 30.));
+                    let palette = browser::palette::Palette::of(
+                        preview_theme().as_ref(),
+                        browser::palette::Tone::Dark,
+                    );
+                    let site = "news.example".to_string();
+                    boost_editor::show(0, site, style, true, at, f32::MAX, palette, requested, cx);
+                }
+            }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
             let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
@@ -2893,6 +2926,12 @@ impl theme_picker::Host for PreviewPicker {
     fn hide(&self) {}
 
     fn detent(&self) {}
+}
+
+impl boost_editor::Host for PreviewPicker {
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+
+    fn hide(&self) {}
 }
 
 /// Peek over the preview's window, which it covers. There's no page of its own, so the shell's

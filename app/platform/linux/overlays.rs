@@ -74,8 +74,8 @@ struct Shown {
 }
 
 thread_local! {
-    static OVERLAYS: RefCell<[Option<Overlay>; 4]> =
-        const { RefCell::new([None, None, None, None]) };
+    static OVERLAYS: RefCell<[Option<Overlay>; 5]> =
+        const { RefCell::new([None, None, None, None, None]) };
     /// The app's overlays that have each browser window's keyboard, by their views.
     static LENT: RefCell<Vec<(bc::bc_id, usize)>> = const { RefCell::new(Vec::new()) };
     /// Reduce Motion, under which they grow and shrink no more, and only fade.
@@ -124,14 +124,16 @@ pub(crate) fn keyboard_lent_to_another(window: bc::bc_id, view: *mut c_void) -> 
 }
 
 /// The overlays by index, as check.sh reads them in the log.
-/// The icon and theme pickers, host.h's HOST_ICON_PICKER and HOST_THEME_PICKER.
-const PICKERS: [c_int; 2] = [1, 2];
+/// The icon and theme pickers and the Boost editor, host.h's HOST_ICON_PICKER, HOST_THEME_PICKER
+/// and HOST_BOOST_EDITOR.
+const PICKERS: [c_int; 3] = [1, 2, 4];
 
-const NAMES: [&str; 4] = [
+const NAMES: [&str; 5] = [
     "command bar",
     "icon picker",
     "theme picker",
     "folder preview",
+    "boost editor",
 ];
 
 fn with_overlay<R>(overlay: c_int, f: impl FnOnce(&mut Overlay) -> R) -> Option<R> {
@@ -289,6 +291,9 @@ pub extern "C" fn host_show_overlay(
         lend_keyboard(window, view, true);
     }
     if shrinking {
+        // GPUI still shows the one fading, without the keys, and a press as it went, such as the
+        // one that shows it again, left it: shown anew, that leave isn't this showing's (#2237).
+        gpui_linux::hide_overlay(view, || {});
         gpui_linux::set_overlay_pointer(view, None);
     }
     let Growth {
@@ -679,7 +684,6 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     lend_keyboard(window, view, true);
     gpui_linux::set_overlay_pointer(view, None);
     show_over(view, ui_view, bounds, radius, true, left_dialog);
-    // check.sh reads this line.
     eprintln!("browser: dialog window shown");
 }
 
@@ -713,7 +717,6 @@ pub(crate) fn dialog_leaving() {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_dialog);
     lend_keyboard(window, view, false);
-    // check.sh reads this line.
     eprintln!("browser: dialog gives the keyboard back");
 }
 

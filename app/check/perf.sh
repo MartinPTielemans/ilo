@@ -388,7 +388,7 @@ chrome_quit() {
 chrome_launch() {
   chrome_open "$1"
   pid=$!
-  sleep 5
+  sleep 5 # the 5 s a Chrome that won't stay takes to go
   kill -0 "$pid" 2> /dev/null
 }
 if [ "$active" != 1 ]; then
@@ -401,7 +401,7 @@ else
   if ! chrome_launch warm; then
     echo "skip: perf's Chrome on this runner. It didn't stay open: $(tail -3 "$perf_dir/chrome.log")"
   else
-    sleep 15
+    sleep 15 # Chrome's first 15 s, which warm its caches for the runs measured
     chrome_quit
     chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
     started=$(($(date +%s) - 5))

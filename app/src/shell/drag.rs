@@ -368,6 +368,8 @@ impl Shell {
         {
             return;
         }
+        // check.sh reads this line.
+        log!("browser: pressed {tab}");
         let origin = self.sidebar_origin.get();
         self.dragged = false;
         self.drag = Some(Drag {
@@ -1042,7 +1044,6 @@ impl Shell {
             .find(|each| each.pinned.contains(&tab) || each.today.contains(&tab))
             .map(|each| each.id);
         if !here && its_space.is_some_and(|its| profile_of(its) != profile_of(self.space)) {
-            // check.sh waits for this line.
             log!("browser: tab {tab} dropped from window {from} into another profile's space");
             self.window_drag.take_if(|drag| drag.tab == tab);
             self.settle_drag(cx);

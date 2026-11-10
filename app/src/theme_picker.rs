@@ -284,11 +284,16 @@ pub enum At {
 /// from where it grows in from: the arrow's tip `arrow_y` down the window, or with no arrow the
 /// card's top left.
 pub fn corners(arrow_y: Option<f32>) -> Vec<(f32, f32, f32)> {
+    corners_of(arrow_y, HEIGHT)
+}
+
+/// `corners` for a card of the picker's form `height` tall, as the Boost editor's is.
+pub fn corners_of(arrow_y: Option<f32>, height: f32) -> Vec<(f32, f32, f32)> {
     let card = [
         (ARROW, 0., RADIUS),
         (WIDTH, 0., RADIUS),
-        (WIDTH, HEIGHT, RADIUS),
-        (ARROW, HEIGHT, RADIUS),
+        (WIDTH, height, RADIUS),
+        (ARROW, height, RADIUS),
     ];
     let Some(arrow_y) = arrow_y else {
         return card.to_vec();
@@ -306,17 +311,22 @@ pub fn corners(arrow_y: Option<f32>) -> Vec<(f32, f32, f32)> {
 /// down it if it has one. Beside a row, the card centres on the arrow, as Arc's does, unless that
 /// takes it past the browser window's top or bottom.
 pub fn placed(at: At, height: f32) -> (f32, f32, Option<f32>) {
+    placed_of(at, height, HEIGHT)
+}
+
+/// `placed` for a card of the picker's form `card` tall.
+pub fn placed_of(at: At, height: f32, card: f32) -> (f32, f32, Option<f32>) {
     let anchor = match at {
         // The window is as wide as the card and its arrow, so it starts that far left of the card.
         At::Edge(x) => return (x + EDGE_INSET - ARROW, EDGE_INSET, None),
         At::Row(anchor) => anchor,
     };
-    let top = (anchor.y - HEIGHT / 2.)
-        .min(height - MARGIN - HEIGHT)
+    let top = (anchor.y - card / 2.)
+        .min(height - MARGIN - card)
         .max(MARGIN);
     // The tip keeps clear of the card's rounded corners.
     let reach = RADIUS + ARROW + ARROW_FOOT_RADIUS;
-    let arrow_y = (anchor.y - top).clamp(reach, HEIGHT - reach);
+    let arrow_y = (anchor.y - top).clamp(reach, card - reach);
     (anchor.x + GAP - TIP_SHORT, top, Some(arrow_y))
 }
 
