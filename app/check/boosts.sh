@@ -82,6 +82,8 @@ expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
 post rightclick $(row 0)
 expect "^browser: menu shown .*, $(cased 'Mute (disabled), Edit Boost…, Add Split View'), " \
   "the tab's menu didn't offer Edit Boost… after Mute"
+expect '^browser: menu drawn ' "the tab's menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-tab-menu.png" || fail "no window to capture"
 send choose "$(cased 'Edit Boost…')"
 expect "^browser: boost card $tab opened\$" "the tab menu's Edit Boost… opened no card"
 send layout
@@ -90,6 +92,8 @@ height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: lay
 post click 204 $((height - 25))
 plus=$(cased "New Space…, New Folder…, New Split View, New Note, Edit Boost…")
 expect "^browser: menu shown $plus\(, .*\)\{0,1\}\$" "the +'s menu didn't offer Edit Boost…"
+expect '^browser: menu drawn ' "the +'s menu didn't draw"
+../tools/window-screenshot.sh "$pid" "$out/boost-plus-menu.png" || fail "no window to capture"
 send choose "$(cased 'Edit Boost…')"
 expect "^browser: boost card $tab opened\$" "the +'s Edit Boost… opened no card"
 
@@ -103,4 +107,5 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card;" \
   "with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png"
+  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png"
