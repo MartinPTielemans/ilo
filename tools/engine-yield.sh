@@ -16,21 +16,22 @@
 set -u
 repo=$GITHUB_REPOSITORY
 
-# The releases waiting for the runner, a run id a line.
+# The first release waiting for the runner, by its run id, or nothing.
 waiting() {
-  for workflow in engine-linux.yml engine-windows-cross.yml; do
+  runs=$(for workflow in engine-linux.yml engine-windows-cross.yml; do
     gh api "repos/$repo/actions/workflows/$workflow/runs?per_page=50" --jq '.workflow_runs[]
       | select(.status != "completed" and (.head_branch | startswith("engine-build/batch-"))) | .id'
-  done | while read -r run; do
+  done)
+  for run in $runs; do
     building=$(gh api "repos/$repo/actions/runs/$run/jobs" --jq '[.jobs[]
       | select(.name == "build" and (.status == "in_progress" or .status == "completed"))] | length')
-    [ "$building" = 0 ] && echo "$run"
+    [ "$building" = 0 ] && echo "$run" && return
   done
 }
 
 case ${1:-} in
 yield)
-  release=$(waiting | head -1)
+  release=$(waiting)
   [ -n "$release" ] || { echo "engine-yield: no release waits for the runner"; exit 0; }
   workflow=${GITHUB_WORKFLOW_REF%@*}
   workflow=${workflow##*/}
@@ -47,7 +48,7 @@ wait)
   # Five hours at most, beyond a release's wait for the one lane build it lets finish; after that
   # the retry joins the queue anyway, so a release that never starts can't hold lanes for good.
   for _ in $(seq 300); do
-    release=$(waiting | head -1)
+    release=$(waiting)
     [ -n "$release" ] || { echo "engine-yield: no release waits for the runner"; exit 0; }
     echo "engine-yield: release run $release waits for the runner"
     sleep 60
