@@ -1,0 +1,208 @@
+# Temporary, for #2342, never for main: what trusts the released, Developer ID-signed Mac app by
+# its signature. Its passkey dialog with no iCloud Keychain entitlement, the iCloud Passwords
+# helper, and where 1Password's and Bitwarden's apps put their native messaging hosts. No account
+# is made or signed in to anywhere, and the page is the run's own, on localhost.
+name: Signature trust
+
+on:
+  push:
+    branches: ['check/signature-trust-*']
+    paths: [.github/workflows/signature-trust.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signature-trust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  look:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: 0.1.14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App
+        run: |
+          out=$RUNNER_TEMP/out
+          mkdir -p "$out" "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/apps"
+          sw_vers | tee "$out/macos.txt"
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          ditto "$RUNNER_TEMP/mnt/ilo.app" "$RUNNER_TEMP/apps/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+          app=$RUNNER_TEMP/apps/ilo.app
+          {
+            echo "== codesign -dvvv"
+            codesign -dvvv "$app" 2>&1
+            echo "== entitlements"
+            codesign -d --entitlements - --xml "$app" 2>&1 | plutil -p - 2>&1
+            echo "== embedded.provisionprofile"
+            ls -la "$app/Contents/embedded.provisionprofile" 2>&1
+            echo "== spctl"
+            spctl --assess -vv "$app" 2>&1
+            echo "== Info.plist usage strings"
+            plutil -p "$app/Contents/Info.plist" | grep -i -e UsageDescription -e CFBundleIdentifier -e CFBundleShortVersionString
+            echo "== the framework's Info.plist usage strings"
+            plutil -p "$app/Contents/Frameworks/Chromium Framework.framework/Resources/Info.plist" 2>/dev/null | grep -i UsageDescription
+          } | tee "$out/signature.txt"
+
+      # Screen capture for the job's processes and the app, as check-mac.yml grants it.
+      - name: Grants
+        run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          paths="$(find -L "$RUNNER_TEMP/apps" -path '*/Contents/MacOS/*' -type f -perm -u+x)
+          /usr/sbin/screencapture"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in /*) paths="$paths
+          $path" ;; esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "$paths" | sed 's/^ *//' | while read -r path; do
+            [ -n "$path" ] || continue
+            sudo sqlite3 -cmd '.timeout 10000' "$system" "INSERT OR REPLACE INTO access (service, client, client_type,
+              auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified)
+              VALUES ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+            defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd" || true
+          killall replayd || true
+
+      # The page asks for a passkey at its first click and makes one at its second, and says how
+      # each ended in its title, which the app logs.
+      - name: Passkey dialog
+        run: |
+          out=$RUNNER_TEMP/out
+          site=$RUNNER_TEMP/site
+          mkdir -p "$site"
+          cat > "$site/passkey.html" <<'HTML'
+          <!doctype html><title>passkey ready</title>
+          <body style="font: 24px system-ui; margin: 40px">Click to ask for a passkey, then again to make one.
+          <script>
+          const bytes = n => crypto.getRandomValues(new Uint8Array(n));
+          let clicks = 0;
+          const said = (what, p) => p.then(r => document.title = what + " gave " + (r && r.type))
+            .catch(e => document.title = what + " ended " + e.name + ": " + e.message);
+          addEventListener("click", () => {
+            clicks++;
+            document.title = (clicks == 1 ? "get" : "create") + " asked";
+            if (clicks == 1) {
+              said("get", navigator.credentials.get({ publicKey: { challenge: bytes(32), rpId: "localhost",
+                userVerification: "preferred", timeout: 120000 } }));
+            } else {
+              said("create", navigator.credentials.create({ publicKey: { challenge: bytes(32),
+                rp: { id: "localhost", name: "localhost" },
+                user: { id: bytes(16), name: "throwaway", displayName: "Throwaway" },
+                pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+                authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+                timeout: 120000 } }));
+            }
+          });
+          </script>
+          HTML
+          (cd "$site" && python3 -I -m http.server 8765 --bind 127.0.0.1 > "$out/site.log" 2>&1) &
+          app=$RUNNER_TEMP/apps/ilo.app
+          exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+          id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
+          defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+          security delete-generic-password -s "ilo Safe Storage" > /dev/null 2>&1 || true
+          log=$out/app.log
+          fifo=$RUNNER_TEMP/drive
+          mkfifo "$fifo"
+          stamp() { perl -MTime::HiRes=time -ne 'BEGIN { $| = 1 } printf "%.3f %s", time, $_'; }
+          (BROWSER_DRIVE=1 BROWSER_URL=http://localhost:8765/passkey.html BROWSER_PROFILE_DIR=$RUNNER_TEMP/profile \
+            "$exe" --enable-logging=stderr --v=0 --vmodule='*fido*=1,*webauthn*=1,*touch_id*=1,*keychain*=1,*icloud*=1' \
+            < "$fifo" 2>&1 | stamp >> "$log") &
+          exec 3> "$fifo"
+          has() { grep -q "$1" "$log"; }
+          wait_for() { for _ in $(seq $(($2 * 10))); do has "$1" && return 0; sleep 0.1; done; echo "no \"$1\" in $2 s"; return 1; }
+          step=0
+          send() { step=$((step + 1)); echo "$*" >&3; wait_for "browser: drive $step done" 30 || true; }
+          wait_for 'browser: title [0-9]* passkey ready' 90
+          pid=$(pgrep -n -f "^$exe" || true)
+          sleep 2
+          ../tools/window-screenshot.sh "$pid" "$out/0-page.png" all 2> /dev/null || true
+          send click 600 400
+          wait_for 'get asked' 10
+          sleep 6
+          ../tools/window-screenshot.sh "$pid" "$out/1-get.png" all 2> /dev/null || true
+          screencapture -x "$out/1-get-screen.png" || true
+          send state
+          send key escape
+          wait_for 'get ended\|get gave' 30
+          sleep 2
+          send click 600 400
+          wait_for 'create asked' 10
+          sleep 6
+          ../tools/window-screenshot.sh "$pid" "$out/2-create.png" all 2> /dev/null || true
+          screencapture -x "$out/2-create-screen.png" || true
+          send state
+          send key escape
+          wait_for 'create ended\|create gave' 30
+          sleep 2
+          screencapture -x "$out/3-after.png" || true
+          exec 3>&-
+          kill "$pid" 2> /dev/null || true
+          sleep 3
+          pkill -9 -f "$RUNNER_TEMP/apps/" || true
+          grep -i -e 'browser: title' -e 'touch id' -e keychain -e icloud -e 'fido' -e webauthn -e bluetooth -e 'ble' "$log" | cut -c1-400 | tee "$out/passkey-lines.txt" || true
+        working-directory: app
+
+      # Apple's helper for the iCloud Passwords extension: where it is, who signed it, the manifest
+      # macOS gives Chrome, and whether it starts for a process that isn't a browser it lists.
+      - name: iCloud Passwords helper
+        run: |
+          out=$RUNNER_TEMP/out
+          {
+            helper=$(find /System/Cryptexes/App/System/Library/CoreServices /System/Library/CoreServices /System/Volumes/Preboot/Cryptexes -maxdepth 6 -name 'PasswordManagerBrowserExtensionHelper*' 2>/dev/null | head -5)
+            echo "== helper: $helper"
+            for h in $helper; do codesign -dvvv "$h" 2>&1; done
+            echo "== manifests named com.apple.passwordmanager"
+            find "$HOME/Library/Application Support" /Library -name 'com.apple.passwordmanager.json' 2>/dev/null | while read -r m; do echo "-- $m"; cat "$m"; echo; done
+            first=$(echo "$helper" | head -1)
+            bin=$first
+            [ -d "$first" ] && bin=$first/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$first/Contents/Info.plist")
+            echo "== started from this shell, no browser: $bin"
+            if [ -x "$bin" ]; then
+              start=$(date '+%Y-%m-%d %H:%M:%S')
+              python3 -I -c 'import json,struct,sys; m=json.dumps({"cmd":"handshake"}).encode(); sys.stdout.buffer.write(struct.pack("=I",len(m))+m)' |
+                ( "$bin" chrome-extension://pejdijmoenmkgeppbflobdenhhabjlaj/ > "$out/helper-out.bin" 2> "$out/helper-err.txt" & h=$!; sleep 5; kill -0 $h 2>/dev/null && { echo "still running after 5 s"; kill $h; }; wait $h; echo "exit $?" )
+              echo "stdout bytes: $(wc -c < "$out/helper-out.bin")"; cat "$out/helper-err.txt"
+              log show --start "$start" --style compact --predicate 'eventMessage CONTAINS[c] "constraint" OR eventMessage CONTAINS[c] "PasswordManagerBrowserExtensionHelper"' 2>/dev/null | tail -40
+            fi
+          } 2>&1 | tee "$out/icloud-helper.txt"
+
+      # The password managers' apps, started once with no account, and the native messaging hosts
+      # they leave in each browser's folder, which ilo falls back to (core/platform/native_hosts.h).
+      - name: Password managers
+        run: |
+          out=$RUNNER_TEMP/out
+          ls -d "$HOME/Library/Application Support/Google/Chrome" 2>&1 | tee "$out/managers.txt"
+          brew install --cask bitwarden 1password >> "$out/brew.txt" 2>&1 || true
+          for a in Bitwarden 1Password; do
+            open -a "$a" || true
+            sleep 25
+            screencapture -x "$out/$a.png" || true
+            osascript -e "quit app \"$a\"" || true
+            sleep 3
+          done
+          {
+            echo "== native messaging hosts"
+            find "$HOME/Library/Application Support" -path '*NativeMessagingHosts/*.json' 2>/dev/null | while read -r m; do echo "-- $m"; cat "$m"; echo; done
+            for a in /Applications/Bitwarden.app /Applications/1Password.app; do echo "== $a"; codesign -dvv "$a" 2>&1 | grep -e Identifier -e TeamIdentifier -e Authority=Developer; done
+          } 2>&1 | tee -a "$out/managers.txt"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: signature-trust
+          path: ${{ runner.temp }}/out
