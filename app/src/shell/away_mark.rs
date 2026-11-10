@@ -3,9 +3,10 @@
 
 use std::sync::OnceLock;
 
-use gpui::{AnyElement, Hsla, IntoElement, div, prelude::*, px, svg};
+use gpui::{AnyElement, Hsla, IntoElement, div, prelude::*, px, rgb, svg};
 
 use super::{FAVICON_SIZE, HOVERED, Row, SECONDARY, Shell};
+use crate::palette::Tone;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Form {
@@ -75,12 +76,22 @@ impl Shell {
             .into_any_element()
     }
 
+    /// The sidebar's colour where the rows are, as the preview draws it on Linux, sampled from its
+    /// captures: the window's material isn't a colour the shell knows, and on the Mac it's
+    /// translucent, so a build would cut the icon rather than paint over it.
+    pub(super) fn sidebar_ground(&self) -> Hsla {
+        match self.palette.tone {
+            Tone::Dark => rgb(0x2f2f2f).into(),
+            Tone::Light => rgb(0xd9d9d9).into(),
+        }
+    }
+
     /// What's under `tab`'s row's favicon, opaque: the window, with the selected plate or the
     /// hover fill over it. A split's segments are on their row's.
     pub(super) fn row_ground(&self, tab: u64) -> Hsla {
         let row = Row::Tab(self.panes(tab).first().copied().unwrap_or(tab));
         let hover = self.hover_fill(row).unwrap_or(0.);
-        let under = self.window_fill_at(0.3);
+        let under = self.sidebar_ground();
         match Some(row) == self.selected_row() {
             true => under.blend(self.palette.selected(hover)),
             false => under.blend(self.palette.plate(HOVERED).opacity(hover)),
