@@ -780,6 +780,9 @@ typedef struct bc_sidebar_backup {
   const char* label;
 } bc_sidebar_backup;
 
+// Declared further down, with bc_profile_add_history; history_listed hands the app some.
+typedef struct bc_history_page bc_history_page;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
