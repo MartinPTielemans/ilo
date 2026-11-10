@@ -1,0 +1,37 @@
+# Runs spikes/arrange on public sites in Playwright's Chromium, headed under Xvfb, sandbox on, a
+# throwaway profile and no accounts. On #2347's proof branches only. spikes/arrange/ci-mode says
+# what each push runs: "measure" records today's descriptions and measures, "refind" finds the
+# recorded ones again.
+name: Spike arrange
+on:
+  push:
+    branches: ['spike/arrange-2347-[0-9]*']
+permissions:
+  contents: read
+jobs:
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        site: [news, docs, spa, video, shop, shop2, article]
+    defaults:
+      run:
+        working-directory: spikes/arrange
+    steps:
+      - uses: actions/checkout@v4
+      # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs; the sandbox stays on.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+      - run: xvfb-run -a -s '-screen 0 1280x800x24' node harness/run.mjs "$(cat ci-mode)" ${{ matrix.site }} "$RUNNER_TEMP/out"
+      - if: always()
+        run: cp recorded/${{ matrix.site }}.json "$RUNNER_TEMP/out/" 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arrange-${{ matrix.site }}
+          path: ${{ runner.temp }}/out
