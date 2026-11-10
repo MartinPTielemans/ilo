@@ -241,21 +241,18 @@ send click $(offer_never)
 expect "^browser: offer $tab answered Never check@example.test\$" "Never didn't answer"
 expect '^browser: offer hidden$' "Never didn't hide the offer"
 
-# The Site Controls list the site set to Never in a Passwords row, whose menu takes it off Never at
-# once. With no extension pinned and no permission set, it's the row under the ones the log lists
-# between its semicolons: ad blocking's, whose middle is at y 262 (clear.sh measures the panel), and
-# Developer Mode's on localhost, each 43 under the last.
+# The Site Controls list the site set to Never in a Passwords line, whose menu takes it off Never at
+# once. The panel logs where it drew the line.
 last_controls() { grep '^browser: site controls http' "$log" | tail -1; }
-passwords_y() { echo $((262 + 43 * $(last_controls | cut -d';' -f2 | tr ',' '\n' | grep -c .))); }
 controls="^browser: site controls http://localhost:$port: "
 bar_command site-controls "Site Controls" "site controls"
 expect "${controls}.*; passwords never localhost:$port\$" \
   "the Site Controls didn't list localhost as set to Never: $(last_controls)"
 expect '^browser: site controls settled$' "the Site Controls didn't open"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-never.png" || fail "no window to capture"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Offer to Save Passwords, All Passwords…')\$" \
-  "the Passwords row didn't offer to take localhost off Never"
+  "the Passwords line didn't offer to take localhost off Never"
 send choose "$(cased 'Offer to Save Passwords')"
 expect "^browser: site controls allow saving localhost:$port\$" "Offer to Save Passwords didn't run"
 expect "^browser: remove login [0-9]* never localhost:$port\$" \
@@ -278,9 +275,9 @@ expect "${controls}.*; passwords 127.0.0.1:$port check@example.test\$" \
 expect '^browser: site controls settled$' "the Site Controls didn't open on the first site"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-passwords.png" ||
   fail "no window to capture"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “check@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the saved login"
+  "the Passwords line didn't offer to remove the saved login"
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run"
 expect '^browser: settings tab Passwords$' "All Passwords… didn't show Settings' Passwords tab"
@@ -353,9 +350,9 @@ expect "^browser: selected $tab\( in .*\)\{0,1\}\$" "⌘2 didn't show the login'
 send click $page_point
 bar_command site-controls "Site Controls" "site controls"
 expect '^browser: site controls settled$' "the Site Controls didn't open again"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “check@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the saved login again"
+  "the Passwords line didn't offer to remove the saved login again"
 send choose 'Remove “check@example.test”…'
 expect '^browser: site controls run remove-login$' "Remove didn't run"
 expect "^browser: dialog shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
@@ -407,9 +404,9 @@ bar_command site-controls "Site Controls" "site controls"
 expect "${controls}.*; passwords 127.0.0.1:$port new@example.test\$" \
   "the Site Controls didn't list the generated login: $(last_controls)"
 expect '^browser: site controls settled$' "the Site Controls didn't open after the sign-up"
-post click 207 $(passwords_y)
+click_placed post "line Passwords"
 expect "^browser: menu shown $(cased 'Remove “new@example.test”…, All Passwords…')\$" \
-  "the Passwords row didn't offer to remove the generated login"
+  "the Passwords line didn't offer to remove the generated login"
 send choose "$(cased 'All Passwords…')"
 expect '^browser: site controls run passwords$' "All Passwords… didn't run again"
 expect '^browser: settings shown Passwords$' "All Passwords… didn't show Settings' Passwords tab again"

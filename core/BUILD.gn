@@ -462,6 +462,7 @@ source_set("browser_core") {
     "//components/autofill/content/browser",
     "//components/autofill/core/browser",
     "//components/component_updater",
+    "//components/content_settings/browser",
     "//components/content_settings/core/browser",
     "//components/crash/core/app",
     "//components/crash/core/common",

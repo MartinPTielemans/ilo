@@ -17,8 +17,9 @@ class Profile;
 namespace browser_core {
 
 // The site of the tab's page as the app's Site Controls show it, in place of Chrome's page info
-// bubble (tab_site_controls): its permissions as Chrome's page info lists them, its connection,
-// whether it plays a video that can go Picture in Picture, and whether the ad blocker runs on it.
+// bubble (tab_site_controls): of the permissions Chrome's page info lists, those that differ for the
+// site; its connection; whether it plays a video that can go Picture in Picture; and whether the ad
+// blocker runs on it.
 // One tab's at a time, while the app's panel shows, and meanwhile its window tells of every
 // turned-on extension's action.
 class SiteControls : public PageInfoUI, public content::WebContentsObserver {
