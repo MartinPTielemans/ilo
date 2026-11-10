@@ -257,3 +257,97 @@ fn a_boost_turns_off_on_its_site_and_back_on(cx: &mut TestAppContext) {
     });
     assert_eq!(listed, ["example.com"]);
 }
+
+/// The titles of the last menu shown.
+fn menu(host: &Recorder) -> Vec<String> {
+    let menus = host.menus.borrow();
+    menus
+        .last()
+        .unwrap()
+        .iter()
+        .map(|(title, _)| title.to_string())
+        .collect()
+}
+
+/// A Today tab's menu has its Boost after Mute, as Arc's Customize Page…, and opens its card,
+/// showing the tab first when it isn't; a file's tab has none.
+#[gpui::test]
+fn a_tabs_menu_opens_its_boost(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.tab_menu(11, point(px(100.), px(200.)), cx)
+    });
+    assert!(
+        !menu(&host).iter().any(|title| title.contains("Boost")),
+        "{:?}",
+        menu(&host)
+    );
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.tab_menu(10, point(px(100.), px(200.)), cx)
+    });
+    let titles = menu(&host);
+    let mute = titles
+        .iter()
+        .position(|title| title.starts_with("Mute"))
+        .unwrap();
+    let boost = titles
+        .iter()
+        .position(|title| title == "New Boost…")
+        .expect("no New Boost…");
+    assert!(mute < boost, "{titles:?}");
+    shell.update(cx, |shell, cx| shell.set_selected(11, cx));
+    host.take();
+    cx.update(|_, cx| host.choose("New Boost…", cx));
+    cx.run_until_parked();
+    assert_eq!(host.take(), ["select 10"]);
+    assert_eq!(
+        card(&shell, cx),
+        None,
+        "the card opened before its tab showed"
+    );
+    shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+    assert!(
+        card(&shell, cx).is_some(),
+        "the tab showed without its card"
+    );
+}
+
+/// The + menu makes the shown page's Boost after New Note, and edits it once there is one.
+#[gpui::test]
+fn the_plus_menu_makes_then_edits_a_boost(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.plus_menu(point(px(100.), px(700.)), cx)
+    });
+    let titles = menu(&host);
+    let note = titles.iter().position(|title| title == "New Note").unwrap();
+    assert_eq!(titles[note + 1], "New Boost…", "{titles:?}");
+    cx.update(|_, cx| host.choose("New Boost…", cx));
+    assert!(card(&shell, cx).is_some(), "New Boost… opened no card");
+    shell.update(cx, |shell, cx| {
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
+        shell.close_boost_card(cx);
+    });
+    shell.update(cx, |shell, cx| {
+        shell.plus_menu(point(px(100.), px(700.)), cx)
+    });
+    assert!(
+        menu(&host).contains(&"Edit Boost…".to_string()),
+        "{:?}",
+        menu(&host)
+    );
+    cx.update(|_, cx| host.choose("Edit Boost…", cx));
+    assert!(card(&shell, cx).is_some(), "Edit Boost… opened no card");
+    shell.update(cx, |shell, cx| {
+        shell.close_boost_card(cx);
+        shell.set_selected(11, cx);
+        shell.plus_menu(point(px(100.), px(700.)), cx);
+    });
+    assert!(
+        !menu(&host).iter().any(|title| title.contains("Boost")),
+        "{:?}",
+        menu(&host)
+    );
+}
