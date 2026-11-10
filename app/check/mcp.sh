@@ -78,26 +78,24 @@ cat > "$extension/manifest.json" << 'EOF'
   "manifest_version": 3,
   "name": "Frame check",
   "version": "1",
-  "content_scripts": [{"matches": ["http://localhost/frames.html*", "http://localhost/withheld.html*"],
-    "js": ["content.js"]}],
-  "web_accessible_resources": [{"resources": ["frame.html", "shown.html"],
-    "matches": ["http://localhost/*"]}]
+  "content_scripts": [
+    {"matches": ["http://localhost/frames.html*"], "js": ["content.js"]},
+    {"matches": ["http://localhost/withheld.html*"], "js": ["withheld.js"]}
+  ],
+  "web_accessible_resources": [{"resources": ["frame.html", "shown.html"], "matches": ["http://localhost/*"]}]
 }
 EOF
-printf '%s' 'if (location.pathname == "/withheld.html") {
-  for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
-    const frame = document.createElement("iframe");
-    frame.src = chrome.runtime.getURL("shown.html");
-    frame.style = style + "; width: 25vw; height: 15vh; border: 0";
-    document.body.append(frame);
-  }
-} else {
-  const frame = document.createElement("iframe");
-  frame.src = chrome.runtime.getURL("frame.html");
-  document.body.append(frame);
-}' > "$extension/content.js"
+printf '%s' 'const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
+printf '%s' 'for (const style of ["position: fixed; left: 40vw; top: 76vh", "display: block; margin-left: 2vw"]) {
+  const frame = document.createElement("iframe");
+  frame.src = chrome.runtime.getURL("shown.html");
+  frame.style = style + "; width: 25vw; height: 15vh; border: 0";
+  document.body.append(frame);
+}' > "$extension/withheld.js"
 printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff; color: #f00; font: 60vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; overflow: hidden }
