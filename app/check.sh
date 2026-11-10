@@ -3,8 +3,8 @@
 # Each run's file in check/ says what it checks. ./check.sh tabs spaces does only those runs, in
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
-#   split favorites cards extensions adblock adblock-lists adblock-cosmetic windows private blank
-#   little capture media
+#   split favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page windows
+#   private blank little capture media
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
@@ -103,7 +103,7 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
   exec ../tools/headless.sh --x11 --run ./check.sh "$@"
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
-runs="$runs split favorites cards extensions adblock adblock-lists adblock-cosmetic windows private blank little capture media"
+runs="$runs split favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page windows private blank little capture media"
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"

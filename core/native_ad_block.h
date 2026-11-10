@@ -44,7 +44,10 @@ void ProxyForNativeAdBlock(network::URLLoaderFactoryBuilder& factory_builder);
 
 // Gives the page |registry|'s navigation loads what the app's engine hides on it and runs in it
 // from its start, sent to its frame before it commits (ad_block_page.mojom), from
-// ContentBrowserClient::CreateThrottlesForNavigation where ad_block.cc says it blocks.
+// ContentBrowserClient::CreateThrottlesForNavigation where ad_block.cc says it blocks. A tab's page
+// that the user's lists block, as uBlock Origin's strict blocking does, never starts its request:
+// a warning shows in its place, whose Open anyway lets its host through for a while, as uBlock
+// Origin's does, and which an agent's tab has no way past.
 void AddNativeAdBlockPage(content::NavigationThrottleRegistry& registry);
 
 }  // namespace browser_core
