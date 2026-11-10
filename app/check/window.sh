@@ -123,6 +123,38 @@ motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
 fi
+# PROBE (#2179): uBlock Origin's extension process, and all of the browser's, over 4 s at 30, 60
+# and 90 s after a launch with one blank tab.
+ext_cpu() {
+  if [ -d /proc ]; then
+    for p in $(pgrep -f -- "$procs"); do
+      tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e --extension-process || continue
+      sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
+    done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
+  else
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk 'index($0, "--extension-process")' |
+      awk '{ n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
+      END { printf "%.2f %d\n", t, n }'
+  fi
+}
+BROWSER_URL=about:blank "$browser" < /dev/null > "$out/idle.log" 2>&1 &
+idle_pid=$!
+idle_from=$(date +%s)
+for at in 30 60 90; do
+  while [ $(($(date +%s) - idle_from)) -lt $at ]; do
+    sleep 1
+  done
+  set -- $(ext_cpu) $(cpu)
+  sleep 4
+  set -- "$@" $(ext_cpu) $(cpu)
+  echo "probe: at $at s uBlock Origin's $2 process(es) took $(echo "$1 $5" | awk '{ printf "%.2f", $2 - $1 }') s of CPU in 4 s, all $4 of the browser's $(echo "$3 $7" | awk '{ printf "%.2f", $2 - $1 }') s"
+done
+kill "$idle_pid"
+wait "$idle_pid" || true
+for _ in $(seq 50); do
+  [ -z "$(pgrep -f -- "$procs")" ] && break
+  sleep 0.2
+done
 BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
