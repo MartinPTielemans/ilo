@@ -1740,11 +1740,11 @@ impl Browser for Engine {
         folder_preview::ask(ask, cx);
     }
 
-    fn card_picture(&self, tab: u64, cx: &mut App) {
+    fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
         log!("browser: tab {tab} picturing {request}");
-        let (width, height) = hover_card::PICTURE_PIXELS;
+        let (width, height) = hover_card::picture_pixels(scale);
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
     }
 

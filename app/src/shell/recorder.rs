@@ -1478,7 +1478,7 @@ impl Browser for Recorder {
         }
     }
 
-    fn card_picture(&self, tab: u64, _: &mut App) {
+    fn card_picture(&self, tab: u64, _: f32, _: &mut App) {
         self.record(format!("card picture {tab}"))
     }
 

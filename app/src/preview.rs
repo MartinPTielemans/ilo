@@ -1649,7 +1649,7 @@ impl Browser for Fake {
     // And the folder preview's.
     fn folder_preview(&self, _: browser::folder_preview::Ask, _: &mut App) {}
 
-    fn card_picture(&self, _: u64, _: &mut App) {}
+    fn card_picture(&self, _: u64, _: f32, _: &mut App) {}
 
     // The same for the link target's, which the preview's made-up pages have no links for.
     fn link_target(

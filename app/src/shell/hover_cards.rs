@@ -296,7 +296,7 @@ impl Shell {
                         && !self.page(tab).unloaded
                         && !self.frozen(tab)
                     {
-                        self.browser.card_picture(tab, cx);
+                        self.browser.card_picture(tab, self.scale, cx);
                     }
                 }
             }
@@ -378,7 +378,7 @@ impl Shell {
         for tab in hidden {
             let open = self.tabs.get(&tab).is_some_and(|each| !each.page.unloaded);
             if open && !self.on_screen(tab) {
-                self.browser.card_picture(tab, cx);
+                self.browser.card_picture(tab, self.scale, cx);
             }
         }
     }
