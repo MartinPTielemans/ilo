@@ -17,7 +17,8 @@
 #   the minute after, and again 2 minutes after the page loaded (settled); 19 new tabs opened from
 #   ⌘T's bar, ↩ to their page painted; memory at 10 and 20 tabs, 10 s and 15 s after; idle at 20
 #   tabs and settled at 20; 16 switches by ⌘1–⌘8, the key to the page shown; 3 new windows, ⌘N to
-#   their first frame; and memory back at 1 tab, 30 s after closing the others.
+#   their first frame; 5 opens of the Library, ⇧⌘L to its first frame; and memory back at 1 tab,
+#   30 s after closing the others.
 # - Then Google Chrome, where the runner has it, on the same page on the same machine: memory at 1,
 #   10 and 20 tabs and idle at 1 and 20, which the gate compares ilo with, and the run says how far
 #   ilo is from it on each.
@@ -314,6 +315,21 @@ perf_session() {
   done
   perf_row newwindow "New window, ⌘N to first frame" \
     "$(perf_stats '%.1f' < "$perf_dir/newwindow") ms" "Ardia 79.9 ms, Chrome 100 ms"
+
+  # The Library opens on History, with the session's pages in it, which it asks for after its
+  # first frame (#2337).
+  : > "$perf_dir/library"
+  for _ in 1 2 3 4 5; do
+    send key l cmd shift
+    expect_late '^browser: library [a-z]* first frame at [0-9.]* ms$' "⇧⌘L's Library drew no frame"
+    sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n 's/^browser: library [a-z]* first frame at \([0-9.]*\) ms$/\1/p' | head -1 >> "$perf_dir/library"
+    expect '^browser: library shown$' "⇧⌘L didn't open the Library"
+    send key l cmd shift
+    expect '^browser: library hidden$' "⇧⌘L didn't close the Library"
+  done
+  perf_row library "Library, ⇧⌘L to first frame" \
+    "$(perf_stats '%.1f' < "$perf_dir/library") ms" "none of its own"
 
   for _ in $(seq 19); do
     send key w cmd

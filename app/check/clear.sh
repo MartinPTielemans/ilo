@@ -542,7 +542,7 @@ view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layou
 ../tools/window-screenshot.sh "$pid" "$out/library.png" || fail "no window to capture"
 # A right-click on the archived tab shows its menu, whose Copy URL copies its URL.
 post rightclick 300 111
-expect "^browser: menu shown $(cased 'Restore Tab, Copy URL, Delete from Archive')\$" \
+expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
   "a right-click on the archived tab didn't show its menu"
 ../tools/window-screenshot.sh "$pid" "$out/archived-menu.png" || fail "no window to capture"
 send choose Copy URL
@@ -570,7 +570,7 @@ expect '^browser: library shown$' "Open Library… didn't open the Library"
 # Delete from Archive in a tab's menu takes it out, and the Library stays open.
 archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f3)
 post rightclick 300 111
-expect "^browser: menu shown $(cased 'Restore Tab, Copy URL, Delete from Archive')\$" \
+expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
   "a right-click on an archived tab didn't show its menu"
 send choose "$(cased 'Delete from Archive')"
 expect '^browser: remove archived [0-9][0-9]*$' "Delete from Archive didn't run"
