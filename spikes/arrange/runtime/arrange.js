@@ -262,7 +262,7 @@
     restore(el); restore(ref);
     const skip = [el, ref];
     const sa = slotOf(el, skip), sb = slotOf(ref, skip);
-    for (const sl of [sa, sb]) if (sl.axis === 'table' || sl.axis === 'grid' || sl.axis === 'inline') { s.why = 'a place in a ' + sl.axis; s.keepers = []; return; }
+    for (const sl of [sa, sb]) if (sl.axis === 'table' || sl.axis === 'grid' || sl.axis === 'inline') { s.why = 'a place in ' + (sl.axis === 'inline' ? 'inline text' : 'a ' + sl.axis); s.keepers = []; return; }
     sa.incoming = ref; sb.incoming = el;
     const keepers = (s.keepers = []);
     // Out of the flow, each at its new width.
