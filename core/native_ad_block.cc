@@ -35,6 +35,8 @@
 #include "browser_core/agent_autofill.h"
 #include "browser_core/host.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/space.h"
+#include "browser_core/tab.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_controller.h"
@@ -597,6 +599,24 @@ if (open) {
 )html"});
 }
 
+// An agent's tab gets the warning with no Open anyway, and the activity log says why, as it does
+// for a device the agent's page asks for: only the user gets past a page their lists block.
+void LogAgentWarned(content::WebContents* contents) {
+  const Tab* tab = Tab::FromWebContents(contents);
+  const Space* space = tab && IsAgentTab(contents) ? Space::Holding(tab->id()) : nullptr;
+  if (!space || !space->agent() || !Host().agent_activity) {
+    return;
+  }
+  const bc_agent_activity entry = {
+      .agent = space->agent()->id.c_str(),
+      .tab = tab->id(),
+      .action = "blocked_page",
+      .refused = "A filter list in Settings › Ad blocking names this page, and only the user "
+                 "can open it anyway, in a tab of their own.",
+  };
+  Host().agent_activity(Host().context, &entry);
+}
+
 // Asks the app's engine what the page a navigation loads hides and runs as its request starts, so
 // the answer is in by its response, which waits for it only if it isn't. A tab's page also waits,
 // at each address it goes to, to be asked whether the user's lists block it, before its request
@@ -731,6 +751,7 @@ class PageThrottle : public content::NavigationThrottle {
     if (navigation_handle()->IsInPrimaryMainFrame()) {
       Warned::CreateForWebContents(contents);
       Warned::FromWebContents(contents)->url = url;
+      LogAgentWarned(contents);
     }
     // Last: the navigation, and this with it, can go here.
     CancelDeferredNavigation(
