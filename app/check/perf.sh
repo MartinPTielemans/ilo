@@ -28,6 +28,16 @@
 
 serve
 perf_dir="$out/perf"
+# #2317, not for merge: user-mode stack traces for chrome.exe's heap allocations, ilo's and Chrome's
+# browser alike, which perf_dissect has UMDH read.
+perf_debuggers="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
+if [ -n "${MSYSTEM:-}" ]; then
+  if [ -x "$perf_debuggers/gflags.exe" ]; then
+    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe +ust || echo "perf: gflags failed"
+  else
+    echo "perf: no Debugging Tools in $perf_debuggers: $(ls "/c/Program Files (x86)/Windows Kits/10" 2>&1 | tr '\n' ' ')"
+  fi
+fi
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
 profile_dir="$PWD/$perf_dir/profile"
@@ -139,6 +149,14 @@ perf_dissect() {
   [ -z "${MSYSTEM:-}" ] || DISSECT_VMMAP=$(cygpath -w "$PWD/$out/vmmap/vmmap64.exe")
   DISSECT_VMMAP=${DISSECT_VMMAP:-} python3 -I check/dissect.py "$perf_dir/memory-$1.json" "$perf_dir" \
     "dissect-$1" || echo "perf: dissect $1 failed"
+  # #2317, not for merge: the browser process's NT heap by allocating stack, as UMDH reads it.
+  if [ -n "${MSYSTEM:-}" ] && [ -x "$perf_debuggers/umdh.exe" ]; then
+    umdh_pid=$(cut -d' ' -f1 "$perf_dir/dissect-$1-browser-pid.txt" 2> /dev/null)
+    [ -z "$umdh_pid" ] ||
+      _NT_SYMBOL_PATH="srv*$(cygpath -w "$PWD/$out/symbols")*https://msdl.microsoft.com/download/symbols" \
+        timeout 900 "$perf_debuggers/umdh.exe" -p:"$umdh_pid" -f:"$(cygpath -w "$PWD/$perf_dir/umdh-$1.txt")" \
+        > "$perf_dir/umdh-$1.log" 2>&1 || echo "perf: umdh $1 failed"
+  fi
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
