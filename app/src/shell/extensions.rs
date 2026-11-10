@@ -225,6 +225,13 @@ impl Shell {
             })
             .collect();
         log!("browser: extension actions {}", shown.join(" "));
+        // For check.sh, where an extension of its own says in its title how far its popup's page
+        // has got (#2241).
+        let titles: Vec<String> = (self.extension_actions.iter())
+            .chain(&self.unpinned_actions)
+            .map(|action| format!("{}={}", action.id, action.title))
+            .collect();
+        log!("browser: extension titles {}", titles.join(" | "));
         // The panel takes them only while it shows for the tab.
         let grid = self.site_controls_extensions();
         self.browser
