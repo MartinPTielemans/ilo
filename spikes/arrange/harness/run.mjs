@@ -284,6 +284,8 @@ async function scenario(name, arrangement, rec, opts = {}) {
     r.fcp = await p.page.evaluate(() => (performance.getEntriesByType('paint').find((e) => e.name === 'first-contentful-paint') || {}).startTime || null);
     r.mainWorldSeesRuntime = await p.page.evaluate(() => typeof window.__ILO_ARRANGE__ !== 'undefined' || typeof window.__ILO_ARRANGEMENT__ !== 'undefined');
     r.styleSheets = await p.page.evaluate(() => document.styleSheets.length);
+    // How far the page now scrolls sideways, which an arrangement must not add.
+    r.overflowX = await p.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (arrangement) {
       const s = await p.inWorld('globalThis.__ILO_ARRANGE_STATS__');
       r.state = await p.inWorld('globalThis.__ILO_ARRANGE__.state()');
