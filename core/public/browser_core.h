@@ -780,6 +780,18 @@ typedef struct bc_sidebar_backup {
   const char* label;
 } bc_sidebar_backup;
 
+// A page of history: another browser's, for bc_profile_add_history, or the profile's, in
+// history_listed. Strings are UTF-8.
+typedef struct bc_history_page {
+  const char* url;
+  const char* title;
+  // When it was last visited, in microseconds since 1970.
+  int64_t last_visit;
+  int32_t visits;
+  // How many of the visits were typed into the address bar, which ranks it among suggestions.
+  int32_t typed;
+} bc_history_page;
+
 typedef struct bc_host {
   // Passed back to every callback.
   void* context;
@@ -1759,17 +1771,6 @@ BC_EXPORT bool bc_profile_set_archive_after(bc_id profile, double seconds);
 // none picked. The app keeps the services and their URLs; the profile keeps the name.
 BC_EXPORT size_t bc_profile_notes_service(bc_id profile, char* service, size_t capacity);
 BC_EXPORT void bc_profile_set_notes_service(bc_id profile, const char* service);
-
-// A page of another browser's history, for bc_profile_add_history. Strings are UTF-8.
-typedef struct bc_history_page {
-  const char* url;
-  const char* title;
-  // When it was last visited, in microseconds since 1970.
-  int64_t last_visit;
-  int32_t visits;
-  // How many of the visits were typed into the address bar, which ranks it among suggestions.
-  int32_t typed;
-} bc_history_page;
 
 // Adds |count| pages from another browser's history to the loaded profile's, as Chrome's importer
 // does, and returns whether it will: not to a private profile or one that hasn't loaded. A page
