@@ -237,6 +237,36 @@ jobs:
           launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
           killall replayd || true
 
+      # macOS asks whether the runner's agent, which it holds responsible for the app, may find devices
+      # on the local network the first time anything the job started reaches the default route's
+      # address, as webrtc's STUN server is. Its question, in UserNotificationCenter, took the app's
+      # activation mid-run, and the run's keys went nowhere: in webrtc, and in handback, which came
+      # later in the same job (#2205). Local Network can't be granted ahead like the others, and a check
+      # VM answered once, so the job asks it now, reaching that address, and answers Allow through
+      # System Events with the Accessibility granted above.
+      - if: ${{ steps.engine.outputs.found == 'true' }}
+        run: |
+          address=$(ipconfig getifaddr "$(route -n get default | awk '/interface:/ { print $2 }')")
+          python3 -c 'import socket, sys
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.sendto(b"ilo", (sys.argv[1], 9))' "$address"
+          for _ in $(seq 150); do
+            asked=$(osascript -e 'tell application "System Events"
+              if not (exists process "UserNotificationCenter") then return ""
+              tell process "UserNotificationCenter"
+                if (count of windows) is 0 then return ""
+                set asked to (value of every static text of window 1) as text
+                click button "Allow" of window 1
+                return asked
+              end tell
+            end tell') || true
+            if [ -n "$asked" ]; then
+              echo "allowed: $asked"
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo "::warning::macOS asked nothing after a datagram to $address in 30 s: a run that reaches the local network may meet its question"
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       - name: Runs
         if: ${{ steps.engine.outputs.found == 'true' }}

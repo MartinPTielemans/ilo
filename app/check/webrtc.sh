@@ -106,33 +106,6 @@ relay_switch() {
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 }
 
-# macOS asks whether the app may find devices on the local network a few seconds after its page
-# first reaches the STUN server on the default route's address, in UserNotificationCenter, which
-# takes the app's activation, so the run's next keys went to no window of the app's (#2205). A
-# check VM was asked once and kept the answer, while GitHub's hosted runner is new each time and
-# Local Network can't be granted ahead, so there the run answers Allow, as through System Events,
-# which needs the Accessibility check-mac.yml grants. Never on a Mac in use.
-answer_local_network() {
-  [ "$(uname)" = Darwin ] && [ -n "${GITHUB_ACTIONS:-}" ] || return 0
-  : > "$out/webrtc-local-network.log"
-  for _ in $(seq 75); do
-    answered=$(osascript -e 'tell application "System Events"
-      if not (exists process "UserNotificationCenter") then return ""
-      tell process "UserNotificationCenter"
-        if (count of windows) is 0 then return ""
-        set asked to (value of every static text of window 1) as text
-        click button "Allow" of window 1
-        return asked
-      end tell
-    end tell' 2>> "$out/webrtc-local-network.log") || true
-    if [ -n "$answered" ]; then
-      echo "local network: allowed, asked $answered" >> "$out/webrtc-local-network.log"
-      return 0
-    fi
-    sleep 0.2
-  done
-}
-
 log="$out/webrtc.log"
 step=0
 profile_dir="$PWD/$out/webrtc/profile"
@@ -147,7 +120,6 @@ tab=$(today | cut -d' ' -f1)
 said
 [ "$said" = "$direct" ] ||
   fail "with no setting and no proxy, the page didn't gather server-reflexive candidates alone and connect: $said"
-answer_local_network
 send click $page_point
 if [ "$active" != 1 ]; then
   exec 3>&-
