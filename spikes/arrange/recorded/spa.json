@@ -1,0 +1,218 @@
+{
+  "url": "https://bsky.app/profile/bsky.app",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "div.r-12vffkv:nth-of-type(2) > div:nth-of-type(3)",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "text": "35.6M followers41 following918 postsofficial Bluesky account"
+        }
+      },
+      "rect": {
+        "x": 243.5,
+        "y": 272,
+        "w": 568,
+        "h": 92
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div:nth-of-type(3) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div.r-18u37iz.r-1cvj4g8:nth-of-type(3) > div.r-1m04atk.r-1qfoi16:nth-of-type(1)",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "nth": 188
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "div.r-12vffkv:nth-of-type(1) > a.r-1loqt21:nth-of-type(1)",
+        "fp": {
+          "tag": "a",
+          "role": "link",
+          "label": "35605162 followers",
+          "href": "bsky.app/profile/bsky.app/followers",
+          "landmark": "main",
+          "text": "35.6M followers"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "div:nth-of-type(2) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div.r-18u37iz.r-1cvj4g8:nth-of-type(3) > div.r-1m04atk.r-1qfoi16:nth-of-type(1)",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "nth": 142
+        }
+      },
+      "rect": {
+        "x": 237.5,
+        "y": 447,
+        "w": 60,
+        "h": 173
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div:nth-of-type(2) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div.r-18u37iz.r-1cvj4g8:nth-of-type(3) > div.r-13awgt0:nth-of-type(2)",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "text": "Bluesky @bsky.app· Oct 17, 2024👋 Bluesky is an open social ",
+          "nth": 1
+        }
+      },
+      "link": {
+        "path": "div:nth-of-type(2) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div.r-18u37iz.r-1cvj4g8:nth-of-type(3) > div.r-1m04atk.r-1qfoi16:nth-of-type(1) > div > div > a.r-1loqt21.r-1otgn73",
+        "fp": {
+          "tag": "a",
+          "role": "link",
+          "label": "Bluesky's avatar",
+          "href": "bsky.app/profile/bsky.app",
+          "landmark": "main",
+          "nth": 0
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "div > input.r-6taxm2",
+        "fp": {
+          "tag": "input",
+          "role": "combobox",
+          "label": "Search",
+          "landmark": "div#root"
+        }
+      },
+      "rect": {
+        "x": 891.5,
+        "y": 22,
+        "w": 202,
+        "h": 40
+      },
+      "tag": "input",
+      "at": {
+        "x": 1054,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 202,
+        "h": null
+      },
+      "video": null,
+      "input": {
+        "path": "div > input.r-6taxm2",
+        "fp": {
+          "tag": "input",
+          "role": "combobox",
+          "label": "Search",
+          "landmark": "div#root"
+        }
+      }
+    },
+    "hide": {
+      "target": {
+        "path": "div > nav",
+        "fp": {
+          "tag": "nav",
+          "role": "navigation",
+          "landmark": "div#root",
+          "text": "Create accountSign in"
+        }
+      },
+      "rect": {
+        "x": 0,
+        "y": 738,
+        "w": 1265,
+        "h": 62
+      },
+      "tag": "nav"
+    },
+    "size": {
+      "target": {
+        "path": "div:nth-of-type(3) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div.r-18u37iz.r-1cvj4g8:nth-of-type(3) > div.r-13awgt0:nth-of-type(2) > div:nth-of-type(2) > div:nth-of-type(2) > div > div > div > div > div > div > button.r-1loqt21.r-1otgn73 > div > div:nth-of-type(1) > div > img",
+        "fp": {
+          "tag": "img",
+          "src": "cdn.bsky.app/img/feed_thumbnail/plain/did:plc:denuvqodvvnzxtuitumle4vs/bafkreieq4ad3gi7xe2rxw76ds3npwfk44sozfk3sjfjaqqbi6l56arzb2y",
+          "landmark": "main"
+        }
+      },
+      "rect": {
+        "x": 297.5,
+        "y": 728,
+        "w": 515,
+        "h": 515
+      },
+      "tag": "img",
+      "size": {
+        "w": 309,
+        "h": null
+      }
+    }
+  },
+  "away": {
+    "path": "div:nth-of-type(3) > div > div.r-1loqt21.r-1otgn73 > div.r-1loqt21.r-1hfyk0a > div:nth-of-type(2) > div:nth-of-type(2) > a.r-1loqt21.r-1otgn73",
+    "fp": {
+      "tag": "a",
+      "role": "link",
+      "label": "Reposted by Bluesky",
+      "href": "bsky.app/profile/bsky.app",
+      "landmark": "main",
+      "text": "Reposted by Bluesky",
+      "nth": 0
+    }
+  },
+  "input": {
+    "path": "div > input.r-6taxm2",
+    "fp": {
+      "tag": "input",
+      "role": "combobox",
+      "label": "Search",
+      "landmark": "div#root"
+    }
+  },
+  "recordedAt": "2026-11-10T16:17:13.588Z",
+  "site": {
+    "id": "spa",
+    "kind": "a single-page app (React Native Web, live feed)",
+    "url": "https://bsky.app/profile/bsky.app"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "size": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

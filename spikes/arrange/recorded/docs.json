@@ -1,0 +1,168 @@
+{
+  "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/position",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "details.baseline-indicator.high > div.extra",
+        "fp": {
+          "tag": "div",
+          "landmark": "main#content",
+          "text": "This feature is well established and works across many devic"
+        }
+      },
+      "rect": {
+        "x": 289,
+        "y": 340,
+        "w": 687,
+        "h": 107.1875
+      },
+      "tag": "div",
+      "ref": {
+        "path": "dd:nth-of-type(1) > p",
+        "fp": {
+          "tag": "p",
+          "landmark": "main#content",
+          "text": "The element is positioned according to the Normal Flow of th"
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "div.extra > ul > li:nth-of-type(1) > a",
+        "fp": {
+          "tag": "a",
+          "href": "developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/position",
+          "landmark": "main#content",
+          "text": "See full compatibility"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "dd:nth-of-type(3) > p:nth-of-type(1)",
+        "fp": {
+          "tag": "p",
+          "landmark": "main#content",
+          "text": "The element is removed from the normal document flow, and no",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 304,
+        "y": 1979.5,
+        "w": 673,
+        "h": 113
+      },
+      "tag": "p",
+      "ref": {
+        "path": "dd:nth-of-type(3) > p:nth-of-type(2)",
+        "fp": {
+          "tag": "p",
+          "landmark": "main#content",
+          "text": "This value creates a new stacking context when the value of ",
+          "nth": 1
+        }
+      },
+      "link": {
+        "path": "dd:nth-of-type(3) > p:nth-of-type(1) > a",
+        "fp": {
+          "tag": "a",
+          "href": "developer.mozilla.org/en-US/docs/Web/CSS/Guides/Display/Containing_block",
+          "landmark": "main#content",
+          "text": "containing block",
+          "nth": 0
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "div:nth-of-type(1) > section.content-section > p",
+        "fp": {
+          "tag": "p",
+          "landmark": "main#content",
+          "text": "The position CSS property sets how an element is positioned "
+        }
+      },
+      "rect": {
+        "x": 288,
+        "y": 357,
+        "w": 689,
+        "h": 115
+      },
+      "tag": "p",
+      "at": {
+        "x": 776,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 480,
+        "h": null
+      },
+      "video": null,
+      "input": null
+    },
+    "hide": {
+      "target": {
+        "path": "body.page-layout > header",
+        "fp": {
+          "tag": "header",
+          "landmark": "",
+          "text": "MDN HTML HTML: Markup language HTML reference Elements Globa"
+        }
+      },
+      "rect": {
+        "x": 0,
+        "y": 91,
+        "w": 1265,
+        "h": 98
+      },
+      "tag": "header"
+    }
+  },
+  "away": {
+    "path": "dd:nth-of-type(2) > p:nth-of-type(2) > a",
+    "fp": {
+      "tag": "a",
+      "href": "developer.mozilla.org/en-US/docs/Web/CSS/Guides/Positioned_layout/Stacking_context",
+      "landmark": "main#content",
+      "text": "stacking context",
+      "nth": 0
+    }
+  },
+  "recordedAt": "2026-11-10T16:16:55.546Z",
+  "site": {
+    "id": "docs",
+    "kind": "documentation",
+    "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/position"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

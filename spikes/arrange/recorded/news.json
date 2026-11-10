@@ -1,0 +1,201 @@
+{
+  "url": "https://www.theguardian.com/international",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "aside.dcr-1hh99kg > div.dcr-1muhitv",
+        "fp": {
+          "tag": "div",
+          "landmark": "aside",
+          "text": "You are viewing the International homepage View the US homep",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 62.5,
+        "y": 670.640625,
+        "w": 1140,
+        "h": 50
+      },
+      "tag": "div",
+      "ref": {
+        "path": "ul.sublinks.dcr-5wzpf > li:nth-of-type(1) > div.dcr-v3oiu1 > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.theguardian.com/us-news/2026/nov/10/pete-hegseth-impeachment-massie",
+          "landmark": "div#container-news",
+          "text": "Pete HegsethHegseth calls Republican’s bid to impeach him a "
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "p > a.dcr-66bvag",
+        "fp": {
+          "tag": "a",
+          "href": "www.theguardian.com/us",
+          "landmark": "aside",
+          "text": "View the US homepage"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "ul.dcr-e76yd7:nth-of-type(1) > li.dcr-jq2eac > div > div.dcr-1ybrhgq > div.dcr-1y98a6f:nth-of-type(2) > ul.sublinks.dcr-5wzpf > li:nth-of-type(2) > div.dcr-v3oiu1 > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.theguardian.com/business/2026/nov/10/oil-prices-fall-donald-trump-iran-war-ftse-100-markets",
+          "landmark": "div#container-news",
+          "text": "US-Israel war on IranOil prices fall to lowest since August "
+        }
+      },
+      "rect": {
+        "x": 482.5,
+        "y": 1240.640625,
+        "w": 220,
+        "h": 54.5625
+      },
+      "tag": "a",
+      "ref": {
+        "path": "li:nth-of-type(3) > div.dcr-kj9b60 > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.theguardian.com/us-news/2026/nov/10/midterms-elections-2026-republicans-washington",
+          "landmark": "div#container-news",
+          "text": "US midtermsRepublicans return to Washington to sift through "
+        }
+      },
+      "link": {
+        "path": "ul.dcr-e76yd7:nth-of-type(1) > li.dcr-jq2eac > div > div.dcr-1ybrhgq > div.dcr-1y98a6f:nth-of-type(2) > ul.sublinks.dcr-5wzpf > li:nth-of-type(2) > div.dcr-v3oiu1 > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.theguardian.com/business/2026/nov/10/oil-prices-fall-donald-trump-iran-war-ftse-100-markets",
+          "landmark": "div#container-news",
+          "text": "US-Israel war on IranOil prices fall to lowest since August "
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "div.dcr-1wvldn0 > div > div.dcr-3pnynv:nth-of-type(1) > div.dcr-sgagsy:nth-of-type(1)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#container-in-focus",
+          "nth": 3
+        }
+      },
+      "rect": {
+        "x": 722.5,
+        "y": 3562.390625,
+        "w": 460,
+        "h": 377.59375
+      },
+      "tag": "div",
+      "at": {
+        "x": 796,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 460,
+        "h": null
+      },
+      "video": {
+        "path": "#video-collection-2-standard-0",
+        "fp": {
+          "tag": "video",
+          "id": "video-collection-2-standard-0",
+          "landmark": "div#container-in-focus"
+        }
+      },
+      "input": null
+    },
+    "hide": {
+      "target": {
+        "path": "div.top-banner-ad-container.dcr-1ob3oxu > aside.ad-slot-container.dcr-14nbbgb",
+        "fp": {
+          "tag": "aside",
+          "landmark": "div#bannerandheader"
+        }
+      },
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 1265,
+        "h": 294
+      },
+      "tag": "aside"
+    },
+    "size": {
+      "target": {
+        "path": "#container-news > ul.dcr-e76yd7:nth-of-type(1) > li.dcr-jq2eac > div > div.dcr-1ybrhgq > div.dcr-12rrx4o:nth-of-type(1) > div.dcr-14qnufr:nth-of-type(1) > picture",
+        "fp": {
+          "tag": "picture",
+          "landmark": "div#container-news",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 562.5,
+        "y": 736.640625,
+        "w": 620,
+        "h": 496
+      },
+      "tag": "picture",
+      "size": {
+        "w": 372,
+        "h": null
+      }
+    }
+  },
+  "away": {
+    "path": "#container-news > ul.dcr-e76yd7:nth-of-type(1) > li.dcr-jq2eac > div > div.dcr-1ybrhgq > a.dcr-bvbu91",
+    "fp": {
+      "tag": "a",
+      "label": "Pete Hegseth dismisses Republican’s impeachment effort against him as ‘a political spectacle’",
+      "href": "www.theguardian.com/us-news/live/2026/nov/10/donald-trump-pete-hegseth-thomas-massie-republicans-iran-war-impeachment-midterms-latest-news-updates",
+      "landmark": "div#container-news"
+    }
+  },
+  "recordedAt": "2026-11-10T16:17:12.222Z",
+  "site": {
+    "id": "news",
+    "kind": "a news front page",
+    "url": "https://www.theguardian.com/international"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "size": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

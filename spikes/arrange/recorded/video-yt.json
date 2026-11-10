@@ -1,0 +1,186 @@
+{
+  "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "ytd-topbar-logo-renderer.style-scope.ytd-masthead > a.yt-simple-endpoint.style-scope",
+        "fp": {
+          "tag": "a",
+          "id": "logo",
+          "href": "www.youtube.com/",
+          "landmark": "ytd-topbar-logo-renderer#logo"
+        }
+      },
+      "rect": {
+        "x": 56,
+        "y": 0,
+        "w": 123,
+        "h": 56
+      },
+      "tag": "a",
+      "ref": {
+        "path": "div.interstitialViewModelModelContainer > div.interstitialViewModelButtonContainer:nth-of-type(3)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#container",
+          "text": "Sign inLearn more"
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "ytd-topbar-logo-renderer.style-scope.ytd-masthead > a.yt-simple-endpoint.style-scope",
+        "fp": {
+          "tag": "a",
+          "id": "logo",
+          "href": "www.youtube.com/",
+          "landmark": "ytd-topbar-logo-renderer#logo"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "#buttons",
+        "fp": {
+          "tag": "div",
+          "id": "buttons",
+          "landmark": "div#end",
+          "text": "Sign in"
+        }
+      },
+      "rect": {
+        "x": 1096.375,
+        "y": 8,
+        "w": 152.625,
+        "h": 40
+      },
+      "tag": "div",
+      "ref": {
+        "path": "#owner > ytd-video-owner-renderer.style-scope.ytd-watch-metadata",
+        "fp": {
+          "tag": "ytd-video-owner-renderer",
+          "landmark": "div#owner",
+          "text": "Blender Blender 1.26M subscribers"
+        }
+      },
+      "link": {
+        "path": "ytd-button-renderer.style-scope.ytd-masthead > yt-button-shape > a.ytSpecButtonShapeNextHost.ytSpecButtonShapeNextOutline",
+        "fp": {
+          "tag": "a",
+          "label": "Sign in",
+          "href": "accounts.google.com/ServiceLogin",
+          "landmark": "div#buttons",
+          "text": "Sign in"
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "div.ytSearchboxComponentInputBox > form.ytSearchboxComponentSearchForm",
+        "fp": {
+          "tag": "form",
+          "landmark": "div#center"
+        }
+      },
+      "rect": {
+        "x": 331.5,
+        "y": 16,
+        "w": 515,
+        "h": 24
+      },
+      "tag": "form",
+      "at": {
+        "x": 776,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 480,
+        "h": null
+      },
+      "video": null,
+      "input": {
+        "path": "form.ytSearchboxComponentSearchForm > input.ytSearchboxComponentInput.yt-searchbox-input",
+        "fp": {
+          "tag": "input",
+          "role": "combobox",
+          "name": "search_query",
+          "landmark": "div#center"
+        }
+      }
+    },
+    "size": {
+      "target": {
+        "path": "yt-lockup-view-model.ytd-item-section-renderer.lockup:nth-of-type(1) > div.ytLockupViewModelHost.ytLockupViewModelHorizontal > a.ytLockupViewModelContentImage > yt-thumbnail-view-model.ytThumbnailViewModelHost.ytThumbnailViewModelMedium > div.ytThumbnailViewModelImage > img.ytCoreImageHost.ytCoreImageFillParentHeight",
+        "fp": {
+          "tag": "img",
+          "src": "i.ytimg.com/vi/EdsC5J-FzJ8/hqdefault.jpg",
+          "landmark": "div#contents"
+        }
+      },
+      "rect": {
+        "x": 905.25,
+        "y": 68,
+        "w": 214.84375,
+        "h": 120.84375
+      },
+      "tag": "img",
+      "size": {
+        "w": 129,
+        "h": null
+      }
+    }
+  },
+  "away": {
+    "path": "ytd-video-owner-renderer.style-scope.ytd-watch-metadata > a.yt-simple-endpoint.style-scope",
+    "fp": {
+      "tag": "a",
+      "href": "www.youtube.com/@BlenderOfficial",
+      "landmark": "div#owner"
+    }
+  },
+  "input": {
+    "path": "form.ytSearchboxComponentSearchForm > input.ytSearchboxComponentInput.yt-searchbox-input",
+    "fp": {
+      "tag": "input",
+      "role": "combobox",
+      "name": "search_query",
+      "landmark": "div#center"
+    }
+  },
+  "recordedAt": "2026-11-10T16:16:52.573Z",
+  "site": {
+    "id": "video-yt",
+    "kind": "a video page that asks a runner to sign in",
+    "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "size": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}
