@@ -1,21 +1,45 @@
-# Runs spikes/boost-script on Linux's engine with its sandbox on. On this proof branch only.
+# Runs spikes/boost-script on Linux's app and engine with its sandbox on. On this proof branch only.
 name: Spike boost-script
 on:
   push:
     branches: [spike/boost-script-2]
 permissions:
   contents: read
+  actions: read
 jobs:
   measure:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs; the sandbox stays on.
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: spikes/boost-script/run.sh "$RUNNER_TEMP/spike"
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            libvulkan1 mesa-vulkan-drivers libegl1 libgl1-mesa-dri xvfb xauth openbox
+      # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs; the sandbox stays
+      # on.
+      - run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          rustup update stable --no-self-update
+      # main's build cache, as check-linux.yml reads it.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: check-linux-${{ hashFiles('app/Cargo.lock', 'app/linux/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: |
+            check-linux-
+            app-linux-
+      - run: ./setup.sh && ./build.sh
+      - run: ../spikes/boost-script/run.sh "$RUNNER_TEMP/spike"
       - if: always()
         run: |
           { echo '```json'; cat "$RUNNER_TEMP/spike/results.json" || tail -40 "$RUNNER_TEMP/spike/chrome.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
