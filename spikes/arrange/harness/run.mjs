@@ -98,7 +98,7 @@ async function clickLink(p, desc) {
     const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(desc))});
     if (!el) return null;
     el.scrollIntoView({ block: 'center' });
-    const r = el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 40), y = r.top + r.height / 2;
+    const r = el.getClientRects()[0] || el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 40), y = r.top + r.height / 2;
     const hit = document.elementFromPoint(x, y);
     return { x, y, hits: !!hit && (el === hit || el.contains(hit) || hit.contains(el)), href: el.href };
   })()`);
@@ -116,7 +116,7 @@ async function clickLink(p, desc) {
 async function typeInto(p, desc) {
   if (!desc) return { tried: false };
   const at = await p.inWorld(`(() => { const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(desc))});
-    if (!el) return null; const r = el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 30), y = r.top + r.height / 2;
+    if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getClientRects()[0] || el.getBoundingClientRect(); const x = r.left + Math.min(r.width / 2, 30), y = r.top + r.height / 2;
     const hit = document.elementFromPoint(x, y); return { x, y, hits: !!hit && (el === hit || el.contains(hit)) }; })()`);
   if (!at) return { tried: true, found: false };
   await p.page.mouse.click(at.x, at.y);
@@ -153,7 +153,8 @@ function flashes(stats) {
   const out = {};
   for (const [id, c] of Object.entries(stats.changes || {})) {
     if (c.applied == null) { out[id] = { applied: false }; continue; }
-    const between = stats.frames.filter((f) => f > c.seen && f < c.applied).length;
+    // Frames that began after the element was seen and before the one its placement landed in.
+    const between = stats.frames.filter((f) => f > c.seen && f < (c.frame != null ? c.frame : c.applied)).length;
     out[id] = { applied: true, framesBetween: between, seenMs: Math.round(c.seen), appliedMs: Math.round(c.applied) };
   }
   return out;
@@ -317,6 +318,10 @@ async function measure() {
     }
   }
   results.runs.push(await scenario('all/place', { strategy: 'place', finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { idle: true, capture: 'after.png', checks: false }));
+  // The first way, placing again at every burst the page adds, for what once a frame saves.
+  results.runs.push(await scenario('all/place-sync', { strategy: 'place', sync: true, finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
+  // The same by fingerprint, which finds each element by what it says rather than where it sits.
+  results.runs.push(await scenario('all/place-fp', { strategy: 'place', finder: 'fp', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   writeFileSync(join(out, 'measure.json'), JSON.stringify(results, null, 2));
   log('done', results.runs.length, 'runs');
 }

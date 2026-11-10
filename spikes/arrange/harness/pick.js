@@ -14,11 +14,13 @@
   const docTop = (r) => r.top + scrollY;
   const area = (r) => r.width * r.height;
   const nest = (a, b) => a.contains(b) || b.contains(a);
+  // A block's link: the block itself when it is one.
+  const linkIn = (b) => D(b.matches('a[href]') ? b : b.querySelector('a[href]'));
   const blockOf = (el, min, max) => {
     for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
       const r = vis(e);
       if (!r) continue;
-      if (area(r) >= min && area(r) <= max && getComputedStyle(e).display !== 'inline') return e;
+      if (area(r) >= min && area(r) <= max && r.height >= 40 && getComputedStyle(e).display !== 'inline') return e;
     }
     return null;
   };
@@ -48,19 +50,19 @@
       const rx = vis(x);
       return x !== b && !nest(x, b) && docTop(rx) > docTop(rb) + rb.height + 120 && Math.abs(rx.left - rb.left) < 300;
     });
-    if (ref) { rec('settle', b, { ref: D(ref), where: 'after', link: D(b.querySelector('a[href]')) }); break; }
+    if (ref) { rec('settle', b, { ref: D(ref), where: 'after', link: linkIn(b) }); break; }
   }
   // Trade: two link blocks under one parent.
   outer: for (const b of blocks) {
     for (const x of blocks) {
       if (x === b || nest(x, b) || x.parentElement !== b.parentElement) continue;
-      rec('trade', b, { ref: D(x), link: D(b.querySelector('a[href]')) });
+      rec('trade', b, { ref: D(x), link: linkIn(b) });
       break outer;
     }
   }
   if (!out.picks.trade && blocks.length > 1) {
     const [b, x] = blocks.filter((e, i, a) => !a.some((o) => o !== e && nest(o, e)));
-    if (b && x) rec('trade', b, { ref: D(x), link: D(b.querySelector('a[href]')) });
+    if (b && x) rec('trade', b, { ref: D(x), link: linkIn(b) });
   }
   // Float, pinned to the screen: the player, else a search form, else a link block.
   const video = [...document.querySelectorAll('video')].find((v) => { const r = vis(v); return r && area(r) > 20000; });
@@ -74,22 +76,24 @@
   }
   const input = [...document.querySelectorAll('input[type=search], input[type=text], input:not([type]), input[name=q]')].find((i) => vis(i));
   const form = input && (input.closest('form') || blockOf(input, 2000, 120000));
-  const floater = player || form || blocks[0];
+  // Each kind moves an element of its own, so a run of all of them moves no element twice.
+  const free = (e) => e && !picked.some((p) => nest(p, e));
+  const floater = [player, form, ...blocks].find(free);
   if (floater) {
     const r = vis(floater);
     const w = Math.min(r.width, 480);
     rec('float', floater, { at: { x: Math.round(W - w - 24), y: 96 }, pin: 'screen', size: { w: Math.round(w), h: null }, video: player ? D(video) : null, input: !player && input ? D(input) : null });
   }
   // Hide: the site's header or banner, else its navigation, else an aside.
-  const hide = [...document.querySelectorAll('header, [role=banner], nav, aside')].find((e) => { const r = vis(e); return r && docTop(r) < H && area(r) > 3000; });
+  const hide = [...document.querySelectorAll('header, [role=banner], nav, aside')].find((e) => { const r = vis(e); return free(e) && r && docTop(r) < H && area(r) > 3000; });
   if (hide) rec('hide', hide, {});
   // Size: the player, else the largest picture in the first two screens, to 60 % of its width.
-  let big = player;
+  let big = free(player) ? player : null;
   if (!big) {
     let best = 0;
     for (const im of document.querySelectorAll('img, picture, svg')) {
       const r = vis(im);
-      if (r && docTop(r) < H * 2 && area(r) > best && area(r) > 15000) { best = area(r); big = im; }
+      if (r && free(im) && docTop(r) < H * 2 && area(r) > best && area(r) > 15000) { best = area(r); big = im; }
     }
   }
   if (big) rec('size', big, { size: { w: Math.round(vis(big).width * 0.6), h: null } });

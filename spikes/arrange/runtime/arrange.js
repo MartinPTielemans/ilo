@@ -7,6 +7,7 @@
 //   strategy: 'place' | 'anchor' | 'reparent' | 'clone',
 //   finder: 'path' | 'fp',
 //   test: true,   // the spike's counters and frame log; off, the runtime keeps none
+//   sync: true,   // place again at every burst the page adds, not once a frame (to measure)
 //   changes: [{ id, kind: 'settle' | 'trade' | 'float' | 'hide' | 'size',
 //               target: { path, fp }, ref: { path, fp },   // ref for settle and trade
 //               where: 'before' | 'after',                  // settle
@@ -255,7 +256,7 @@
 
   // ---- Keeping it placed: observers only, no timer, no frame loop.
   let busy = false;
-  function layoutAll(why) {
+  function layoutAll(why, frame) {
     if (busy) return;
     busy = true;
     const t = performance.now();
@@ -265,7 +266,11 @@
         const was = s.applied;
         if (A.strategy === 'reparent' || A.strategy === 'clone') { if (!s.applied) place(s); }
         else place(s);
-        if (T && s.applied && !was && T.changes[s.c.id] && T.changes[s.c.id].applied == null) T.changes[s.c.id].applied = performance.now();
+        if (T && s.applied && !was && T.changes[s.c.id] && T.changes[s.c.id].applied == null) {
+          // Placed in a frame's callback lands in that frame, before it paints.
+          T.changes[s.c.id].applied = performance.now();
+          if (frame != null) T.changes[s.c.id].frame = frame;
+        }
         if (T && s.el) observeSizes(s);
       }
     } finally {
@@ -287,8 +292,19 @@
     if (busy) return;
     let relevant = false;
     for (const r of records) if (r.type === 'childList' && (r.addedNodes.length || r.removedNodes.length)) { relevant = true; break; }
-    if (relevant) layoutAll('mo');
+    if (relevant) later();
   });
+  // What the page adds comes in bursts while it loads: placing again after each costs a forced
+  // layout each time. One placement a frame, in that frame's animation callback, still lands
+  // before it paints, and asks for no frame while the page adds nothing. |sync| is the first way,
+  // kept to measure against.
+  let pending = false;
+  function later() {
+    if (A.sync) return layoutAll('mo');
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame((ts) => { pending = false; layoutAll('frame', ts); });
+  }
   function onScroll() { if (T) T.callbacks.scroll++; layoutAll('scroll'); }
   addEventListener('resize', () => { if (T) T.callbacks.resize++; layoutAll('resize'); });
 
@@ -331,7 +347,7 @@
   };
 
   // Records a description of |el| both ways, as the arrangement keeps it.
-  function describe(el) { return { path: pathOf(el), fp: fpOf(el) }; }
+  function describe(el) { return el ? { path: pathOf(el), fp: fpOf(el) } : null; }
   function stableToken(t) { return /^[a-zA-Z][\w-]{1,40}$/.test(t) && !/\d{3,}|[A-Z].*[A-Z].*\d|__|--[a-z0-9]{5,}$|^css-|^sc-|^jsx-|^_[a-z0-9]{5}/.test(t); }
   function pathOf(el) {
     const parts = [];
