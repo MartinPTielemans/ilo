@@ -86,8 +86,10 @@
     const w = Math.min(r.width, 480);
     rec('float', floater, { at: { x: Math.round(W - w - 24), y: 96 }, pin: 'screen', size: { w: Math.round(w), h: null }, video: player ? D(video) : null, input: !player && input ? D(input) : null });
   }
-  // Hide: the site's header or banner, else its navigation, else an aside.
-  const hide = [...document.querySelectorAll('header, [role=banner], nav, aside')].find((e) => { const r = vis(e); return free(e) && r && docTop(r) < H && area(r) > 3000; });
+  // Hide: the site's header or banner, else its navigation, else an aside, never the one holding
+  // the field or video the run checks, which hiding would take away with it.
+  const holds = (e) => (input && e.contains(input)) || (video && e.contains(video));
+  const hide = [...document.querySelectorAll('header, [role=banner], nav, aside')].find((e) => { const r = vis(e); return free(e) && !holds(e) && r && docTop(r) < H && area(r) > 3000; });
   if (hide) rec('hide', hide, {});
   // Size: the player, else the largest picture in the first two screens, to 60 % of its width.
   let big = free(player) ? player : null;
