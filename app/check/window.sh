@@ -351,10 +351,19 @@ expect '^browser: appearance automatic$' \
 send click $page_point
 
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
-# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches.
-scroll="10 300"
-[ "$(uname)" = Linux ] && scroll="1 25"
-send scroll $page_point $scroll
+# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches, five at a time.
+# Chromium hands a page one wheel event at a time and merges those that queue meanwhile, capping a
+# merged one at the page's height (LimitScrollDeltaToScrollerSize), as Chrome does. In a slow
+# session the 25 at once came as one notch and 24 merged, and the page stopped at its height, 779
+# points (#2256). Five, 600 points, stay under it.
+if [ "$(uname)" = Linux ]; then
+  for to in 600 1200 1800 2400 3000; do
+    send scroll $page_point 1 5
+    await "^browser: title [0-9]* frames .* scrolled $to\$" || break
+  done
+else
+  send scroll $page_point 10 300
+fi
 expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
 # The page says its count after each pause of 300 ms, so the last is the whole scroll's.
 await '^browser: title [0-9]* frames .* scrolled 3000$' || true
