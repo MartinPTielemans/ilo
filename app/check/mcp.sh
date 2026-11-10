@@ -259,10 +259,11 @@ if content["type"] == "image":
 else:
     print(("error: " if result["isError"] else "") + content["text"])'
 }
-# The tools/call request for the tool $1 with the arguments $2.
+# The tools/call request for the tool $1 with the arguments $2, as they are: sh's echo would make
+# a JSON escape such as \n a line break.
 request() {
   id=$((id + 1))
-  echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"
 }
 # Calls the tool $1 with the arguments $2, and prints its answer.
 call() {
