@@ -31,9 +31,10 @@ TEST_F(BoostScriptTest, AScriptNewHereStaysOffUntilTurnedOn) {
 TEST_F(BoostScriptTest, AnyChangedByteTurnsItOff) {
   ASSERT_TRUE(TurnOn(prefs_, "a.test", kScript));
   const std::string script = kScript;
-  for (const std::string& changed :
-       {script + " ", "document.title = 'boosted';\r\n", script.substr(0, script.size() - 1),
-        std::string(), "document.title = 'Boosted';\n"}) {
+  const std::string changed_ones[] = {script + " ", "document.title = 'boosted';\r\n",
+                                      script.substr(0, script.size() - 1), std::string(),
+                                      "document.title = 'Boosted';\n"};
+  for (const std::string& changed : changed_ones) {
     EXPECT_EQ(Check(prefs_, "a.test", changed), State::kChanged) << changed;
   }
   // The file back as it was runs again: the record is the bytes, not a version.
