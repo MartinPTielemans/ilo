@@ -84,7 +84,6 @@ impl Shell {
             Box::new(move |cx| {
                 shell
                     .update(cx, |shell, cx| {
-                        // check.sh waits for this line.
                         log!("browser: restore sidebar {time}");
                         shell.browser.restore_sidebar(time, cx);
                     })

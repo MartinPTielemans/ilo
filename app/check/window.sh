@@ -1023,15 +1023,17 @@ if windows; then
   alone=winalt
   after_key() { send flags winalt shift; }
 fi
+docked=$((step + 1))
 send flags $alone
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ with the sidebar docked brought it out"
 send key s cmd
 toggle ui hidden "⌘S before ⌥"
 send move 600 300
 send flags $alone
 send flags
 expect '^browser: reveal by option$' "⌥ pressed alone didn't bring the hidden sidebar out"
+[ "$(since "$docked" | grep -c '^browser: reveal by option$')" = 1 ] ||
+  fail "⌥ with the sidebar docked brought it out"
 expect '^browser: reveal shown$' "⌥ didn't bring the sidebar's panel out"
 check_reveal "with the sidebar out for ⌥" shown
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-option.png" || fail "no window to capture"
@@ -1043,20 +1045,18 @@ send flags
 expect '^browser: reveal away by option$' \
   "the pointer over the page, or a second ⌥, sent the sidebar away"
 expect '^browser: reveal hidden$' "a second ⌥ didn't take the sidebar's panel away"
+not_alone=$((step + 1))
 send flags $alone
 send flags $alone cmd
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ held with ⌘ brought the sidebar out"
 if windows; then
   send flags cmd
   send flags cmd winalt
   send flags
-  none_since '^browser: reveal by option$' || fail "AltGr, Ctrl then Alt, brought the sidebar out"
 fi
 send flags $alone
 after_key
 send flags
-none_since '^browser: reveal by option$' || fail "⌥ let go after a key brought the sidebar out"
 # The same with the page focused, whose keys on X11 GPUI doesn't hear, so the core tells of its ⌥,
 # and on the Mac come through the app again when the page doesn't use them.
 send click $page_point
@@ -1065,18 +1065,21 @@ send flags $alone
 send flags
 expect '^browser: reveal by option$' \
   "⌥ pressed alone with the page focused didn't bring the hidden sidebar out"
+[ "$(since "$not_alone" | grep -c '^browser: reveal by option$')" = 1 ] ||
+  fail "⌥ held with ⌘, let go after a key, or as AltGr brought the sidebar out"
 expect '^browser: reveal shown$' "⌥ with the page focused didn't bring the sidebar's panel out"
 send flags $alone
 send flags
 expect '^browser: reveal away by option$' "a second ⌥ with the page focused didn't send it away"
 expect '^browser: reveal hidden$' "a second ⌥ with the page focused didn't take the panel away"
+after_page_key=$((step + 1))
 send flags $alone
 after_key
 send flags
-none_since '^browser: reveal by option$' ||
-  fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
+none_since '^browser: reveal by option$' "$after_page_key" ||
+  fail "⌥ let go after a key with the page focused brought the sidebar out"
 # A shortcut the page hands back hides the row under the pointer until it moves, and the sidebar
 # out, by the edge or by ⌥, hears that move in its own window, so its row under the pointer shows
 # its hover (#2133). While it rests out, the browser takes about the CPU it takes docked: the two
@@ -1091,10 +1094,10 @@ hover_out() {
 # below the rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
-  sleep 1
+  sleep 1 # the hover's fade out, before the window measured
   local from
   from=$(cpu)
-  sleep 4
+  sleep 4 # the window measured
   set -- $from $(cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
@@ -1353,7 +1356,7 @@ if [ "$(uname)" = Darwin ]; then
   expect '^browser: window entered full screen$' "the window didn't go full screen again"
   send keydown escape
   expect "^browser: title $keeps kept [0-9]*\$" "the page didn't get the held Esc's press"
-  sleep 0.7
+  sleep 0.7 # Esc held past the key repeat's delay
   send keydown escape repeat
   expect '^browser: escape held leaves full screen$' "Esc held 700 ms didn't leave full screen"
   send keyup escape

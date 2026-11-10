@@ -186,7 +186,6 @@ pub(crate) unsafe extern "C" fn sync_pairing_asked(
     pairing: *const bc::bc_sync_pairing,
 ) {
     let Some(pairing) = (unsafe { pairing.as_ref() }) else {
-        // check.sh waits for this line.
         log!("browser: pairing withdrawn");
         update_app_later(dialog::withdraw_account);
         return;

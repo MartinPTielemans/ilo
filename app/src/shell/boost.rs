@@ -238,7 +238,6 @@ impl Shell {
         let Some(path) = boosts::with(|boosts| boosts.file(profile, site)) else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: boost edit {site}");
         let changes = boosts::with(|boosts| boosts.reload(profile));
         self.browser.show_boosts(changes, cx);

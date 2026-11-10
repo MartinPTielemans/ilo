@@ -93,7 +93,7 @@ if [ "${1:-}" = --steps ]; then
   to 100 300
   hover '^browser: drop line in ' "$at"
   await '^drag: target text/uri-list$' 0 "$dlog"
-  sleep 0.3
+  sleep 0.3 # for sway to show the frame that drew it
   grim "$out/line.png"
   at=$(mark)
   step release

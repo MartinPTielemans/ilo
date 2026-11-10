@@ -137,8 +137,8 @@ send type nihongo
 send key space
 [ "$marked" = 8,3 ] || fail "the form's field didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/space-form-ime.png" || fail "no window to capture"
+committed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return while composing named the Space"
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
 # The form's Choose a Theme row opens the theme picker beside it, a child window with the
@@ -148,6 +148,7 @@ send click 100 299
 expect "^browser: theme picker for $second\$" "the form's Choose a Theme row didn't open the picker"
 expect '^browser: theme picker shown$' "the theme picker didn't show"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+none_since '^browser: create space' "$committed" || fail "return while composing named the Space"
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
   fail "the theme picker opened at $at, not 370 by 509"
@@ -330,7 +331,7 @@ send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto 220 $(row 0 | cut -d' ' -f2)
 send dragto $page_point
 expect "^browser: drop targets for $a\$" "a row dragged over the page didn't bring the targets"
-sleep 1
+sleep 1 # the row held over the page past a Space edge's paging delay
 none_since '^browser: drag paged to space' || fail "a row held over the page paged to the next Space"
 send dragto $(row 0)
 expect '^browser: drop targets gone$' "the targets stayed with the row back over the sidebar"
@@ -801,9 +802,10 @@ else
 fi
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: space $third in " "the window didn't show the third Space"
+unnamed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return with no name named the Space"
 show_space "key 1 ctrl" select-space ui "$first" "$a"
+none_since '^browser: create space' "$unnamed" || fail "return with no name named the Space"
 # The footer's + offers New Space…, New Folder…, New Split View and New Note, then what adds
 # from the desktop, 8 in from the sidebar's edge.
 post click 204 $((${content#*x} - 25))

@@ -1484,13 +1484,15 @@ impl Settings {
     /// ⌘Z: on Links, the last rule its trash took comes back. The other sections' changes show
     /// as they're made and are made back the same way.
     fn undo(&mut self, cx: &mut Context<Self>) {
-        if let Some(links) = self
-            .links
-            .as_ref()
-            .filter(|_| self.section == Section::Links)
-        {
-            links.update(cx, |links, cx| links.undo(cx));
-        }
+        let links = (self.links.as_ref()).filter(|_| self.section == Section::Links);
+        let undone = links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
+        let what = if undone {
+            "brought a rule back"
+        } else {
+            "had nothing"
+        };
+        // check.sh reads this line.
+        log!("browser: settings undo {what}");
     }
 
     fn forget_undo(&mut self, cx: &mut Context<Self>) {
@@ -1746,7 +1748,6 @@ impl Settings {
         };
         let make = default.offers().then(|| {
             let make = cx.listener(|settings: &mut Self, _, _, cx| {
-                // check.sh waits for this line.
                 log!("browser: make default browser");
                 settings.default_browser.read(cx).make_default();
             });
@@ -2749,7 +2750,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((title, seconds)) = picked.map(|index| LITTLE_ARCHIVE_AFTER[index]) {
-                // check.sh waits for this line.
                 log!("browser: little windows archive after {title}");
                 unsafe { bc::bc_set_little_archive_after(seconds) };
             }
@@ -3030,7 +3030,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&(name, title, _)) = picked.and_then(|index| notes::SERVICES.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: notes service {profile} {title}");
                 let name = CString::new(name).unwrap_or_default();
                 unsafe { bc::bc_profile_set_notes_service(profile, name.as_ptr()) };
@@ -3713,7 +3712,6 @@ impl Settings {
             let copy = self
                 .button(("copy-task-command", cli as usize), "Copy")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: task command copied {command}");
                     cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
                 });
@@ -3774,7 +3772,6 @@ impl Settings {
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: tasks run on {}", cli.id());
                 agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
             }
@@ -3936,7 +3933,6 @@ impl Settings {
         let copy = setup.map(|setup| {
             self.button(("copy-agent-setup", index), "Copy Setup")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: agent setup copied");
                     cx.write_to_clipboard(ClipboardItem::new_string(setup.clone()));
                 })
@@ -4401,7 +4397,6 @@ impl Settings {
         let plain = !keystroke.modifiers.modified();
         let keys = match keystroke.key.as_str() {
             "escape" if plain => {
-                // check.sh waits for this line.
                 log!("browser: shortcut recording stopped");
                 self.recording = None;
                 self.refused = None;
@@ -4419,7 +4414,6 @@ impl Settings {
             }
             Err(refused) => {
                 let why = refusal(refused);
-                // check.sh waits for this line.
                 log!("browser: shortcut refused {why}");
                 self.refused = Some((command, why.into()));
             }
@@ -4610,7 +4604,6 @@ fn restore_earlier_sidebar(cx: &mut App) {
     let Some(shell) = front_shell() else {
         return;
     };
-    // check.sh waits for this line.
     log!("browser: settings restore sidebar");
     hide(cx);
     shell.update(cx, |shell, cx| {
@@ -5335,7 +5328,6 @@ impl Settings {
                     .and_then(|import| import.read(cx).focus())
             })
             .flatten();
-        // check.sh reads this line.
         log!(
             "browser: settings keyboard back to {}",
             if import.is_some() {

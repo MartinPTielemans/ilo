@@ -1221,7 +1221,7 @@ pub fn suggested(text: String, rows: Vec<Suggestion>, cx: &mut App) {
                         .is_some_and(|url| url == row.url);
             }
             bar.set_rows(bar.asked.clone(), rows, window, cx);
-            // The performance gate reads this line: what the rows cost the frame they come in.
+            // What the rows cost the frame they come in.
             log!(
                 "browser: command bar rows for \"{text}\" in {:.1} ms",
                 started.elapsed().as_secs_f64() * 1000.
@@ -1536,7 +1536,6 @@ impl CommandBar {
     fn name_spaces(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         let typed = text.trim().to_lowercase();
         let rows = self.space_rows(&typed);
-        // check.sh reads this line.
         let names: Vec<&str> = rows.iter().map(|row| row.text.as_ref()).collect();
         log!(
             "browser: command bar finds spaces \"{typed}\": {}",
@@ -1774,7 +1773,6 @@ impl CommandBar {
             return;
         }
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
-            // check.sh reads this line.
             log!("browser: command bar ask without its page");
             ask.page = None;
             cx.notify();
@@ -1880,7 +1878,6 @@ impl CommandBar {
         if !self.end_ask(cx) {
             return false;
         }
-        // check.sh reads this line.
         log!("browser: command bar leaves the ask");
         let text = self.input.read(cx).text().to_string();
         self.ask_for(text, window, cx);
@@ -3112,7 +3109,7 @@ impl Render for CommandBar {
         if window.is_visible()
             && let Some(opened) = self.opened_at.take()
         {
-            // The performance gate reads this line: from ⌘T to the bar's first frame on screen.
+            // From ⌘T to the bar's first frame on screen.
             log!(
                 "browser: command bar first frame in {:.1} ms",
                 opened.elapsed().as_secs_f64() * 1000.
