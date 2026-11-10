@@ -2541,6 +2541,26 @@ fn main() {
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
                         (None, None) => shell.set_selected(1, cx),
                     }
+                    // The mock (#2344) shows the Today tabs alone, the first selected. With
+                    // folders the list is longer than the window, so =folders-end selects the
+                    // last tab and reveals its row once the list is laid out.
+                    if let Ok(group) = std::env::var("PREVIEW_GROUP") {
+                        shell.set_favorites(Vec::new(), cx);
+                        if group.ends_with("-end") {
+                            let last = MOCK_GROUP_FIRST + MOCK_GROUP_TABS.len() as u64 - 1;
+                            shell.set_selected(last, cx);
+                            let shown = cx.weak_entity();
+                            window.on_next_frame(move |_, cx| {
+                                shown
+                                    .update(cx, |shell, cx| {
+                                        shell.run(Command::RevealTab, "preview", cx)
+                                    })
+                                    .ok();
+                            });
+                        } else {
+                            shell.set_selected(MOCK_GROUP_FIRST, cx);
+                        }
+                    }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
                     if let Ok(language) = std::env::var("PREVIEW_TRANSLATE") {
@@ -3426,8 +3446,10 @@ const MOCK_GROUP_SITES: [(&str, &str); 4] = [
     ("Rust", "doc.rust-lang.org"),
 ];
 
+const MOCK_GROUP_FIRST: u64 = 9000;
+
 fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context<Shell>) {
-    const FIRST: u64 = 9000;
+    const FIRST: u64 = MOCK_GROUP_FIRST;
     let ids: Vec<u64> = (FIRST..).take(MOCK_GROUP_TABS.len()).collect();
     for (&tab, (title, url)) in ids.iter().zip(MOCK_GROUP_TABS) {
         shell.set_title(tab, title.into(), cx);
@@ -3447,7 +3469,7 @@ fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context
             .filter(move |tab| site_of(tab) == Some(site))
     };
     let mut folders = Folders::default();
-    let today: Vec<u64> = match group {
+    let today: Vec<u64> = match group.trim_end_matches("-end") {
         // Each site's tabs together, sites in the order of their first tab, as option 3 sorts.
         "sorted" => (0..MOCK_GROUP_SITES.len()).flat_map(by_site).collect(),
         // A folder a site, open, in the order of its first tab, as option 1 groups.
@@ -3466,6 +3488,5 @@ fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context
         }
         _ => ids.clone(),
     };
-    shell.set_tabs(space, vec![1, 2], today, Vec::new(), folders, cx);
-    shell.set_selected(FIRST, cx);
+    shell.set_tabs(space, Vec::new(), today, Vec::new(), folders, cx);
 }

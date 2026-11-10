@@ -26,12 +26,14 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # shell words, so a value with spaces is quoted, and for one taken under the pointer, what the
 # preview logs ending in the point the pointer goes to.
 screens=(
-  "group-before|drawn at|PREVIEW_GROUP=before"
-  "group-sorted|drawn at|PREVIEW_GROUP=sorted"
-  "group-folders|drawn at|PREVIEW_GROUP=folders"
+  "group-before|drawn at|PREVIEW_GROUP=before PREVIEW_APPEARANCE=dark"
+  "group-sorted|drawn at|PREVIEW_GROUP=sorted PREVIEW_APPEARANCE=dark"
+  "group-folders|drawn at|PREVIEW_GROUP=folders PREVIEW_APPEARANCE=dark"
+  "group-folders-end|drawn at|PREVIEW_GROUP=folders-end PREVIEW_APPEARANCE=dark"
   "group-before-light|drawn at|PREVIEW_GROUP=before PREVIEW_APPEARANCE=light"
   "group-sorted-light|drawn at|PREVIEW_GROUP=sorted PREVIEW_APPEARANCE=light"
   "group-folders-light|drawn at|PREVIEW_GROUP=folders PREVIEW_APPEARANCE=light"
+  "group-folders-end-light|drawn at|PREVIEW_GROUP=folders-end PREVIEW_APPEARANCE=light"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
