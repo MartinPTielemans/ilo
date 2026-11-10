@@ -494,6 +494,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_shortcuts(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
+        settings::read_new_note(cx);
+        settings::read_clean_links(cx);
         translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
