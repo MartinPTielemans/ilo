@@ -1096,6 +1096,12 @@ probe_procs() {
     type=$(tr '\0' '\n' < "/proc/$p/cmdline" 2> /dev/null | sed -n 's/^--type=//p' | head -1)
     sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null |
       awk -v p="$p" -v hz="$(getconf CLK_TCK)" -v type="${type:-browser}" '{ printf "%s %.2f %s\n", p, ($12 + $13) / hz, type }'
+    # And each of its threads, by name.
+    for t in /proc/$p/task/*; do
+      name=$(tr ' ' '_' < "$t/comm" 2> /dev/null)
+      sed 's/^.*) //' "$t/stat" 2> /dev/null |
+        awk -v id="$p/${t##*/}" -v hz="$(getconf CLK_TCK)" -v name="${type:-browser}:$name" '{ printf "%s %.2f %s\n", id, ($12 + $13) / hz, name }'
+    done
   done
 }
 # rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
