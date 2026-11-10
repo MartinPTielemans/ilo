@@ -709,8 +709,8 @@ expect "^browser: menu shown $(cased 'New Space…, New Folder…, New Split Vie
 send choose "$(cased 'New Note')"
 expect '^browser: new note https://notion\.new$' "the footer's New Note didn't open a new Notion page"
 expect "$atop" "the footer's note didn't open at the top of Today: Today is \"$(today)\""
-send key w cmd
-expect "^browser: today $before\$" "⌘W didn't close the footer's note"
+# New Note Split opens beside the page shown, as the bar offers it only with one, so the footer's
+# note stays for it.
 shown=$(sed -n 's/^browser: selected \([0-9]*\).*/\1/p' "$log" | tail -1)
 bar_runs "New Note Split"
 expect '^browser: new note https://notion\.new split$' "New Note Split didn't open a new Notion page"
