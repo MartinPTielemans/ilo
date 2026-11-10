@@ -83,11 +83,109 @@ index 4ad4cc77b3..48291220e4 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/direct_write.rs b/crates/gpui_windows/src/direct_write.rs
+index 304dc38663..78d11953c7 100644
+--- a/crates/gpui_windows/src/direct_write.rs
++++ b/crates/gpui_windows/src/direct_write.rs
+@@ -1028,6 +1028,7 @@ impl DirectWriteState {
+                 CPUAccessFlags: 0,
+                 MiscFlags: 0,
+             };
++            crate::directx_renderer::ilo_d3d_texture("glyph-target", &desc);
+             unsafe {
+                 gpu_state
+                     .device
+@@ -1082,6 +1083,7 @@ impl DirectWriteState {
+             };
+ 
+             let mut buffer = None;
++            crate::directx_renderer::ilo_d3d_buffer("glyph-params", &desc);
+             unsafe {
+                 gpu_state
+                     .device
+@@ -1107,6 +1109,7 @@ impl DirectWriteState {
+                 CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                 MiscFlags: 0,
+             };
++            crate::directx_renderer::ilo_d3d_texture("glyph-staging", &desc);
+             unsafe {
+                 gpu_state
+                     .device
+@@ -1335,6 +1338,7 @@ impl GlyphLayerTexture {
+ 
+         let texture = {
+             let mut texture: Option<ID3D11Texture2D> = None;
++            crate::directx_renderer::ilo_d3d_texture("glyph-layer", &desc);
+             unsafe {
+                 gpu_state
+                     .device
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 622c1cb604..1390867097 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -207,6 +207,7 @@ impl DirectXAtlasTextures {
+             CPUAccessFlags: 0,
+             MiscFlags: 0,
+         };
++        crate::directx_renderer::ilo_d3d_texture(&format!("atlas-{kind:?}"), &texture_desc);
+         let mut texture: Option<ID3D11Texture2D> = None;
+         unsafe {
+             // This only returns None if the device is lost, which we will recreate later.
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 98a13f304c..6cfbd572ae 100644
+index 98a13f304c..fcc20b1b5e 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
-@@ -73,16 +73,36 @@ struct DirectXResources {
+@@ -25,6 +25,49 @@ use gpui::*;
+ 
+ pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
+ const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
++// #2317, not for merge: each D3D11 texture, buffer and swap chain GPUI makes, with its size, in the
++// app's log, to name the private blocks VMMap shows on a runner drawing with WARP.
++pub(crate) fn ilo_d3d_texture(site: &str, desc: &D3D11_TEXTURE2D_DESC) {
++    let bpp: u64 = match desc.Format {
++        DXGI_FORMAT_R8_UNORM | DXGI_FORMAT_A8_UNORM => 1,
++        DXGI_FORMAT_R16G16B16A16_FLOAT => 8,
++        _ => 4,
++    };
++    let bytes = desc.Width as u64
++        * desc.Height as u64
++        * bpp
++        * desc.ArraySize.max(1) as u64
++        * desc.SampleDesc.Count.max(1) as u64;
++    ilo_d3d_log(
++        "texture",
++        site,
++        &format!(
++            "{}x{} format {} samples {} usage {}",
++            desc.Width, desc.Height, desc.Format.0, desc.SampleDesc.Count, desc.Usage.0
++        ),
++        bytes,
++    );
++}
++
++pub(crate) fn ilo_d3d_buffer(site: &str, desc: &D3D11_BUFFER_DESC) {
++    ilo_d3d_log("buffer", site, &format!("stride {}", desc.StructureByteStride), desc.ByteWidth as u64);
++}
++
++pub(crate) fn ilo_d3d_swap_chain(site: &str, width: u32, height: u32) {
++    ilo_d3d_log(
++        "swapchain",
++        site,
++        &format!("{width}x{height} buffers {BUFFER_COUNT}"),
++        width as u64 * height as u64 * 4 * BUFFER_COUNT as u64,
++    );
++}
++
++fn ilo_d3d_log(kind: &str, site: &str, what: &str, bytes: u64) {
++    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++    let made = MADE.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes;
++    eprintln!("browser: d3d {kind} {site} {what} bytes {bytes} made {made}");
++}
++
+ // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
+ const PATH_MULTISAMPLE_COUNT: u32 = 4;
+ const MAX_INSTANCE_BUFFER_SIZE: usize = 256 * 1024 * 1024;
+@@ -73,16 +116,36 @@ struct DirectXResources {
      render_target: Option<ID3D11Texture2D>,
      render_target_view: Option<ID3D11RenderTargetView>,
  
@@ -129,7 +227,7 @@ index 98a13f304c..6cfbd572ae 100644
  struct DirectXRenderPipelines {
      shadow_pipeline: PipelineState<Shadow>,
      quad_pipeline: PipelineState<Quad>,
-@@ -409,7 +429,6 @@ impl DirectXRenderer {
+@@ -409,7 +472,6 @@ impl DirectXRenderer {
      /// goes through MetalRenderer; this is the Windows analogue). Draws into
      /// the existing render target, copies it into a `D3D11_USAGE_STAGING`
      /// texture, maps it, and converts BGRA to RGBA.
@@ -137,7 +235,23 @@ index 98a13f304c..6cfbd572ae 100644
      pub(crate) fn render_to_image(
          &mut self,
          scene: &Scene,
-@@ -618,16 +637,21 @@ impl DirectXRenderer {
+@@ -452,6 +514,7 @@ impl DirectXRenderer {
+             ..desc
+         };
+         let mut staging: Option<ID3D11Texture2D> = None;
++        ilo_d3d_texture("staging", &staging_desc);
+         unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging))? };
+         let staging = staging.context("creating staging texture")?;
+         unsafe { context.CopyResource(&staging, render_target) };
+@@ -502,6 +565,7 @@ impl DirectXRenderer {
+         // The app might have moved to a monitor that's attached to a different graphics device.
+         // When a graphics device is removed or reset, the desktop resolution often changes, resulting in a window size change.
+         // But here we just return the error, because we are handling device lost scenarios elsewhere.
++        ilo_d3d_swap_chain("resize", width, height);
+         unsafe {
+             resources
+                 .swap_chain
+@@ -618,16 +682,21 @@ impl DirectXRenderer {
          }
  
          let devices = self.devices.as_ref().context("devices missing")?;
@@ -161,7 +275,7 @@ index 98a13f304c..6cfbd572ae 100644
                  None,
              );
          }
-@@ -660,9 +684,9 @@ impl DirectXRenderer {
+@@ -660,9 +729,9 @@ impl DirectXRenderer {
          // Resolve MSAA to non-MSAA intermediate texture
          unsafe {
              devices.device_context.ResolveSubresource(
@@ -173,7 +287,7 @@ index 98a13f304c..6cfbd572ae 100644
                  0,
                  RENDER_TARGET_FORMAT,
              );
-@@ -704,6 +728,10 @@ impl DirectXRenderer {
+@@ -704,6 +773,10 @@ impl DirectXRenderer {
  
          let devices = self.devices.as_ref().context("devices missing")?;
          let resources = self.resources.as_ref().context("resources missing")?;
@@ -184,7 +298,7 @@ index 98a13f304c..6cfbd572ae 100644
          self.pipelines.path_sprite_pipeline.update_buffer(
              &devices.device,
              &devices.device_context,
-@@ -713,7 +741,7 @@ impl DirectXRenderer {
+@@ -713,7 +786,7 @@ impl DirectXRenderer {
          // Draw the sprites with the path texture
          self.pipelines.path_sprite_pipeline.draw_with_texture(
              &devices.device_context,
@@ -193,7 +307,7 @@ index 98a13f304c..6cfbd572ae 100644
              slice::from_ref(&self.globals.sampler),
              sprites.len() as u32,
          )
-@@ -889,25 +917,15 @@ impl DirectXResources {
+@@ -889,25 +962,15 @@ impl DirectXResources {
              )?
          };
  
@@ -222,7 +336,7 @@ index 98a13f304c..6cfbd572ae 100644
              viewport,
          })
      }
-@@ -919,21 +937,12 @@ impl DirectXResources {
+@@ -919,21 +982,12 @@ impl DirectXResources {
          width: u32,
          height: u32,
      ) -> Result<()> {
@@ -248,7 +362,23 @@ index 98a13f304c..6cfbd572ae 100644
          self.viewport = viewport;
          Ok(())
      }
-@@ -1359,20 +1368,12 @@ fn create_resources(
+@@ -1318,6 +1372,7 @@ fn create_swap_chain_for_composition(
+         AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+         Flags: 0,
+     };
++    ilo_d3d_swap_chain("composition", width, height);
+     Ok(unsafe { dxgi_factory.CreateSwapChainForComposition(device, &desc, None)? })
+ }
+ 
+@@ -1346,6 +1401,7 @@ fn create_swap_chain(
+         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+         Flags: 0,
+     };
++    ilo_d3d_swap_chain("hwnd", width, height);
+     let swap_chain =
+         unsafe { dxgi_factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None) }?;
+     unsafe { dxgi_factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER) }?;
+@@ -1359,20 +1415,12 @@ fn create_resources(
      width: u32,
      height: u32,
  ) -> Result<(
@@ -269,7 +399,7 @@ index 98a13f304c..6cfbd572ae 100644
      let viewport = D3D11_VIEWPORT {
          TopLeftX: 0.0,
          TopLeftY: 0.0,
-@@ -1381,15 +1382,7 @@ fn create_resources(
+@@ -1381,15 +1429,7 @@ fn create_resources(
          MinDepth: 0.0,
          MaxDepth: 1.0,
      };
@@ -286,6 +416,38 @@ index 98a13f304c..6cfbd572ae 100644
  }
  
  #[inline]
+@@ -1426,6 +1466,7 @@ fn create_path_intermediate_texture(
+             CPUAccessFlags: 0,
+             MiscFlags: 0,
+         };
++        ilo_d3d_texture("path", &desc);
+         device.CreateTexture2D(&desc, None, Some(&mut output))?;
+         output.unwrap()
+     };
+@@ -1459,6 +1500,7 @@ fn create_path_intermediate_msaa_texture_and_view(
+             CPUAccessFlags: 0,
+             MiscFlags: 0,
+         };
++        ilo_d3d_texture("path-msaa", &desc);
+         device.CreateTexture2D(&desc, None, Some(&mut output))?;
+         output.unwrap()
+     };
+@@ -1600,6 +1642,7 @@ fn create_constant_buffer<T>(device: &ID3D11Device) -> Result<Option<ID3D11Buffe
+         StructureByteStride: 0,
+     };
+     let mut buffer = None;
++    ilo_d3d_buffer("constant", &desc);
+     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
+     Ok(buffer)
+ }
+@@ -1619,6 +1662,7 @@ fn create_buffer(
+         StructureByteStride: element_size as u32,
+     };
+     let mut buffer = None;
++    ilo_d3d_buffer("instances", &desc);
+     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
+     Ok(buffer.unwrap())
+ }
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
 index 08f91bd626..cb0838e0bb 100644
 --- a/crates/gpui_windows/src/events.rs
