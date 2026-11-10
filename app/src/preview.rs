@@ -2444,6 +2444,12 @@ fn main() {
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
+                    // Mock (#2344): PREVIEW_GROUP=before, sorted or folders shows twelve Today
+                    // tabs of four sites as they came, sorted by site (option 3), or in a folder
+                    // a site among the Today tabs (option 1).
+                    if let Ok(group) = std::env::var("PREVIEW_GROUP") {
+                        mock_group(&mut shell, first_space, &group, cx);
+                    }
                     let reading: Vec<u64> = (folder + 1..).take(READING.len()).collect();
                     let (pinned, today) = (reading[..1].to_vec(), reading[1..].to_vec());
                     shell.set_tabs(
@@ -3378,4 +3384,88 @@ fn preview_update(update: &str, cx: &mut App) {
         _ => Stage::Ready(version),
     };
     updates::changed(stage, cx);
+}
+
+// Mock (#2344): twelve Today tabs of four sites, in the order they were opened.
+const MOCK_GROUP_TABS: [(&str, &str); 12] = [
+    ("Pull requests · ilo", "https://github.com/pulls"),
+    (
+        "Arc (web browser) - Wikipedia",
+        "https://en.wikipedia.org/wiki/Arc_(web_browser)",
+    ),
+    ("Hacker News", "https://news.ycombinator.com/"),
+    (
+        "std::collections - Rust",
+        "https://doc.rust-lang.org/std/collections/",
+    ),
+    ("Issues · ilo", "https://github.com/issues"),
+    (
+        "Chromium - Wikipedia",
+        "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+    ),
+    (
+        "Ask HN: What are you working on?",
+        "https://news.ycombinator.com/item?id=1",
+    ),
+    ("The Rust Book", "https://doc.rust-lang.org/book/"),
+    ("Actions · ilo", "https://github.com/actions"),
+    ("GPUI - Wikipedia", "https://en.wikipedia.org/wiki/GPU"),
+    (
+        "Iterator in std::iter - Rust",
+        "https://doc.rust-lang.org/std/iter/trait.Iterator.html",
+    ),
+    (
+        "Show HN: A browser",
+        "https://news.ycombinator.com/item?id=2",
+    ),
+];
+const MOCK_GROUP_SITES: [(&str, &str); 4] = [
+    ("GitHub", "github.com"),
+    ("Wikipedia", "en.wikipedia.org"),
+    ("Hacker News", "news.ycombinator.com"),
+    ("Rust", "doc.rust-lang.org"),
+];
+
+fn mock_group(shell: &mut Shell, space: u64, group: &str, cx: &mut gpui::Context<Shell>) {
+    const FIRST: u64 = 9000;
+    let ids: Vec<u64> = (FIRST..).take(MOCK_GROUP_TABS.len()).collect();
+    for (&tab, (title, url)) in ids.iter().zip(MOCK_GROUP_TABS) {
+        shell.set_title(tab, title.into(), cx);
+        let page = Page {
+            url: url.into(),
+            ..Default::default()
+        };
+        shell.set_page(tab, page, cx);
+    }
+    let site_of = |tab: &u64| {
+        let url = MOCK_GROUP_TABS[(tab - FIRST) as usize].1;
+        (MOCK_GROUP_SITES.iter()).position(|(_, host)| url.contains(host))
+    };
+    let by_site = |site: usize| {
+        ids.iter()
+            .copied()
+            .filter(move |tab| site_of(tab) == Some(site))
+    };
+    let mut folders = Folders::default();
+    let today: Vec<u64> = match group {
+        // Each site's tabs together, sites in the order of their first tab, as option 3 sorts.
+        "sorted" => (0..MOCK_GROUP_SITES.len()).flat_map(by_site).collect(),
+        // A folder a site, open, in the order of its first tab, as option 1 groups.
+        "folders" => {
+            let mut today = Vec::new();
+            for (site, (name, _)) in MOCK_GROUP_SITES.iter().enumerate() {
+                let folder = FIRST + 100 + site as u64;
+                folders.folders.insert(folder, ((*name).into(), true));
+                today.push(folder);
+                for tab in by_site(site) {
+                    folders.parents.insert(tab, folder);
+                    today.push(tab);
+                }
+            }
+            today
+        }
+        _ => ids.clone(),
+    };
+    shell.set_tabs(space, vec![1, 2], today, Vec::new(), folders, cx);
+    shell.set_selected(FIRST, cx);
 }
