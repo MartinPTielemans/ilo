@@ -767,6 +767,29 @@ typedef struct bc_sync_activity {
   int trouble;
 } bc_sync_activity;
 
+// The memory (#2324, a spike): a page the user read, found from ⌘T by its words, kept on this
+// device. bc_memory_state's values.
+#define BC_MEMORY_UNASKED 0  // The one-time ask hasn't been answered: nothing is kept.
+#define BC_MEMORY_OFF 1      // The user said no, or turned it off: nothing is kept.
+#define BC_MEMORY_ON 2       // Pages are kept and found.
+#define BC_MEMORY_PAUSED 3   // Pages kept are found; none is kept until it's on again.
+
+// Why a site is kept out of the memory (memory_kept_out).
+#define BC_MEMORY_KEPT_OUT_USER 0    // The user listed it.
+#define BC_MEMORY_KEPT_OUT_BANK 1    // It said it's a bank or another financial service.
+#define BC_MEMORY_KEPT_OUT_HEALTH 2  // It said it's a medical page or medical organization.
+#define BC_MEMORY_KEPT_OUT_DOMAIN 3  // Its domain is .bank or .insurance.
+
+// A page the memory found. The strings last only for the call.
+typedef struct bc_memory_match {
+  const char* url;
+  const char* title;
+  // The line of the page with the query's first word, UTF-8.
+  const char* snippet;
+  // When it was kept, in seconds since 1970.
+  int64_t visited;
+} bc_memory_match;
+
 // What the app gives the core when it starts Chromium. Any callback may be null, and a string it's
 // passed lasts only for the call.
 // A backup of a profile's sidebar: its Spaces, with their folders and tabs, and its favorites.
@@ -1263,6 +1286,14 @@ typedef struct bc_host {
   // first launch, which comes before the app has a window: the app reads that one's command line.
   // The user's alone: agents get no windows.
   void (*app_new_window)(void* context, bool private_window);
+  // The pages bc_memory_search found for |request|, newest first, |count| of them; none if the
+  // memory is off or holds no page with the query's words. The user's alone: agents get none.
+  void (*memory_found)(void* context, bc_id profile, uint64_t request,
+                       const bc_memory_match* matches, size_t count);
+  // The sites bc_memory_read_kept_out asked for as |request|: |count| registrable domains, UTF-8,
+  // each with its BC_MEMORY_KEPT_OUT_ reason.
+  void (*memory_kept_out)(void* context, bc_id profile, uint64_t request,
+                          const char* const* sites, const int* why, size_t count);
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -3269,6 +3300,32 @@ BC_EXPORT void bc_folder_move_to_space(bc_id folder, bc_id space);
 // for a web link (tab_page_menu): the app leaves it out while it opens no link preview there, and
 // chosen, the core asks tab_link_to_preview. Negative, as Chrome's commands are all positive.
 #define BC_PAGE_MENU_PREVIEW_LINK (-1)
+
+// The memory: the text of the pages the user read in |profile|'s Spaces, found from ⌘T by its
+// words, kept on this device and sealed with the profile's OS-held key, as its saved passwords
+// are. Each page is kept once, when it has been loaded and still 10 s or behind another tab 2 s,
+// so never on a tab switch, a new tab, the command bar's open or launch. Never a private window's
+// page, a field's contents, a page sent with Cache-Control: no-store, an agent's Space's page, or
+// a site kept out. Clearing history forgets the same pages. Not synced. No agent tool reads or
+// searches it: these are the user's alone (#2324, a spike).
+
+// A BC_MEMORY_ value; BC_MEMORY_UNASKED for a profile not loaded or private.
+BC_EXPORT int bc_memory_state(bc_id profile);
+// Sets it from the user's answer or Settings: BC_MEMORY_ON, BC_MEMORY_PAUSED, or BC_MEMORY_OFF,
+// which forgets every page and the sites kept out with them.
+BC_EXPORT void bc_memory_set_state(bc_id profile, int state);
+// Finds the pages whose words hold every word of |query|, UTF-8, the last as the start of one,
+// off the UI thread. Then memory_found with |request|.
+BC_EXPORT void bc_memory_search(bc_id profile, uint64_t request, const char* query);
+// Forgets every page of |site|, a host such as "docs.example.com", and its registrable domain's.
+BC_EXPORT void bc_memory_forget_site(bc_id profile, const char* site);
+// Forgets every page; the sites kept out stay.
+BC_EXPORT void bc_memory_forget_all(bc_id profile);
+// Keeps |site|'s registrable domain out, forgetting its pages, or lets it in again with |out|
+// false, a site kept out automatically too.
+BC_EXPORT void bc_memory_keep_out(bc_id profile, const char* site, bool out);
+// Lists the sites kept out. Then memory_kept_out with |request|.
+BC_EXPORT void bc_memory_read_kept_out(bc_id profile, uint64_t request);
 
 #ifdef __cplusplus
 }

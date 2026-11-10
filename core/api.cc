@@ -23,6 +23,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
+#include "browser_core/memory.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
@@ -2028,6 +2029,38 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
                        },
                        id, request));
   }
+}
+
+int bc_memory_state(bc_id profile) {
+  return browser_core::MemoryState(profile);
+}
+
+void bc_memory_set_state(bc_id profile, int state) {
+  browser_core::SetMemoryState(profile, state);
+}
+
+void bc_memory_search(bc_id profile, uint64_t request, const char* query) {
+  browser_core::SearchMemory(profile, request, query ? query : "");
+}
+
+void bc_memory_forget_site(bc_id profile, const char* site) {
+  if (site && *site) {
+    browser_core::ForgetMemorySite(profile, site);
+  }
+}
+
+void bc_memory_forget_all(bc_id profile) {
+  browser_core::ForgetMemory(profile);
+}
+
+void bc_memory_keep_out(bc_id profile, const char* site, bool out) {
+  if (site && *site) {
+    browser_core::KeepOutOfMemory(profile, site, out);
+  }
+}
+
+void bc_memory_read_kept_out(bc_id profile, uint64_t request) {
+  browser_core::ReadMemoryKeptOut(profile, request);
 }
 
 void bc_tab_translate_read(bc_id id, uint64_t request) {

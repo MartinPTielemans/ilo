@@ -26,6 +26,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -393,6 +394,7 @@ int main(int argc, char** argv) {
   gzbuffer(file, 1 << 20);
   Stats words_time, seal_time, write_time, total_time, term_count, text_size, sealed_size;
   std::vector<Page> kept;  // Every 10th page, for queries.
+  std::unordered_map<std::string, int> pages_with;  // How many pages hold each word.
   std::mt19937 random(2324);
   sqlite3_stmt* add_page;
   sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO pages(url, site, visited, sealed) VALUES(?,?,?,?)",
@@ -443,6 +445,11 @@ int main(int argc, char** argv) {
     text_size.Add(page.text.size());
     sealed_size.Add(sealed.size());
     ++added;
+    {
+      std::unordered_set<std::string> unique;
+      for (const icu::UnicodeString& word : Words(page.text)) unique.insert(Utf8(word));
+      for (const std::string& word : unique) ++pages_with[word];
+    }
     if (added % 10 == 0) {
       kept.push_back(page);
     }
@@ -465,9 +472,17 @@ int main(int argc, char** argv) {
          total_time.At(0.5), total_time.At(0.95), total_time.At(0.99), total_time.At(1.0),
          words_time.At(0.5), seal_time.At(0.5), write_time.At(0.5));
 
-  // Queries a person might type for a page they read: one, two or three of its words, the last
-  // cut short as if still typing.
-  std::vector<std::pair<std::string, std::string>> queries;  // The query, the page it's from.
+  // Queries a person might type for a page they read, the last word cut short as if still
+  // typing. "adjacent": one, two or three neighbouring words of the page, common ones too.
+  // "distinctive": two of its words, in its order, that fewer than 1 % of the pages hold, as
+  // a person remembers a page by what set it apart.
+  auto cut = [&](icu::UnicodeString word) {
+    if (word.countChar32() > 4) {
+      word.truncate(word.moveIndex32(0, 2 + random() % (word.countChar32() - 2)));
+    }
+    return Utf8(word);
+  };
+  std::vector<std::pair<std::string, std::string>> adjacent, distinctive;
   for (const Page& source : kept) {
     std::vector<icu::UnicodeString> words = Words(source.text);
     if (words.size() < 10) continue;
@@ -475,13 +490,21 @@ int main(int argc, char** argv) {
     size_t at = random() % (words.size() - n);
     std::string query;
     for (size_t i = 0; i < n; ++i) {
-      icu::UnicodeString word = words[at + i];
-      if (i + 1 == n && word.countChar32() > 4) {
-        word.truncate(word.moveIndex32(0, 2 + random() % (word.countChar32() - 2)));
-      }
-      query += (i ? " " : "") + Utf8(word);
+      query += (i ? " " : "") + (i + 1 == n ? cut(words[at + i]) : Utf8(words[at + i]));
     }
-    queries.emplace_back(query, source.url);
+    adjacent.emplace_back(query, source.url);
+    std::vector<icu::UnicodeString> rare;
+    for (const icu::UnicodeString& word : words) {
+      if (word.countChar32() >= 3 && pages_with[Utf8(word)] * 100 < int(added) &&
+          std::find(rare.begin(), rare.end(), word) == rare.end()) {
+        rare.push_back(word);
+      }
+    }
+    if (rare.size() >= 2) {
+      size_t first = random() % (rare.size() - 1);
+      size_t second = first + 1 + random() % (rare.size() - first - 1);
+      distinctive.emplace_back(Utf8(rare[first]) + " " + cut(rare[second]), source.url);
+    }
   }
   Search search{terms, sealer};
   for (int round = 0; round < 2; ++round) {
@@ -490,23 +513,26 @@ int main(int argc, char** argv) {
       sqlite3_close(db);
       db = OpenDb(db_path);
     }
-    Stats query_time, candidate_count;
-    search.sql_ms = search.open_ms = 0;
-    size_t found = 0;
-    for (const auto& [query, want] : queries) {
-      size_t candidates = 0;
-      Clock::time_point start = Clock::now();
-      found += search.Run(db, query, want, &candidates);
-      query_time.Add(Ms(Clock::now() - start));
-      candidate_count.Add(candidates);
+    for (int set = 0; set < 2; ++set) {
+      const auto& queries = set ? distinctive : adjacent;
+      Stats query_time, candidate_count;
+      search.sql_ms = search.open_ms = 0;
+      size_t found = 0;
+      for (const auto& [query, want] : queries) {
+        size_t candidates = 0;
+        Clock::time_point start = Clock::now();
+        found += search.Run(db, query, want, &candidates);
+        query_time.Add(Ms(Clock::now() - start));
+        candidate_count.Add(candidates);
+      }
+      printf("%s, %s, %zu queries at %zu pages, ms: median %.2f, p95 %.2f, p99 %.2f, max %.2f; "
+             "%zu found the page they came from among the 5 shown; candidates opened, mean %.1f\n",
+             round ? "fresh connection" : "warm", set ? "distinctive" : "adjacent",
+             queries.size(), added, query_time.At(0.5), query_time.At(0.95), query_time.At(0.99),
+             query_time.At(1.0), found, candidate_count.Mean());
+      printf("  of which SQLite %.2f ms and opening candidates %.2f ms a query, mean\n",
+             search.sql_ms / queries.size(), search.open_ms / queries.size());
     }
-    printf("%s, %zu queries at %zu pages, ms: median %.2f, p95 %.2f, p99 %.2f, max %.2f; "
-           "%zu found the page they came from among the 5 shown; candidates opened, mean %.1f\n",
-           round ? "fresh connection" : "warm", queries.size(), added, query_time.At(0.5),
-           query_time.At(0.95), query_time.At(0.99), query_time.At(1.0), found,
-           candidate_count.Mean());
-    printf("  of which SQLite %.2f ms and opening candidates %.2f ms a query, mean\n",
-           search.sql_ms / queries.size(), search.open_ms / queries.size());
   }
   sqlite3_close(db);
   return 0;

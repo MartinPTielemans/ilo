@@ -50,3 +50,19 @@ warm, 1000 queries at 10000 pages, ms: median 0.16, p95 10.44, p99 28.42, max 37
 fresh connection, 1000 queries at 10000 pages, ms: median 0.15, p95 10.93, p99 29.57, max 37.09; 344 found a page; candidates opened, mean 1.4
   of which SQLite 1.21 ms and opening candidates 1.16 ms a query, mean
 
+
+## Two-pass search (whole word, then first three letters), 4-byte terms, without fsync; two query sets
+warm, adjacent, 1000 queries at 10000 pages, ms: median 4.54, p95 30.03, p99 41.82, max 52.74; 358 found the page they came from among the 5 shown; candidates opened, mean 7.3
+  of which SQLite 2.97 ms and opening candidates 4.49 ms a query, mean
+warm, distinctive, 997 queries at 10000 pages, ms: median 1.17, p95 14.18, p99 28.06, max 50.59; 792 found the page they came from among the 5 shown; candidates opened, mean 4.3
+  of which SQLite 0.21 ms and opening candidates 3.07 ms a query, mean
+fresh connection, adjacent, 1000 queries at 10000 pages, ms: median 4.61, p95 31.03, p99 42.28, max 68.27; 358 found the page they came from among the 5 shown; candidates opened, mean 7.3
+  of which SQLite 3.07 ms and opening candidates 4.57 ms a query, mean
+fresh connection, distinctive, 997 queries at 10000 pages, ms: median 1.15, p95 14.33, p99 29.97, max 50.08; 792 found the page they came from among the 5 shown; candidates opened, mean 4.3
+  of which SQLite 0.20 ms and opening candidates 3.12 ms a query, mean
+
+## Same, with fsync (indexing times)
+pages 1000: file 9.9 MB (9.9 MB per 1,000 pages)
+pages 5000: file 55.1 MB (11.0 MB per 1,000 pages)
+pages 10000: file 112.5 MB (11.3 MB per 1,000 pages)
+index a page, ms: median 38.99, p95 95.00, p99 153.49, max 3785.22 (words 1.18, seal 0.12, write 37.56, medians)

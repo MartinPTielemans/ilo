@@ -321,7 +321,7 @@ void MemoryIndex::ForgetPage(int64_t id) {
   page.Run();
 }
 
-std::vector<MemoryMatch> MemoryIndex::Search(std::string_view query, size_t limit) {
+std::vector<MemoryMatch> MemoryIndex::Search(const std::string& query, size_t limit) {
   std::vector<MemoryMatch> matches;
   std::vector<std::u16string> words = MemoryWords(base::UTF8ToUTF16(query));
   if (key_.empty() || words.empty() || limit == 0) {
@@ -373,7 +373,7 @@ std::vector<MemoryMatch> MemoryIndex::Search(std::string_view query, size_t limi
   return matches;
 }
 
-void MemoryIndex::ForgetSite(std::string_view site) {
+void MemoryIndex::ForgetSite(const std::string& site) {
   if (key_.empty()) {
     return;
   }
@@ -445,7 +445,7 @@ std::vector<std::pair<std::string, KeptOut>> MemoryIndex::SitesKeptOut() {
   return sites;
 }
 
-void MemoryIndex::KeepOut(std::string_view site, KeptOut why, bool out) {
+void MemoryIndex::KeepOut(const std::string& site, KeptOut why, bool out) {
   if (key_.empty()) {
     return;
   }

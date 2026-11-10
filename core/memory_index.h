@@ -72,10 +72,10 @@ class MemoryIndex {
 
   // The pages, newest first and at most |limit|, whose words hold every word of |query|, the last
   // as the start of one, as the user is still typing it.
-  std::vector<MemoryMatch> Search(std::string_view query, size_t limit);
+  std::vector<MemoryMatch> Search(const std::string& query, size_t limit);
 
   // Forgets every page of |site|.
-  void ForgetSite(std::string_view site);
+  void ForgetSite(const std::string& site);
   // Forgets the pages at |urls|, and every page visited from |begin| to |end| when begin < end.
   void ForgetPages(const std::vector<std::string>& urls, base::Time begin, base::Time end);
   // Forgets every page and the key; SQLite's secure delete zeroes what they took in the file.
@@ -84,7 +84,7 @@ class MemoryIndex {
   // The sites kept out, with why.
   std::vector<std::pair<std::string, KeptOut>> SitesKeptOut();
   // Keeps |site| out, forgetting its pages, or lets it in again with |out| false.
-  void KeepOut(std::string_view site, KeptOut why, bool out);
+  void KeepOut(const std::string& site, KeptOut why, bool out);
   // Whether |site| is kept out.
   bool IsKeptOut(std::string_view site);
 
