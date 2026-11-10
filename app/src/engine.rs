@@ -1745,6 +1745,17 @@ impl Browser for Engine {
         log!("browser: tab {tab} picturing {request}");
         let (width, height) = hover_card::picture_pixels(scale);
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
+        // Probe for #2239, never to merge: the hidden page keeps drawing after its picture, every
+        // 100 ms for a minute, as a tab that really runs hidden would. spaces must fail it.
+        cx.spawn(async move |cx| {
+            for _ in 0..600 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                unsafe { bc::bc_tab_picture(tab, 1 << 62, width, height) };
+            }
+        })
+        .detach();
     }
 
     fn window(&self) -> u64 {
