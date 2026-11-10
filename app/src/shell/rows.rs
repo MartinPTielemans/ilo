@@ -744,7 +744,11 @@ impl Shell {
 
     /// The speaker after `tab`'s favicon while its page plays sound, crossed out while it's muted,
     /// which a click mutes or unmutes (Dia).
-    fn speaker(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+    pub(super) fn speaker(
+        &self,
+        tab: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
         let page = self.page(tab);
         let icon = speaker_glyph(page.muted);
         (page.audible || page.muted).then(|| {
@@ -988,42 +992,46 @@ impl Shell {
         width: f32,
         first: bool,
         focused: bool,
+        fold: Option<(u64, Option<f32>)>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        self.segment(&self.palette, tab, width, first, focused)
-            .id(("segment", tab))
-            .when(self.a11y, |segment| {
-                segment
-                    .role(Role::Tab)
-                    .accessibility_id(Self::tab_access_id(tab))
-                    .aria_label(format!("{}, split view", self.tab_label(tab)))
-                    .aria_selected(focused)
-                    .pressed_by_mouse_down(true, true)
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                    // The first press selected the tab (Dia); the row's press may start a drag.
-                    if event.click_count == 2 {
-                        cx.stop_propagation();
-                        return shell.rename_tab(tab, cx);
-                    }
-                    if (event.modifiers.alt && shell.alt_press_row(tab, cx))
-                        || shell.choose_by_press(tab, event, cx)
-                    {
-                        return cx.stop_propagation();
-                    }
-                    shell.show_row(tab, cx)
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                    if shell.dragging().is_none() {
-                        shell.tab_menu(tab, event.position, cx)
-                    }
-                }),
-            )
+        match fold {
+            Some((wide, width)) => self.fold_segment(tab, wide, width, first, focused, cx),
+            None => self.segment(&self.palette, tab, width, first, focused),
+        }
+        .id(("segment", tab))
+        .when(self.a11y, |segment| {
+            segment
+                .role(Role::Tab)
+                .accessibility_id(Self::tab_access_id(tab))
+                .aria_label(format!("{}, split view", self.tab_label(tab)))
+                .aria_selected(focused)
+                .pressed_by_mouse_down(true, true)
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                // The first press selected the tab (Dia); the row's press may start a drag.
+                if event.click_count == 2 {
+                    cx.stop_propagation();
+                    return shell.rename_tab(tab, cx);
+                }
+                if (event.modifiers.alt && shell.alt_press_row(tab, cx))
+                    || shell.choose_by_press(tab, event, cx)
+                {
+                    return cx.stop_propagation();
+                }
+                shell.show_row(tab, cx)
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                if shell.dragging().is_none() {
+                    shell.tab_menu(tab, event.position, cx)
+                }
+            }),
+        )
     }
 
     /// Where the row or tile of `subject`, a tab or a folder, is, for the icon picker to hang under
@@ -1050,6 +1058,7 @@ impl Shell {
         ghost: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let drop = super::fold_mock::drop(drop);
         let first = panes[0];
         let row_selected = self.selected_row() == Some(Row::Tab(first));
         let hovered = self.pointer_row() == Some(Row::Tab(first)) && drop.is_none();
@@ -1098,13 +1107,25 @@ impl Shell {
                 let count = panes.len() + usize::from(drop.is_some());
                 let width = self.segment_width(self.listed_depth(first), count);
                 let slot = drop.map(|(_, left)| if left { 0 } else { panes.len() });
+                // Mock only (#2340): each segment's width as the row folds.
+                let mut order = panes.clone();
+                if let Some(((tab, _), slot)) = drop.zip(slot) {
+                    order.insert(slot, tab);
+                }
+                let wide = self.wide_pane(&panes, drop.map(|(tab, _)| tab));
+                let total = self.segment_width(self.listed_depth(first), 1);
+                let widths = self.fold_widths(&order, wide, total);
+                let fold = |tab: u64| {
+                    let index = order.iter().position(|&each| each == tab)?;
+                    super::fold_mock::on().then(|| (wide, widths[index]))
+                };
                 let mut segments: Vec<_> = panes
                     .iter()
                     .enumerate()
                     .map(|(index, &tab)| {
                         let focused = row_selected && tab == self.selected;
                         let leads = index == 0 && slot != Some(0);
-                        self.split_segment(tab, width, leads, focused, cx)
+                        self.split_segment(tab, width, leads, focused, fold(tab), cx)
                             .into_any_element()
                     })
                     .collect();
@@ -1921,7 +1942,7 @@ fn breath_strength(phase: f32) -> f32 {
 impl Shell {
     /// A tab's status dot, in the slot at its row's end, while its page loads: the row's text,
     /// breathing.
-    fn status_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {
+    pub(super) fn status_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {
         if !self.page(tab).loading {
             return None;
         }

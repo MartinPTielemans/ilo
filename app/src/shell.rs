@@ -73,6 +73,7 @@ mod favorites;
 mod favorites_scope;
 mod files;
 mod fly_in;
+mod fold_mock;
 mod footer;
 #[cfg(test)]
 mod full_screen;

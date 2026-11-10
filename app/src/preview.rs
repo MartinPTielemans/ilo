@@ -2455,8 +2455,15 @@ fn main() {
                     if away.is_some() {
                         pinned.extend(today.split_off(today.len() - 2));
                     }
+                    // Mock only (#2340): PREVIEW_SPLIT=3 has the last three tabs in the split, and
+                    // PREVIEW_SPLIT_STACKED=1 stacks it.
+                    let panes = match std::env::var("PREVIEW_SPLIT").as_deref() {
+                        Ok("3") => 3,
+                        _ => 2,
+                    };
                     let split = Split {
-                        tabs: vec![TABS.len() as u64 - 1, TABS.len() as u64],
+                        tabs: (TABS.len() as u64 + 1 - panes..=TABS.len() as u64).collect(),
+                        stacked: std::env::var_os("PREVIEW_SPLIT_STACKED").is_some(),
                         ..Split::default()
                     };
                     shell.set_tabs(first_space, pinned, today, vec![split], folders, cx);
@@ -2549,13 +2556,22 @@ fn main() {
                         (Some(_), _) => shell.set_selected(0, cx),
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
-                        (None, None) => shell.set_selected(
-                            std::env::var("PREVIEW_AWAY_SELECT")
+                        // Mock only: PREVIEW_SELECT=<tab>[,<tab>...] shows each in turn, so the
+                        // last shown before it is the split's pane focused last.
+                        (None, None) => {
+                            let select = std::env::var("PREVIEW_SELECT")
+                                .or(std::env::var("PREVIEW_AWAY_SELECT"))
+                                .unwrap_or("1".into());
+                            for tab in select.split(',').filter_map(|tab| tab.parse().ok()) {
+                                shell.set_selected(tab, cx);
+                            }
+                            if let Some(tab) = std::env::var("PREVIEW_SPLIT_HOVER")
                                 .ok()
                                 .and_then(|tab| tab.parse().ok())
-                                .unwrap_or(1),
-                            cx,
-                        ),
+                            {
+                                shell.mock_hover(tab);
+                            }
+                        }
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
