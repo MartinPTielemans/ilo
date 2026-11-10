@@ -518,6 +518,18 @@ pub struct Activity {
     pub steps: Vec<Activity>,
     /// Who sent a script's command, by its app's name (scripts.rs), or empty for an agent's.
     pub by: SharedString,
+    /// Its own, which Settings › Agents keeps a row opened by.
+    pub id: u64,
+    /// A request's whole address, or empty.
+    pub url: SharedString,
+    /// What a request sent, or would have, a line a field, without its secrets (#2326).
+    pub sent: Vec<request::Sent>,
+}
+
+/// A new entry's id: the log's entries are made in more than one place.
+pub fn entry_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// An agent the user connected.
@@ -2515,7 +2527,15 @@ impl Agents {
             self.browser.answer_download(act.download, false);
             self.ended.remove(&act.download);
         }
-        self.note(&act.agent, act.action, site, why);
+        // A call's requests the user said no to are each listed, as each sent one is.
+        match act.requests.as_slice() {
+            [] => self.note(&act.agent, act.action, site, why),
+            requests => {
+                for each in requests {
+                    self.note_request(&act.agent, site, each, why);
+                }
+            }
+        }
         cx.notify();
         let answer = match why {
             SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
@@ -2752,7 +2772,7 @@ impl Agents {
         let checked = self.browser.may_act(&agent, tab, "request", cx);
         let site = site(&self.browser.tab(tab, cx).url);
         let refused = checked.as_ref().err().map_or("", String::as_str);
-        self.note_on(&agent, "request", &site, &next.target(), refused);
+        self.note_request(&agent, &site, &next, refused);
         cx.notify();
         if let Err(why) = checked {
             sending.answers.push(format!("{}: {why}", next.target()));
@@ -3141,8 +3161,26 @@ impl Agents {
         self.note_on(agent, action, site, "", refused)
     }
 
+    /// As `note`, for a request: where it went and what it sent, or would have.
+    fn note_request(&mut self, agent: &str, site: &str, sent: &request::Request, refused: &str) {
+        let entry = (sent.url.as_str(), sent.sent());
+        self.note_entry(agent, "request", site, &sent.target(), refused, entry);
+    }
+
     /// As `note`, for what on the page, `target`.
     fn note_on(&mut self, agent: &str, action: &str, site: &str, target: &str, refused: &str) {
+        self.note_entry(agent, action, site, target, refused, ("", Vec::new()))
+    }
+
+    fn note_entry(
+        &mut self,
+        agent: &str,
+        action: &str,
+        site: &str,
+        target: &str,
+        refused: &str,
+        (url, sent): (&str, Vec<request::Sent>),
+    ) {
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
         match refused.is_empty() {
@@ -3165,6 +3203,9 @@ impl Agents {
             refused: SharedString::from(refused.to_string()),
             steps: Vec::new(),
             by: SharedString::default(),
+            id: entry_id(),
+            url: SharedString::from(url.to_string()),
+            sent,
         };
         if self.stepping.as_deref() == Some(agent) {
             let run = self

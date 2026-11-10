@@ -863,6 +863,7 @@ impl Browser for Fake {
                                     action: action.into(),
                                     site: format!("example{n}.com"),
                                     refused: refused.into(),
+                                    ..Default::default()
                                 };
                             [
                                 step(at, "open_tab", ""),
@@ -876,6 +877,7 @@ impl Browser for Fake {
                             site: String::new(),
                             refused: "Agents never read passwords, cookies or autofill data."
                                 .into(),
+                            ..Default::default()
                         }])
                         .collect(),
                     answers: "claude-code".into(),

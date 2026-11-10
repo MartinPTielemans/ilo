@@ -41,8 +41,9 @@ use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Chip, Look as RowLook, SLIDE, chevron_slot, chip, detailed_row, end, frame, glyph_plate, group,
+    group_lined, named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore,
+    stop_switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
@@ -51,8 +52,8 @@ use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
     FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
     GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
-    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
-    SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
+    SHORT_PADDING, SHORT_ROW, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -509,6 +510,10 @@ pub struct Settings {
     nightly: Entity<NightlyRow>,
     /// Draws Agents again as the agents change.
     _agents: Option<Subscription>,
+    /// The agents' requests opened in their activity, by entry, to show where each went and what
+    /// it sent (#2326), and those of them showing every line.
+    requests_opened: HashSet<u64>,
+    requests_all: HashSet<u64>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -1283,6 +1288,8 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            requests_opened: HashSet::new(),
+            requests_all: HashSet::new(),
             import: None,
             _import: None,
             drawn_size: None,
@@ -3569,7 +3576,7 @@ impl Settings {
                     let ago = div()
                         .text_color(look.detail)
                         .child(agents::ago(entry.at, now));
-                    line_row(look, what, detail, vec![ago.into_any_element()])
+                    self.request_row(agents, entry, what, detail, ago, cx)
                 })
                 .collect();
             if grants.is_none() && entries.is_empty() {
@@ -3670,6 +3677,114 @@ impl Settings {
             blocks.push(Block::Group(group(look, entries)));
         }
         blocks
+    }
+
+    /// An entry of an agent's activity, its time at its end and then the chevron's place, which a
+    /// request fills: a press opens it to show where it went and what it sent (#2326). Every row
+    /// keeps the place, so every time ends on one edge.
+    fn request_row(
+        &self,
+        agents: &Entity<Agents>,
+        entry: &agents::Activity,
+        what: String,
+        detail: Option<SharedString>,
+        ago: gpui::Div,
+        cx: &Context<Self>,
+    ) -> gpui::Div {
+        let look = &self.look;
+        let id = entry.id;
+        let opens = !entry.url.is_empty();
+        let opened = self.requests_opened.contains(&id);
+        let slot = chevron_slot(opens.then_some(opened), look.detail.into());
+        let controls = vec![ago.into_any_element(), slot.into_any_element()];
+        let head = line_row(look, what.clone(), detail, controls);
+        if !opens {
+            return head;
+        }
+        let head = head
+            .id(("request", id))
+            .relative()
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(browser::settings_rows::ring(look.ink))
+            .when(self.a11y, |head| {
+                named_button(head, what.clone()).aria_expanded(opened)
+            })
+            // Its method, which check.sh tells reads from changes by, and no path: its "/" would
+            // end the run's pattern.
+            .child(self.drawn(format!("request {id} {}", method(&entry.target))))
+            .on_click({
+                let (agents, agent) = (agents.clone(), entry.agent.clone());
+                cx.listener(move |settings, _, _, cx| {
+                    settings.open_request(&agents, &agent, id, cx)
+                })
+            });
+        let all = self.requests_all.contains(&id);
+        let refused = !entry.refused.is_empty();
+        let colors = (look.ink.into(), look.detail.into());
+        let more = cx.listener(move |settings: &mut Self, _: &gpui::ClickEvent, _, cx| {
+            settings.requests_all.insert(id);
+            // check.sh waits for this line.
+            log!("browser: settings request {id} shows all");
+            cx.notify();
+        });
+        let part = opened.then(|| {
+            sent_part(
+                ("request-all", id),
+                &entry.url,
+                &entry.sent,
+                refused,
+                all,
+                colors,
+                self.a11y,
+                move |window, cx| more(&gpui::ClickEvent::default(), window, cx),
+            )
+            .px(px(ROW_X))
+            .pb(px(browser::tokens::settings::PADDING))
+            .mt(px(-SENT_TUCK))
+        });
+        div().child(head).children(part)
+    }
+
+    /// Opens an agent's request in its activity, or closes it, and says what it shows.
+    fn open_request(
+        &mut self,
+        agents: &Entity<Agents>,
+        agent: &str,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.requests_opened.remove(&id) {
+            self.requests_opened.insert(id);
+        }
+        let opened = self.requests_opened.contains(&id);
+        let said = |sent: &[agents::request::Sent]| {
+            let lines = sent.iter().map(|line| match line.name.is_empty() {
+                true => line.value.clone(),
+                false => format!("{}: {}", line.name, line.value),
+            });
+            lines.collect::<Vec<_>>().join(" · ")
+        };
+        let found = (agents.read(cx).activity(agent))
+            .find(|entry| entry.id == id)
+            .map(|entry| {
+                (
+                    entry.url.clone(),
+                    entry.refused.is_empty(),
+                    said(&entry.sent),
+                )
+            });
+        // check.sh reads this line: where it went, and what it sent, secrets hidden.
+        match (opened, found) {
+            (true, Some((url, true, sent))) => {
+                log!("browser: settings request {id} opened to {url}, sent: {sent}")
+            }
+            (true, Some((url, false, sent))) => {
+                log!("browser: settings request {id} opened to {url}, not sent: {sent}")
+            }
+            _ => log!("browser: settings request {id} closed"),
+        }
+        cx.notify();
     }
 
     /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
@@ -4754,6 +4869,11 @@ fn manage_passwords(profile: u64, cx: &mut App) {
     log!("browser: manage passwords {profile}");
     crate::open_in_profile(profile, "chrome://password-manager/passwords");
     hide(cx);
+}
+
+/// A request's method, the first word of its target ("POST /api/items").
+fn method(target: &str) -> &str {
+    target.split(' ').next().unwrap_or_default()
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
