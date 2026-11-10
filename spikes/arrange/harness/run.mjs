@@ -1,4 +1,4 @@
-// The spike's driver: node run.mjs <record|measure|refind|calls> <site> [out dir]
+// The spike's driver: node run.mjs <record|measure|refind|calls|calls2> <site> [out dir]
 //
 // record   loads the site as it is today, picks an element for each kind of change (pick.js), and
 //          writes recorded/<site>.json: each change's two descriptions, which refind reads again.
@@ -24,8 +24,8 @@ const root = join(here, '..');
 const [mode, siteId, outArg] = process.argv.slice(2);
 const sites = JSON.parse(readFileSync(join(root, 'sites.json'), 'utf8'));
 const site = sites.find((s) => s.id === siteId);
-if (!site || !['record', 'measure', 'refind', 'calls'].includes(mode)) {
-  console.error('usage: node run.mjs <record|measure|refind|calls> <site>; sites: ' + sites.map((s) => s.id).join(' '));
+if (!site || !['record', 'measure', 'refind', 'calls', 'calls2'].includes(mode)) {
+  console.error('usage: node run.mjs <record|measure|refind|calls|calls2> <site>; sites: ' + sites.map((s) => s.id).join(' '));
   process.exit(2);
 }
 const out = outArg || join(root, 'out', siteId);
@@ -513,7 +513,108 @@ async function calls() {
   log('done', results.runs.length, 'runs');
 }
 
+const frames2 = 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))';
+const merged = (...sets) => { const s = new Set(); for (const x of sets) for (const i of x) s.add(i); return s; };
+const isClean = (d) => d.style === 0 && d.geometry === 0 && d.count === 0;
+
+// A preview sharing an element with a placed change, on a page with the settle placed: |carry|
+// moves the settled element somewhere else, |beside| settles another element beside it. Each is
+// put back, or kept, on a fresh page. Put back must leave the page as it was; kept must leave
+// what placing the kept arrangement afresh gives; and reset after either, the site's own page.
+async function shared(rec) {
+  const st = rec.picks.settle;
+  if (!st) return [{ error: 'no settle pick' }];
+  const nests = (a, b) => a.path === b.path || a.path.startsWith(b.path + ' ') || b.path.startsWith(a.path + ' ');
+  const other = [rec.picks.trade?.target, rec.picks.trade?.ref, rec.picks.hide?.target].find((d) => d && !nests(d, st.target) && !nests(d, st.ref));
+  const cases = { carry: { id: 'carry', kind: 'settle', target: st.target, ref: st.ref, where: st.where === 'before' ? 'after' : 'before' } };
+  if (other) cases.beside = { id: 'beside', kind: 'settle', target: other, ref: st.target, where: 'after' };
+  const out = [];
+  for (const [name, c] of Object.entries(cases)) {
+    for (const then of ['put back', 'kept']) {
+      const p = await open(null, { strategy: 'place', finder: 'path', test: true, changes: changesOf(rec, ['settle']) });
+      await load(p, site.url);
+      const r = { name, then };
+      try {
+        await settleOn(p, st.target);
+        // The site's own page, for reset to come back to.
+        await p.inWorld('globalThis.__ILO_ARRANGE__.reset(), true');
+        const z0 = await p.inWorld(SNAP); await sleep(400); const z1 = await p.inWorld(SNAP);
+        await p.inWorld('globalThis.__ILO_ARRANGE__.reapply(), true');
+        await p.inWorld(frames2);
+        r.placed = await p.inWorld('globalThis.__ILO_ARRANGE__.state()[0].applied');
+        const a0 = await p.inWorld(SNAP); await sleep(400); const a1 = await p.inWorld(SNAP);
+        const churn = merged(churnOf(z0, z1), churnOf(a0, a1));
+        r.shown = await p.inWorld(`new Promise((res) => { const A = globalThis.__ILO_ARRANGE__, t0 = performance.now();
+          const r = A.preview(${JSON.stringify(c)});
+          requestAnimationFrame(() => requestAnimationFrame(() => res({ ...r, shownMs: performance.now() - t0 }))); })`);
+        await sleep(400);
+        if (then === 'put back') {
+          r.back = await p.inWorld(`globalThis.__ILO_ARRANGE__.unpreview(${JSON.stringify(c.id)})`);
+          await p.inWorld(frames2);
+          const b = await p.inWorld(SNAP);
+          r.diff = snapDiff(a1, b, churn);
+          r.clean = isClean(r.diff) && r.diff.scroll.every((x) => x === 0);
+          r.stateAfter = await p.inWorld('globalThis.__ILO_ARRANGE__.state().map((s) => s.id + ":" + s.applied)');
+        } else {
+          r.kept = await p.inWorld(`globalThis.__ILO_ARRANGE__.keep(${JSON.stringify(c.id)})`);
+          await p.inWorld(frames2);
+          const k0 = await p.inWorld(SNAP); await sleep(400); const k1 = await p.inWorld(SNAP);
+          const kchurn = merged(churn, churnOf(k0, k1));
+          r.stateAfter = await p.inWorld('globalThis.__ILO_ARRANGE__.state().map((s) => s.id + ":" + s.applied)');
+          await p.inWorld('globalThis.__ILO_ARRANGE__.reset(), true');
+          const k2r = await p.inWorld(SNAP);
+          await p.inWorld('globalThis.__ILO_ARRANGE__.reapply(), true');
+          await p.inWorld(frames2);
+          const k2 = await p.inWorld(SNAP);
+          r.diff = snapDiff(k1, k2, kchurn);
+          r.sameAsAfresh = isClean(r.diff);
+          r.resetDiff = snapDiff(z1, k2r, kchurn);
+          r.resetClean = isClean(r.resetDiff);
+        }
+        // Reset after either: the site's own page.
+        await p.inWorld('globalThis.__ILO_ARRANGE__.reset(), true');
+        const z2 = await p.inWorld(SNAP);
+        r.finalDiff = snapDiff(z1, z2, churn);
+        r.finalClean = isClean(r.finalDiff);
+      } catch (e) { r.error = String(e.message || e).split('\n')[0]; }
+      r.errors = p.errors.length;
+      await p.close();
+      log('shared', name, then, JSON.stringify({ applied: r.shown?.applied, why: r.shown?.why, waiting: r.shown?.waiting, clean: r.clean, sameAsAfresh: r.sameAsAfresh, resetClean: r.resetClean, finalClean: r.finalClean, error: r.error }));
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+// The orchestrator's second calls (#2348): the trade refused when it doesn't fit, the top layer
+// when the page closes it, the picker refusing what isn't shown, and a preview sharing an element
+// with a placed change.
+async function calls2() {
+  const rec = JSON.parse(readFileSync(recordedFile, 'utf8'));
+  const results = { site: siteId, url: site.url, at: new Date().toISOString(), picks: Object.keys(rec.picks), runs: [] };
+  if (rec.picks.trade) results.runs.push(await scenario('trade/settles', { strategy: 'place', finder: 'path', test: true, changes: changesOf(rec, ['trade']) }, rec, { capture: 'trade-settles.png', checks: false }));
+  for (const kind of ['settle', 'float']) {
+    if (rec.picks[kind]) results.runs.push(await scenario(`${kind}/top`, { strategy: 'place', top: true, finder: 'path', test: true, changes: changesOf(rec, [kind]) }, rec, { capture: `${kind}-top.png` }));
+  }
+  // What the picker would refuse of today's picks, on the site's own page.
+  {
+    const p = await open(null, { strategy: 'place', finder: 'path', test: true, changes: changesOf(rec, ['settle']) });
+    await load(p, site.url);
+    await p.inWorld('globalThis.__ILO_ARRANGE__.reset(), true');
+    results.canPick = {};
+    for (const [kind, pk] of Object.entries(rec.picks)) {
+      for (const role of ['target', 'ref']) if (pk[role]) results.canPick[kind + '.' + role] = await p.inWorld(`globalThis.__ILO_ARRANGE__.canPick(${JSON.stringify(pk[role])})`).catch((e) => ({ error: String(e.message).slice(0, 100) }));
+    }
+    await p.close();
+  }
+  results.previews = await previews(rec);
+  results.shared = await shared(rec);
+  writeFileSync(join(out, 'calls2.json'), JSON.stringify(results, null, 2));
+  log('done', results.runs.length, 'runs');
+}
+
 if (mode === 'record') await record();
 else if (mode === 'calls') await calls();
+else if (mode === 'calls2') await calls2();
 else if (mode === 'refind') await refind();
 else await measure();

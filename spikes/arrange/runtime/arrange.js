@@ -54,10 +54,18 @@
   // ---- Inline styles the runtime sets, each kept with what it replaced, so put back is exact.
   const saved = new Map(); // el -> Map(prop -> [value, priority])
   const bare = new WeakSet(); // elements that had no style attribute before the runtime's
+  // The element's own inline style when the runtime first touched it. A prop first written by a
+  // later change takes its original from here, not from the element, where an earlier change's
+  // value (margin: 0 under a margin-bottom) would pass for the page's.
+  const firstStyle = new WeakMap();
+  const scratch = document.createElement('div');
   function set(el, prop, value) {
     let m = saved.get(el);
-    if (!m) { saved.set(el, (m = new Map())); if (!el.hasAttribute('style')) bare.add(el); }
-    if (!m.has(prop)) m.set(prop, [el.style.getPropertyValue(prop), el.style.getPropertyPriority(prop)]);
+    if (!m) {
+      saved.set(el, (m = new Map())); if (!el.hasAttribute('style')) bare.add(el);
+      scratch.style.cssText = el.style.cssText; firstStyle.set(el, scratch.style.cssText);
+    }
+    if (!m.has(prop)) { scratch.style.cssText = firstStyle.get(el); m.set(prop, [scratch.style.getPropertyValue(prop), scratch.style.getPropertyPriority(prop)]); }
     // The same value again would still be a style change the page can see, and restyles the element.
     if (el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important') return;
     el.style.setProperty(prop, value, 'important');
@@ -66,8 +74,14 @@
   // ancestor's stacking context or clipping can cover it. The page sees the attribute, the
   // :popover-open state and the toggle events; the popover's own look is undone inline.
   const lifted = new WeakSet();
-  function lift(el) {
-    if (!A.top || lifted.has(el) || !el.showPopover) return;
+  function lift(el, s) {
+    if (!A.top || s.covered || !el.showPopover) return;
+    if (lifted.has(el)) {
+      if (el.getAttribute('popover') === 'manual' && el.matches(':popover-open')) return;
+      // Closed with the attribute still ours: once, as a re-inserted element is; twice, the page.
+      if (el.getAttribute('popover') === 'manual' && !s.reshown) { s.reshown = true; try { el.showPopover(); } catch {} return; }
+      return drop(el, s);
+    }
     if (el.hasAttribute('popover')) return; // the site's own popover stays the site's
     const cs = getComputedStyle(el);
     for (const side of ['top', 'right', 'bottom', 'left']) {
@@ -78,17 +92,30 @@
     set(el, 'overflow-x', cs.overflowX); set(el, 'overflow-y', cs.overflowY);
     set(el, 'right', 'auto'); set(el, 'bottom', 'auto');
     el.setAttribute('popover', 'manual');
-    try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); }
+    try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); return; }
+    if (!s.heard) { s.heard = true; el.addEventListener('toggle', (e) => { if (lifted.has(el) && e.newState === 'closed') later(); }); }
+  }
+  // The page reacted to the lift: the element goes back to the plain settle, and the bar says it
+  // may be covered.
+  function drop(el, s) {
+    lifted.delete(el);
+    if (el.getAttribute('popover') === 'manual') { try { el.hidePopover(); } catch {} el.removeAttribute('popover'); }
+    restore(el);
+    s.covered = true;
+    place(s);
   }
   function restore(el) {
-    if (lifted.has(el)) { try { el.hidePopover(); } catch {} el.removeAttribute('popover'); lifted.delete(el); }
+    if (lifted.has(el)) { lifted.delete(el); try { el.hidePopover(); } catch {} if (el.getAttribute('popover') === 'manual') el.removeAttribute('popover'); }
     const m = saved.get(el);
     if (!m) return;
-    for (const [prop, [v, p]] of m) v ? el.style.setProperty(prop, v, p) : el.style.removeProperty(prop);
+    // All out first, then the page's back: taking out a shorthand would take its longhands too.
+    for (const prop of m.keys()) el.style.removeProperty(prop);
+    for (const [prop, [v, p]] of m) if (v) el.style.setProperty(prop, v, p);
     // An empty style attribute left behind would be a trace the page could see.
     if (bare.has(el) && !el.style.length) el.removeAttribute('style');
     bare.delete(el);
     saved.delete(el);
+    firstStyle.delete(el);
   }
 
   const rect = (el) => { if (T) T.geometryReads++; return el.getBoundingClientRect(); };
@@ -121,6 +148,7 @@
     return changed;
   }
 
+  const moved = (s) => (s.c.kind === 'trade' ? [s.el, s.ref] : s.c.kind === 'hide' || s.c.kind === 'size' ? [] : [s.el]).filter(Boolean);
   function unplace(s) {
     if (s.el) restore(s.el);
     if (s.ref) restore(s.ref);
@@ -191,7 +219,7 @@
     const m0 = s.m0 != null ? s.m0 : (s.m0 = parseFloat(getComputedStyle(ref)[c.where === 'before' ? 'marginTop' : 'marginBottom']) || 0);
     set(ref, side, px(m0 + h));
     s.room = h;
-    lift(el);
+    lift(el, s);
     const rr = rect(ref);
     const o = origin(el);
     const y = c.where === 'before' ? rr.top - m0 - h : rr.bottom + m0;
@@ -256,6 +284,7 @@
     let next = el.nextElementSibling; while (next && !inFlow(next)) next = next.nextElementSibling;
     return { el, parent, axis, prev, next, r: rect(el), pr: rect(parent), prevR: prev && rect(prev), nextR: next && rect(next) };
   }
+  const FIT = "These two don't fit each other's places";
   function tradeSettles(s) {
     const { el, ref } = s;
     if (s.keepers) for (const k of s.keepers) restore(k);
@@ -335,8 +364,19 @@
       });
     }
     const mine = placed.find((p) => p.m === el);
+    // Either element running out of its own box at the other's width is a broken column the user
+    // would see: the trade is refused, and the bar says so while the element is still carried.
+    // Layout is already clean from placing, so the test is two reads.
+    const t0 = performance.now();
     const reflow = (m) => Math.max(0, m.scrollWidth - m.clientWidth);
-    s.intended = { x: mine.x, y: mine.y, w: sb.r.width, h: rect(el).height, sizes: { a: [sa.r.width, sa.r.height], b: [sb.r.width, sb.r.height] }, reflow: { el: reflow(el), ref: reflow(ref) } };
+    const over = { el: reflow(el), ref: reflow(ref) };
+    s.fitMs = performance.now() - t0;
+    const sizes = { a: [sa.r.width, sa.r.height], b: [sb.r.width, sb.r.height] };
+    if (over.el > 1 || over.ref > 1) {
+      restore(el); restore(ref); for (const k of keepers) restore(k); s.keepers = [];
+      s.why = FIT; s.refusedFit = { over, sizes }; s.applied = false; return;
+    }
+    s.intended = { x: mine.x, y: mine.y, w: sb.r.width, h: rect(el).height, sizes, reflow: over };
     s.applied = true;
   }
   // Float: over the page, at a place in the document (pin page) or on the screen (pin screen).
@@ -347,7 +387,7 @@
     set(el, 'width', px(w));
     set(el, 'margin', '0');
     set(el, 'z-index', '2147483000');
-    lift(el);
+    lift(el, s);
     if (c.pin === 'screen') {
       set(el, 'position', 'fixed');
       set(el, 'left', px(c.at.x)); set(el, 'top', px(c.at.y));
@@ -401,6 +441,7 @@
     try {
       resolveAll();
       for (const s of live) {
+        if (s.suspendedBy) continue;
         const was = s.applied;
         if (A.strategy === 'reparent' || A.strategy === 'clone') { if (!s.applied) place(s); }
         else place(s);
@@ -430,7 +471,7 @@
     if (T) T.callbacks.mo++;
     if (busy) return;
     let relevant = false;
-    for (const r of records) if (r.type === 'childList' && (r.addedNodes.length || r.removedNodes.length)) { relevant = true; break; }
+    for (const r of records) if ((r.type === 'childList' && (r.addedNodes.length || r.removedNodes.length)) || r.type === 'attributes') { relevant = true; break; }
     if (relevant) later();
   });
   // What the page adds comes in bursts while it loads: placing again after each costs a forced
@@ -449,7 +490,7 @@
 
   function start() {
     if (T) T.started = performance.now();
-    mo.observe(document, { childList: true, subtree: true });
+    mo.observe(document, { childList: true, subtree: true, attributes: !!A.top, attributeFilter: A.top ? ['popover'] : undefined });
     layoutAll('start');
   }
   // Without changes, only what recording and finding again need: how many elements a description
@@ -473,12 +514,34 @@
     reset,
     reapply: () => { on = true; layoutAll('reapply'); },
     // A carry's preview: one more change placed over what's placed now, and taken away again.
+    // An element the preview moves is moved by the preview alone: a placed change that moves it
+    // too waits, out of the page, until the preview is taken away or kept.
     preview: (c) => {
       const s = { c, el: null, ref: null, n: 0, refN: 0, applied: false, room: 0, why: '', preview: true };
       live.push(s);
       const t = performance.now();
+      resolveAll();
+      const mine = moved(s);
+      for (const o of live) if (o !== s && !o.preview && !o.suspendedBy && moved(o).some((e) => mine.includes(e))) { unplace(o); o.suspendedBy = c.id; }
       layoutAll('preview');
-      return { ms: performance.now() - t, applied: s.applied, why: s.why };
+      return { ms: performance.now() - t, applied: s.applied, why: s.why, fitMs: s.fitMs, waiting: live.filter((o) => o.suspendedBy === c.id).map((o) => o.c.id) };
+    },
+    // The drop: the preview becomes a placed change, and the changes it took over are gone.
+    keep: (id) => {
+      const s = live.find((o) => o.preview && o.c.id === id);
+      if (!s || !s.applied) return null;
+      s.preview = false;
+      const dropped = live.filter((o) => o.suspendedBy === id).map((o) => o.c.id);
+      for (let i = live.length - 1; i >= 0; i--) if (live[i].suspendedBy === id) live.splice(i, 1);
+      return { dropped };
+    },
+    // The picker refuses an element the page doesn't show (display none, a closed <details>),
+    // when the user points at it, not when they drop it.
+    canPick: (d) => {
+      const el = find(d).el;
+      if (!el) return { ok: false, why: 'not found' };
+      const shown = el.getClientRects().length > 0 && (!el.checkVisibility || el.checkVisibility({ visibilityProperty: true }));
+      return shown ? { ok: true } : { ok: false, why: "This isn't shown on the page" };
     },
     unpreview: (id) => {
       const i = live.findIndex((s) => s.preview && s.c.id === id);
@@ -487,6 +550,7 @@
       const t = performance.now();
       unplace(s);
       live.splice(i, 1);
+      for (const o of live) if (o.suspendedBy === id) delete o.suspendedBy;
       // What's placed goes back where the page now puts it, without the preview.
       layoutAll('unpreview');
       return { ms: performance.now() - t };
@@ -496,7 +560,8 @@
       return {
         id: s.c.id, kind: s.c.kind, found: !!s.el, n: s.n, refN: s.refN, applied: s.applied, why: s.why,
         connected: !!(s.el && s.el.isConnected), rect: r && { x: r.left, y: r.top, w: r.width, h: r.height },
-        intended: s.intended || null, fixedBroken: !!s.fixedBroken, room: s.room,
+        intended: s.intended || null, fixedBroken: !!s.fixedBroken, room: s.room, refusedFit: s.refusedFit || null,
+        covered: !!s.covered, reshown: !!s.reshown, preview: !!s.preview, waiting: s.suspendedBy || null,
             styled: !!(s.el && saved.has(s.el)),
       };
     }),
