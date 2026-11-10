@@ -919,7 +919,7 @@ impl Naming {
 static FIELDS_OPENED: AtomicU64 = AtomicU64::new(0);
 
 /// How many name fields have opened so far.
-pub(crate) fn fields_opened() -> u64 {
+pub fn fields_opened() -> u64 {
     FIELDS_OPENED.load(Ordering::Relaxed)
 }
 
