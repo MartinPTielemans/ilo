@@ -14,7 +14,9 @@ reproduce it where relevant. -->
 ## Change
 
 <!-- How this fixes it. If it spans layers (engine, core, UI, platform), why
-each part is needed for the same fix. Split independent fixes into their own PRs. -->
+each part is needed for the same fix. Split independent fixes into their own PRs.
+A surface that leaves Arc's or Dia's structure, behavior or timings lists each
+difference and why it's better in every way, for the owner's review (decision 6). -->
 
 ## Scope and approval
 

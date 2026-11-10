@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui::{App, Context, Hsla, Image, Pixels, Point, Rgba, SharedString, rgb};
 
 use super::{
-    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys, clean_link,
+    Command, FavoritesScope, MAX_PANES, Page, ProfileChoice, Row, Shell, UserKeys,
     commands::markdown_text,
     files,
     undo::{Prop, Value},
@@ -986,13 +986,18 @@ impl Shell {
     /// without their tracking parameters. Those with none are left out.
     fn folder_links(&self, folder: u64) -> Vec<(u64, String)> {
         let tabs = self.folder_tabs(folder).into_iter();
-        let links = tabs.map(|tab| (tab, clean_link(&self.url(tab))));
+        let links = tabs.map(|tab| (tab, self.copied_link(&self.url(tab))));
         links.filter(|(_, link)| !link.is_empty()).collect()
     }
 
     /// A folder's Copy All Links, as Arc's: each link on a line, or each a Markdown link, which
     /// Arc's menu offers with ⌥ held.
-    fn copy_folder_links(&mut self, folder: u64, markdown: bool, cx: &mut Context<Self>) {
+    pub(super) fn copy_folder_links(
+        &mut self,
+        folder: u64,
+        markdown: bool,
+        cx: &mut Context<Self>,
+    ) {
         let lines: Vec<String> = (self.folder_links(folder).into_iter())
             .map(|(tab, link)| match markdown {
                 false => link,
@@ -1166,7 +1171,7 @@ impl Shell {
     ) -> Vec<(MenuEntry, &'static str, MenuAction)> {
         let page = self.page(tab);
         let below = self.today().iter().skip_while(|&&id| id != tab).count() > 1;
-        let link = clean_link(&page.url);
+        let link = self.copied_link(&page.url);
         let markdown = MenuEntry::new("Copy Link as Markdown", !link.is_empty())
             .shortcut(Command::CopyMarkdownLink, keys)
             .alternate();
@@ -1426,7 +1431,7 @@ impl Shell {
         position: Point<Pixels>,
     ) {
         let page = self.page(pane);
-        let link = clean_link(&page.url);
+        let link = self.copied_link(&page.url);
         let focused = pane == self.selected;
         let key = |entry: MenuEntry, command: Command| match focused {
             true => entry.shortcut(command, keys),

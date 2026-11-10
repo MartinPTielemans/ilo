@@ -1107,15 +1107,17 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// ⇧⌘C in the link preview copies its page's address, not the tab's under it, as Arc's Peek
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
-    let url = clean_link(url);
     let Some(shell) = key_shell(cx) else {
         return;
     };
-    if !url.is_empty() {
-        shell
-            .update(cx, |shell, cx| shell.copy(&url, "Copied Current URL", cx))
-            .ok();
-    }
+    shell
+        .update(cx, |shell, cx| {
+            let url = shell.copied_link(url);
+            if !url.is_empty() {
+                shell.copy(&url, "Copied Current URL", cx);
+            }
+        })
+        .ok();
 }
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
@@ -1977,7 +1979,7 @@ impl Shell {
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
     /// as Site Controls' Share tile opens it, hanging from the URL field, else from the page's top.
     fn share_page(&mut self, cx: &mut Context<Self>) {
-        let link = clean_link(&self.url(self.selected));
+        let link = self.copied_link(&self.url(self.selected));
         if link.is_empty() || !self.browser.has_share_sheet() {
             return;
         }
@@ -1995,7 +1997,7 @@ impl Shell {
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
     pub(super) fn link_to_copy(&self, tab: u64, markdown: bool) -> Option<(String, &'static str)> {
-        let url = clean_link(&self.url(tab));
+        let url = self.copied_link(&self.url(tab));
         if url.is_empty() {
             return None;
         }
@@ -2167,6 +2169,21 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings › Privacy's Copy links without tracking: off, every copy path, and the share sheet,
+    /// gives the address as it is (#2351).
+    pub fn set_clean_links(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.clean_links = on;
+        cx.notify();
+    }
+
+    /// `url` as the copy paths give it: without its trackers, unless the user turned that off.
+    pub(super) fn copied_link(&self, url: &str) -> String {
+        match self.clean_links {
+            true => clean_link(url),
+            false => url.to_string(),
+        }
+    }
+
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
         if self.one_space() && !private_runs(command) {
@@ -2226,9 +2243,7 @@ impl Shell {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
             }
-            Command::Share => {
-                self.browser.has_share_sheet() && !clean_link(&self.url(self.selected)).is_empty()
-            }
+            Command::Share => self.browser.has_share_sheet() && !self.url(self.selected).is_empty(),
             // A favorite's menu has no Rename, and the field is in the tab's row in the sidebar.
             Command::RenameTab => {
                 let favorite = self.favorites.contains(&self.selected);
