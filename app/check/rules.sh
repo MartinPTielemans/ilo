@@ -73,10 +73,11 @@ await_more() {
 # Another agent, Codex, opens a tab in a Space of its own, and goes.
 # Its tab's id goes to a file, as bash 3.2 parses a here-document in a command substitution badly.
 BROWSER_AGENT_TOKEN=$other_token python3 -I - "$(app_path "$bridge")" "$socket" \
-  "$local_site/rules-own.html?other" > "$out/rules-other.txt" 2>&1 << 'PY' ||
+  "$local_site/rules-own.html?other" > "$out/rules-other.txt" 2> "$out/rules-other.log" << 'PY' ||
 import json, subprocess, sys, threading
 bridge, socket, url = sys.argv[1:]
-client = subprocess.Popen([bridge, socket], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+client = subprocess.Popen([bridge, socket], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL)
 threading.Timer(30, client.kill).start()
 def say(message):
     client.stdin.write((json.dumps(message) + "\n").encode())
@@ -94,7 +95,7 @@ client.wait(timeout=30)
 import os
 os._exit(0)
 PY
-  fail "the other agent didn't open its tab: $(cat "$out/rules-other.txt")"
+  fail "the other agent didn't open its tab: $(cat "$out/rules-other.txt" "$out/rules-other.log")"
 other_tab=$(cat "$out/rules-other.txt")
 case "$other_tab" in '' | *[!0-9]*) fail "the other agent's open_tab answered: $other_tab" ;; esac
 
