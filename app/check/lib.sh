@@ -623,18 +623,24 @@ row() {
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+# cpu <not> leaves out the processes whose command line holds <not>.
 cpu() {
   if windows; then
+    local not=
+    [ -z "${1:-}" ] || not=" -and \$_.CommandLine -notlike '*$1*'"
     powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
-      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*'$not } |
       ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
       -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
   elif [ -d /proc ]; then
     for p in $(pgrep -f -- "$procs"); do
+      # Chromium writes its processes' command lines over with spaces, others keep their NULs.
+      [ -z "${1:-}" ] || ! tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e "$1" || continue
       sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
     done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
   else
-    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' |
+      awk -v not="${1:-}" 'not == "" || !index($0, not)' | awk '{
       n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
       END { printf "%.2f %d\n", t, n }'
   fi
