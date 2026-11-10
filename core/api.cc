@@ -1646,6 +1646,37 @@ void bc_set_ad_blocking(bool on) {
   browser_core::SessionChanged();
 }
 
+size_t bc_ad_block_lists(char* lists, size_t capacity) {
+  std::string lines;
+  for (const browser_core::AdBlockList& list : browser_core::AdBlockLists()) {
+    lines += (lines.empty() ? "" : "\n") + list.key + "\t" + list.group + "\t" +
+             (list.on ? "1" : "0") + "\t" + list.title;
+  }
+  return CopyString(lines, lists, capacity);
+}
+
+bool bc_ad_block_lists_locked(void) {
+  return browser_core::AdBlockListsLocked();
+}
+
+void bc_set_ad_block_list(const char* key, bool on) {
+  if (key) {
+    browser_core::SetAdBlockList(key, on);
+  }
+}
+
+size_t bc_ad_block_filters(char* filters, size_t capacity) {
+  return CopyString(browser_core::AdBlockFilters(), filters, capacity);
+}
+
+bool bc_ad_block_filters_locked(void) {
+  return browser_core::AdBlockFiltersLocked();
+}
+
+void bc_set_ad_block_filters(const char* filters) {
+  browser_core::SetAdBlockFilters(filters ? filters : "");
+}
+
 bool bc_relay_calls(void) {
   return browser_core::UserSettings().relay_calls;
 }

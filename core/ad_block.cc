@@ -1,16 +1,21 @@
 #include "browser_core/ad_block.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -21,20 +26,25 @@
 #include "base/path_service.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/hooks.h"
 #include "browser_core/session.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "components/policy/core/common/configuration_policy_provider.h"
 #include "components/policy/core/common/policy_bundle.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_namespace.h"
+#include "components/policy/core/common/policy_service.h"
 #include "components/policy/core/common/policy_types.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
@@ -45,6 +55,8 @@
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/event_listener_map.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/browser/extension_action.h"
+#include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
@@ -79,8 +91,8 @@ constexpr char kUpdatePeriodHours[] = "168";
 // prefs.
 constexpr char kOffSitesPref[] = "browser_core_off_sites";
 
-// Filters, one a line, for its "My filters" in place of the user's: check.sh's, which block and
-// hide what its page loads.
+// Filters, one a line, for its "My filters" until the user sets theirs: check.sh's, which block
+// and hide what its page loads.
 constexpr char kFiltersSwitch[] = "ad-block-filters";
 
 // An assets.json in place of kFilterListsSource: check.sh's, on its own server, naming a list it
@@ -95,6 +107,115 @@ constexpr char kReadyEvent[] = "runtime.onRestartRequired";
 
 // The longest a page waits for it, so one that never gets ready doesn't keep pages from loading.
 constexpr base::TimeDelta kLongestHold = base::Seconds(10);
+
+// The groups of its filter lists, in the order Settings shows them, as its assets.json names them.
+constexpr const char* kGroups[] = {"default",      "ads",        "privacy", "malware",
+                                   "multipurpose", "annoyances", "regions"};
+
+// Where |group| is in kGroups, or -1.
+int GroupRank(const std::string& group) {
+  for (size_t i = 0; i < std::size(kGroups); ++i) {
+    if (group == kGroups[i]) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+// A filter list as uBlock Origin comes with it: on unless its assets.json says it starts off, as
+// the annoyance and regional lists do. uBlock Origin also turns on a new profile's regional list
+// for its language, which this turns off again, as the user turns it on in Settings.
+struct Listed {
+  std::string key;
+  std::string group;
+  std::string title;
+  bool on = false;
+};
+
+// The lists, by group and title, once ReadLists has read them.
+std::vector<Listed>& Lists() {
+  static base::NoDestructor<std::vector<Listed>> lists;
+  return *lists;
+}
+
+// Reads the lists from the assets.json at |path|, the one uBlock Origin comes with. Off the UI
+// thread. Lists its source adds later, as it updates assets.json, aren't Settings' until a browser
+// update brings them.
+std::vector<Listed> ReadLists(const base::FilePath& path) {
+  std::vector<Listed> lists;
+  std::string json;
+  if (!base::ReadFileToString(path, &json)) {
+    LOG(ERROR) << "uBlock Origin's lists couldn't be read from " << path;
+    return lists;
+  }
+  std::optional<base::DictValue> assets = base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
+  if (!assets) {
+    return lists;
+  }
+  for (const auto [key, value] : *assets) {
+    const base::DictValue* entry = value.GetIfDict();
+    const std::string* content = entry ? entry->FindString("content") : nullptr;
+    const std::string* group = entry ? entry->FindString("group") : nullptr;
+    const std::string* title = entry ? entry->FindString("title") : nullptr;
+    if (content && *content == "filters" && group && GroupRank(*group) >= 0 && title) {
+      lists.push_back({key, *group, *title, !entry->FindBool("off").value_or(false)});
+    }
+  }
+  std::ranges::sort(lists, {}, [](const Listed& list) {
+    return std::tuple(GroupRank(list.group), base::ToLowerASCII(list.title));
+  });
+  return lists;
+}
+
+// What an administrator's policy for it overwrites at each launch, its toOverwrite, if any: the
+// core's own policy sets none.
+const base::DictValue* AdminOverwrite() {
+  if (!g_browser_process || !g_browser_process->browser_policy_connector()) {
+    return nullptr;
+  }
+  const base::Value* overwrite =
+      g_browser_process->browser_policy_connector()
+          ->GetPolicyService()
+          ->GetPolicies(policy::PolicyNamespace(policy::POLICY_DOMAIN_EXTENSIONS, kId))
+          .GetValue("toOverwrite", base::Value::Type::DICT);
+  return overwrite ? overwrite->GetIfDict() : nullptr;
+}
+
+// The lists an administrator's policy chose, if it did, which uBlock Origin takes in place of the
+// user's.
+const base::ListValue* AdminLists() {
+  const base::DictValue* overwrite = AdminOverwrite();
+  const base::ListValue* lists = overwrite ? overwrite->FindList("filterLists") : nullptr;
+  return lists && !lists->empty() ? lists : nullptr;
+}
+
+// The filters an administrator's policy set, if it did, even none, in place of the user's.
+const base::ListValue* AdminFilters() {
+  const base::DictValue* overwrite = AdminOverwrite();
+  return overwrite ? overwrite->FindList("filters") : nullptr;
+}
+
+// Whether |list| is on as the user left it.
+bool UserOn(const Listed& list) {
+  const std::map<std::string, bool>& chosen = UserSettings().ad_block_lists;
+  const auto it = chosen.find(list.key);
+  return it == chosen.end() ? list.on : it->second;
+}
+
+// The user's own filters: as they set them, else check.sh's, else nullopt, which leaves uBlock
+// Origin's as they are, as they were before Settings had them.
+std::optional<std::string> UserFilters() {
+  if (UserSettings().ad_block_filters) {
+    return UserSettings().ad_block_filters;
+  }
+  const base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
+  if (!command_line.HasSwitch(kFiltersSwitch)) {
+    return std::nullopt;
+  }
+  return base::JoinString(base::SplitString(command_line.GetSwitchValueASCII(kFiltersSwitch), "\n",
+                                            base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY),
+                          "\n");
+}
 
 // Its settings, as uBlock Origin reads them from managed storage (its managed_storage.json).
 policy::PolicyBundle Settings() {
@@ -115,32 +236,66 @@ policy::PolicyBundle Settings() {
   set("adminSettings",
       base::Value(base::WriteJson(base::DictValue().Set("assetsBootstrapLocation", lists))
                       .value_or(std::string())));
-  if (command_line.HasSwitch(kFiltersSwitch)) {
-    base::ListValue filters;
-    for (const std::string& filter :
-         base::SplitString(command_line.GetSwitchValueASCII(kFiltersSwitch), "\n",
-                           base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-      filters.Append(filter);
+  // Settings › Ad blocking's, which the bridge app/fetch-ublock.sh adds to its background page
+  // applies as it starts and whenever they change: the lists to turn on and off, My filters among
+  // them, and the user's own filters. It leaves what an administrator's toOverwrite sets.
+  base::DictValue ilo;
+  if (!Lists().empty()) {
+    base::ListValue on;
+    base::ListValue off;
+    on.Append("user-filters");
+    for (const Listed& list : Lists()) {
+      (UserOn(list) ? on : off).Append(list.key);
     }
-    set("toOverwrite", base::Value(base::DictValue().Set("filters", std::move(filters))));
+    ilo.Set("on", std::move(on));
+    ilo.Set("off", std::move(off));
   }
+  if (std::optional<std::string> filters = UserFilters()) {
+    ilo.Set("filters", *filters);
+  }
+  set("ilo", base::Value(std::move(ilo)));
   policy::PolicyBundle bundle;
   bundle.Get(policy::PolicyNamespace(policy::POLICY_DOMAIN_EXTENSIONS, kId)) = std::move(map);
   return bundle;
 }
 
-// Its settings for every profile, which never change while the browser runs.
+// Its settings for every profile, which change as the user's do.
 class Policy : public policy::ConfigurationPolicyProvider {
  public:
   Policy() { UpdatePolicy(Settings()); }
 
+  // Gives it the settings as they are now. The policy service tells it only if they changed.
+  void Update() { UpdatePolicy(Settings()); }
+
   // policy::ConfigurationPolicyProvider:
-  void RefreshPolicies(policy::PolicyFetchReason reason) override { UpdatePolicy(Settings()); }
+  void RefreshPolicies(policy::PolicyFetchReason reason) override { Update(); }
 };
 
-policy::ConfigurationPolicyProvider* PolicyProvider() {
+Policy* ThePolicy() {
   static base::NoDestructor<Policy> policy;
   return policy.get();
+}
+
+policy::ConfigurationPolicyProvider* PolicyProvider() {
+  return ThePolicy();
+}
+
+// Reads the lists once, as the first profile loads, and gives them to it.
+void ReadListsOnce() {
+  static bool read = false;
+  base::FilePath resources;
+  if (std::exchange(read, true) || !base::PathService::Get(base::DIR_ASSETS, &resources)) {
+    return;
+  }
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&ReadLists, resources.Append(FILE_PATH_LITERAL("ublock"))
+                                     .Append(FILE_PATH_LITERAL("assets"))
+                                     .Append(FILE_PATH_LITERAL("assets.json"))),
+      base::BindOnce([](std::vector<Listed> lists) {
+        Lists() = std::move(lists);
+        ThePolicy()->Update();
+      }));
 }
 
 // The pattern that turns it off on |url|'s site: its registrable domain with every subdomain, or
@@ -394,6 +549,7 @@ void LoadInto(Profile* profile) {
   }
   Followers()[profile] = std::make_unique<Follower>(profile);
   Load(profile);
+  ReadListsOnce();
 }
 
 }  // namespace
@@ -428,6 +584,8 @@ void ApplyAdBlocking() {
   if (!manager) {
     return;
   }
+  // The settings read, its lists and filters are the user's.
+  ThePolicy()->Update();
   const bool on = UserSettings().ad_blocking;
   for (Profile* profile : manager->GetLoadedProfiles()) {
     extensions::ExtensionRegistrar* registrar = extensions::ExtensionRegistrar::Get(profile);
@@ -513,6 +671,79 @@ void TurnOnAdBlockingOnSite(Profile* profile, const std::string& site) {
   if (found) {
     KeepOffSites(profile, std::move(sites));
   }
+}
+
+std::vector<AdBlockList> AdBlockLists() {
+  const base::ListValue* admin = AdminLists();
+  std::vector<AdBlockList> lists;
+  for (const Listed& list : Lists()) {
+    lists.push_back({.key = list.key,
+                     .group = list.group,
+                     .title = list.title,
+                     .on = admin ? admin->contains(list.key) : UserOn(list)});
+  }
+  return lists;
+}
+
+bool AdBlockListsLocked() {
+  return AdminLists() != nullptr;
+}
+
+void SetAdBlockList(const std::string& key, bool on) {
+  const auto list = std::ranges::find(Lists(), key, &Listed::key);
+  if (list == Lists().end() || AdminLists()) {
+    return;
+  }
+  // Only what differs from how it comes, so a list a new version turns on by default follows it.
+  if (on == list->on) {
+    UserSettings().ad_block_lists.erase(key);
+  } else {
+    UserSettings().ad_block_lists[key] = on;
+  }
+  SessionChanged();
+  ThePolicy()->Update();
+}
+
+std::string AdBlockFilters() {
+  if (const base::ListValue* admin = AdminFilters()) {
+    std::vector<std::string> lines;
+    for (const base::Value& line : *admin) {
+      if (line.is_string()) {
+        lines.push_back(line.GetString());
+      }
+    }
+    return base::JoinString(lines, "\n");
+  }
+  return UserFilters().value_or(std::string());
+}
+
+bool AdBlockFiltersLocked() {
+  return AdminFilters() != nullptr;
+}
+
+void SetAdBlockFilters(const std::string& filters) {
+  if (AdminFilters()) {
+    return;
+  }
+  UserSettings().ad_block_filters = std::string(base::TrimWhitespaceASCII(filters, base::TRIM_ALL));
+  SessionChanged();
+  ThePolicy()->Update();
+}
+
+std::string AdBlockedOn(content::WebContents* contents) {
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  const extensions::Extension* extension =
+      extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(kId);
+  extensions::ExtensionAction* action =
+      extension ? extensions::ExtensionActionManager::Get(profile)->GetExtensionAction(*extension)
+                : nullptr;
+  if (!action) {
+    return std::string();
+  }
+  // Its badge is "!" while it hasn't seen the page's requests, and empty at none.
+  std::string count =
+      action->GetDisplayBadgeText(sessions::SessionTabHelper::IdForTab(contents).id());
+  return std::ranges::any_of(count, base::IsAsciiDigit<char>) ? count : std::string();
 }
 
 }  // namespace browser_core
