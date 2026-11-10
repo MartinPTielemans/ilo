@@ -1,5 +1,6 @@
-# #2375's question for a Mac VM, on its test branch alone: with the window's title bar laid out right
-# to left (BROWSER_SIDEBAR_RIGHT, platform/mac/host.mm), do AppKit's own buttons take the mirrored
+# #2375's question for a Mac VM, on its test branch alone: with the browser windows' class answering
+# right to left for windowTitlebarLayoutDirection, which is read-only (BROWSER_SIDEBAR_RIGHT,
+# platform/mac/host.mm), do AppKit's own buttons take the mirrored
 # places, zoom, minimize, close, with close 13 points from the right edge, as the core's inset puts
 # it from the left (core/platform/mac/native_widget.mm), and keep them through a resize, full screen
 # with its title bar come down, and the sidebar hidden, revealed and docked again? Only the buttons
@@ -43,6 +44,10 @@ for side in left right; do
   pid=$!
   exec 3> "$out/drive"
   await_load
+  if [ -n "$right" ]; then
+    grep -q '^browser: titlebar right to left$' "$log" ||
+      fail "the host didn't lay the title bar out right to left: $(grep '^browser: titlebar' "$log")"
+  fi
   buttons $side rest
   shot $side rest
   send resize 1000 700

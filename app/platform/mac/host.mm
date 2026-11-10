@@ -1626,7 +1626,38 @@ void host_centered(double width, double height, double* x, double* y) {
   *y = NSHeight(main.frame) - NSMidY(visible) - height / 2;
 }
 
+// #2375's question for a Mac VM, on this test branch alone (check/titlebar-right.sh): with the
+// sidebar on the right, does AppKit lay the window's buttons out from the window's right edge?
+// windowTitlebarLayoutDirection is read-only, so the browser windows' class answers right to left,
+// before the first window lays its title bar out.
+static NSUserInterfaceLayoutDirection TitlebarRightToLeft(id, SEL) {
+  return NSUserInterfaceLayoutDirectionRightToLeft;
+}
+
+static void LayTitlebarsRightToLeft() {
+  static bool done = false;
+  const char* right = getenv("BROWSER_SIDEBAR_RIGHT");
+  if (done || !right || strcmp(right, "1") != 0) {
+    return;
+  }
+  done = true;
+  Class kind = NSClassFromString(@"BrowserCoreNSWindow");
+  SEL selector = @selector(windowTitlebarLayoutDirection);
+  Method inherited = class_getInstanceMethod(NSWindow.class, selector);
+  if (!kind || !inherited) {
+    fprintf(stderr, "browser: titlebar right to left not set: no %s\n",
+            kind ? "windowTitlebarLayoutDirection" : "BrowserCoreNSWindow");
+    return;
+  }
+  if (!class_addMethod(kind, selector, (IMP)TitlebarRightToLeft,
+                       method_getTypeEncoding(inherited))) {
+    method_setImplementation(class_getInstanceMethod(kind, selector), (IMP)TitlebarRightToLeft);
+  }
+  fprintf(stderr, "browser: titlebar right to left\n");
+}
+
 void* host_ui_view(void) {
+  LayTitlebarsRightToLeft();
   auto browser = std::make_unique<Browser>();
   browser->ui_view = [[HostUIView alloc] initWithFrame:NSZeroRect];
   g_browsers.push_back(std::move(browser));
@@ -1916,12 +1947,6 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
-  // #2375's question for a Mac VM, on this test branch alone (check/titlebar-right.sh): with the
-  // sidebar on the right, AppKit lays the window's buttons out from the window's right edge.
-  const char* right = getenv("BROWSER_SIDEBAR_RIGHT");
-  if (!browser->little && right && strcmp(right, "1") == 0) {
-    window.windowTitlebarLayoutDirection = NSUserInterfaceLayoutDirectionRightToLeft;
-  }
   // Under the UI's view, since the core keeps only the UI's and the page's views in its own.
   // The system's look until the shell says its Space's.
   browser->material = WindowMaterial(view.bounds, SystemIsLight());
