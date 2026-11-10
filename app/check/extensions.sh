@@ -84,7 +84,20 @@ cat > "$extensions/popup/manifest.json" << 'EOF'
 EOF
 echo '<body style="width:240px;height:120px;display:grid;place-items:center;font:16px system-ui">
 the popup<script src="popup.js"></script></body>' > "$extensions/popup/popup.html"
-echo 'chrome.action.setBadgeText({text: "1"});' > "$extensions/popup/popup.js"
+# DIAG-2241: 0 as it loads, 1 once painted, as site.sh's painted() tells it.
+cat > "$extensions/popup/popup.js" << 'EOF2'
+chrome.action.setBadgeText({text: "0"});
+let done = false;
+const call = () => done || (done = true, chrome.action.setBadgeText({text: "1"}));
+new PerformanceObserver((entries, observer) => { observer.disconnect(); call(); })
+  .observe({type: "paint", buffered: true});
+let first;
+const frame = time => {
+  first ??= time;
+  time - first > 600 ? call() : done || requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+EOF2
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -219,6 +232,37 @@ send menu "Check Popup"
 expect "^browser: extension popup $popup\$" "Check Popup's popup didn't show from the menu"
 # On Linux a click on its action would run it again, so the page's click closes it, for the bar.
 close_popup "$page_point"
+# DIAG-2241: escape at once, or once the popup's page says it painted, 15 times each.
+if [ "$(uname)" = Darwin ]; then
+  painted_line="^browser: extension actions $popup:1\( \|\$\)"
+  within() { # $1 logged since step $2, within 3 s
+    for _ in $(seq 30); do
+      logged "$1" "$2" && return 0
+      sleep 0.1
+    done
+    return 1
+  }
+  for way in now painted; do
+    missed=0 early=0 unpainted=0
+    for n in $(seq 15); do
+      send menu "Check Popup"
+      opened=$step
+      expect "^browser: extension popup $popup\$" "DIAG-2241: no popup"
+      [ $way = now ] || within "$painted_line" "$opened" || unpainted=$((unpainted + 1))
+      before=$(since "$opened" | grep -c "$painted_line" || true)
+      send key escape
+      if ! within '^browser: extension popup none$' "$step"; then
+        missed=$((missed + 1))
+        [ "$before" != 0 ] || early=$((early + 1))
+        echo "DIAG-2241: $way $n missed, painted lines before the escape: $before, done: $focus in $key"
+        within "$painted_line" "$opened" || echo "DIAG-2241: $way $n no painted line"
+        send key escape
+        expect '^browser: extension popup none$' "DIAG-2241: a second escape didn't close it"
+      fi
+    done
+    echo "DIAG-2241: $way: $missed of 15 missed, $early of them before the page said it painted; $unpainted waits saw no painted line"
+  done
+fi
 # The command bar finds it by its name and runs it, as Arc's does (#1396). Captured before the
 # expect, so a build without the row shows what's there instead.
 send key l cmd
