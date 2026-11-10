@@ -234,12 +234,44 @@ perf_trace_config "$perf_dir/trace-ilo.config" 245 "$PWD/$perf_dir/trace-ilo.jso
 step=0
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
-# #2138, not for merge: the browser process's heap, sampled about every 8 KiB with native stacks
-# and thread names, in the detailed dumps, to name the owner of Linux's 32 and 36 KiB blocks.
+# #2138, not for merge: who asks malloc for Linux's 32 and 36 KiB blocks (28-36 KiB), by stack, in
+# the first 40 s from launch, when they appear, through uprobes on the browser binary's allocator.
+alloc_trace=
+if [ "$(uname)" = Linux ] && sudo -n true 2> /dev/null; then
+  command -v bpftrace > /dev/null ||
+    sudo -n timeout 600 apt-get install -y -qq bpftrace > "$perf_dir/bpftrace-install.log" 2>&1 ||
+    echo "perf: no bpftrace: $(tail -2 "$perf_dir/bpftrace-install.log")"
+  bin=$(readlink -f "$browser")
+  cat > "$perf_dir/allocs.bt" << EOF
+uprobe:$bin:malloc /arg0 > 28672 && arg0 <= 36864/ { @bytes[pid, tid, comm, ustack(perf, 24)] = sum(arg0); @n[pid, comm] = count(); }
+uprobe:$bin:calloc /arg0 * arg1 > 28672 && arg0 * arg1 <= 36864/ { @bytes[pid, tid, comm, ustack(perf, 24)] = sum(arg0 * arg1); @n[pid, comm] = count(); }
+uprobe:$bin:realloc /arg1 > 28672 && arg1 <= 36864/ { @bytes[pid, tid, comm, ustack(perf, 24)] = sum(arg1); @n[pid, comm] = count(); }
+uprobe:$bin:posix_memalign /arg2 > 28672 && arg2 <= 36864/ { @bytes[pid, tid, comm, ustack(perf, 24)] = sum(arg2); @n[pid, comm] = count(); }
+uprobe:$bin:aligned_alloc /arg1 > 28672 && arg1 <= 36864/ { @bytes[pid, tid, comm, ustack(perf, 24)] = sum(arg1); @n[pid, comm] = count(); }
+END { print(@n); print(@bytes, 60); clear(@bytes); clear(@n); }
+EOF
+  if command -v bpftrace > /dev/null; then
+    sudo -n bpftrace -o "$perf_dir/allocs.txt" "$perf_dir/allocs.bt" > "$perf_dir/bpftrace.log" 2>&1 &
+    alloc_trace=$!
+    # Until it says it's attached, as its probes miss what launches before.
+    for _ in $(seq 300); do
+      grep -q 'Attaching' "$perf_dir/bpftrace.log" "$perf_dir/allocs.txt" 2> /dev/null && break
+      sleep 0.1
+    done
+    sleep 2
+    echo "perf: bpftrace: $(head -3 "$perf_dir/bpftrace.log" "$perf_dir/allocs.txt" 2> /dev/null | tr '\n' ' ')"
+  fi
+fi
 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-  --memlog=browser --memlog-sampling-rate=8192 --memlog-stack-mode=native-with-thread-names \
   --trace-config-file="$(app_path "$PWD/$perf_dir/trace-ilo.config")" < "$out/drive" > "$log" 2>&1 &
 pid=$!
+echo "perf: ilo's browser process is $pid" | tee "$perf_dir/browser-pid.txt"
+if [ -n "$alloc_trace" ]; then
+  (
+    sleep 40
+    sudo -n pkill -INT -x bpftrace
+  ) &
+fi
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
