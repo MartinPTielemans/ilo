@@ -18,8 +18,9 @@ interface AdBlockHide {
 interface AdBlockPage {
   // For the document at |url|, which the agent checks the one that starts is: |css|, the rules that
   // hide what the page's filters hide, as the user's style sheet, and |script|, the scriptlets'
-  // code, to run in the page's main world. Either may be empty. |hide|, where the page's generic
-  // rules apply, for those that hide by a class or an id.
-  UseForNextDocument(string url, string css, string script,
+  // code, to run in the page's main world, and |isolated|, its procedural filters' code, to run in
+  // the agent's isolated world, where the page can't change what it does. Any may be empty.
+  // |hide|, where the page's generic rules apply, for those that hide by a class or an id.
+  UseForNextDocument(string url, string css, string script, string isolated,
                      pending_remote<AdBlockHide>? hide);
 };

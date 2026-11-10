@@ -130,13 +130,15 @@ class AdBlockPageAgent : public content::RenderFrameObserver,
   void UseForNextDocument(const std::string& url,
                           const std::string& css,
                           const std::string& script,
+                          const std::string& isolated,
                           mojo::PendingRemote<mojom::AdBlockHide> hide) override {
-    next_ = Next{url, css, script, std::move(hide)};
+    next_ = Next{url, css, script, isolated, std::move(hide)};
   }
 
   // content::RenderFrameObserver:
   void DidCreateNewDocument() override {
     script_.clear();
+    isolated_.clear();
     hide_.reset();
     // What the last document's watch gives after this isn't this one's.
     watching_.InvalidateWeakPtrs();
@@ -163,6 +165,7 @@ class AdBlockPageAgent : public content::RenderFrameObserver,
     }
     // Blink forbids script here, so they wait for RunScriptsAtDocumentStart, next.
     script_ = std::move(next.script);
+    isolated_ = std::move(next.isolated);
     if (next.hide) {
       hide_.Bind(std::move(next.hide));
     }
@@ -176,6 +179,14 @@ class AdBlockPageAgent : public content::RenderFrameObserver,
       render_frame()->GetWebFrame()->ExecuteScript(
           blink::WebScriptSource(blink::WebString::FromUtf8(script)));
     }
+    if (!isolated_.empty()) {
+      std::string isolated = std::move(isolated_);
+      isolated_.clear();
+      // In the watch's world, as uBlock Origin's content script runs its procedural filters.
+      render_frame()->GetWebFrame()->ExecuteScriptInIsolatedWorld(
+          world_, blink::WebScriptSource(blink::WebString::FromUtf8(isolated)),
+          blink::BackForwardCacheAware::kAllow);
+    }
     if (hide_.is_bound()) {
       Watch();
     }
@@ -188,6 +199,7 @@ class AdBlockPageAgent : public content::RenderFrameObserver,
     std::string url;
     std::string css;
     std::string script;
+    std::string isolated;
     mojo::PendingRemote<mojom::AdBlockHide> hide;
   };
 
@@ -231,6 +243,7 @@ class AdBlockPageAgent : public content::RenderFrameObserver,
   const int32_t world_;
   std::optional<Next> next_;
   std::string script_;
+  std::string isolated_;
   // The document's, where its page's generic rules apply.
   mojo::Remote<mojom::AdBlockHide> hide_;
   mojo::AssociatedReceiverSet<mojom::AdBlockPage> receivers_;
