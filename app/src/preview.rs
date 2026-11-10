@@ -2378,12 +2378,20 @@ fn main() {
                     shell.set_space(first_space, cx);
                     // The shell forgets what it knows of a tab in no list, so the lists come first.
                     shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
-                    for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
+                    // Mock only (#2338): PREVIEW_AWAY=1 or =emoji has the first, third and fifth
+                    // favorites, the closed pinned tab and the split's second pane away from their
+                    // pinned URLs too, with the split pinned, and =emoji gives the first tab an
+                    // emoji. PREVIEW_AWAY_SELECT=<tab> shows that tab.
+                    let away = std::env::var("PREVIEW_AWAY").ok();
+                    for (index, (&tab, (title, url, icon))) in
+                        favorites.iter().zip(FAVORITES).enumerate()
+                    {
                         shell.set_title(tab, title.into(), cx);
                         shell.set_page(
                             tab,
                             Page {
                                 url: url.into(),
+                                away_from_pinned_url: away.is_some() && index % 2 == 0,
                                 ..Default::default()
                             },
                             cx,
@@ -2402,7 +2410,12 @@ fn main() {
                             // pinned somewhere else. The second is a pinned tab closed, and the third
                             // is still loading and plays sound.
                             can_go_back: index == 0,
-                            away_from_pinned_url: index == 0,
+                            away_from_pinned_url: index == 0
+                                || (away.is_some() && (index == 1 || index == TABS.len() - 1)),
+                            icon: match (index, away.as_deref()) {
+                                (0, Some("emoji")) => "🦊".into(),
+                                _ => Default::default(),
+                            },
                             unloaded: index == 1,
                             loading: index == 2,
                             audible: index == 2,
@@ -2432,13 +2445,16 @@ fn main() {
                         shell.set_pair(1, Some(shell::Pair { device, kind }), cx);
                     }
                     // The second in a folder, and the last two in a split view.
-                    let pinned = vec![1, folder, 2];
+                    let mut pinned = vec![1, folder, 2];
                     let folders = Folders {
                         folders: [(folder, ("Docs".into(), true))].into(),
                         parents: [(2, folder)].into(),
                         ..Default::default()
                     };
-                    let today = (3..=TABS.len() as u64).collect();
+                    let mut today: Vec<u64> = (3..=TABS.len() as u64).collect();
+                    if away.is_some() {
+                        pinned.extend(today.split_off(today.len() - 2));
+                    }
                     let split = Split {
                         tabs: vec![TABS.len() as u64 - 1, TABS.len() as u64],
                         ..Split::default()
@@ -2533,7 +2549,13 @@ fn main() {
                         (Some(_), _) => shell.set_selected(0, cx),
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
-                        (None, None) => shell.set_selected(1, cx),
+                        (None, None) => shell.set_selected(
+                            std::env::var("PREVIEW_AWAY_SELECT")
+                                .ok()
+                                .and_then(|tab| tab.parse().ok())
+                                .unwrap_or(1),
+                            cx,
+                        ),
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.

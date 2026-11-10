@@ -37,6 +37,7 @@ mod agent_question;
 mod assets;
 #[cfg(test)]
 mod autofill_tests;
+mod away_mark;
 #[cfg(test)]
 mod bar_commands_tests;
 mod bar_usage;

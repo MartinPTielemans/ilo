@@ -947,7 +947,11 @@ impl Shell {
             .items_center()
             .justify_center()
             .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-            .child(self.tab_icon_in(palette, tab));
+            .child(self.with_away_mark(
+                self.tab_icon_in(palette, tab),
+                page.away_from_pinned_url,
+                self.row_ground(tab),
+            ));
         let line = div()
             .absolute()
             .left_0()
@@ -1341,7 +1345,7 @@ impl Shell {
                 .size(px(FAVICON_DRAWN))
                 .text_color(self.palette.glyph(NAV))
                 .into_any_element(),
-            false => self.tab_icon(tab),
+            false => self.with_away_mark(self.tab_icon(tab), away, self.row_ground(tab)),
         };
         let icon = div()
             .id(("favicon", tab))

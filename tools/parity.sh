@@ -25,25 +25,45 @@ if command -v magick >/dev/null; then convert=(magick) montage=(magick montage);
 # Each screen: its name, what it waits for in the preview's log, and the preview's settings, as
 # shell words, so a value with spaces is quoted, and for one taken under the pointer, what the
 # preview logs ending in the point the pointer goes to.
+# Mock only (#2338, not for merge): the return mark's states and forms, in place of the screens.
 screens=(
-  "sidebar|drawn at|"
-  "command-bar|command bar drew|PREVIEW_BAR=tabs"
-  "context-menu|menu shown|PREVIEW_MENU=100,247"
-  "site-controls|site controls settled|PREVIEW_SITE_CONTROLS=1"
-  "icon-picker|icon picker for|PREVIEW_ICON_PICKER="
-  "dialog|dialog settled|PREVIEW_DIALOG=1 PREVIEW_MENU=40,205,up,enter"
-  "space-theme|drawn at|PREVIEW_THEME='x=0.5 y=0 colors=3'"
-  "peek|link preview settled|PREVIEW_PEEK=1"
-  "many-spaces|drawn at|PREVIEW_SPACES=16 PREVIEW_SIDEBAR=300"
-  "many-spaces-library|library shown|PREVIEW_SPACES=8 PREVIEW_LIBRARY=spaces PREVIEW_SIZE=1100x700"
-  "settings-least|settings held Sync|PREVIEW_ACCOUNT=words PREVIEW_SIZE=720x480 PREVIEW_SCROLL=200"
-  "translate-hover-dark|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=dark|translate mark drawn at"
-  "translate-hover-light|translate mark drawn|PREVIEW_TRANSLATE=es PREVIEW_APPEARANCE=light|translate mark drawn at"
+  "rest-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_APPEARANCE=dark"
+  "rest-dark-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=dark"
+  "rest-dark-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=dark"
+  "rest-dark-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=dark"
+  "rest-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_APPEARANCE=light"
+  "rest-light-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=light"
+  "rest-light-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=light"
+  "rest-light-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1  PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=light"
+  "split-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_APPEARANCE=dark"
+  "split-dark-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=dark"
+  "split-dark-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=dark"
+  "split-dark-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=dark"
+  "split-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_APPEARANCE=light"
+  "split-light-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=light"
+  "split-light-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=light"
+  "split-light-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=emoji PREVIEW_AWAY_SELECT=5 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=light"
+  "tile-dark-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_APPEARANCE=dark"
+  "tile-dark-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=dark"
+  "tile-dark-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=dark"
+  "tile-dark-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=dark"
+  "tile-light-before|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_APPEARANCE=light"
+  "tile-light-badge|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=light"
+  "tile-light-notch|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=light"
+  "tile-light-dot|drawn at|PARITY_SCALE=2 PREVIEW_AWAY=1 PREVIEW_FAVORITE=0 PREVIEW_SIDEBAR=164 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=light"
+  "rest-1x-dark-before|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=dark"
+  "rest-1x-dark-badge|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=dark"
+  "rest-1x-dark-notch|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=dark"
+  "rest-1x-dark-dot|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=dark"
+  "rest-1x-light-before|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_APPEARANCE=light"
+  "rest-1x-light-badge|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=badge PREVIEW_APPEARANCE=light"
+  "rest-1x-light-notch|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=notch PREVIEW_APPEARANCE=light"
+  "rest-1x-light-dot|drawn at|PARITY_SCALE=1 PREVIEW_AWAY=1 PREVIEW_AWAY_MARK=dot PREVIEW_APPEARANCE=light"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
   *)
-    systems=(wayland x11)
+    systems=(x11)
     cargo build -q --release --manifest-path "$here/../app/check/drag/Cargo.toml" \
       --target-dir "$here/../app/target"
     drag=$here/../app/target/release/drag
@@ -64,7 +84,7 @@ capture() { # <system> <output.png> <ready> [<point>]
   case $1 in
     windows) timeout 90 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$here/window-capture.ps1" \
       "$2" "$3" "$preview" -Moving 400 "${point[@]}" ;;
-    x11) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" --x11 "$2" "$3" "$preview" ;;
+    x11) timeout 90 "$here/headless.sh" --scale "${PARITY_SCALE:-1}" --moving 400 "${then[@]}" --x11 "$2" "$3" "$preview" ;;
     *) timeout 90 "$here/headless.sh" --moving 400 "${then[@]}" "$2" "$3" "$preview" ;;
   esac
 }

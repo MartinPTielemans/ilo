@@ -628,12 +628,31 @@ impl Shell {
             .when(self.page(tab).unloaded, |icon| {
                 icon.opacity(SLEEPING_FAVICON)
             })
-            .child(match theme {
-                Some(TileTheme::Flat { template, .. }) => img(template.clone())
-                    .size(px(FAVICON_DRAWN))
-                    .into_any_element(),
-                _ => self.tab_icon(tab),
-            })
+            .child(
+                self.with_away_mark(
+                    match theme {
+                        Some(TileTheme::Flat { template, .. }) => img(template.clone())
+                            .size(px(FAVICON_DRAWN))
+                            .into_any_element(),
+                        _ => self.tab_icon(tab),
+                    },
+                    self.page(tab).away_from_pinned_url,
+                    self.tile_ground(tab, theme),
+                ),
+            )
+    }
+
+    /// Mock only (#2338): what's under a tile's icon, opaque, as `tile` fills it.
+    fn tile_ground(&self, tab: u64, theme: Option<&TileTheme>) -> Hsla {
+        let fill = match self.tile_shown(tab) {
+            true => shown_look(theme, &self.palette).0,
+            false => tile_fill(
+                &self.palette,
+                self.page(tab).developer_mode,
+                self.hover_fill(Row::Tab(tab)).unwrap_or(0.),
+            ),
+        };
+        self.window_fill_at(0.05).blend(fill)
     }
 
     /// Whether `tab` can become a favorite of the Space shown, or is one already, below the most
