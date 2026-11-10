@@ -22,6 +22,8 @@
 # And one part of a run that passes here, which skips it, saying so:
 # - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
 #   Dia was measured over (#1554).
+# sync-devices runs here, in about 200 s, against the run's own ilo-server, its copies handing each
+# other the active app as each needs the keyboard (#589).
 # Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
 # adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
 # keychain asked for alone, which builds the prod build it needs. perf and adblock-cost measure, so
@@ -85,7 +87,7 @@ jobs:
       matrix:
         shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
     runs-on: macos-26
-    # The default runs take about 70 min here, after about 6 of setting up.
+    # The default runs take about 73 min here, after about 6 of setting up.
     timeout-minutes: 120
     permissions:
       contents: read
