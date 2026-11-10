@@ -442,7 +442,7 @@ struct Overlay {
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
-                        Overlay("folder preview")};
+                        Overlay("folder preview"), Overlay("boost editor")};
 
 // The Site Controls: an overlay for its blur and shadow alone, outside g_overlays, so the tooltip
 // shows over it.

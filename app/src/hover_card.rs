@@ -43,9 +43,14 @@ pub const DWELL: Duration = Duration::from_millis(500);
 pub const LEAVE: Duration = Duration::from_millis(150);
 /// The picture's box is as wide as the card inside its padding.
 pub const INNER: f32 = WIDTH - 2. * PADDING;
-/// The pictures the core takes are scaled down to fit this, in pixels: twice the picture's box at
-/// its tallest, for a Retina screen.
-pub const PICTURE_PIXELS: (i32, i32) = ((2. * INNER) as i32, (2. * INNER * PICTURE_MOST) as i32);
+/// The pixels the core scales a picture down to fit: the picture's box at its tallest, at the
+/// window's `scale`. One is kept for each hidden tab, so a 1× screen's are a quarter of a Retina
+/// screen's, which needs the twice (#2138).
+pub fn picture_pixels(scale: f32) -> (i32, i32) {
+    let scale = scale.max(1.);
+    let side = |points: f32| (points * scale).ceil() as i32;
+    (side(INNER), side(INNER * PICTURE_MOST))
+}
 /// The card's window, as big as the card at its tallest and the margin its shadow draws in.
 pub const WINDOW_WIDTH: f32 = WIDTH + 2. * WINDOW_MARGIN;
 pub const WINDOW_HEIGHT: f32 = PADDING + INNER * PICTURE_MOST + TEXT + 2. * WINDOW_MARGIN;

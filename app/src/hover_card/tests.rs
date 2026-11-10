@@ -483,11 +483,11 @@ fn the_picture_s_box_keeps_to_its_shares() {
         picture_height(true, Some((600., 100.))),
         INNER * PICTURE_LEAST
     );
-    // Its tallest fits the pixels the core is asked for, twice over.
-    assert_eq!(
-        PICTURE_PIXELS,
-        ((2. * INNER) as i32, (2. * INNER * PICTURE_MOST) as i32)
-    );
+    // Its tallest fits the pixels the core is asked for at the window's scale, and a Retina
+    // window's are twice a 1× window's each way.
+    let (across, down) = picture_pixels(1.);
+    assert!(across as f32 >= INNER && down as f32 >= INNER * PICTURE_MOST);
+    assert_eq!(picture_pixels(2.), (2 * across, 2 * down));
     assert!(height(INNER * PICTURE_MOST) + 2. * WINDOW_MARGIN <= WINDOW_HEIGHT);
 }
 

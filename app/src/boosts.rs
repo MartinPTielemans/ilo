@@ -208,6 +208,11 @@ impl Kept {
     }
 }
 
+/// A new Boost's start: a line saying what its file is.
+fn first_line(site: &str) -> String {
+    format!("/* {site}: your CSS for its pages, shown as you save. */\n\n")
+}
+
 /// A line of OFF_FILE, if it names a site.
 fn site_of_line(line: &str) -> Option<String> {
     let line = line.trim();
@@ -330,6 +335,42 @@ impl Boosts {
         self.changes(profile)
     }
 
+    /// The editor's edits for `site`'s Boost, the default where it has none.
+    pub fn style(&self, profile: u64, site: &str) -> crate::boost_style::Style {
+        let css = (self.profiles.get(&profile))
+            .and_then(|kept| kept.sites.get(site))
+            .map_or("", String::as_str);
+        crate::boost_style::Style::of(css)
+    }
+
+    /// Rewrites the editor's block in `site`'s Boost as `style`, starting the Boost if it has
+    /// none, and turns it on, as the user sees each edit. While `kept` is false, as a drag goes,
+    /// the page shows it but the file waits for the drag's end.
+    pub fn set_style(
+        &mut self,
+        profile: u64,
+        site: &str,
+        style: &crate::boost_style::Style,
+        kept: bool,
+    ) -> Vec<Change> {
+        let Some(kept_boosts) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        let before = kept_boosts.sites.get(site).cloned();
+        let css = style.into_file(&before.unwrap_or_else(|| first_line(site)));
+        let written = match kept {
+            true => kept_boosts.write(site, &css),
+            false => {
+                kept_boosts.sites.insert(site.to_owned(), css);
+                true
+            }
+        };
+        if written && kept_boosts.off.remove(site) {
+            kept_boosts.save_off();
+        }
+        self.changes(profile)
+    }
+
     /// Deletes `site`'s Boost: its file, and its place in the list of those turned off.
     pub fn delete(&mut self, profile: u64, site: &str) -> Vec<Change> {
         let Some(kept) = self.profiles.get_mut(&profile) else {
@@ -353,8 +394,7 @@ impl Boosts {
     pub fn file(&mut self, profile: u64, site: &str) -> Option<PathBuf> {
         let kept = self.profiles.get_mut(&profile)?;
         if !kept.sites.contains_key(site) {
-            let start = format!("/* {site}: your CSS for its pages, shown as you save. */\n\n");
-            if !kept.write(site, &start) {
+            if !kept.write(site, &first_line(site)) {
                 return None;
             }
         }

@@ -121,6 +121,7 @@ while read -r url <&4; do
   ../tools/window-screenshot.sh "$pid" "$dir/$(printf %02d "$n").png" ||
     fail "no window to capture"
 done 4< check/adblock-sites.txt
+# Without pictures, the last site's ads, which load after its page does, get the 8 s here alone.
 [ -z "${ADBLOCK_PARITY_NO_CAPTURE:-}" ] || sleep 8
 [ -s "$starts" ] || fail "no site opened"
 # The most memory a process took, in MB.

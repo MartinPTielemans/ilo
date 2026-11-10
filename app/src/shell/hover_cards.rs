@@ -34,7 +34,9 @@ impl Shell {
         if !hovered {
             return self.browser.hover_card(Hover::Left(tab), cx);
         }
-        let picker = theme_picker::is_open(cx) || icon_picker::is_open(cx);
+        let picker = theme_picker::is_open(cx)
+            || icon_picker::is_open(cx)
+            || crate::boost_editor::is_open(cx);
         let naming = self.renaming.is_some();
         let busy = self.dragging().is_some() || self.menu_row.is_some() || naming || picker;
         let Some(card) = self.card(tab).filter(|_| !busy) else {
@@ -296,7 +298,7 @@ impl Shell {
                         && !self.page(tab).unloaded
                         && !self.frozen(tab)
                     {
-                        self.browser.card_picture(tab, cx);
+                        self.browser.card_picture(tab, self.scale, cx);
                     }
                 }
             }
@@ -349,6 +351,7 @@ impl Shell {
         crate::menu::dismissed(cx);
         crate::icon_picker::leave(cx);
         crate::theme_picker::leave(cx);
+        crate::boost_editor::leave(cx);
         crate::site_controls::dismissed(cx);
     }
 
@@ -378,7 +381,7 @@ impl Shell {
         for tab in hidden {
             let open = self.tabs.get(&tab).is_some_and(|each| !each.page.unloaded);
             if open && !self.on_screen(tab) {
-                self.browser.card_picture(tab, cx);
+                self.browser.card_picture(tab, self.scale, cx);
             }
         }
     }
