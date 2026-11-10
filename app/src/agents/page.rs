@@ -72,7 +72,8 @@ const LANDMARKS: &[&str] = &[
     "contentinfo",
 ];
 /// Parts of a table or list a person may click, as a console's list of things does, given a ref
-/// too. A list item with no name of its own is named by its text, when that's all it holds.
+/// too. A row or list item with no name of its own, as Chromium gives neither one, is named by its
+/// text, when that's all it holds.
 const PARTS: &[&str] = &[
     "row",
     "cell",
@@ -449,8 +450,8 @@ impl Walk<'_> {
         self.lines.push(line);
     }
 
-    /// The text a list item holds, if that's all it holds: no element to act on, which it would
-    /// rather be acted on by.
+    /// The text a row or list item holds, if that's all it holds: no element to act on, which it
+    /// would rather be acted on by.
     fn text_of(&self, node: &Value, levels: usize) -> Option<String> {
         if levels > 50 {
             return None;
@@ -490,6 +491,10 @@ impl Walk<'_> {
         if human.iter().any(|words| lower.contains(words)) {
             self.captcha = true;
         }
+        // A list's bullet or number, which its indent already says.
+        if role == "ListMarker" {
+            return;
+        }
         if !ignored && role == "StaticText" {
             let repeated = parent_name.contains(&name) || self.field_names.contains(&name);
             if !name.is_empty() && !repeated {
@@ -502,7 +507,7 @@ impl Walk<'_> {
             return;
         }
         let name = match (role, name.is_empty()) {
-            ("listitem", true) => (self.text_of(node, 0))
+            ("listitem" | "row", true) => (self.text_of(node, 0))
                 .map(|text| clip(&text, 160))
                 .unwrap_or_default(),
             _ => name,
@@ -559,6 +564,7 @@ impl Walk<'_> {
                     state
                 };
                 match (state, value) {
+                    ("level", _) if role == "listitem" => {}
                     ("level", Some(level)) => states.push(format!("level {level}")),
                     (_, Some(Value::Bool(true))) => states.push(shown.into()),
                     (_, Some(Value::String(text))) if text == "true" => states.push(shown.into()),
@@ -938,11 +944,15 @@ mod tests {
         let mut nodes = vec![
             node("1", "RootWebArea", "Console", &["2", "5"]),
             node("2", "table", "Instances", &["3"]),
-            node("3", "row", "web-1 Running", &["4"]),
+            // Chromium names neither a row nor a list item by what it holds.
+            node("3", "row", "", &["4", "42"]),
             node("4", "cell", "web-1", &["41"]),
             node("41", "StaticText", "web-1", &[]),
+            node("42", "cell", "Running", &["43"]),
+            node("43", "StaticText", "Running", &[]),
             node("5", "list", "", &["6", "7"]),
-            node("6", "listitem", "", &["61"]),
+            node("6", "listitem", "", &["60", "61"]),
+            node("60", "ListMarker", "•", &[]),
             node("61", "StaticText", "Instances", &[]),
             node("7", "listitem", "", &["71"]),
             node("71", "link", "Volumes", &["72"]),
@@ -952,6 +962,8 @@ mod tests {
             node["backendDOMNodeId"] =
                 json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
         }
+        // Its level says nothing a list item's indent doesn't.
+        nodes[6]["properties"] = json!([{ "name": "level", "value": { "value": 1 } }]);
         let mut refs = Refs::default();
         assert_eq!(
             outline(&tab(), &nodes, &mut refs, None).text(),
@@ -959,10 +971,12 @@ mod tests {
              - table \"Instances\"\n\
              \x20 - row \"web-1 Running\" [e1]\n\
              \x20   - cell \"web-1\" [e2]\n\
-             - listitem \"Instances\" [e3]\n\
-             - link \"Volumes\" [e4]"
+             \x20   - cell \"Running\" [e3]\n\
+             - listitem \"Instances\" [e4]\n\
+             - link \"Volumes\" [e5]"
         );
-        assert_eq!(refs.get("e3").map(|element| element.node), Some(6));
+        assert_eq!(refs.get("e1").map(|element| element.node), Some(3));
+        assert_eq!(refs.get("e4").map(|element| element.node), Some(6));
     }
 
     /// A new page, by its address or its document, answers whole, as do changes to more than half
