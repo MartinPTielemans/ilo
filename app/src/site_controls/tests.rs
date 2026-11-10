@@ -1015,37 +1015,46 @@ fn the_profile_chip_opens_the_page_in_another_profile(cx: &mut TestAppContext) {
     );
 }
 
-/// Beside the chip a secure page's lock is its glyph alone, its words in its tooltip; a page
-/// that isn't secure keeps its words, and the chip gives way to its glyph, naming the profile
-/// in its tooltip instead.
+/// Beside the chip only a secure page's lock loses its words, to its glyph and a tooltip. Any
+/// other lock keeps them, and the chip gives way instead: its name cuts at its end, and with
+/// too little room goes, named in its tooltip whenever it's cut.
 #[gpui::test]
-fn beside_the_chip_the_lock_or_the_chip_is_a_glyph_alone(cx: &mut TestAppContext) {
+fn beside_the_chip_only_a_secure_lock_loses_its_words(cx: &mut TestAppContext) {
+    let tip = |panel: &mut Panel, at| {
+        panel.hover(at);
+        let tips = panel.host.tips.take();
+        tips.into_iter().find(|tip| !tip.starts_with("none"))
+    };
     let mut panel = profiled(cx, site());
-    panel.hover(LOCK);
-    assert!(panel.host.tips.take()[0].starts_with("Secure at "));
-    panel.hover(PROFILE);
-    let tips = panel.host.tips.take();
-    assert!(
-        !tips.iter().any(|tip| tip.starts_with("Personal")),
-        "{tips:?}"
+    assert!(tip(&mut panel, LOCK).is_some_and(|tip| tip.starts_with("Secure at ")));
+    assert_eq!(tip(&mut panel, PROFILE), None, "the whole name shows");
+    let not_secure = Site {
+        connection: Connection::NotSecure,
+        connection_summary: "Not secure".into(),
+        certificate: false,
+        ..site()
+    };
+    // Left of the chip's glyph and chevron, where only its name is.
+    let name = (PROFILE.0 - 60., PROFILE.1);
+    let mut panel = profiled(cx, not_secure);
+    assert_eq!(tip(&mut panel, LOCK), None, "the lock keeps its words");
+    assert!(tip(&mut panel, PROFILE).is_some_and(|tip| tip.starts_with("Personal at ")));
+    assert_eq!(
+        tip(&mut panel, name),
+        None,
+        "too little room: the name goes"
     );
-    let mut panel = profiled(
-        cx,
-        Site {
-            connection: Connection::NotSecure,
-            connection_summary: "Not secure".into(),
-            certificate: false,
-            ..site()
-        },
-    );
-    panel.hover(LOCK);
-    let tips = panel.host.tips.take();
-    assert!(
-        !tips.iter().any(|tip| tip.starts_with("Not secure")),
-        "{tips:?}"
-    );
-    panel.hover(PROFILE);
-    assert!(panel.host.tips.take()[0].starts_with("Personal at "));
+    // The browser's own page names itself in fewer words, which leaves the name some room: in
+    // the tests' face, not all of it.
+    let own = Site {
+        site: "ilo".into(),
+        connection: Connection::Internal,
+        certificate: false,
+        ..site()
+    };
+    let mut panel = profiled(cx, own);
+    assert_eq!(tip(&mut panel, LOCK), None);
+    assert!(tip(&mut panel, name).is_some_and(|tip| tip.starts_with("Personal at ")));
 }
 
 /// The keyboard reaches the chip after the lock, before "…", and space opens its menu.
@@ -1059,13 +1068,17 @@ fn the_keyboard_reaches_the_profile_chip_before_more(cx: &mut TestAppContext) {
 }
 
 /// With one profile, or in a window with a Space of its own, the shell gives none, and the
-/// footer is the lock and "…" as before.
+/// footer is the lock in words and "…" as before.
 #[gpui::test]
 fn with_one_profile_there_is_no_chip(cx: &mut TestAppContext) {
     let mut panel = Panel::new(cx, site());
     panel.calls();
     panel.click(PROFILE);
     assert_eq!(panel.calls(), Vec::<String>::new());
+    // "Secure" stays in words, with no tooltip standing in for them.
+    panel.hover(LOCK);
+    let tips = panel.host.tips.take();
+    assert!(tips.iter().all(|tip| tip.starts_with("none")), "{tips:?}");
 }
 
 #[gpui::test]

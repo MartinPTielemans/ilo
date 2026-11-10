@@ -3073,11 +3073,21 @@ fn preview_site() -> Site {
             state: state.to_string().into(),
             choices: choices.to_vec(),
         };
+    // PREVIEW_CONNECTION=not-secure shows a page over plain http, and =internal the browser's own.
+    let (site, connection, summary) = match std::env::var("PREVIEW_CONNECTION").as_deref() {
+        Ok("not-secure") => ("en.wikipedia.org", Connection::NotSecure, "Not secure"),
+        Ok("internal") => ("ilo", Connection::Internal, "ilo"),
+        _ => (
+            "en.wikipedia.org",
+            Connection::Secure,
+            "Connection is secure",
+        ),
+    };
     Site {
-        site: "en.wikipedia.org".into(),
-        connection: Connection::Secure,
-        connection_summary: "Connection is secure".into(),
-        certificate: true,
+        site: site.into(),
+        connection,
+        connection_summary: summary.into(),
+        certificate: connection == Connection::Secure,
         permissions: vec![
             permission(
                 5,

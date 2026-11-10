@@ -2229,6 +2229,9 @@ lock-right = 8.0
 # glyph, the name, and this chevron this far after it, in the secondary ink.
 profile-chevron = 12.0
 profile-chevron-gap = 4.0
+# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
+# the glyph and chevron left, as a letter and an ellipsis say nothing.
+profile-name-min = 24.0
 # The lock's words' cap top in its plate.
 lock-cap = 11.5
 # Ours: the lock button with no certificate to show.

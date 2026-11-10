@@ -105,7 +105,8 @@ use crate::tokens::site_controls::LOCK_TEXT_GAP;
 use crate::tokens::site_controls::MANAGED_OPACITY;
 use crate::tokens::site_controls::MORE_FILL;
 use crate::tokens::site_controls::MORE_GLYPH;
-use crate::tokens::site_controls::{PROFILE_CHEVRON, PROFILE_CHEVRON_GAP};
+use crate::tokens::site_controls::{PROFILE_CHEVRON, PROFILE_CHEVRON_GAP, PROFILE_NAME_MIN};
+use crate::tooltip::text_width;
 // Down the body, each from the top of what's above it.
 const HEADING_CAP: f32 = TILE_HEIGHT + 14.;
 use crate::tokens::site_controls::HEADING_TO_TILES;
@@ -2045,7 +2046,13 @@ impl SiteControls {
         }
     }
 
-    fn footer(&self, site: &Site, y: f32, cx: &mut Context<Self>) -> [gpui::AnyElement; 3] {
+    fn footer(
+        &self,
+        site: &Site,
+        y: f32,
+        system: &gpui::WindowTextSystem,
+        cx: &mut Context<Self>,
+    ) -> [gpui::AnyElement; 3] {
         let lock = match site.connection {
             Connection::Secure => "icons/lock.svg",
             _ => "icons/lock-open.svg",
@@ -2059,6 +2066,17 @@ impl SiteControls {
         };
         let square = Bounds::new(point(px(PADDING), px(y)), size(px(FOOTER), px(FOOTER)));
         let label = lock_label(site);
+        let medium = gpui::FontWeight::MEDIUM;
+        // Where the lock ends: its square alone, or its words, which a chip never cuts.
+        let lock_width = match alone {
+            true => FOOTER,
+            false => (LOCK_LEFT
+                + LOCK_SLOT
+                + LOCK_TEXT_GAP
+                + text_width(&label, NAME_SIZE, medium, system).ceil()
+                + LOCK_RIGHT)
+                .min(room),
+        };
         let button = div()
             .id("site-lock")
             .when(self.a11y, |button| {
@@ -2147,26 +2165,30 @@ impl SiteControls {
                     .text_color(palette.on_overlay_glyph(TEXT)),
             )
             .children(self.ring(&Stop::More, Some(FOOTER / 2.), cx));
-        let chip = profiles.map(|profiles| self.profile_chip(&profiles, !alone, y, cx));
+        let chip = profiles.map(|profiles| {
+            let name = text_width(&profiles.name, NAME_SIZE, medium, system).ceil();
+            self.profile_chip(&profiles, PADDING + lock_width + GAP, name, y, cx)
+        });
         let chip = chip.map_or_else(|| div().into_any_element(), |chip| chip.into_any_element());
         [button.into_any_element(), chip, more.into_any_element()]
     }
 
-    /// The profile's chip, against "…" (#2339): the Profiles glyph, the name and a chevron, or
-    /// beside a lock in words its glyph and chevron alone, the name in its tooltip, as an ellipsis
-    /// alone would read as a second "…". Its menu opens the page in another profile.
+    /// The profile's chip, against "…" (#2339), in the room from `left`: the Profiles glyph, the
+    /// name `name` wide and a chevron. The name gives way first, cut at its end, and with too
+    /// little room it goes, the name then in its tooltip, as an ellipsis alone would read as a
+    /// second "…". Its menu opens the page in another profile.
     fn profile_chip(
         &self,
         profiles: &Profiles,
-        alone: bool,
+        left: f32,
+        name: f32,
         y: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let palette = palette::current(cx);
-        let left = match alone {
-            true => PROFILE_RIGHT - PROFILE_ALONE,
-            false => PADDING + FOOTER + GAP,
-        };
+        let room = PROFILE_RIGHT - left - PROFILE_ALONE - LOCK_TEXT_GAP;
+        let alone = room < name.min(PROFILE_NAME_MIN);
+        let cut = room < name;
         let square = Bounds::new(
             point(px(PROFILE_RIGHT - FOOTER), px(y)),
             size(px(FOOTER), px(FOOTER)),
@@ -2218,7 +2240,7 @@ impl SiteControls {
                             .child(name.clone()),
                     )
                 })
-                .when(alone, |chip| {
+                .when(cut, |chip| {
                     chip.on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                         panel.tooltip(name.clone(), square, *hovered, cx)
                     }))
@@ -2472,7 +2494,7 @@ impl Render for SiteControls {
             .children(extensions)
             .children(settings.into_iter().flatten())
             .child(divider)
-            .children(self.footer(&site, at.footer, cx));
+            .children(self.footer(&site, at.footer, &window.text_system().clone(), cx));
         root.child(scaled(card, scale, origin))
     }
 }
