@@ -25,7 +25,7 @@ use browser::little_launch;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Extension,
     ExtensionAction, ExtensionCommand, FilePreview, Folders, MediaAction, MenuEntry, Page,
-    PagePicture, Shell, SidePanel, Split, Trouble, WindowButton,
+    PagePicture, Shell, SidePanel, Split, Trouble, Volume, WindowButton,
 };
 use browser::text_input::{Copy, Cut, Paste, PasteAndMatchStyle, Redo, SelectAll, Undo};
 use browser::theme::Appearance;
@@ -180,6 +180,8 @@ mod other_tabs_host;
 use other_tabs_host::*;
 mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
+mod boosts_host;
+use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
 
 use browser::bc;
 
@@ -243,9 +245,20 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
         return (true, "reserved shortcut");
     }
     let keystroke = keystroke(unsafe { &*key });
-    // ⌘. is the agent bar's Stop while it shows one, before the page could keep it.
-    if update_tab_window(tab, |shell, cx| shell.run_agent_key(&keystroke, cx)).unwrap_or(false) {
+    // ⌘. is the agent bar's Stop while it shows one, and ⌘↩ its Take Over or Hand Back, before
+    // the page could keep them.
+    if update_tab_window(tab, |shell, cx| shell.run_agent_page_key(&keystroke, cx)).unwrap_or(false)
+    {
         return (true, "agent bar");
+    }
+    // Escape ends Zap on the page, which the page doesn't see (shell/boost.rs).
+    if keystroke == "escape"
+        && update_tab_window(tab, |shell, cx| {
+            shell.zapping(tab) && shell.escape_boost(cx)
+        })
+        .unwrap_or(false)
+    {
+        return (true, "zap");
     }
     if update_tab_window(tab, |shell, cx| {
         shell.run_extension_key(&keystroke, "page", cx)
@@ -479,8 +492,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::face::register(cx);
         // The user's keys, before the shortcuts are bound to them.
         settings::read_shortcuts(cx);
-        settings::read_appearance(cx);
-        settings::read_lone_header(cx);
+        settings::read_look(cx);
+        settings::read_portrait_background(cx);
+        translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
         browser::text_input::bind_keys(cx);
@@ -841,7 +855,17 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         // and the allocator's memory reclaim backs off from every 4 s while there's little to give
         // back.
         "--disable-stack-profiler".into(),
-        "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval".into(),
+        // On the Mac, child processes start from Apéritif helpers, as Chrome's field trial has
+        // them: those link the framework at launch, so the kernel binds its constant data clean
+        // and shared, where the other helpers load it late and dyld dirties 11.7 MiB of it in each.
+        format!(
+            "--enable-features=PartitionAllocAdaptiveMemoryReclaimInterval{}",
+            if cfg!(target_os = "macos") {
+                ",AperitifHelpers"
+            } else {
+                ""
+            }
+        ),
     ];
     // Chromium keeps its cookie encryption key in the Keychain. An ad-hoc-signed dev build asking
     // for it gets a password prompt after every build, and every request that uses cookies waits.
@@ -959,6 +983,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_press_before_page: Some(tab_press_before_page),
         tab_press_moved: Some(tab_press_moved),
         tab_press_released: Some(tab_press_released),
+        tab_boost_zapped: Some(tab_boost_zapped),
+        tab_boost_zap_ended: Some(tab_boost_zap_ended),
         held_keys_unclaimed: Some(held_keys_unclaimed),
         tab_media_unsupported: Some(tab_media_unsupported),
         widevine_changed: Some(widevine_changed),

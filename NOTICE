@@ -20,10 +20,10 @@ b36b283021c48f1712714b8a0e2ad6ffb578920b.
 
 Lucide (https://github.com/lucide-icons/lucide), ISC License, some icons MIT License
 Used in app/assets/icons/: activity, app-window, archive, arrow-down-to-line, arrow-down,
-arrow-left-right, arrow-left, arrow-right, arrow-up, asterisk, bandage, bed, bell, bluetooth,
-book-open, bookmark, brush-cleaning, cable, calendar-days, camera, check, chevron-down, chevron-up,
-chevrons-up-down, circle-alert, circle-fading-arrow-up, circle-question-mark, circle, clipboard,
-clock, cloud, cloudy, code, columns-2, command, compass, cookie, copy, corner-down-left,
+arrow-left-right, arrow-left, arrow-right, arrow-up-right, arrow-up, asterisk, bandage, bed, bell,
+bluetooth, book-open, bookmark, brush-cleaning, cable, calendar-days, camera, check, chevron-down,
+chevron-up, chevrons-up-down, circle-alert, circle-fading-arrow-up, circle-question-mark, circle,
+clipboard, clock, cloud, cloudy, code, columns-2, command, compass, cookie, copy, corner-down-left,
 credit-card, database, download, dumbbell, egg, eighth-note, ellipsis, external-link, eye, file,
 flag, flame, fold-vertical, folder-open, folder-plus, folder, gallery-vertical-end, gamepad-2, gift,
 glasses, globe, grid-2x2, grip, hand, heart, image, inbox, info, key-round, keyboard, layers, leaf,
@@ -31,11 +31,13 @@ library, lightbulb, link, lock-open, lock, mail, map-pin, map, maximize, megapho
 message-circle-more, message-circle, mic, minus, moon-star, moon, mouse-pointer-2, network, nfc,
 paintbrush, palette, panel-left, paw-print, pencil, piano, picture-in-picture-2, pin, pizza, plane,
 plus, printer, puzzle, receipt, rotate-ccw-clock, rotate-ccw, rotate-cw, rows-2, save, search,
-settings, shapes, share, shield, shopping-basket, skull, sliders-horizontal, sparkles, speaker,
-square-check, square-mouse-pointer, square-terminal, square, star, sun, terminal, text-align-start,
+settings, shapes, share, shield, shopping-basket, skip-back, skip-forward, skull,
+sliders-horizontal, sparkles, speaker, square-check, square-mouse-pointer, square-terminal, square,
+star, sun, terminal, text-align-start,
 text-search, thumbs-up, train-front, trash, triangle, type, undo-2, ungroup, usb, user, users,
-utensils, vibrate, video, volume-2, volume-x, wrench, x, zap, zoom-in and zoom-out, and rotate-cw
-and x scaled as nav-reload and nav-stop; and camera's path, drawn as Capture's pointer, in
+utensils, vibrate, video, volume, volume-1, volume-2, volume-x, wrench, x, zap, zoom-in and
+zoom-out, and rotate-cw and x scaled as nav-reload and nav-stop; and camera's path, drawn as
+Capture's pointer, in
 app/platform/mac/host.mm; at commit 7faf87628a1ad6175975bc595344337ce14a7db4. Each icon's stroke
 width is 2.25 where Lucide's is 2 (app/design/tokens.toml); palette's four dots and key-round's one
 lose their fill; folder-ellipsis is folder with three dots of ours in it.
@@ -56,11 +58,11 @@ lose their fill; folder-ellipsis is folder with three dots of ours in it.
   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-  archive, arrow-down, arrow-left, arrow-right, arrow-up, check, chevron-down, chevron-up, circle,
-  clipboard, clock, code, command, compass, corner-down-left, database, download, external-link,
-  folder-plus, globe, link, lock, maximize, minus, moon, panel-left, pencil, plus, printer,
-  rotate-cw, save, search, share, square, terminal, trash, triangle, type, user, volume-2, volume-x,
-  x, zoom-in and zoom-out are derived from Feather:
+  archive, arrow-down, arrow-left, arrow-right, arrow-up-right, arrow-up, check, chevron-down,
+  chevron-up, circle, clipboard, clock, code, command, compass, corner-down-left, database,
+  download, external-link, folder-plus, globe, link, lock, maximize, minus, moon, panel-left,
+  pencil, plus, printer, rotate-cw, save, search, share, square, terminal, trash, triangle, type,
+  user, volume-2, volume-x, x, zoom-in and zoom-out are derived from Feather:
 
   The MIT License (MIT)
 
@@ -87,7 +89,7 @@ lose their fill; folder-ellipsis is folder with three dots of ours in it.
 T3 Code (https://github.com/pingdotgg/t3code), MIT License
 Used in CONTRIBUTING.md, .github/pull_request_template.md, .github/VOUCHED.td,
 .github/ISSUE_TEMPLATE/bug_report.yml and via-triage.yml, .github/triage/PLAYBOOK.md,
-.github/workflows/pr-vouch.yml, pr-size.yml, labels.yml, stale-needs-more-info.yml,
+.github/workflows/pr-vouch.yml, labels.yml, stale-needs-more-info.yml,
 agent-context-budget.yml and ci.yml, .github/actions/ci-changes/action.yml and
 .github/scripts/ci-changes.cjs; at commit 570d4b03eef879bd60be3d74444046858c94dacd.
 

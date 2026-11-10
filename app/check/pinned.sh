@@ -1011,14 +1011,15 @@ case "$(outline)" in
 esac
 # The +'s menu ends with Add File or Folder… (Add Files… and Add Folder… off the Mac, whose
 # panels pick one kind), whose file, named at launch, opens at the top of Today and shows. Today is
-# read here, as the drag before may have dropped its file on the page, which opens it as a tab.
+# read here, as the drag before may have dropped its file on the page, which opens it as a tab,
+# and so whether the page shown offers New Boost… (boosts.sh checks that).
 was=$(today)
 send layout
 height=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed 's/^browser: layout content [0-9]*x\([0-9]*\),.*/\1/')
 post click 204 $((height - 25))
 add=$(plus_adds | cut -d, -f1)
-plus="New Space…, New Folder…, New Split View, New Note, $(plus_adds)"
+plus="New Space…, New Folder…, New Split View, New Note, \\(New Boost…, \\)\\{0,1\\}$(plus_adds)"
 expect "^browser: menu shown $(cased "$plus")\$" \
   "the +'s menu didn't end with $(plus_adds)"
 ../tools/window-screenshot.sh "$pid" "$out/plus-add.png" || fail "no window to capture"

@@ -390,8 +390,18 @@ await "^browser: title $tab gap ready\$" || fail "gap.html didn't draw"
 send resize 1200 700
 expect '^browser: drawn at 1200x700$' "the window didn't draw widened over gap.html"
 ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+# Under Wayland the UI lays out the new size before the window shows a frame at it, and until it
+# does, sway's own grey, 63 63 63, fills the rest of the width sway gave it, so it's captured again.
+captures=1
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  while [ "$(pixel "$out/resize-gap.png" 0.97 0.5)" = "63 63 63" ] && [ $captures -lt 100 ]; do
+    ../tools/window-screenshot.sh "$pid" "$out/resize-gap.png" || fail "no window to capture"
+    captures=$((captures + 1))
+  done
+fi
 grep -q "^browser: title $tab gap drew\$" "$log" && fail "gap.html drew at the new size before the capture"
 set -- $(pixel "$out/resize-gap.png" 0.97 0.5)
+[ "$captures" = 1 ] || set -- "$@" "in capture $captures"
 if [ "$1" -ge 170 ] && [ "$2" -ge 50 ] && [ "$2" -le 130 ] && [ "$3" -le 60 ]; then
   gap="the space gap.html hadn't drawn yet showed its orange, $*"
 elif [ "$3" -ge 170 ] && [ "$1" -le 60 ]; then
@@ -805,9 +815,13 @@ else
 fi
 drag $((width - 8)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
-# unless it's set to something else.
+# unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
+# its windows tile or float, so there's no zoom to see.
 action=$(defaults read -g AppleActionOnDoubleClick 2>/dev/null || echo Maximize)
-if [ "$action" = Maximize ]; then
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  zoom="isn't checked, since sway maximizes no window"
+  echo "skip: a double-click on the header's zoom: sway maximizes no window."
+elif [ "$action" = Maximize ]; then
   send doubleclick 115 24
   expect '^browser: window zoomed 1$' "a double-click on the header didn't zoom the window"
   # On Windows the UI lays out at the maximized size after Windows has zoomed the window, and a
@@ -972,7 +986,8 @@ settings_drew About
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 settings_drew "Tabs & Sidebar"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar off$' "a click on the edge's switch didn't turn it off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -992,7 +1007,8 @@ toggle ui shown "⌘S with the edge off"
 send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew "Tabs & Sidebar"
-send clickkey $(drawn "switch edge reveals sidebar")
+in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
+send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -1061,6 +1077,57 @@ none_since '^browser: reveal by option$' ||
   fail "⌥ let go after a key with the page focused brought the sidebar out"
 send key s cmd
 toggle page shown "⌘S from the page after ⌥"
+# A shortcut the page hands back hides the row under the pointer until it moves, and the sidebar
+# out, by the edge or by ⌥, hears that move in its own window, so its row under the pointer shows
+# its hover (#2133). While it rests out, the browser takes about the CPU it takes docked: the two
+# windows drawing the sidebar's list each asked the other for a frame, on and on, which took about
+# 0.65 s of CPU in 4 s on GitHub's hosted Mac, against 0.1 s once fixed.
+# hover_out <what>: the pointer on the first tab's row of the sidebar out draws its hover.
+hover_out() {
+  send move $(row 0)
+  expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
+}
+# rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
+# below the rows. Not in a subshell, which would lose send's step.
+rest_cpu() {
+  send move 100 600
+  sleep 1
+  local from
+  from=$(cpu)
+  sleep 4
+  set -- $from $(cpu)
+  rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
+}
+rest_cpu
+docked_cpu=$rest
+send key s cmd
+toggle page hidden "⌘S from the page before the sidebar out is hovered"
+send move 400 300
+reveal_at_edge "the pointer at the edge didn't bring the sidebar out after ⌘S from the page"
+hover_out "the sidebar out by the edge"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
+rest_cpu
+out_cpu=$rest
+echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
+awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
+send move 600 300
+expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
+send key s cmd
+toggle page shown "⌘S from the page with the sidebar in"
+send key s cmd
+toggle page hidden "⌘S from the page before ⌥ brings the sidebar out"
+send flags $alone
+send flags
+expect '^browser: reveal by option$' "⌥ after ⌘S from the page didn't bring the hidden sidebar out"
+expect '^browser: reveal shown$' "⌥ after ⌘S from the page didn't bring the sidebar's panel out"
+hover_out "the sidebar out by ⌥"
+../tools/window-screenshot.sh "$pid" "$out/sidebar-option-hover.png" || fail "no window to capture"
+# ⌘S docks the panel in one update, under the pointer, so the layout waits for the frame that
+# draws it and says the pointer is over it: on Linux the driver's layout can come before it.
+send key s cmd
+expect '^browser: sidebar hovered 1$' "⌘S from the page didn't dock the sidebar out by ⌥ under the pointer"
+toggle page shown "⌘S from the page with the sidebar out by ⌥"
 # With the sidebar hidden, a tab opening says so in a toast, as its row isn't seen. A second asked
 # for while it's in place, as Arc's second ⌘↩ is, keeps it there and bumps it, unless motion is
 # reduced; recorded on the Mac, and the window captured after, as a capture ends a recording on

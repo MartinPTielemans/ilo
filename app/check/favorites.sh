@@ -59,7 +59,7 @@ expect_tabs "$b $a" "$b" "after opening a tab"
 # Below. Dragged onto the Space's name, the row takes the tab out of Today into a tile, and its
 # press shows the tab, as Arc's does.
 post rightclick $(row 1)
-expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below (disabled)")\$" \
+expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below (disabled)")\$" \
   "a right-click on the bottom Today row didn't show Arc's tab menu"
 expect '^browser: menu drawn ' "the Today tab's menu didn't draw"
 # With ⌥ held, its Copy Link is Copy Link as Markdown, as Arc's menu copies a link as Markdown.
@@ -211,10 +211,15 @@ at=$(grep '^browser: icon picker at' "$log" | tail -1 | cut -d' ' -f5-)
 echo "$at $tile" | awk '{ x = $1 + 13 - $5; y = $2 - 12 - $6; exit !(x > -2 && x < 2 && y > -2 && y < 2) }' ||
   fail "the icon picker opened at $at, not under the tile's middle at $tile"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-icon-picker.png" || fail "no window to capture"
+# Under KWin it asks for the blur behind it that the Mac's material has, and stops as it goes.
+[ "${BROWSER_XVFB:-}" != kwin ] || kwin_blurs ||
+  fail "the icon picker's window didn't ask KWin to blur under it"
 send insert glowing star
 send key return
 expect "^browser: page $a icon 🌟\$" "the picker's pick didn't become the favorite's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
+[ "${BROWSER_XVFB:-}" != kwin ] || ! kwin_blurs ||
+  fail "a window still asked KWin to blur under it after the icon picker went"
 expect "^browser: tile $a drawn with icon 🌟\$" "the tile didn't draw the favorite's new icon"
 ../tools/window-screenshot.sh "$pid" "$out/favorite-icon.png" || fail "no window to capture"
 post rightclick $tile
@@ -252,6 +257,9 @@ send resize 1000 340
 expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
 # Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
+# The overlay knob holds 0.8 s after the last scroll, less than a still can take to be captured,
+# so the scroll is recorded for a look at the knob (scroller.mp4).
+record scroller 2
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
 if [ $legacy = 1 ]; then
@@ -259,6 +267,7 @@ if [ $legacy = 1 ]; then
 else
   expect '^browser: scroller shown$' "the list scrolled didn't show its knob"
 fi
+recorded
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
 # Near each row's top, as Windows' capture is a row taller than the window.
 edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))
@@ -334,7 +343,10 @@ expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (
 send choose "$(cased 'In Each Space')"
 expect "^browser: favorites scope In Each Space\$" "choosing In Each Space in Settings didn't set it"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "switch haptics")
+  # Under the card's edge where the screen is short, below Battery Saver's row: in_sight scrolls
+  # it up.
+  in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
+  send clickkey $at
   expect '^browser: haptics off$' "a click on the haptics switch didn't turn them off"
 fi
 send key w cmd
@@ -730,7 +742,8 @@ expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces, 
 send choose "$(cased "In Each Profile's Spaces")"
 expect "^browser: favorites scope In Each Profile's Spaces\$" "choosing Each Profile's Spaces didn't set it"
 if [ "$(uname)" = Darwin ]; then
-  send clickkey $(drawn "switch haptics")
+  in_sight "switch haptics" || fail "Settings didn't draw the haptics' switch"
+  send clickkey $at
   expect '^browser: haptics on$' "Settings didn't keep the haptics off across the quit"
 fi
 # The driver's done for a click that closes its window can be lost with the window, as it always

@@ -292,10 +292,15 @@ impl Browser for Engine {
         let action = match action {
             MediaAction::Play => bc::BC_MEDIA_PLAY,
             MediaAction::Pause => bc::BC_MEDIA_PAUSE,
+            MediaAction::Previous => bc::BC_MEDIA_PREVIOUS,
             MediaAction::Next => bc::BC_MEDIA_NEXT,
             MediaAction::PictureInPicture => bc::BC_MEDIA_PICTURE_IN_PICTURE,
         };
         unsafe { bc::bc_tab_media(tab, action as i32) };
+    }
+
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }
 
     fn cast(&self, tab: u64, _: &mut App) {
@@ -729,8 +734,16 @@ impl Browser for Engine {
         crate::translate_host::target().map(SharedString::from)
     }
 
+    fn reads_language(&self, language: &str) -> bool {
+        crate::translate_host::reads(language)
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         crate::translate_host::language_name(language).into()
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        crate::translate_host::save_always(languages);
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
@@ -981,12 +994,49 @@ impl Browser for Engine {
         bar_picks_host::folder(profile)
     }
 
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        boosts_host::load(profile, cx);
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, _: &mut App) {
+        boosts_host::show(changes);
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        // check.sh reads this line.
+        log!("browser: zap {tab} {}", if on { "on" } else { "off" });
+        unsafe { bc::bc_tab_boost_zap(tab, on) };
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::edit_file(path);
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::show_file(path);
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         bar_picks_host::sessions(profile)
     }
 
     fn set_agent_history(&self, profile: u64, text: &str) {
         bar_picks_host::set_sessions(profile, text);
+    }
+
+    fn agent_answers(&self, key: &str, cx: &App) -> Vec<(String, bool)> {
+        let Some(agents) = browser::agents::global(cx) else {
+            return Vec::new();
+        };
+        (agents.read(cx).grants(key).into_iter())
+            .map(|(site, may)| (site.to_string(), may))
+            .collect()
+    }
+
+    fn revoke_agent_answer(&self, key: &str, site: &str, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.revoke(key, Some(site), cx));
+        }
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {
@@ -1174,12 +1224,11 @@ impl Browser for Engine {
     }
 
     fn set_appearance(&self, appearance: Appearance, _: &mut App) {
-        settings::save_appearance(appearance);
         give_host_appearance(appearance);
     }
 
     fn keep_lone_header(&self, kept: bool, _: &mut App) {
-        settings::save_lone_header(kept);
+        unsafe { bc::bc_set_space_header(kept) };
     }
 
     fn page_moving(&self, moving: bool, _: &mut App) {
@@ -1657,6 +1706,25 @@ impl Browser for Engine {
             },
             cx,
         );
+    }
+
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: capture::portrait::Background,
+        cx: &mut App,
+    ) {
+        settings::save_portrait_background(background);
+        with_overlays(
+            move |cx| capture::portrait(tab, frame, radius, background, cx),
+            cx,
+        );
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        cfg!(target_os = "macos")
     }
 
     fn page_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -2138,9 +2206,17 @@ fn open_bar_when_shown(from: bc::bc_id, opened: bc::bc_id, asked: Instant, cx: &
         })
     };
     let full_screen = shell_of(from).is_some_and(|shell| shell.read(cx).in_window_full_screen());
+    let shown = crate::window_opening::drawn_before_shown();
+    if let Some(shown) = shown {
+        // check.sh reads this line, the new window's time from the key to its first frame, which
+        // came on screen with it, before its overlays were made.
+        let ms = shown.duration_since(asked).as_secs_f64() * 1000.;
+        log!("browser: new window first frame at {ms:.1} ms");
+    }
+    let drawn = shown.is_some();
     if let Some(shell) = shell_of(opened) {
         shell.update(cx, |shell, cx| {
-            shell.open_bar_when_shown(asked, full_screen);
+            shell.open_bar_when_shown(asked, full_screen, drawn);
             cx.notify();
         });
     }

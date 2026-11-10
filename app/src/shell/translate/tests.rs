@@ -2,7 +2,10 @@ use std::rc::Rc;
 
 use gpui::{Entity, Modifiers, TestAppContext, VisualTestContext, point, px};
 
-use crate::shell::{Command, Folders, Shell, Translation, bind_keys, recorder::Recorder};
+use crate::shell::{
+    AlwaysTranslated, Command, Folders, Shell, Translation, bind_keys, recorder::Recorder,
+};
+use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT};
 
 fn window(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
     let host = Rc::new(Recorder::default());
@@ -37,8 +40,9 @@ fn offered(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (bool, bool) {
     })
 }
 
-/// A page is offered in the user's language only when it declares another: not in the user's own
-/// with another region's spelling, nor one that declares none.
+/// A page is offered in the user's language only when it declares another they don't read: not in
+/// the user's own with another region's spelling, nor one the system prefers, as Arc offers none
+/// for those, nor one that declares none.
 #[gpui::test]
 fn only_a_page_in_another_language_is_offered(cx: &mut TestAppContext) {
     let (shell, _, cx) = window(cx);
@@ -48,6 +52,7 @@ fn only_a_page_in_another_language_is_offered(cx: &mut TestAppContext) {
         ("und", false),
         ("es", true),
         ("EN", false),
+        ("nl-BE", false),
     ] {
         shell.update(cx, |shell, cx| shell.set_page_language(10, language, cx));
         assert_eq!(offered(&shell, cx).0, offer, "{language}");
@@ -125,9 +130,10 @@ fn the_card_asks_and_says_what_went_wrong(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let card = shell.read_with(cx, |shell, _| shell.translate_card_drawn.get());
     let card = card.expect("the mark's press opened no card");
-    // Translate is the right of the buttons along the card's bottom.
+    // Translate is the right of the buttons, over Always Translate along the card's bottom.
     let bottom = card.origin.y + card.size.height;
-    let translate = point(card.origin.x + card.size.width * 0.75, bottom - px(26.));
+    let answers = bottom - px(26. + BUTTON_HEIGHT + BUTTON_GAP);
+    let translate = point(card.origin.x + card.size.width * 0.75, answers);
     cx.simulate_click(translate, Modifiers::none());
     cx.run_until_parked();
     // The mark's tooltip came and went with the pointer.
@@ -183,4 +189,89 @@ fn the_mark_names_itself_under_the_pointer(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(tips(mark.center(), cx), ["tooltip Translated "]);
+}
+
+/// A row along the bottom of the card the mark opens, whatever it says.
+fn click_card_bottom(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    let card = shell.read_with(cx, |shell, _| shell.translate_card_drawn.get());
+    let card = card.expect("no translate card");
+    let bottom = card.origin.y + card.size.height;
+    cx.simulate_click(
+        point(card.origin.x + card.size.width * 0.5, bottom - px(26.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+}
+
+/// What the host was asked, without what the pointer on its way showed: the mark's tooltip and a
+/// sidebar row's hover card.
+fn asked(host: &Recorder) -> Vec<String> {
+    (host.take().into_iter())
+        .filter(|call| !call.starts_with("tooltip") && !call.starts_with("card left"))
+        .collect()
+}
+
+fn always_translated(cx: &mut VisualTestContext) -> Vec<String> {
+    cx.update(|_, cx| {
+        (cx.try_global::<AlwaysTranslated>())
+            .map(|always| always.0.iter().map(ToString::to_string).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// The card's Always Translate translates the page and keeps its language, so the next page in it
+/// translates as it opens, in any region's spelling; Stop Always Translating on a translated page
+/// leaves it translated and the next asks again.
+#[gpui::test]
+fn always_translate_keeps_the_language_until_stopped(cx: &mut TestAppContext) {
+    let (shell, host, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_page_language(10, "es", cx);
+        shell.translate_card = Some(10);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_card_bottom(&shell, cx);
+    assert_eq!(asked(&host), ["always translated es", "translate 10 es en"]);
+    assert_eq!(always_translated(cx), ["es"]);
+
+    // The next page, and another tab's, translate as they come.
+    shell.update(cx, |shell, cx| {
+        shell.set_translation(10, Translation::Translated, cx);
+        shell.set_page_language(10, "", cx);
+        shell.set_page_language(10, "es-MX", cx);
+        shell.set_page_language(11, "es", cx);
+    });
+    assert_eq!(host.take(), ["translate 10 es-MX en", "translate 11 es en"]);
+    // One the user reads doesn't, nor an agent's Space's.
+    host.space_agents.borrow_mut().insert(1, "claude".into());
+    shell.update(cx, |shell, cx| {
+        shell.set_page_language(11, "", cx);
+        shell.set_page_language(11, "es", cx);
+    });
+    host.space_agents.borrow_mut().clear();
+    shell.update(cx, |shell, cx| shell.set_page_language(11, "en", cx));
+    assert_eq!(host.take(), Vec::<String>::new());
+
+    // A translated page's card says why, and stops it.
+    shell.update(cx, |shell, cx| {
+        shell.set_translation(10, Translation::Translated, cx);
+        shell.translate_card = Some(10);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_card_bottom(&shell, cx);
+    assert_eq!(asked(&host), ["always translated "]);
+    assert_eq!(always_translated(cx), Vec::<String>::new());
+    assert_eq!(
+        offered(&shell, cx),
+        (false, true),
+        "the page stays translated"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_page_language(10, "", cx);
+        shell.set_page_language(10, "es", cx);
+    });
+    assert_eq!(host.take(), Vec::<String>::new());
+    assert_eq!(offered(&shell, cx), (true, false));
 }

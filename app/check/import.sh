@@ -1,7 +1,8 @@
 # Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
 # beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
-# named Work as Arc's Local State names it, their pinned tabs and folders, its favorites, and the
-# three of its link rules that can be ours, each to the Space its Arc Space became; from
+# named Work as Arc's Local State names it, their pinned tabs and folders, Personal's Today tab, its
+# favorites, and the five of its link rules that can be ours, each to the Space its Arc Space became,
+# Little ilo or the Space in front, with where it opens everything else, Personal; from
 # Chrome and from Firefox their bookmarks as a Space named after each and their history, which the
 # core adds, with Chrome's open tabs, but for the one a bookmark pins, as that Space's Today tabs,
 # and its saved address, which the core adds too, never its card. Run again, each adds nothing. A
@@ -19,6 +20,8 @@
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
 # Chrome and Firefox where each system keeps them. Arc has no Linux build, so on Linux it isn't
 # found and its steps are left out.
+# On the Mac a made-up Safari comes in last, its bookmarks kept from the app until it's given
+# Full Disk Access, which the import waits for and asks for.
 
 serve
 printf '%s' '<title>import ready</title>' > "$out/site/import.html"
@@ -292,7 +295,7 @@ settings_shots list
 # row and the profiles it goes into. Esc goes back to the list.
 if [ -n "$arc" ]; then
   first_found=Arc
-  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 3, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 0, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
+  counts='spaces: 2, pinned: 6, folders: 2, link_rules: 6, favorites: 3, bookmarks: 0, bookmark_folders: 0, open_tabs: 1, reading_list: 0, pages: 0, addresses: 0, extensions: 0'
 else
   first_found=Chrome
   counts='spaces: 0, pinned: 0, folders: 0, link_rules: 0, favorites: 0, bookmarks: 3, bookmark_folders: 1, open_tabs: 2, reading_list: 0, pages: 2, addresses: 1, extensions: 0'
@@ -324,9 +327,9 @@ if [ -n "$arc" ]; then
   # -5814); the cards wait on, as Work is held.
   recorded
   ../tools/window-screenshot.sh "$pid" "$out/import-arriving.png" || fail "no window to capture"
-  expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 0 open tabs, 3 favorites, 0 pages, 0 addresses$' \
-    "Import didn't plan Arc's 2 Spaces, 6 pinned tabs and 3 favorites"
-  expect '^browser: import from Arc: 3 link rules$' "Import didn't plan Arc's 3 link rules"
+  expect '^browser: import from Arc: 2 Spaces, 6 pinned tabs, 1 open tabs, 3 favorites, 0 pages, 0 addresses$' \
+    "Import didn't plan Arc's 2 Spaces, 6 pinned tabs, Today tab and 3 favorites"
+  expect '^browser: import from Arc: 6 link rules$' "Import didn't plan Arc's 5 link rules and everything else"
   expect '^browser: added profile [0-9]* Work$' "Arc's Work profile didn't come in"
   # Work's card stalls, dimmed with ⚠ and its rows waiting once Work opens, and Personal's waits
   # with it, as the tabs go in together.
@@ -337,16 +340,20 @@ if [ -n "$arc" ]; then
   ../tools/window-screenshot.sh "$pid" "$out/import-stalled.png" || fail "no window to capture"
   send key f12 shift
   expect '^browser: import releases 1 Spaces to profile [0-9]*$' "Shift+F12 didn't release Work's Space"
-  arc_done='2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc'
+  arc_done='2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc'
   await "^browser: import done: $arc_done\\.\$" ||
     fail "the import didn't finish once the Work profile loaded"
-  # The rules go to Arc's Spaces by their places among the user's: Personal second, Work third.
+  # The rules go to Arc's Spaces by their places among the user's, Personal second and Work third,
+  # to Little ilo and to the Space in front, and everything else to Personal.
   t=$(printf '\t')
   # After the Meet rule a profile starts with (#692).
   rules="rule${t}contains${t}front${t}meet.google.com
 rule${t}contains${t}3${t}work.example.com
 rule${t}is${t}2${t}https://news.ycombinator.com/
+rule${t}contains${t}Little ilo${t}meet.example.com
+rule${t}contains${t}front${t}front.example.com
 rule${t}is${t}3${t}https://docs.example.com/
+otherwise${t}2
 seeded${t}meet"
   [ "$(cat "$rules_file" 2>/dev/null)" = "$rules" ] ||
     fail "Arc's link rules didn't come in to its Spaces: $(cat "$rules_file" 2>/dev/null)"
@@ -360,6 +367,13 @@ seeded${t}meet"
   work_profile=$(sed -n 's/^browser: added profile \([0-9]*\) Work$/\1/p' "$log" | tail -1)
   grep -q "^browser: profiled space $work $work_profile\$" "$log" ||
     fail "Arc's Work Space isn't in the Work profile"
+  # Each Space keeps the theme Arc's has: Personal's three colours, the third its teal, with its
+  # intensity, grain and sand as our dust, forced dark; Work's one colour, following the system,
+  # with its dark look.
+  grep -q "^browser: themed space $personal x=[^ ]* y=[^ ]* colors=3 intensity=0\.600 grain=0\.300 appearance=dark .*texture=dust third=33cc99" "$log" ||
+    fail "Arc's Personal theme didn't come in: $(grep "^browser: themed space $personal " "$log" | tail -1)"
+  grep -q "^browser: themed space $work x=[^ ]* y=[^ ]* colors=1 [^ ]* grain=0\.000 appearance=automatic .*dark=" "$log" ||
+    fail "Arc's Work theme didn't come in with its dark look: $(grep "^browser: themed space $work " "$log" | tail -1)"
   # Done goes back to the list, and the same import again plans nothing.
   expect '^browser: import drawn done$' "the import's end didn't draw"
   click_drawn import-done
@@ -496,13 +510,15 @@ if [ -n "$arc" ]; then
   send key s cmd
   expect '^browser: sidebar shown$' "⌘S didn't bring the sidebar back after the import"
   # The Personal Space shows its pinned tabs: HN, then Reading with a, b and c split side by side,
-  # as Arc's split view has them, and Deep with d.
+  # as Arc's split view has them, and Deep with d; then its one Today tab.
   send key 2 ctrl
   expect "^browser: space $personal in " "⌃2 didn't show Arc's Personal Space"
   expect '^browser: pinned [0-9]*\( [0-9]*\)\{6\}$' \
     "Personal's pinned tabs and folders aren't the 7 rows Arc's are: $(pinned)"
   expect '^browser: splits [0-9][0-9]*+[0-9][0-9]*$' \
     "Arc's split view of b and c didn't come in as one: $(grep '^browser: splits' "$log" | tail -1)"
+  expect '^browser: today [0-9][0-9]*$' \
+    "Personal's Today tab didn't come in from Arc: $(grep '^browser: today' "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/import-personal.png" || fail "no window to capture"
 fi
 # The rows the parity checklist ticks on this run (docs/ux-parity/import.md). A made-up Brave comes
@@ -631,16 +647,102 @@ else
     fail "the extension Brave pinned wasn't pinned once it came in"
   ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
 fi
+# On the Mac a made-up Safari comes in last, its Bookmarks.plist kept from the app as macOS keeps
+# ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
+# System Settings; back in the app without it, it says it's still waiting; with it, coming back
+# reads Safari and its bar, menu and Reading List come in as a Space, with its history, and a
+# second time adds nothing. The driver says the app came back to the front, which a run can't do.
+if [ "$(uname)" = Darwin ]; then
+  safari="$home/Library/Safari"
+  mkdir -p "$safari"
+  leaf() {
+    printf '<dict><key>WebBookmarkType</key><string>WebBookmarkTypeLeaf</string>'
+    printf '<key>URLString</key><string>%s</string>' "$1"
+    printf '<key>URIDictionary</key><dict><key>title</key><string>%s</string></dict></dict>' "$2"
+  }
+  list() {
+    printf '<dict><key>WebBookmarkType</key><string>WebBookmarkTypeList</string>'
+    printf '<key>Title</key><string>%s</string><key>Children</key><array>%s</array></dict>' "$1" "$2"
+  }
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+    printf '<key>WebBookmarkType</key><string>WebBookmarkTypeList</string><key>Children</key><array>'
+    list BookmarksBar "$(leaf https://safari-bar.example.org/ Bar)"
+    list BookmarksMenu "$(leaf https://safari-menu.example.org/ Menu)"
+    list com.apple.ReadingList "$(leaf https://safari-read.example.org/ Read)"
+    printf '</array></dict></plist>\n'
+  } > "$safari/Bookmarks.plist"
+  # Safari counts seconds from 2001: two pages visited an hour and two hours ago.
+  now=$(( $(date +%s) - 978307200 ))
+  sql "$safari/History.db" "
+    CREATE TABLE history_items(id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,
+      visit_count INTEGER NOT NULL);
+    CREATE TABLE history_visits(id INTEGER PRIMARY KEY, history_item INTEGER NOT NULL,
+      visit_time REAL NOT NULL, title TEXT);
+    INSERT INTO history_items(id, url, visit_count) VALUES
+      (1, 'https://history-five.example.org/', 2), (2, 'https://history-six.example.org/', 1);
+    INSERT INTO history_visits(history_item, visit_time, title) VALUES
+      (1, $now - 3600, 'Five'), (2, $now - 7200, 'Six');"
+  chmod 000 "$safari/Bookmarks.plist"
+  # Readable again whatever ends the run, or the artifact's upload stops at it.
+  trap 'cleanup; chmod 644 "$safari/Bookmarks.plist" 2> /dev/null || true' EXIT
+  send menu Import from Other Browsers…
+  expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for Safari"
+  settings_drew 'Import & Export'
+  send clickkey $(drawn "toolbar Passwords")
+  expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  settings_drew Passwords
+  send clickkey $(drawn "toolbar Import & Export")
+  expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+  settings_drew 'Import & Export'
+  expect '^browser: import found .*Safari' "Settings didn't find the made-up Safari once it showed again"
+  send clickkey $(drawn "import-from Safari")
+  expect '^browser: import pick Safari$' "Import… on Safari's row didn't show its choices"
+  expect '^browser: import from Safari needs full disk access$' \
+    "Safari's files kept from the app didn't ask for Full Disk Access"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari-access.png" || fail "no window to capture"
+  send clickkey $(drawn import-full-disk-access)
+  expect '^browser: open full disk access$' "Open System Settings didn't ask for System Settings' list"
+  # Back in the app from System Settings, which the driver stands in for: a run can't take the app
+  # from the front and bring it back, as macOS lets no background process make an app active.
+  send active
+  expect '^browser: import from Safari still needs full disk access$' \
+    "back in the app without access, the import didn't say it still waits"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari-still.png" || fail "no window to capture"
+  chmod 644 "$safari/Bookmarks.plist"
+  trap cleanup EXIT
+  send active
+  expect '^browser: import read Safari: ' "back in the app with access, the import didn't read Safari"
+  expect '^browser: import drawn pick$' "Safari's choices didn't draw once it was read"
+  send clickkey $(drawn import-go)
+  expect '^browser: import from Safari: 1 Spaces, 3 pinned tabs, 0 open tabs, 0 favorites, 2 pages, 0 addresses$' \
+    "Import didn't plan Safari's bookmarks, Reading List and history"
+  await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Safari's 2 pages"
+  expect '^browser: import done: 1 Space, 3 pinned tabs and 2 pages of history came in from Safari\.$' \
+    "the import didn't say what came from Safari"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari.png" || fail "no window to capture"
+  expect '^browser: import drawn done$' "Safari's import's end didn't draw"
+  click_drawn import-done
+  expect '^browser: import drawn list$' "Done didn't go back to the list"
+  send clickkey $(drawn "import-from Safari")
+  expect '^browser: import pick Safari$' "Import… didn't show Safari's choices again"
+  expect '^browser: import drawn pick$' "Safari's choices didn't draw"
+  click_drawn import-go
+  await '^browser: history added 0 to profile [0-9]*$' || fail "the core added Safari's pages again"
+  expect '^browser: import done: Everything from Safari is here already\.$' \
+    "the second import from Safari said it added something"
+fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
-echo "  one in a new profile, their pinned tabs and folders, and its favorites; from Chrome and"
-echo "  Firefox their bookmarks as a Space and their history, with Chrome's open tab and address; and"
+echo "  one in a new profile, their pinned tabs and folders, Personal's Today tab, and its favorites; from"
+echo "  Chrome and Firefox their bookmarks as a Space and their history, with Chrome's open tab and address; and"
 echo "  a second import of each adds nothing."
 echo "  A bookmarks file comes in as a Space named Bookmarks, and a second time adds nothing."
 echo "  A passwords file comes in, says how many, and is deleted when asked; a second one says its"
 echo "  changed login conflicted and kept the saved one; Settings' Passwords tab lists the three,"
 echo "  and the app menu's Import from Other Browsers… shows Import again."
+[ "$(uname)" != Darwin ] || echo "  Safari waits for Full Disk Access, then its bookmarks, Reading List and history come in, once."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
@@ -650,4 +752,5 @@ echo "  $out/import-folders.png, $out/import-extensions.png, $out/import-pinned-
 echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
-echo "  $out/import-passwords-conflict.png, $out/import-personal.png"
+echo "  $out/import-passwords-conflict.png, $out/import-personal.png,"
+echo "  and on the Mac $out/import-safari-access.png, import-safari-still.png and import-safari.png"

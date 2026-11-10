@@ -251,6 +251,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Share", Keys::Of(Command::Share)),
             ("Capture", Keys::Of(Command::CapturePortion)),
             ("Capture Full Page", Keys::Of(Command::CaptureFullPage)),
+            (
+                "Capture in Portrait Mode",
+                Keys::Of(Command::CapturePortrait),
+            ),
             ("Save Page As", Keys::Of(Command::SavePage)),
             ("Print", Keys::Of(Command::Print)),
             (
@@ -1942,7 +1946,8 @@ impl Settings {
         }
     }
 
-    /// Tabs & Sidebar: when Today tabs are archived and unloaded, who shares the favorites, and
+    /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
+    /// shares the favorites, and
     /// how the hidden sidebar comes.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
@@ -1993,6 +1998,24 @@ impl Settings {
             ),
             vec![unload],
         );
+        let battery = self.toggle(
+            "battery saver setting",
+            "Battery Saver",
+            unsafe { bc::bc_battery_saver_enabled() },
+            set_battery_saver,
+            accent,
+            cx,
+        );
+        let battery = setting(
+            look,
+            "Battery Saver",
+            Some(
+                "Below 20% on battery, pages draw less often and tabs out of sight that keep \
+                 busy pause."
+                    .into(),
+            ),
+            vec![battery],
+        );
         let scope = favorites_scope();
         let favorites = self.popup(
             Popup::Favorites,
@@ -2025,7 +2048,12 @@ impl Settings {
         );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
-            Block::Rows(archive.into_iter().chain([unload, moving]).collect()),
+            Block::Rows(
+                archive
+                    .into_iter()
+                    .chain([unload, battery, moving])
+                    .collect(),
+            ),
             Block::Rows(vec![favorites]),
         ];
         let edge = self.toggle(
@@ -2273,14 +2301,43 @@ impl Settings {
                 [head].into_iter().chain(services).collect()
             }
         };
+        let boosts_on = !crate::boosts_host::all_off();
+        let boosts = self.toggle(
+            "boosts",
+            "Boosts",
+            boosts_on,
+            crate::boosts_host::set_all_on,
+            accent,
+            cx,
+        );
+        // Off, the line is the receipt, as Little ilo's is.
+        let boosts_line = match boosts_on {
+            true => {
+                "Your CSS and Zap on the sites you boost. New Boost in the command bar makes one."
+            }
+            false => "Off: no site shows its Boost. They stay in each profile's Boosts folder.",
+        };
+        let boosts = feature(
+            look,
+            "icons/paintbrush.svg",
+            "Boosts",
+            Some(boosts_line.into()),
+            vec![boosts],
+        );
         let mut blocks = vec![
             Block::Rows(little),
             Block::Rows(vec![peek]),
             Block::Rows(vec![mini_player]),
+            Block::Rows(vec![boosts]),
             Block::Rows(note),
         ];
         if self.widevine.read(cx).shown() {
             blocks.push(Block::Rows(vec![self.widevine_row(cx)]));
+        }
+        let always = cx.try_global::<shell::AlwaysTranslated>().cloned();
+        if let Some(always) = always.filter(|always| !always.0.is_empty()) {
+            blocks.push(Block::Heading("Always translated".into()));
+            blocks.push(Block::Group(self.always_translated(&always.0, cx)));
         }
         Page::new(
             Section::Features,
@@ -2448,11 +2505,58 @@ impl Settings {
         if !sending.is_empty() {
             blocks.push(Block::Rows(sending));
         }
+        // What it never does, in a line, beside the policy that names every service it talks to,
+        // as the owner asked (#684).
+        let policy = self
+            .button("privacy-policy", "Open")
+            .relative()
+            .child(self.drawn("open privacy policy".into()))
+            .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
+        let line = concat!(
+            env!("APP_NAME"),
+            " never sees the sites you visit or what you type, and never sells your data. ",
+            "The policy names every service it talks to."
+        );
+        let policy = setting(
+            look,
+            "Privacy Policy",
+            Some(line.into()),
+            vec![policy.into_any_element()],
+        );
+        blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
             concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
             blocks,
         )
+    }
+
+    /// The languages a page's translate card said to always translate, each with Remove, after
+    /// which a page in it asks again (#671).
+    fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
+        let look = &self.look;
+        let rows = languages.iter().enumerate().map(|(index, language)| {
+            let at = self.drawn(format!("always translated {language}"));
+            let gone = language.clone();
+            let remove = self
+                .button(("always-translated-remove", index as u64), "Remove")
+                .relative()
+                .child(at)
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    let mut languages = (cx.try_global::<shell::AlwaysTranslated>())
+                        .map(|always| always.0.clone())
+                        .unwrap_or_default();
+                    languages.retain(|each| *each != gone);
+                    crate::translate_host::save_always(&languages);
+                    // check.sh waits for this line.
+                    log!("browser: always translate {gone} off");
+                    cx.set_global(shell::AlwaysTranslated(languages));
+                    cx.refresh_windows();
+                }));
+            let name = crate::translate_host::language_name(language);
+            line_row(look, name, None, vec![remove.into_any_element()])
+        });
+        group(look, rows)
     }
 
     /// The sites the user turned ad blocking off on in their Site Controls, each with the way to
@@ -4363,6 +4467,11 @@ fn set_unload_idle_tabs(unload: bool, _: &mut App) {
     unsafe { bc::bc_set_unload_idle_tabs(unload) };
 }
 
+/// Chrome's Local State pref, so off turns Battery Saver off at once and it never comes on.
+fn set_battery_saver(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_battery_saver_enabled(on) };
+}
+
 /// In every profile; a site's own stays as the user set it in the Site Controls.
 fn set_ad_blocking(on: bool, _: &mut App) {
     unsafe { bc::bc_set_ad_blocking(on) };
@@ -4736,8 +4845,8 @@ fn shown(name: &str) -> String {
     name.replace("⌘1–⌘8", &tabs)
 }
 
-/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as the
-/// core keeps no settings of the app's own.
+/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as they
+/// stay with the computer (docs/ux-spec.md, Sync).
 fn shortcuts_path() -> String {
     format!("{}/Shortcuts", crate::profile_dir())
 }
@@ -4748,43 +4857,90 @@ pub fn read_shortcuts(cx: &mut App) {
     cx.set_global(UserKeys::parse(&text));
 }
 
-/// Where View › Appearance's choice is kept, beside the keys.
+/// Where View › Appearance's choice was kept before the core kept it, beside the keys.
 fn appearance_path() -> String {
     format!("{}/Appearance", crate::profile_dir())
 }
 
-/// Reads View › Appearance's choice, automatic if there's none.
-pub fn read_appearance(cx: &mut App) {
-    let text = std::fs::read_to_string(appearance_path()).unwrap_or_default();
-    cx.set_global(shell::AppAppearance(
-        Appearance::named(text.trim()).unwrap_or_default(),
-    ));
-}
-
-/// Where Show Space Header's choice is kept, beside View › Appearance's.
+/// Where Show Space Header's choice was kept before the core kept it.
 fn lone_header_path() -> String {
     format!("{}/Space Header", crate::profile_dir())
 }
 
-/// Reads whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at
-/// first. check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
-pub fn read_lone_header(cx: &mut App) {
-    let text = std::fs::read_to_string(lone_header_path())
-        .or_else(|_| std::env::var("BROWSER_SPACE_HEADER"))
-        .unwrap_or_default();
-    cx.set_global(shell::LoneSpaceHeader(text.trim() == "shown"));
+/// What an older version kept at `path`, which the core keeps from now on, so it goes.
+fn take_old(path: String) -> Option<String> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        log!("couldn't remove {path}: {error}");
+    }
+    Some(text)
 }
 
-pub fn save_lone_header(kept: bool) {
-    if let Err(error) = std::fs::write(lone_header_path(), if kept { "shown" } else { "hidden" }) {
-        log!("couldn't save the space header: {error}");
+/// View › Appearance's choice as the core keeps it.
+fn core_appearance() -> Appearance {
+    match unsafe { bc::bc_appearance() } {
+        1 => Appearance::Light,
+        2 => Appearance::Dark,
+        _ => Appearance::Automatic,
     }
 }
 
-pub fn save_appearance(appearance: Appearance) {
-    if let Err(error) = std::fs::write(appearance_path(), appearance.name()) {
-        log!("couldn't save the appearance: {error}");
+/// Where Portrait Mode's background is kept, in the profile.
+fn portrait_background_path() -> String {
+    format!("{}/Portrait Background", crate::profile_dir())
+}
+
+/// Reads the background Portrait Mode last captured on, if it's kept.
+pub fn read_portrait_background(cx: &mut App) {
+    let text = std::fs::read_to_string(portrait_background_path()).unwrap_or_default();
+    if let Some(background) = crate::capture::portrait::Background::parse(&text) {
+        cx.set_global(shell::PortraitBackground(background));
     }
+}
+
+pub fn save_portrait_background(background: crate::capture::portrait::Background) {
+    if let Err(error) = std::fs::write(portrait_background_path(), background.name()) {
+        log!("couldn't save portrait mode's background: {error}");
+    }
+}
+
+/// Whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at first.
+/// check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
+fn lone_header_kept() -> bool {
+    let kept = unsafe { bc::bc_space_header() };
+    kept || std::env::var("BROWSER_SPACE_HEADER").is_ok_and(|env| env.trim() == "shown")
+}
+
+/// Reads View › Appearance's choice and Show Space Header's, which the core keeps, as they follow
+/// the account. Those an older version kept in files go to the core first.
+pub fn read_look(cx: &mut App) {
+    let old = take_old(appearance_path()).and_then(|text| Appearance::named(text.trim()));
+    if let Some(appearance) = old {
+        unsafe { bc::bc_set_appearance(crate::menu_bar::appearance_code(appearance)) };
+    }
+    if let Some(text) = take_old(lone_header_path()) {
+        unsafe { bc::bc_set_space_header(text.trim() == "shown") };
+    }
+    cx.set_global(shell::AppAppearance(core_appearance()));
+    cx.set_global(shell::LoneSpaceHeader(lone_header_kept()));
+}
+
+/// View › Appearance's choice or Show Space Header's may have come from the account
+/// (settings_synced): every window and the host take them.
+pub fn look_followed(cx: &mut App) {
+    let appearance = core_appearance();
+    if appearance != shell::app_appearance(cx) {
+        // check.sh waits for this line.
+        log!("browser: appearance followed {}", appearance.name());
+        crate::menu_bar::give_host_appearance(appearance);
+    }
+    let header = lone_header_kept();
+    cx.set_global(shell::AppAppearance(appearance));
+    cx.set_global(shell::LoneSpaceHeader(header));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| {
+        shell.look_followed(appearance, header, cx)
+    });
+    refresh(cx);
 }
 
 /// Include Favorites in ⌘1–⌘8, kept with the user's keys.

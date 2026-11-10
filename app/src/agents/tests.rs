@@ -683,7 +683,8 @@ fn list_tabs_lists_only_the_agents_own_tabs(cx: &mut TestAppContext) {
 }
 
 /// An agent whose first call is open_tab gets its Space then, and the tab opens there (#1468),
-/// muted, as an agent's tabs are until the user unmutes or keeps one (#1080).
+/// muted, as an agent's tabs are until the user unmutes or keeps one, and so are the tabs its page
+/// opens there (#1080).
 #[gpui::test]
 fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
     let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
@@ -710,6 +711,18 @@ fn open_tab_as_the_first_call_makes_the_agents_space(cx: &mut TestAppContext) {
         *browser.muted.borrow(),
         [(30, true)],
         "the agent's tab opened with sound"
+    );
+    // A tab its page opens, beside it in its Space, is as quiet; one a user's page opens isn't.
+    (browser.tabs.borrow_mut()).push((31, 2, "Pop-up", "https://example.com/pop"));
+    (browser.tabs.borrow_mut()).push((32, 1, "Mine", "https://example.com/mine"));
+    agents.update(cx, |agents, cx| {
+        agents.tab_opened(31, 30, cx);
+        agents.tab_opened(32, 10, cx);
+    });
+    assert_eq!(
+        *browser.muted.borrow(),
+        [(30, true), (31, true)],
+        "a tab the agent's page opened had sound, or the user's was muted"
     );
     let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
         .recv()
@@ -1582,9 +1595,9 @@ fn a_tab_the_agents_click_opens_is_named(cx: &mut TestAppContext) {
         json!({ "tab": 20, "ref": "e1" }),
         cx,
     );
-    agents.update(cx, |agents, _| {
-        agents.tab_opened(26, 20);
-        agents.tab_opened(27, 10);
+    agents.update(cx, |agents, cx| {
+        agents.tab_opened(26, 20, cx);
+        agents.tab_opened(27, 10, cx);
     });
     let clicked = page_done(&agents, &browser, answer, shop_tree(), cx);
     let said = clicked.text.split("\n\n").next().unwrap();
@@ -1673,6 +1686,68 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     let grants = later.read_with(cx, |agents, _| agents.grants.clone());
     assert_eq!(grants["claude-code"]["example.com"], true);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A question the user leaves for 5 minutes is refused this once, as the × refuses it: the agent's
+/// call answers, the card clears, and the log says why. Nothing is kept for the site.
+#[gpui::test]
+fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let pages = browser.pages.borrow().len();
+    let order = json!({ "tab": 20, "ref": "e3" });
+    let answer = call(&agents, "claude-code", "click", order, cx);
+    assert!(browser.asked.borrow().is_some(), "the order didn't ask");
+
+    cx.executor()
+        .advance_clock(ASK_WAIT - Duration::from_secs(1));
+    assert!(answer.try_recv().is_err(), "it gave up before 5 minutes");
+    assert!(browser.asked.borrow().is_some());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    let refused = answer.recv().unwrap();
+    assert!(refused.error);
+    assert!(
+        refused
+            .text
+            .starts_with("The user didn't answer in 5 minutes")
+    );
+    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(browser.pages.borrow().len(), pages, "it clicked unanswered");
+    assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
+    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
+    assert!(grants.is_empty());
+}
+
+/// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
+/// The tab stays the user's, and Hand Back still gives it back.
+#[gpui::test]
+fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+
+    cx.executor()
+        .advance_clock(HANDOFF_WAIT - Duration::from_secs(1));
+    assert!(handed.try_recv().is_err(), "it gave up before 15 minutes");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    let answer = handed.recv().unwrap();
+    assert!(answer.error);
+    assert!(
+        answer
+            .text
+            .starts_with("The user hasn't handed tab 20 back in 15 minutes.")
+    );
+    assert_eq!(*browser.asked.borrow(), None);
+    assert!(browser.held.borrow().contains(&20), "the tab left the user");
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(status[0].held, [(20, "Sign in to example.com".into())]);
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "not handed back");
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    assert!(browser.held.borrow().is_empty());
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
 /// What the user answered for good is listed, by site, and once revoked, one site or all, what
@@ -5274,18 +5349,22 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
-    /// At launch the tasks' Spaces a run before left go, and an outside agent's, which a run
-    /// before #1080 showed as a Space of the user's, gives its tabs to the user's Space first.
+    /// At launch the Spaces a crash left, of tasks and of an outside agent, which a run before
+    /// #1080 showed as a Space of the user's, give their tabs to the user's Space, then go (#1080).
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         browser.task_spaces.borrow_mut().extend([100, 101]);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "https://flights.example/", "Flights"));
         agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
         assert_eq!(*browser.deleted.borrow(), vec![100, 101, 2]);
         let spaces: Vec<_> = (browser.tabs.borrow().iter())
             .map(|each| (each.0, each.1))
             .collect();
-        assert_eq!(spaces, [(20, 1), (10, 1)]);
+        assert_eq!(spaces, [(20, 1), (30, 1), (10, 1)]);
     }
 
     #[gpui::test]
@@ -5643,6 +5722,22 @@ mod sessions {
             ("Claude Code", 1, 0, 1)
         );
         assert!(past.ended >= past.started);
+        // With its activity log, for its page there: what it did and where, and the order it was
+        // refused, under its client's answers for good, which its page's Revoke takes (#1080).
+        assert_eq!(past.answers, "claude-code");
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert!(actions.contains(&"snapshot"), "{actions:?}");
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && step.refused.is_empty()),
+            "{:?}",
+            past.steps
+        );
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && !step.refused.is_empty()),
+            "the refused order isn't in its log: {:?}",
+            past.steps
+        );
+        assert!((past.steps.iter()).all(|step| step.at >= past.started && step.at <= past.ended));
         assert!(
             agents
                 .update(cx, |agents, cx| agents.take_ended(cx))

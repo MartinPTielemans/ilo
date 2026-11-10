@@ -382,7 +382,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..9e0fbe054f 100644
+index c559412e56..17eb434609 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -609,7 +609,22 @@ index c559412e56..9e0fbe054f 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3761,7 +3859,23 @@ impl Window {
+@@ -3636,6 +3734,14 @@ impl Window {
+         profiling::finish_frame!();
+     }
+ 
++    /// Draws a frame and presents it now, outside the platform's frame requests: for a window
++    /// about to go on screen, whose platform draws only once it reports the window visible, some
++    /// frames after it's on screen, so that it comes on screen drawn.
++    pub fn draw_and_present(&mut self, cx: &mut App) {
++        self.draw(cx).clear(cx);
++        self.present();
++    }
++
+     /// Presents the most recently drawn frame if it hasn't been presented yet.
+     #[cfg(all(test, feature = "profiler"))]
+     pub fn present_if_needed(&mut self) {
+@@ -3761,7 +3867,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -634,7 +649,7 @@ index c559412e56..9e0fbe054f 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4341,40 @@ impl Window {
+@@ -4227,6 +4349,40 @@ impl Window {
          result
      }
  
@@ -675,7 +690,7 @@ index c559412e56..9e0fbe054f 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5726,8 @@ impl Window {
+@@ -5578,9 +5734,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -687,7 +702,7 @@ index c559412e56..9e0fbe054f 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7244,24 @@ impl Window {
+@@ -7097,18 +7252,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -715,7 +730,7 @@ index c559412e56..9e0fbe054f 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -8179,6 +8332,101 @@ mod tests {
+@@ -8179,6 +8340,101 @@ mod tests {
          }
      }
  

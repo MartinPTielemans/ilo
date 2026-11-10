@@ -7,15 +7,16 @@
 # B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists A's
 # tab, naming A, and opens it (#1234). A saves a login, which B lists, then removes, and A hears
 # it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
-# asking, as the account has other devices, and the server forgets them. Linux's alone so far:
-# the Mac's and Windows' clipboards and two copies of the app at once there are unrun.
+# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and
+# Wayland and on Windows, where each device's window takes the foreground from the others' as the
+# run drives it (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
   return 0
 fi
-if [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; then
-  echo "skip: sync-devices. It runs under Xvfb on Linux so far, where xdotool and xclip reach it."
+if ! windows && { [ "$(uname)" != Linux ] || sway_xwayland; }; then
+  echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland and on Windows so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
@@ -37,17 +38,16 @@ await_spaces() {
 # Makes a Space named $1 in the device's window, from the Spaces menu, as spaces.sh does.
 new_space() {
   had=$(spaces)
-  send window 1
+  forward
   send menu New Space…
   expect '^browser: command new-space via ui$' "New Space in the menu didn't run new-space on $on"
   await_spaces $((had + 1)) "New Space didn't make a Space on $on"
   send type "$1"
   send key return
 }
-# What the X server's clipboard holds, as target $1 (text if none).
-clipboard() {
-  timeout 5 xclip -selection clipboard -o ${1:+-t "$1"} 2>/dev/null || true
-}
+# The format that marks what clipboard managers are to skip (#641).
+hint=x-kde-passwordManagerHint
+! windows || hint=ExcludeClipboardContentFromMonitorProcessing
 others=
 
 # A's list ends with none once B removes the login A saves, so A starts with none: the check's
@@ -72,13 +72,15 @@ send clickkey $at
 copied_at=$(date +%s)
 words=
 for _ in $(seq 30); do
-  words=$(clipboard)
-  [ "$(echo "$words" | wc -w)" = 24 ] && break
+  clipboard
+  words=$clipped
+  [ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] && break
   sleep 0.1
 done
-[ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
-clipboard TARGETS | grep -qx 'x-kde-passwordManagerHint' ||
-  fail "the copied words aren't marked for clipboard managers to skip: $(clipboard TARGETS | tr '\n' ' ')"
+[ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
+clipboard formats
+echo "$clipped" | grep -qx "$hint" ||
+  fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
@@ -86,6 +88,7 @@ await 'browser: sync service active$' || fail "A's sync didn't become active"
 new_space "from A"
 
 start b "$PWD/$out/sync-devices-b" 6
+! windows || forward
 open_sign_in
 sign_in
 await '^browser: account NeedsSecret None$' || fail "B, signed in, didn't need the account's secret"
@@ -94,7 +97,7 @@ await '^browser: account Pairing None$' || fail "B didn't ask the account's devi
 # A takes the request once one of its windows is active, as it would be in front of the user.
 # A may have been the active app already, so these are read from all A has logged.
 device a
-send window 1
+forward
 await '^browser: pairing asked$' || fail "A didn't take B's request with its window active"
 await '^browser: dialog shown Add the device that asked at ' || fail "A didn't ask whether to add B"
 await '^browser: dialog confirm at ' || fail "A's question didn't say where Add is"
@@ -114,6 +117,7 @@ device a
 await_spaces 3 "A doesn't have the Space B made"
 
 start c "$PWD/$out/sync-devices-c" 7
+! windows || forward
 open_sign_in
 sign_in
 await '^browser: account NeedsSecret None$' || fail "C, signed in, didn't need the account's secret"
@@ -139,7 +143,7 @@ send agentopen claude-code "${site}login.html?agents-own"
 expect '^browser: agent claude-code opened [1-9][0-9]*$' "A's agent didn't open a tab in its Space"
 agent_tab=$(sed -n 's/^browser: agent claude-code opened \([0-9]*\)$/\1/p' "$log" | tail -1)
 await "^browser: loaded $agent_tab ${site}login.html?agents-own\$" || fail "A's agent's tab didn't load"
-send window 1
+forward
 go_from_bar "${site#http://}login.html?users-own"
 expect '^browser: title [0-9]* login$' "A's own tab didn't load"
 store_b="$out/sync-devices-b/Default/Sync Data/LevelDB"
@@ -156,11 +160,11 @@ grep -rqa 'login.html?agents-own' "$store_b" &&
 device b
 await "^browser: other computers' tabs [1-9]" ||
   fail "B's core never told the app of A's open tab, which B's sync store has"
-send window 1
+forward
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open B's command bar"
 send type login
-expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on ilo on Linux" \
+expect "^browser: command bar lists other computers' tabs: ${site}login.html?users-own on $label" \
   "B's command bar didn't list A's tab for \"login\""
 grep "^browser: command bar lists other computers' tabs: " "$log" | grep -q 'agents-own' &&
   fail "B's command bar listed a tab of A's agent's Space"
@@ -179,7 +183,7 @@ expect "^browser: loaded [0-9]* ${site}login.html?users-own\$" "↩ on A's tab d
 # A saves a login, which reaches B through the server, as only its ciphertext (sync-account reads
 # the store): B's Settings › Passwords lists it. B removes it, and A's list hears it go.
 device a
-send window 1
+forward
 go_from_bar "${site#http://}login.html"
 expect '^browser: title [0-9]* login$' "A's login page didn't load"
 tab=$(sed -n 's/^browser: title \([0-9]*\) login$/\1/p' "$log" | tail -1)
@@ -194,8 +198,11 @@ send key return
 expect "^browser: offer $tab save check@example.test " "A's login brought no offer to save it"
 expect "^browser: offer $tab takes input\$" "A's offer to save the login never took input"
 # The offer takes the keyboard with a click in its field, 56 in and 70 down, as passwords' does.
-offer_at=$(sed -n 's/^browser: offer at \([0-9]*\) \([0-9]*\) .*/\1 \2/p' "$log" | tail -1)
-[ -n "$offer_at" ] || fail "A's offer didn't say where it is"
+# Its card is the window's 320x180 child, which the driver lists on every platform.
+send layout
+offer_at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout child' |
+  grep ' 320x180$' | head -1 | sed 's/^browser: layout child \([0-9]*\),\([0-9]*\) .*/\1 \2/')
+[ -n "$offer_at" ] || fail "A's offer card isn't over its window"
 send click $((${offer_at% *} + 56)) $((${offer_at#* } + 70))
 send key return
 expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save A's login"
@@ -214,10 +221,18 @@ await "^browser: passwords [0-9]*: $login\$" ||
   fail "B didn't get the login A saved: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-password.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-expect "^browser: dialog shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
+# Settings asks in Windows' task dialog, and on Linux, which has none, in its dialog, as passwords'
+# does.
+asks=dialog
+! windows || asks=alert
+expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove on B didn't ask first"
-expect '^browser: dialog settled$' "B's dialog asking to remove the login didn't settle"
-send key return
+if [ "$asks" = dialog ]; then
+  expect '^browser: dialog settled$' "B's dialog asking to remove the login didn't settle"
+  send key return
+else
+  send choose Remove
+fi
 expect "^browser: remove login [0-9]* $login\$" "return didn't remove the login on B"
 send clickkey $(drawn "toolbar Sync")
 expect '^browser: settings tab Sync$' "a click on Sync didn't show B's tab again"
@@ -233,7 +248,8 @@ done
 while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
-[ -z "$(clipboard)" ] || fail "the clipboard still held the words 90 s after A copied them"
+clipboard
+[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do
@@ -252,7 +268,7 @@ done
 for d in c b; do
   device $d
   exec 3>&-
-  kill -INT "$pid"
+  quit_app
   wait "$pid" || fail "$d exited with status $?"
 done
 exec 6>&- 7>&-

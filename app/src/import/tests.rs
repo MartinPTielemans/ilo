@@ -13,7 +13,9 @@ use gpui::{App, AppContext, Entity, TestAppContext};
 use super::arc;
 use super::chromium;
 use super::extensions::{self, Extension};
-use super::found::{Address, Field, Found, FromProfile, LinkRule, Node, Page, Split, Tab};
+use super::found::{
+    Address, Destination, Field, Found, FromProfile, LinkRule, Node, Page, Split, Tab,
+};
 use super::plan::{self, Counts, Existing, ExistingSpace, Row};
 use super::read::{self, Kind, ReadError};
 use super::session;
@@ -21,7 +23,7 @@ use super::sources::{self, Os, Roots};
 use super::suggested;
 use super::{Exported, Host, ImportEvent, ImportView, Look, Passwords, STALL};
 use super::{firefox, safari};
-use crate::link_rules::{Condition, Rule};
+use crate::link_rules::{Condition, FRONT, LITTLE, Rule};
 use crate::theme::{Appearance, Texture, Theme};
 
 fn fixture() -> PathBuf {
@@ -44,6 +46,7 @@ fn picked(spaces: bool, favorites: bool) -> Found {
     if !spaces {
         found.spaces.clear();
         found.link_rules.clear();
+        found.link_otherwise = None;
     }
     if !favorites {
         found.favorites.clear();
@@ -630,6 +633,8 @@ struct State {
     spaces: Vec<Space>,
     favorites: Vec<(u64, Tab)>,
     link_rules: Vec<Rule>,
+    /// Where everything else opens, once an import sets it; Little ilo before.
+    link_otherwise: Option<u64>,
     /// Spaces put in a profile that hasn't loaded yet.
     loading: Vec<(u64, u64)>,
     /// Profiles made that haven't loaded yet.
@@ -791,6 +796,7 @@ impl Browser {
                 .map(|(profile, tab)| (*profile, tab.url.clone()))
                 .collect(),
             link_rules: state.link_rules.clone(),
+            link_otherwise: state.link_otherwise.unwrap_or(LITTLE),
         }
     }
 }
@@ -887,8 +893,10 @@ impl Host for Browser {
             .insert(0, tab.clone());
     }
 
-    fn add_link_rules(&self, rules: &[Rule]) {
-        self.state.borrow_mut().link_rules.extend_from_slice(rules);
+    fn add_link_rules(&self, rules: &[Rule], otherwise: Option<u64>) {
+        let mut state = self.state.borrow_mut();
+        state.link_rules.extend_from_slice(rules);
+        state.link_otherwise = otherwise.or(state.link_otherwise);
     }
 
     fn profile_loaded(&self, profile: u64) -> bool {
@@ -1096,35 +1104,60 @@ fn an_import_brings_in_spaces_folders_and_favorites(cx: &mut TestAppContext) {
     );
 }
 
-/// Arc's link rules that match a link's URL and open it in one of its Spaces come in, in Arc's
-/// order, whichever way the file names the Space; one that matches the app a link came from, or
-/// goes to Little Arc, the Space in front or a Space that's gone, doesn't, nor does a file that
-/// can't be read.
+/// Arc's link rules that match a link's URL come in, in Arc's order, to one of its Spaces whichever
+/// way the file names it, to Little Arc or to the Space in front, and so does where it opens
+/// everything else; one that matches the app a link came from or goes to a Space that's gone
+/// doesn't, nor does a file that can't be read.
 #[test]
 fn arcs_link_rules_read_as_ours() {
-    let rule = |condition, text: &str, space| LinkRule {
+    let rule = |condition, text: &str, to| LinkRule {
         condition,
         text: text.into(),
-        space,
+        to,
     };
     let rules = [
-        rule(Condition::Contains, "work.example.com", 1),
-        rule(Condition::Is, "https://news.ycombinator.com/", 0),
-        rule(Condition::Is, "https://docs.example.com/", 1),
+        rule(
+            Condition::Contains,
+            "work.example.com",
+            Destination::Space(1),
+        ),
+        rule(
+            Condition::Is,
+            "https://news.ycombinator.com/",
+            Destination::Space(0),
+        ),
+        rule(Condition::Contains, "meet.example.com", Destination::Little),
+        rule(Condition::Contains, "front.example.com", Destination::Front),
+        rule(
+            Condition::Is,
+            "https://docs.example.com/",
+            Destination::Space(1),
+        ),
     ];
-    assert_eq!(sidebar().link_rules, rules);
+    let found = sidebar();
+    assert_eq!(found.link_rules, rules);
+    assert_eq!(found.link_otherwise, Some(Destination::Space(0)));
     let arc = fixture().join("Library/Application Support/Arc");
     let json = fs::read_to_string(arc.join("StorableSidebar.json")).unwrap();
-    assert!(
-        arc::parse(&json, Some("not json"))
-            .unwrap()
-            .link_rules
-            .is_empty()
+    let otherwise = |to: &str| {
+        let routing = format!(r#"{{"defaultDestination": {to}, "rules": []}}"#);
+        arc::parse(&json, Some(&routing)).unwrap().link_otherwise
+    };
+    // Little Arc is ours' default too, so it changes nothing.
+    assert_eq!(
+        otherwise(r#"{"littleArc": {"_0": {"mostRecent": {}}}}"#),
+        None
     );
+    let front = otherwise(r#"{"space": {"_0": {"mostRecent": {}}}}"#);
+    assert_eq!(front, Some(Destination::Front));
+    let unread = arc::parse(&json, Some("not json")).unwrap();
+    assert!(unread.link_rules.is_empty() && unread.link_otherwise.is_none());
 }
 
-/// Arc's link rules go after the user's, each to the Space its Arc Space became, and one the
-/// user has already, to the Space of that name here, doesn't come twice.
+/// Arc's link rules go after the user's, each to the Space its Arc Space became, Little ilo or
+/// the Space in front, and everything else to the Space Arc sends it to. One the user has
+/// already, to the Space of that name here or the Space in front, doesn't come twice, and a Space
+/// the user picked for everything else stays.
 #[gpui::test]
 fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
     let rule = |condition, text: &str, space| Rule {
@@ -1142,9 +1175,12 @@ fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
         mine,
         rule(Condition::Contains, "work.example.com", work),
         rule(Condition::Is, "https://news.ycombinator.com/", personal),
+        rule(Condition::Contains, "meet.example.com", LITTLE),
+        rule(Condition::Contains, "front.example.com", FRONT),
         rule(Condition::Is, "https://docs.example.com/", work),
     ];
     assert_eq!(state.link_rules, rules);
+    assert_eq!(state.link_otherwise, Some(personal));
     drop(state);
 
     let browser = Browser::new(None);
@@ -1152,13 +1188,19 @@ fn arcs_link_rules_go_to_the_spaces_they_became(cx: &mut TestAppContext) {
         let mut state = browser.state.borrow_mut();
         state.space(2).name = "Personal".into();
         let hn = rule(Condition::Is, "https://news.ycombinator.com/", 2);
-        state.link_rules.push(hn);
+        let front = rule(Condition::Contains, "front.example.com", FRONT);
+        state.link_rules.extend([hn, front]);
     }
     let plan = plan::plan(&sidebar(), &profile_names(), &browser.here());
-    assert_eq!(plan.counts().link_rules, 2);
+    assert_eq!(plan.counts().link_rules, 4);
+    assert_eq!(plan.link_otherwise, Some(plan::SpaceRef::Existing(2)));
+    browser.state.borrow_mut().link_otherwise = Some(0);
+    let plan = plan::plan(&sidebar(), &profile_names(), &browser.here());
+    assert_eq!(plan.link_otherwise, None);
 }
 
-/// A Space here that an import gives only Today tabs is still the one its link rules go to.
+/// A Space here that an import gives only Today tabs is still the one its link rules go to; where
+/// everything else opens, set the first time, is set already.
 #[gpui::test]
 fn link_rules_go_to_a_space_that_gains_only_today_tabs(cx: &mut TestAppContext) {
     let browser = Browser::new(None);
@@ -1172,7 +1214,7 @@ fn link_rules_go_to_a_space_that_gains_only_today_tabs(cx: &mut TestAppContext) 
     let plan = plan::plan(&found, &profile_names(), &browser.here());
     let counts = Counts {
         today: 1,
-        link_rules: 3,
+        link_rules: 5,
         ..Counts::default()
     };
     assert_eq!(plan.counts(), counts);
@@ -1222,7 +1264,8 @@ fn a_space_already_here_gets_only_what_it_lacks(cx: &mut TestAppContext) {
     let counts = Counts {
         spaces: 1,
         pinned: 4,
-        link_rules: 3,
+        today: 1,
+        link_rules: 6,
         ..Counts::default()
     };
     assert_eq!(plan.counts(), counts);
@@ -1326,13 +1369,14 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
         };
         assert_eq!(
             said.as_ref(),
-            "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+            "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
         );
     });
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     view.update(cx, |view, cx| view.done(cx));
     cx.run_until_parked();
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc.";
     assert_eq!(
         *events.borrow(),
         [
@@ -1394,7 +1438,7 @@ fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
     cx.update(|cx| browser.load(cx));
     assert_eq!(
         says(&view, cx),
-        "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
     );
     assert_eq!(
         primary(&view, cx),
@@ -1611,7 +1655,7 @@ fn cancel_leaves_the_spaces_empty_and_import_again_fills_them(cx: &mut TestAppCo
     cx.run_until_parked();
     assert_eq!(
         says(&view, cx),
-        "6 pinned tabs, 3 favorites and 3 link rules came in from Arc."
+        "6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc."
     );
     assert_eq!(browser.spaces()[2].rows.len(), 1);
     assert!(browser.last_import("Arc").is_some());
@@ -1721,7 +1765,8 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
     assert_eq!(browser.state.borrow().loading.len(), asked + 1);
     assert_eq!(says(&view, cx), "Importing from Arc…");
     cx.update(|cx| browser.load(cx));
-    let said = "2 Spaces, 6 pinned tabs, 3 favorites and 3 link rules came in from Arc.";
+    let said =
+        "2 Spaces, 6 pinned tabs, 1 open tab, 3 favorites and 6 link rules came in from Arc.";
     assert_eq!(says(&view, cx), said);
     cx.executor().advance_clock(STALL);
     cx.run_until_parked();
@@ -2830,7 +2875,7 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
     view.update(cx, |view, cx| view.pick(0, cx));
     view.read_with(cx, |view, _| {
         let counting: Vec<_> = view.choices().into_iter().map(|(_, said)| said).collect();
-        assert_eq!(counting, ["Counting…"; 5]);
+        assert_eq!(counting, ["Counting…"; 6]);
         assert_eq!(view.note(), None);
         assert_eq!(view.nothing(), None);
     });
@@ -2839,7 +2884,8 @@ fn picking_a_browser_shows_its_kinds_with_their_counts(cx: &mut TestAppContext) 
         assert_eq!(
             view.choices(),
             [
-                (Kind::Spaces, "6 pinned tabs · 3 link rules".into()),
+                (Kind::Spaces, "6 pinned tabs · 6 link rules".into()),
+                (Kind::OpenTabs, "1".into()),
                 (Kind::Favorites, "3".into()),
             ]
         );

@@ -100,6 +100,19 @@ impl capture::Host for CaptureHost {
             platform::host_share_png(png.as_ptr(), png.len(), view, x, y, width, height, messages)
         };
     }
+
+    fn desktop_picture(&self) -> Option<Vec<u8>> {
+        let mut png = Vec::new();
+        let context = std::ptr::from_mut(&mut png).cast::<c_void>();
+        let found = unsafe { platform::host_desktop_picture(context, desktop_png) };
+        (found && !png.is_empty()).then_some(png)
+    }
+}
+
+/// Takes the desktop picture's PNG into the Vec at `context`.
+extern "C" fn desktop_png(context: *mut c_void, data: *const u8, size: usize) {
+    let out = unsafe { &mut *context.cast::<Vec<u8>>() };
+    out.extend_from_slice(unsafe { std::slice::from_raw_parts(data, size) });
 }
 
 /// Where the Library's captures are.

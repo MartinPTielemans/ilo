@@ -50,4 +50,12 @@ runs:
         # as a change to core/. Names only, so git reads trees and never fetches file contents.
         git diff --name-only --no-renames "$base" HEAD > "$RUNNER_TEMP/changed-paths" \
           || fail_open "Could not diff against ${base}."
-        decide --paths "$RUNNER_TEMP/changed-paths"
+        # A core file whose change is only to its comments is the same to the compiler, so it starts
+        # no build (tools/core-same.sh, #2195). Reading its two versions fetches just those files.
+        while IFS= read -r path; do
+          case $path in
+            core/*) tools/core-same.sh "$base" HEAD "$path" && continue ;;
+          esac
+          echo "$path"
+        done < "$RUNNER_TEMP/changed-paths" > "$RUNNER_TEMP/compiled-paths"
+        decide --paths "$RUNNER_TEMP/compiled-paths"

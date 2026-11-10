@@ -8,6 +8,7 @@ use gpui::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, po
 use crate::shell::{
     Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, SpaceEntry, recorder::Recorder, rows::given_name,
 };
+use crate::theme::Appearance;
 use crate::theme_picker;
 
 /// A Space `id` named `name`, with `icon`.
@@ -124,6 +125,58 @@ fn a_lone_unnamed_space_hides_its_name_row_until_show_space_header(cx: &mut Test
     cx.update(|_, cx| host.choose("Hide Space Header", cx));
     cx.run_until_parked();
     assert_eq!(host.lone_header.get(), Some(false));
+    assert_eq!(
+        first_row(&shell, cx),
+        NAME_HEIGHT - 39.,
+        "the name row didn't hide again"
+    );
+}
+
+/// Show Space Header and View › Appearance as they came from the account (settings_synced) redraw
+/// the window: the name row comes back, the window takes the look, the menu offers Hide Space
+/// Header, and neither choice is kept again, as the core has them.
+#[gpui::test]
+fn the_accounts_space_header_and_appearance_redraw_the_window(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![space(1, "Space 1", "")]);
+    shell.update(cx, |shell, cx| {
+        shell.look_followed(Appearance::Light, true, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        first_row(&shell, cx),
+        NAME_HEIGHT,
+        "the name row didn't come back"
+    );
+    assert_eq!(
+        host.window_light.get(),
+        Some(true),
+        "the window isn't light"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.look_followed(Appearance::Dark, true, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        host.window_light.get(),
+        Some(false),
+        "the window isn't dark"
+    );
+    let menu = empty_space_menu(&shell, cx, &host);
+    assert!(
+        menu.iter().any(|title| title == "Hide Space Header"),
+        "{menu:?}"
+    );
+    assert_eq!(
+        host.lone_header.get(),
+        None,
+        "the header's choice was kept again"
+    );
+    assert_eq!(host.appearance.get(), None, "the appearance was kept again");
+
+    shell.update(cx, |shell, cx| {
+        shell.look_followed(Appearance::Dark, false, cx)
+    });
+    cx.run_until_parked();
     assert_eq!(
         first_row(&shell, cx),
         NAME_HEIGHT - 39.,

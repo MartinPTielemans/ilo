@@ -16,7 +16,8 @@ pub(crate) struct Opening {
     full_screen: bool,
     /// Whether it has asked to go full screen.
     entering: bool,
-    /// Whether its first frame on screen has been drawn.
+    /// Whether its first frame on screen has been drawn, which it can have been as it came on
+    /// screen.
     drawn: bool,
 }
 
@@ -28,13 +29,14 @@ impl Shell {
     }
 
     /// The window was opened by ⌘N or ⇧⌘N at `asked`: it opens the command bar once it's on
-    /// screen, going full screen first if `full_screen`.
-    pub fn open_bar_when_shown(&mut self, asked: Instant, full_screen: bool) {
+    /// screen, going full screen first if `full_screen`. `drawn` if it came on screen with its
+    /// first frame, whose time is told then.
+    pub fn open_bar_when_shown(&mut self, asked: Instant, full_screen: bool, drawn: bool) {
         self.opening = Some(Opening {
             asked,
             full_screen,
             entering: false,
-            drawn: false,
+            drawn,
         });
     }
 
@@ -131,7 +133,7 @@ mod tests {
     fn a_new_window_opens_the_command_bar_once_its_drawn(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
         shell.update(cx, |shell, _| {
-            shell.open_bar_when_shown(Instant::now(), false)
+            shell.open_bar_when_shown(Instant::now(), false, false)
         });
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
@@ -155,12 +157,27 @@ mod tests {
         );
     }
 
+    /// A window that came on screen with its first frame drawn, as on the Mac (#2141), still
+    /// opens its bar, once.
+    #[gpui::test]
+    fn a_new_window_drawn_as_it_came_on_screen_opens_the_command_bar(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, _| {
+            shell.open_bar_when_shown(Instant::now(), false, true)
+        });
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        assert_eq!(bars(&host), 1, "the drawn window's bar didn't open once");
+    }
+
     /// From a full-screen window, it goes full screen first, and the bar waits for that.
     #[gpui::test]
     fn a_new_window_from_full_screen_goes_full_screen_before_its_bar(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
         shell.update(cx, |shell, _| {
-            shell.open_bar_when_shown(Instant::now(), true)
+            shell.open_bar_when_shown(Instant::now(), true, false)
         });
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
@@ -199,7 +216,7 @@ mod tests {
         let (shell, cx, host) = window(cx);
         host.full_screen.set(true);
         shell.update(cx, |shell, _| {
-            shell.open_bar_when_shown(Instant::now(), true)
+            shell.open_bar_when_shown(Instant::now(), true, false)
         });
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();

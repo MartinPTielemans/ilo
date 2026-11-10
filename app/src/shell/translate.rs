@@ -66,7 +66,9 @@ pub(super) fn bind(cx: &mut gpui::App) {
         let shell = super::commands::key_shell(cx);
         let closed = shell.and_then(|shell| {
             shell
-                .update(cx, |shell, cx| shell.close_translate_card(cx))
+                .update(cx, |shell, cx| {
+                    shell.close_translate_card(cx) || shell.close_portrait_card(cx)
+                })
                 .ok()
         });
         if !closed.unwrap_or(false) {
@@ -75,6 +77,15 @@ pub(super) fn bind(cx: &mut gpui::App) {
     });
 }
 
+/// The languages the user has always translated, each a language alone such as "es", in the order
+/// they were chosen: a page in one translates as it opens, as Chrome's Always Translate does, which
+/// Arc keeps. The computer's, as its translator is, so every window, profile and private window
+/// translates them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AlwaysTranslated(pub Vec<SharedString>);
+
+impl gpui::Global for AlwaysTranslated {}
+
 /// A language's own part of its tag, "pt" of "pt-BR", which says whether two tags are the same
 /// language to read.
 fn primary(language: &str) -> String {
@@ -82,9 +93,17 @@ fn primary(language: &str) -> String {
     primary.to_ascii_lowercase()
 }
 
+/// Whether pages in `language`, a page's tag, translate as they open.
+fn always(language: &str, cx: &gpui::App) -> bool {
+    let primary = primary(language);
+    (cx.try_global::<AlwaysTranslated>())
+        .is_some_and(|always| always.0.iter().any(|each| each.as_ref() == primary))
+}
+
 impl Shell {
     /// The core says the language `tab`'s page declares, or with an empty one that a new page
-    /// came, which shows none of a translation the last one had.
+    /// came, which shows none of a translation the last one had. A page in a language always
+    /// translated translates as it comes.
     pub fn set_page_language(&mut self, tab: u64, language: &str, cx: &mut Context<Self>) {
         let changed = match language.is_empty() {
             true => self.page_languages.remove(&tab).is_some(),
@@ -98,6 +117,9 @@ impl Shell {
         let forgot = self.translations.remove(&tab).is_some();
         if self.translate_card == Some(tab) {
             self.translate_card = None;
+        }
+        if always(language, cx) {
+            self.translate_tab(tab, cx);
         }
         if (changed || forgot) && tab == self.field_tab() {
             cx.notify();
@@ -126,23 +148,33 @@ impl Shell {
     }
 
     /// The language `tab`'s page is in and the one it would be translated to, where it's offered:
-    /// a page that declares a language the user doesn't read, with a translator on the computer,
-    /// outside an agent's Space.
+    /// a page that declares a language the user doesn't read, none the system prefers, as Arc
+    /// offers none for a preferred language, with a translator on the computer, outside an
+    /// agent's Space.
     fn translatable(&self, tab: u64) -> Option<(SharedString, SharedString)> {
         let from = self.page_languages.get(&tab)?;
         let to = self.browser.translation_target()?;
-        let agents = !self.browser.space_agent(self.space).is_empty();
+        // The tab's own Space, as one in the background translates too.
+        let space = self.spot_of(tab).map_or(self.space, |spot| spot.space);
+        let agents = !self.browser.space_agent(space).is_empty();
         let known = !from.is_empty() && from.as_ref() != "und";
-        (tab != 0 && known && !agents && primary(from) != primary(&to)).then(|| (from.clone(), to))
+        let foreign = primary(from) != primary(&to) && !self.browser.reads_language(&primary(from));
+        (tab != 0 && known && !agents && foreign).then(|| (from.clone(), to))
     }
 
     /// Translate Page: the page shown, in the user's language.
     pub(super) fn translate_page(&mut self, cx: &mut Context<Self>) {
-        let tab = self.field_tab();
+        self.translate_tab(self.field_tab(), cx);
+    }
+
+    /// `tab`'s page, in the user's language, unless it's there or on its way.
+    fn translate_tab(&mut self, tab: u64, cx: &mut Context<Self>) {
         let Some((from, to)) = self.translatable(tab) else {
             return;
         };
-        if self.translations.get(&tab) == Some(&Translation::Translating) {
+        if let Some(Translation::Translating | Translation::Translated) =
+            self.translations.get(&tab)
+        {
             return;
         }
         self.translations.insert(tab, Translation::Translating);
@@ -150,9 +182,65 @@ impl Shell {
         cx.notify();
     }
 
+    /// Always Translate, or Stop Always Translating, the language of the page the field shows:
+    /// on, it translates the page now and every page in it as it opens, in every window; off, the
+    /// page stays as it is and the next asks again.
+    pub(super) fn always_translate(&mut self, on: bool, cx: &mut Context<Self>) {
+        let tab = self.field_tab();
+        let Some((from, _)) = self.translatable(tab) else {
+            return;
+        };
+        let language: SharedString = primary(&from).into();
+        let mut languages = (cx.try_global::<AlwaysTranslated>())
+            .map(|always| always.0.clone())
+            .unwrap_or_default();
+        languages.retain(|each| *each != language);
+        if on {
+            languages.push(language.clone());
+        }
+        // check.sh reads this line.
+        log!(
+            "browser: always translate {language} {}",
+            if on { "on" } else { "off" }
+        );
+        self.browser.keep_always_translated(&languages, cx);
+        cx.set_global(AlwaysTranslated(languages));
+        if on {
+            self.translate_tab(tab, cx);
+        }
+        // Settings lists them.
+        cx.refresh_windows();
+    }
+
     /// Use Original: the page's own words back, or a translation under way stopped.
     pub(super) fn use_original(&mut self, cx: &mut Context<Self>) {
-        let tab = self.field_tab();
+        self.use_original_of(self.field_tab(), cx);
+    }
+
+    /// The page menu's translation row for `tab`, as Arc's menu has Translate after Cast…:
+    /// "Translate to English" where it's offered, Use Original once it's translated or on its way,
+    /// and none otherwise.
+    pub(super) fn translate_row(&self, tab: u64) -> Option<SharedString> {
+        match self.translations.get(&tab) {
+            Some(Translation::Translated | Translation::Translating) => Some("Use Original".into()),
+            _ => {
+                let (_, to) = self.translatable(tab)?;
+                Some(format!("Translate to {}", self.browser.language_name(&to)).into())
+            }
+        }
+    }
+
+    /// Runs the page menu's translation row for `tab`.
+    pub(super) fn run_translate_row(&mut self, tab: u64, cx: &mut Context<Self>) {
+        match self.translations.get(&tab) {
+            Some(Translation::Translated | Translation::Translating) => {
+                self.use_original_of(tab, cx)
+            }
+            _ => self.translate_tab(tab, cx),
+        }
+    }
+
+    fn use_original_of(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.translations.remove(&tab).is_none() {
             return;
         }
@@ -286,6 +374,30 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.close_translate_card(cx);
             }));
+        // Always Translate reaches further than the page, so it's its words alone, on a row of its
+        // own under the answers, as Always Allow is on an agent's card.
+        let always_on = always(from, cx);
+        let further = match (translation, always_on) {
+            (None | Some(Translation::Translated), false) => Some(
+                card_button_as(
+                    palette,
+                    "translate-always",
+                    format!("Always Translate {language}"),
+                    Look::Text,
+                )
+                .on_click(cx.listener(|shell, _, _, cx| shell.always_translate(true, cx))),
+            ),
+            (Some(Translation::Translated), true) => Some(
+                card_button_as(
+                    palette,
+                    "translate-always-off",
+                    "Stop Always Translating",
+                    Look::Text,
+                )
+                .on_click(cx.listener(|shell, _, _, cx| shell.always_translate(false, cx))),
+            ),
+            _ => None,
+        };
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) = match translation {
             None => (
                 "Translate this page?".into(),
@@ -316,7 +428,10 @@ impl Shell {
             ),
             Some(Translation::Translated) => (
                 format!("Translated from {language}"),
-                format!("To {target}, on {DEVICE}."),
+                match always_on {
+                    true => format!("To {target}, on {DEVICE}, as every page in {language} is."),
+                    false => format!("To {target}, on {DEVICE}."),
+                },
                 vec![
                     button(
                         "translate-original",
@@ -374,6 +489,7 @@ impl Shell {
                         .gap(px(BUTTON_GAP))
                         .children(buttons),
                 )
+                .children(further.map(|button| div().mt(px(BUTTON_GAP)).flex().child(button)))
                 .child(close),
         )
     }

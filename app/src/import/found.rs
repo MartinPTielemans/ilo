@@ -107,15 +107,26 @@ pub struct Found {
     pub addresses: Vec<(FromProfile, Vec<Address>)>,
     /// Arc's Air Traffic Control rules, in its order.
     pub link_rules: Vec<LinkRule>,
+    /// Where Arc opens a link no rule matches, if not in Little Arc, ours' default too.
+    pub link_otherwise: Option<Destination>,
 }
 
-/// A link rule: links whose URL meets `condition` with `text` open in the Space at `space` among
-/// the found Spaces.
+/// A link rule: links whose URL meets `condition` with `text` open at `to`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkRule {
     pub condition: Condition,
     pub text: String,
-    pub space: usize,
+    pub to: Destination,
+}
+
+/// Where a link rule, or everything else, opens a link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Destination {
+    /// The Space at this index among the found Spaces.
+    Space(usize),
+    /// The Space the window in front shows.
+    Front,
+    Little,
 }
 
 /// Whether a page at `url` can open here: another browser's own pages, such as `arc://` or

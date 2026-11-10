@@ -5,7 +5,7 @@
 # file as another, "s" one that takes longer than the run to come, "v" a two-second video,
 # check/clip.mp4, and "k" opens the cookie page,
 # once a check, as later runs type in it too. A click in its top right 480 by 140 points puts
-# "corner" in the title. "x" and "z" each open check.crx, an extension the
+# "corner" in the title. "x", "z" and "y" each open check.crx, an extension the
 # extensions run puts there, which Chrome installs from. "a" asks to manage windows on all the
 # displays, a permission with no question from macOS, and puts the answer in the title. Keys with
 # ⌘, ⌃ or ⌥ are the browser's. /wait is a page that never comes, /slow text that comes after a
@@ -15,9 +15,10 @@
 # signup.html is the same form asking for a new password, which posts to /signup, as /login.
 # /sign-in, with any query, asks for HTTP basic sign-in and takes ada with the password lovelace.
 # address.html and card.html are an address's form and a card's, their first field across the
-# page's top 40%, which post as the login does and put "filled" in the title while Chrome fills
-# that field, and "unfocused" once the page's focus leaves its fields for nothing, which comes after
-# autofill hears of it, as both go the frame's way to the browser in turn.
+# page's top 40%, which put their name in the title once painted, post as the login does, and put
+# "filled" in the title while Chrome fills that field, and "unfocused" once the page's focus leaves
+# its fields for nothing, which comes after autofill hears of it, as both go the frame's way to the
+# browser in turn.
 mkdir "$out/site"
 # A page that a run types into once its title says so sets that title with painted(): Chromium
 # drops a key that comes before a page it loaded first shows, for up to half a second while it
@@ -44,7 +45,7 @@ printf '%s' '<title>loading</title><link rel="icon" href="icon.png">
 <textarea id=text style="position:fixed;left:0;bottom:0;width:100%;height:60px"></textarea>
 <a id=d download href="notes.txt"></a><a id=s download href="slow.bin"></a>
 <a id=q download="trash.txt" href="notes.txt"></a><a id=v download href="clip.mp4"></a>
-<a id=k href="clear.html"></a><a id=x href="check.crx"></a><a id=z href="check.crx?again"></a>
+<a id=k href="clear.html"></a><a id=x href="check.crx"></a><a id=z href="check.crx?again"></a><a id=y href="check.crx?update"></a>
 <a href="notes.txt" style="position:fixed;left:0;top:0;width:40px;height:40px"></a>
 <a href="notes.txt" style="position:fixed;left:100px;top:100px;width:200px;height:40px"></a>
 <script>
@@ -165,7 +166,8 @@ printf '%s' '<title>welcome</title><p style="font:24px system-ui">Welcome</p>' \
   > "$out/site/welcome.html"
 # $1 is the form's name, $2 its first field's autocomplete and $3 its other fields'.
 autofill_form() {
-  printf '<title>loading</title><form method="post" action="%s">' "$1"
+  printf '<title>loading</title><script src="painted.js"></script>'
+  printf '<form method="post" action="%s">' "$1"
   printf '<input id=first name=%s autocomplete=%s style="position:fixed;left:0;top:0;' "$2" "$2"
   printf 'width:100%%;height:40%%;font:24px system-ui"><div style="position:fixed;top:45%%">'
   for field in $3; do
@@ -173,7 +175,7 @@ autofill_form() {
   done
   printf '</div><button style="position:fixed;right:0;bottom:0;width:1px;height:1px">'
   printf '</button></form><script>
-requestAnimationFrame(() => setTimeout(() => document.title = "%s"));
+painted(() => document.title = "%s");
 let filled = false;
 setInterval(() => {
   if (first.matches(":autofill") != filled) {
