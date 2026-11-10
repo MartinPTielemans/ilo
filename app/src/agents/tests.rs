@@ -1224,7 +1224,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         format!(
             "Clicked combobox “Size”.\n\n{head}{since}New:\n\
              - listbox \"Size\" [e6]\n  - option \"S\" [e7]\n  - option \"M\" [e8]\n\n\
-             Changed:\n- combobox \"Size\" [e4] (expanded)"
+             Changed:\n- combobox \"Size\" [e4] (expanded): now expanded"
         )
     );
 
@@ -1241,7 +1241,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         cx,
     );
     assert!(
-        scrolled.contains("Changed:\n- combobox \"Size\" [e4]\n\nGone:\n- listbox"),
+        scrolled.contains("Changed:\n- combobox \"Size\" [e4]: now collapsed\n\nGone:\n- listbox"),
         "{scrolled}"
     );
     let again = act(
