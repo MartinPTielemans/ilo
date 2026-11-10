@@ -20,10 +20,10 @@ use gpui::{
 };
 
 use super::{
-    Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
-    MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
-    UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
+    Command, DRAG_START, Edit, FAVICON_SIZE, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry,
+    NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY,
+    SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
+    URL_BUTTON_SIZE, What,
     access::Accessible,
     clean_link, dashed_square,
     display_face::{cap_top, display_text},
@@ -1808,13 +1808,16 @@ impl Shell {
                             });
                     return card_row(depth, plate);
                 }
-                let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
-                let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
-                let width = plate / panes.len() as f32;
-                let segments = panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &pane)| self.segment(&palette, pane, width, index == 0, false));
+                let weights = self.rest_weights(&panes, self.browser.space_tab(id));
+                let segments =
+                    panes
+                        .iter()
+                        .zip(weights)
+                        .enumerate()
+                        .map(|(index, (&pane, weight))| {
+                            let speaker = self.still_speaker(&palette, pane);
+                            self.segment(&palette, pane, (weight, 0.), index == 0, false, speaker)
+                        });
                 card_row(depth, split_plate(segments))
             }
         });
