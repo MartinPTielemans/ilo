@@ -124,9 +124,11 @@ clipboard() {
     clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
   elif [ "$(uname)" = Darwin ]; then
     send pasteboard
+    held=text
+    [ -z "${1:-}" ] || held=types
     clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-      sed -n "s/^browser: pasteboard ${1:-text} //p" | tail -1)
-    [ -z "${1:-}" ] || clipped=$(echo "$clipped" | tr ' ' '\n')
+      sed -n "s/^browser: pasteboard $held //p" | tail -1)
+    [ "$held" = text ] || clipped=$(echo "$clipped" | tr ' ' '\n')
   elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
     clipped=$(timeout 5 wl-paste -n ${1:+-l} 2>/dev/null || true)
   else
