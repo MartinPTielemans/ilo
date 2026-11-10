@@ -441,6 +441,7 @@ for line in sys.stdin:
     elif words[:2] == ["trace", "start"] and len(words) == 3:
         # Bounded to what's traced, the buffer holds it all, where a whole session's overflows.
         call("Tracing.start", {"traceConfig": {"recordMode": "recordContinuously",
+                                               "traceBufferSizeInKb": 512 * 1024,
                                                "includedCategories": words[2].split(",")},
                                "transferMode": "ReturnAsStream", "streamFormat": "json"})
         log("tracing")
