@@ -2070,6 +2070,10 @@ void bc_tab_answer_permission(bc_id id, int answer) {
   browser_core::PermissionQuestion::Answer(id, answer);
 }
 
+bool bc_tab_permission_quiet(bc_id id) {
+  return browser_core::PermissionQuestion::Quiet(id);
+}
+
 void bc_tab_answer_dialog(bc_id tab,
                           bc_id dialog,
                           bool accept,

@@ -765,6 +765,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             };
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
+        // The page's question, which the agent can't answer (#2323).
+        "notifications" => {
+            return format!("{} asked to send notifications", site("The page"));
+        }
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
         action => return describe(action).to_string(),
     };
@@ -894,6 +898,7 @@ pub fn describe(action: &str) -> &'static str {
         "scroll" => "Scrolled",
         "screenshot" => "Took a screenshot",
         "request" => "Sent a request",
+        "notifications" => "A page asked to send notifications",
         "connected" => "Connected",
         "disconnected" => "Disconnected",
         "released" => "Let go of the tab",
