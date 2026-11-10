@@ -25,8 +25,8 @@ use super::{
     SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET,
     SPACE_NAME, SPACE_NAME_SHUT, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
     STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, URL_BUTTON_GLYPH, clear_label,
-    cubic_bezier, developer_outline, divider_box, favicon, folder_icon, host, icon_placeholder,
-    icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
+    cubic_bezier, developer_outline, divider_box, favicon, favicon_source, folder_icon, host,
+    icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
     scaled::scaled_from_middle,
     selected_plate, space_icon, split_plate,
     swap::{ARROW_DOWN, NONE, folder_glyph},
@@ -35,6 +35,7 @@ use super::{
 use super::{
     access::{Accessible, NEW_TAB},
     drag::in_sidebar,
+    return_mark::Bitmap,
 };
 use crate::{
     icon_picker::{self, Subject},
@@ -832,6 +833,18 @@ impl Shell {
         }
     }
 
+    /// The bitmap `tab_icon_in` draws, if it draws one: not an emoji or the globe.
+    pub(super) fn tab_bitmap_in(&self, palette: &Palette, tab: u64) -> Option<Bitmap> {
+        let each = self.tabs.get(&tab)?;
+        if has_icon(&each.page.icon) {
+            return None;
+        }
+        Some(Bitmap {
+            source: favicon_source(palette, each.favicon.clone())?,
+            drawn: FAVICON_DRAWN,
+        })
+    }
+
     /// Shows `tab` for a press on its row, or its segment of a split view's, at once, as Arc's
     /// does, even if the press becomes a drag. Its page takes the keyboard, as a tab clicked in
     /// Chrome's tab strip does, so the keys that follow, ⌘D or Space, are the page's.
@@ -952,6 +965,7 @@ impl Shell {
                 palette,
                 tab,
                 FAVICON_SIZE,
+                self.tab_bitmap_in(palette, tab),
                 || self.tab_icon_in(palette, tab),
                 cx,
             ));
@@ -1349,7 +1363,15 @@ impl Shell {
                 .text_color(self.palette.glyph(NAV))
                 .into_any_element(),
             false => {
-                self.with_return_mark(&self.palette, tab, FAVICON_SIZE, || self.tab_icon(tab), cx)
+                let bitmap = self.tab_bitmap_in(&self.palette, tab);
+                self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    bitmap,
+                    || self.tab_icon(tab),
+                    cx,
+                )
             }
         };
         let icon = div()

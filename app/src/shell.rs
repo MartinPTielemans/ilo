@@ -18,7 +18,7 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
-    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowTextSystem, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -4849,6 +4849,7 @@ impl Shell {
                     &self.palette,
                     tab,
                     FAVICON_SIZE,
+                    self.tab_bitmap_in(&self.palette, tab),
                     || self.tab_icon(tab),
                     cx,
                 ));
@@ -5591,14 +5592,20 @@ fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The bitmap `favicon` draws for `favicon`: a one-colour favicon the sidebar's tint would hide
+/// is drawn in the ink.
+fn favicon_source(palette: &Palette, favicon: Option<Arc<Image>>) -> Option<return_mark::Source> {
+    let favicon = favicon?;
+    Some(match tile_theme::ink_copy(&favicon, palette.tone) {
+        Some(copy) => return_mark::Source::Decoded(copy),
+        None => return_mark::Source::Encoded(favicon),
+    })
+}
+
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
-    match favicon {
-        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
-        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
-            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
-            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
-        },
+    match favicon_source(palette, favicon) {
+        Some(source) => source.img().size(px(FAVICON_DRAWN)).into_any_element(),
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))

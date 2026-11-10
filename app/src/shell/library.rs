@@ -1802,6 +1802,7 @@ impl Shell {
                         &palette,
                         tab,
                         FAVICON_SIZE,
+                        self.tab_bitmap_in(&palette, tab),
                         || self.tab_icon_in(&palette, tab),
                         cx,
                     );

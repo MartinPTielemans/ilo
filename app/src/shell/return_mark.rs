@@ -2,7 +2,10 @@
 //! undo arrow in a round notch cut out of its icon's bottom right, so the row says at rest that a
 //! click on its favicon goes back, which before showed only under the pointer.
 
-use gpui::{AnyElement, App, IntoElement, div, prelude::*, px};
+use std::{cell::RefCell, collections::HashMap, sync::Arc};
+
+use gpui::{AnyElement, App, Image, ImageId, IntoElement, RenderImage, div, img, prelude::*, px};
+use image::{Frame, RgbaImage};
 
 use super::{
     SECONDARY, Shell,
@@ -13,14 +16,39 @@ use crate::{
     tokens::shell::{RETURN_GLYPH, RETURN_NOTCH, RETURN_OUT},
 };
 
+/// The bitmap an icon draws, as a favicon is handed to the UI or as the UI made it from one.
+#[derive(Clone)]
+pub(super) enum Source {
+    Encoded(Arc<Image>),
+    Decoded(Arc<RenderImage>),
+}
+
+impl Source {
+    pub(super) fn img(&self) -> gpui::Img {
+        match self {
+            Source::Encoded(image) => img(image.clone()),
+            Source::Decoded(image) => img(image.clone()),
+        }
+    }
+}
+
+/// An icon's bitmap and the size it's drawn at, centred in its box, so the notch can be cut out
+/// of it once rather than drawn around it each frame.
+pub(super) struct Bitmap {
+    pub(super) source: Source,
+    pub(super) drawn: f32,
+}
+
 impl Shell {
     /// `tab`'s icon, which `icon` makes, in a box `side` square, notched with the return mark while
-    /// the tab is away from its pinned URL or the mark is coming or going.
+    /// the tab is away from its pinned URL or the mark is coming or going. `bitmap` is what `icon`
+    /// draws, if it's a bitmap: at rest the notch is cut out of a copy of it, made once.
     pub(super) fn with_return_mark(
         &self,
         palette: &Palette,
         tab: u64,
         side: f32,
+        bitmap: Option<Bitmap>,
         icon: impl Fn() -> AnyElement,
         cx: &App,
     ) -> AnyElement {
@@ -41,17 +69,28 @@ impl Shell {
             palette.text(SECONDARY),
             cx,
         );
-        div()
-            .relative()
-            .flex_none()
-            .size(px(side))
-            .children(notched(
+        let radius = RETURN_NOTCH / 2. * open;
+        let at_rest = bitmap
+            .filter(|_| open == 1.)
+            .and_then(|bitmap| Some((cut_out(&bitmap, side, middle, radius, cx)?, bitmap.drawn)));
+        let frame = div().relative().flex_none().size(px(side));
+        let frame = match at_rest {
+            // One image, as an icon that isn't away is.
+            Some((cut, drawn)) => frame
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(img(cut).size(px(drawn))),
+            // While the notch opens or closes, and for an emoji or the globe, which have no bitmap.
+            None => frame.children(notched(
                 side,
                 middle,
-                RETURN_NOTCH / 2. * open,
+                radius,
                 f32::from(self.hairline()),
                 &icon,
-            ))
+            )),
+        };
+        frame
             .child(
                 div()
                     .absolute()
@@ -126,6 +165,89 @@ fn strips(side: f32, middle: f32, radius: f32, pixel: f32) -> Vec<(f32, f32, f32
     rects
 }
 
+/// Which bitmap a cut copy is of.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Encoded(u64),
+    Decoded(ImageId),
+}
+
+/// `bitmap` with the disc `radius` about (`middle`, `middle`) in its `side` box cut out, made the
+/// first time it's asked for and kept, so an away icon at rest costs one image a frame, as an icon
+/// that isn't away does. None if it can't be decoded, which draws it in strips.
+fn cut_out(
+    bitmap: &Bitmap,
+    side: f32,
+    middle: f32,
+    radius: f32,
+    cx: &App,
+) -> Option<Arc<RenderImage>> {
+    // A session sees a few hundred favicons; past CUT_COPIES the lot is dropped and made again as
+    // drawn.
+    const CUT_COPIES: usize = 512;
+    thread_local! {
+        static MADE: RefCell<HashMap<(Key, [u32; 4]), Option<Arc<RenderImage>>>> =
+            RefCell::default();
+    }
+    let key = match &bitmap.source {
+        Source::Encoded(image) => Key::Encoded(image.id),
+        Source::Decoded(image) => Key::Decoded(image.id),
+    };
+    let shape = [side, bitmap.drawn, middle, radius].map(f32::to_bits);
+    MADE.with_borrow_mut(|made| {
+        if made.len() >= CUT_COPIES {
+            made.clear();
+        }
+        made.entry((key, shape))
+            .or_insert_with(|| {
+                let image = match &bitmap.source {
+                    // As GPUI decodes it to draw it, SVG and all.
+                    Source::Encoded(image) => image.to_image_data(cx.svg_renderer()).ok()?,
+                    Source::Decoded(image) => image.clone(),
+                };
+                let size = image.size(0);
+                let (width, height) = (size.width.0 as u32, size.height.0 as u32);
+                let mut data = image.as_bytes(0)?.to_vec();
+                cut(
+                    &mut data,
+                    (width, height),
+                    bitmap.drawn,
+                    side,
+                    middle,
+                    radius,
+                );
+                let frame = Frame::new(RgbaImage::from_raw(width, height, data)?);
+                Some(Arc::new(RenderImage::new(vec![frame])))
+            })
+            .clone()
+    })
+}
+
+/// Clears what of `data`, `width` by `height` BGRA pixels drawn to fit `drawn` square centred in a
+/// `side` box, lies in the disc `radius` about (`middle`, `middle`), its edge smoothed over one of
+/// the bitmap's pixels.
+fn cut(
+    data: &mut [u8],
+    (width, height): (u32, u32),
+    drawn: f32,
+    side: f32,
+    middle: f32,
+    radius: f32,
+) {
+    // A bitmap that isn't square is drawn whole, to fit, as `img` draws it.
+    let pixel = (drawn / width as f32).min(drawn / height as f32);
+    let left = (side - width as f32 * pixel) / 2.;
+    let top = (side - height as f32 * pixel) / 2.;
+    for (index, bgra) in data.chunks_exact_mut(4).enumerate() {
+        let (i, j) = (index as u32 % width, index as u32 / width);
+        let x = left + (i as f32 + 0.5) * pixel;
+        let y = top + (j as f32 + 0.5) * pixel;
+        let off = (x - middle).hypot(y - middle) - radius;
+        let cover = (off / pixel + 0.5).clamp(0., 1.);
+        bgra[3] = (bgra[3] as f32 * cover).round() as u8;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +295,59 @@ mod tests {
                 "a closed notch cuts nothing"
             );
         }
+    }
+
+    /// The cut copy of a favicon is clear inside the disc and untouched outside it, past a pixel
+    /// of smoothing at its edge, for a square bitmap and one drawn to fit.
+    #[test]
+    fn the_cut_clears_the_disc_and_nothing_else() {
+        let (side, drawn, middle, radius) = (18., 16., 15.5, 5.5);
+        for (width, height) in [(32, 32), (48, 24)] {
+            let mut data = vec![255u8; (width * height * 4) as usize];
+            cut(&mut data, (width, height), drawn, side, middle, radius);
+            let pixel = (drawn / width as f32).min(drawn / height as f32);
+            let (left, top) = (
+                (side - width as f32 * pixel) / 2.,
+                (side - height as f32 * pixel) / 2.,
+            );
+            let mut cleared = 0;
+            for j in 0..height {
+                for i in 0..width {
+                    let alpha = data[((j * width + i) * 4 + 3) as usize];
+                    let (x, y) = (
+                        left + (i as f32 + 0.5) * pixel,
+                        top + (j as f32 + 0.5) * pixel,
+                    );
+                    let off = (x - middle).hypot(y - middle) - radius;
+                    if off <= -pixel {
+                        assert_eq!(alpha, 0, "inside at {i}, {j} of {width}x{height}");
+                        cleared += 1;
+                    } else if off >= pixel {
+                        assert_eq!(alpha, 255, "outside at {i}, {j} of {width}x{height}");
+                    }
+                    let colour = &data[((j * width + i) * 4) as usize..][..3];
+                    assert_eq!(colour, [255; 3], "the colour is kept");
+                }
+            }
+            assert!(cleared > 0, "{width}x{height} has a notch");
+        }
+    }
+
+    /// An away icon at rest is cut once: asked again, the same image comes back.
+    #[gpui::test]
+    fn a_cut_copy_is_made_once(cx: &mut gpui::TestAppContext) {
+        let pixels = RgbaImage::from_pixel(32, 32, image::Rgba([255, 0, 0, 255]));
+        let image = Arc::new(RenderImage::new(vec![Frame::new(pixels)]));
+        let bitmap = Bitmap {
+            source: Source::Decoded(image),
+            drawn: 16.,
+        };
+        cx.update(|cx| {
+            let first = cut_out(&bitmap, 18., 15.5, 5.5, cx).expect("decoded");
+            let again = cut_out(&bitmap, 18., 15.5, 5.5, cx).expect("decoded");
+            assert!(Arc::ptr_eq(&first, &again));
+            let other = cut_out(&bitmap, 14., 11.5, 5.5, cx).expect("decoded");
+            assert!(!Arc::ptr_eq(&first, &other), "another size is another copy");
+        });
     }
 }

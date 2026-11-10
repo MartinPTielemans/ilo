@@ -8,6 +8,7 @@ use gpui::{
     rgba, svg,
 };
 
+use super::return_mark::{Bitmap, Source};
 use crate::elevation::Level;
 use crate::icon_picker::Subject;
 use crate::tooltip::{self, Anchor, Tip};
@@ -632,6 +633,13 @@ impl Shell {
                 &self.palette,
                 tab,
                 FAVICON_SIZE,
+                match theme {
+                    Some(TileTheme::Flat { template, .. }) => Some(Bitmap {
+                        source: Source::Decoded(template.clone()),
+                        drawn: FAVICON_DRAWN,
+                    }),
+                    _ => self.tab_bitmap_in(&self.palette, tab),
+                },
                 || {
                     match theme {
                         Some(TileTheme::Flat { template, .. }) => img(template.clone())
@@ -704,6 +712,7 @@ impl Shell {
                         &self.palette,
                         tab,
                         size,
+                        self.tab_bitmap_sized(tab, size),
                         || self.tab_icon_sized(tab, size),
                         cx,
                     ));
@@ -744,6 +753,17 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY))
                 .into_any_element(),
         }
+    }
+
+    /// The bitmap `tab_icon_sized` draws, if it draws one.
+    fn tab_bitmap_sized(&self, tab: u64, size: f32) -> Option<Bitmap> {
+        if size >= FAVICON_SIZE || !self.page(tab).icon.is_empty() {
+            return self.tab_bitmap_in(&self.palette, tab);
+        }
+        Some(Bitmap {
+            source: Source::Encoded(self.tabs.get(&tab)?.favicon.clone()?),
+            drawn: FAVICON_DRAWN * size / FAVICON_SIZE,
+        })
     }
 
     /// What a tile draws in its middle: a favorite split's segments, unless it has an icon of its
