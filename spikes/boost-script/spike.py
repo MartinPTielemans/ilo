@@ -1,7 +1,8 @@
 # What a Boost's script could reach from an isolated world of its own, in ilo's engine with its
 # sandbox on: the page's Content-Security-Policy over its requests, eval and Trusted Types (#2297's
-# 1.4), and which frames each frame rule would pick (1.2). It drives the engine's chrome over
-# DevTools' pipe, makes a world as the browser would, with no CSP of its own, and runs the same
+# 1.4), and which frames each frame rule would pick (1.2). It drives the built app's chrome, the
+# engine with the app beside it, over DevTools' pipe, as check/cdp.py does, under a display of its
+# own. It makes a world as the browser would, with no CSP of its own, and runs the same
 # probes there and in the page's own world. The run's own server, on 127.0.0.1 under made-up .test
 # names, logs every request that reached it, which is the answer to whether a request was sent.
 # Usage: python3 -I spike.py <chrome> <out directory>
@@ -151,9 +152,8 @@ class DevTools:
 
 
 profile = tempfile.mkdtemp(prefix="boost-spike-")
-tools = DevTools([chrome, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={profile}",
-                  "--host-resolver-rules=MAP *.test 127.0.0.1", "--no-first-run",
-                  "--no-default-browser-check", "about:blank"])
+os.environ["BROWSER_PROFILE_DIR"] = profile
+tools = DevTools([chrome, "--remote-debugging-pipe", "--host-resolver-rules=MAP *.test 127.0.0.1"])
 version = tools.send("Browser.getVersion")
 results = {"browser": version["product"], "sandbox": None, "probes": {}, "frames": {}}
 
