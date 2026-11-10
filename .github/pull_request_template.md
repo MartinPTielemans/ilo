@@ -39,3 +39,8 @@ or timing: a short recording. Hot paths (tab switch, new tab, command bar,
 launch): numbers against the performance gate in docs/roadmap.md, before and after.
 Upload images and video to GitHub and embed them here. Never commit PR-only
 assets. -->
+
+Parity: none
+<!-- The docs/ux-parity/ rows this completes, such as `Parity: spaces.md "Swipe tracking",
+window.md "Base tint"`, or none. Leave their ticks, and the roadmap's counts, to the
+integrator's daily parity-ticks PR, which tools/parity-ticks.sh lists them for. -->
