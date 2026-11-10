@@ -1353,10 +1353,11 @@ if [ "$(uname)" = Darwin ]; then
     done
     fail "the Dock's dot wasn't drawn $1 but ${shown:-never}"
   }
-  # The dot's sRGB levels in the icon, saved at $1, as "r g b".
+  # The dot's sRGB levels in the icon, saved at $1, as "r g b" in $icon. Not echoed for a $(),
+  # whose subshell would count the driver's step for itself alone.
   dock_icon() {
     send dockicon "$1"
-    since | sed -n 's/^browser: dock icon //p' | tail -1
+    icon=$(since | sed -n 's/^browser: dock icon //p' | tail -1)
   }
   green() { echo "$1" | awk '{ exit !($2 > $1 + 50 && $2 > $3 + 25) }'; }
   grey() { echo "$1" | awk '{ hi = $1; lo = $1; for (i = 2; i <= 3; i++) { if ($i > hi) hi = $i; if ($i < lo) lo = $i }; exit !(hi - lo <= 12) }'; }
@@ -1365,7 +1366,8 @@ if [ "$(uname)" = Darwin ]; then
     echo "skip: the Dock icon's dot, as this Mac's icon style draws it in its own colors"
     dock="left to macOS's icon style"
   else
-    black=$(dock_icon "$out/dock-icon-black.png")
+    dock_icon "$out/dock-icon-black.png"
+    black=$icon
     grey "$black" || fail "the Dock icon's dot in a black Space reads $black, not grey"
     send menu Settings…
     expect '^browser: settings shown ' "Settings… didn't show Settings for the Dock icon's switch"
@@ -1377,7 +1379,8 @@ if [ "$(uname)" = Darwin ]; then
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
     dock_dot green
-    plain=$(dock_icon "$out/dock-icon-off.png")
+    dock_icon "$out/dock-icon-off.png"
+    plain=$icon
     green "$plain" || fail "the Dock icon's dot with its switch off reads $plain, not green"
     send menu Settings…
     expect '^browser: settings shown General$' "Settings… didn't show General again"
@@ -1388,7 +1391,8 @@ if [ "$(uname)" = Darwin ]; then
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
     dock_dot 000000
-    again=$(dock_icon "$out/dock-icon-on.png")
+    dock_icon "$out/dock-icon-on.png"
+    again=$icon
     grey "$again" || fail "the Dock icon's dot back on reads $again, not the Space's grey"
     dock="dot $black in a black Space, $plain with its switch off, $again on again"
     dock_shots=", $out/dock-icon-black.png, $out/dock-icon-off.png, $out/dock-icon-on.png"
