@@ -1102,14 +1102,16 @@ hover_out() {
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
 # rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
-# below the rows. Not in a subshell, which would lose send's step.
+# below the rows. Not in a subshell, which would lose send's step. uBlock Origin's background page,
+# in an extension's process, works when it will: on Wayland it took about 0.8 s of the 4 s, with
+# the sidebar docked or out, which isn't the windows' drawing measured here.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
   local from
-  from=$(cpu)
+  from=$(cpu --extension-process)
   sleep 4 # the window measured
-  set -- $from $(cpu)
+  set -- $from $(cpu --extension-process)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
 rest_cpu
