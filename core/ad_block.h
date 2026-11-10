@@ -5,12 +5,28 @@
 #include <string>
 #include <vector>
 
+#include "content/public/browser/content_browser_client.h"
+
 class Profile;
 
 namespace content {
+class BrowserContext;
 class NavigationThrottleRegistry;
+class RenderFrameHost;
 class WebContents;
 }  // namespace content
+
+namespace net {
+class IsolationInfo;
+}  // namespace net
+
+namespace network {
+class URLLoaderFactoryBuilder;
+}  // namespace network
+
+namespace url {
+class Origin;
+}  // namespace url
 
 namespace browser_core {
 
@@ -27,12 +43,24 @@ void SetUpAdBlock();
 bool IsAdBlocker(const std::string& id);
 
 // Holds a page that starts before it's ready in the page's profile, as at launch, until it is, so
-// it blocks from the first page.
+// it blocks from the first page. The browser's own (native_ad_block.h) holds none, and gives the
+// page what it hides and runs from its start.
 void AddAdBlockHold(content::NavigationThrottleRegistry& registry);
 
 // Turns it on or off in every profile loaded, as UserSettings().ad_blocking says, once the
 // settings are read and whenever the user changes them.
 void ApplyAdBlocking();
+
+// Puts the browser's own ad blocker (native_ad_block.h) between the requests of the factory
+// |factory_builder| builds and the network, from ContentBrowserClient::WillCreateURLLoaderFactory,
+// where it blocks: with --ad-block-engine=native and ad blocking on, for a web page on a site the
+// user hasn't turned it off on. A page open as it's turned on blocks from its next load.
+void ProxyForAdBlock(content::BrowserContext* context,
+                     content::RenderFrameHost* frame,
+                     content::ContentBrowserClient::URLLoaderFactoryType type,
+                     const url::Origin& request_initiator,
+                     const net::IsolationInfo& isolation_info,
+                     network::URLLoaderFactoryBuilder& factory_builder);
 
 // Whether it blocks on the site of |contents|'s page, or nullopt where that's not the user's to
 // change there: a page that isn't http(s), a private window, or with it off in the profile.
