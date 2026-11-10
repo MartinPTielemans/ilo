@@ -91,8 +91,6 @@ const DEVELOPER_MODE_NAME: &str = "Developer Mode";
 /// The site's Boost (#695), with the tile's glyph.
 const BOOST: &str = "icons/paintbrush.svg";
 const BOOST_NAME: &str = "Boost";
-/// Ours (#2297): the Boost's script's row, Lucide's terminal, as JavaScript's row has its code.
-const SCRIPT: &str = "icons/terminal.svg";
 const PASSWORDS_NAME: &str = "Passwords";
 use crate::tokens::site_controls::DISABLED_OPACITY;
 use crate::tokens::site_controls::DIVIDER;
@@ -220,8 +218,7 @@ pub struct Site {
     pub boostable: bool,
     /// Whether the site's Boost is on, none where it has none.
     pub boost: Option<bool>,
-    /// The Boost's script, where it has one (#2297). While it's off, the Boost row says why, and
-    /// a row under it turns it on where it can be.
+    /// The Boost's script, where it has one (#2297). While it's off, the Boost row says why.
     pub boost_script: Option<crate::boosts::Script>,
 }
 
@@ -501,9 +498,6 @@ pub trait Host {
     /// Turns the site's Boost on or off there, in the tab's profile. The user's alone, as a Boost
     /// is.
     fn set_boost(&self, tab: u64, on: bool);
-    /// Turn On Script…: the browser's dialog that shows the site's Boost script, or what changed
-    /// in it, and turns it on (#2297). Only the user's click or key on the row asks.
-    fn turn_on_boost_script(&self, _tab: u64) {}
     fn run(&self, run: Run, tab: u64, cx: &mut App);
     /// Shows ilo's menu of `items` at `position` in the panel's window, and calls `chosen` once it
     /// closes, with the index of the one chosen, if any.
@@ -601,8 +595,6 @@ enum Stop {
     AdBlocking,
     DeveloperMode,
     Boost,
-    /// Turn On Script…, under Boost (#2297).
-    BoostScript,
     Passwords,
     /// By Chrome's ContentSettingsType.
     Permission(i32),
@@ -671,16 +663,9 @@ fn rows(site: &Site) -> usize {
     let firsts = site.system_engine.is_some() as usize
         + site.ad_blocking.is_some() as usize
         + site.developer_mode.is_some() as usize
-        + site.boost.is_some() as usize
-        + turns_on_script(site) as usize;
+        + site.boost.is_some() as usize;
     let logins = passwords::state(&site.logins).is_some() as usize;
     firsts + logins + site.permissions.len() + site.devices.len() + site.reset.is_some() as usize
-}
-
-/// Whether the Boost row has "Turn On Script…" under it: the Boost is on and its script is new or
-/// changed.
-fn turns_on_script(site: &Site) -> bool {
-    site.boost == Some(true) && site.boost_script.is_some_and(|script| script.can_turn_on())
 }
 
 /// The panel's corners in its window, clockwise from the beak's tip, or its top left without one.
@@ -1394,16 +1379,6 @@ impl SiteControls {
         cx.notify();
     }
 
-    /// Turn On Script…: the browser's dialog asks, so the panel closes for it.
-    fn turn_on_script(&mut self, cx: &mut Context<Self>) {
-        if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
-            let tab = open.tab;
-            log!("browser: site controls turn on boost script");
-            self.close("boost script", cx);
-            self.host.turn_on_boost_script(tab);
-        }
-    }
-
     fn reset(&mut self, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             log!("browser: site controls reset");
@@ -1470,7 +1445,6 @@ impl SiteControls {
             site.ad_blocking.map(|_| Some(Stop::AdBlocking)),
             site.developer_mode.map(|_| Some(Stop::DeveloperMode)),
             site.boost.map(|_| Some(Stop::Boost)),
-            turns_on_script(site).then_some(Some(Stop::BoostScript)),
             passwords::state(&site.logins).map(|_| Some(Stop::Passwords)),
         ];
         let permissions = (site.permissions.iter())
@@ -1601,7 +1575,6 @@ impl SiteControls {
                 self.toggle_developer_mode(site.developer_mode != Some(true), cx)
             }
             Stop::Boost => self.toggle_boost(site.boost != Some(true), cx),
-            Stop::BoostScript => self.turn_on_script(cx),
             Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
             Stop::Permission(kind) => {
                 if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
@@ -2249,16 +2222,6 @@ impl Render for SiteControls {
                 let row =
                     row.on_click(cx.listener(move |panel, _, _, cx| panel.toggle_boost(!on, cx)));
                 let row = row.children(self.ring(&Stop::Boost, None, cx));
-                rows.push(row.into_any_element());
-                y += ROW_PITCH;
-            }
-            if turns_on_script(&site) {
-                const NAME: &str = "Turn On Script…";
-                let id = "site-boost-script".into();
-                let row = Self::row(&palette, id, y, SCRIPT, false, NAME.into(), None);
-                let row = row.when(a11y, |row| button_named(row, NAME, (false, true, false)));
-                let row = row.on_click(cx.listener(|panel, _, _, cx| panel.turn_on_script(cx)));
-                let row = row.children(self.ring(&Stop::BoostScript, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }

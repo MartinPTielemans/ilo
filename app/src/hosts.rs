@@ -183,14 +183,6 @@ impl site_controls::Host for SiteControlsHost {
         });
     }
 
-    fn turn_on_boost_script(&self, tab: u64) {
-        update_app_later(move |cx| {
-            if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
-                shell.update(cx, |shell, cx| shell.turn_on_tab_boost_script(tab, cx));
-            }
-        });
-    }
-
     fn set_ad_blocking(&self, tab: u64, on: bool) {
         unsafe { bc::bc_tab_set_ad_blocking(tab, on) };
         // Settings lists the sites it's off on.

@@ -1,6 +1,6 @@
 # A Boost's script (#2297): the app gives the core the script in the site's file, which runs on
-# none of the site's pages until the user turns it on, from Site Controls' Turn On Script… and Turn
-# On in the dialog, which takes no answer for its first moment on screen. Then it runs as each of
+# none of the site's pages until the user turns it on, from the Boost card's Turn On Script… and
+# Turn On in the dialog, which takes no answer for its first moment on screen. Then it runs as each of
 # the site's pages loads, though not in a private window. A change to the file outside ilo turns
 # it off from the next load, and turning it back on asks about what changed; Cancel leaves it off.
 
@@ -46,34 +46,28 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
-# Site Controls' Turn On Script…, under Boost, from the keyboard: Tab takes the ring down to it,
-# and return opens the dialog in the panel's place.
-turn_on_from_site_controls() {
-  send key l cmd
-  expect '^browser: command bar shown$' "⌘L didn't open the command bar"
-  send type site controls
-  expect '^browser: command bar commands "site controls": Site Controls$' \
-    "the command bar didn't find Site Controls"
-  send key return
-  expect '^browser: site controls settled$' "the Site Controls didn't open"
-  keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
-  for _ in $(seq 12); do
-    send key tab
-    expect '^browser: site controls keyed ' "Tab didn't move the Site Controls' ring"
-    [ "$(keyed)" = BoostScript ] && break
-  done
-  [ "$(keyed)" = BoostScript ] || fail "Tab didn't reach Turn On Script…: the ring is on $(keyed)"
-  ../tools/window-screenshot.sh "$pid" "$out/boost-script-$1-site-controls.png" ||
+# The Boost card's Turn On Script…, from Edit Boost in the command bar. It's the line under the
+# script's state, its middle 40 points over Zap's row, which is 62 over the card's bottom, and it
+# starts at the card's left.
+turn_on_from_card() {
+  bar_command edit-boost "Edit Boost" "edit boost"
+  expect "^browser: boost card $tab opened\$" "Edit Boost opened no card"
+  expect "^browser: boost card $tab at " "the Boost's card wasn't drawn"
+  send layout
+  read -r bx by bw bh << EOF
+$(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+  ../tools/window-screenshot.sh "$pid" "$out/boost-script-$1-card.png" ||
     fail "no window to capture"
-  send key return
-  expect '^browser: site controls turn on boost script$' "return on Turn On Script… didn't run"
-  expect "^browser: boost script asked $host $1\$" "Turn On Script… didn't ask about the $1 script"
+  send click $((bx + bw / 4)) $((by + bh - 102))
+  expect "^browser: boost script asked $host $1\$" \
+    "the card's Turn On Script… didn't ask about the $1 script"
   expect '^browser: dialog takes input$' "the dialog didn't settle"
   ../tools/window-screenshot.sh "$pid" "$out/boost-script-$1-dialog.png" ||
     fail "no window to capture"
 }
 
-turn_on_from_site_controls New
+turn_on_from_card New
 send choose 'Turn On'
 expect "^browser: boost script turned on $host\$" "Turn On didn't turn the script on"
 send key r cmd
@@ -101,15 +95,15 @@ await "^browser: boost script given $host ([0-9]*): Changed\$" ||
 send key r cmd
 expect "^browser: title $tab script none\$" "the changed script ran"
 
-turn_on_from_site_controls Changed
+turn_on_from_card Changed
 send choose Cancel
 expect "^browser: boost script cancelled $host\$" "Cancel didn't leave the script off"
 send key r cmd
 expect "^browser: title $tab script none\$" "the script cancelled ran"
 exec 3>&-
 quit
-echo "ok: a Boost's script didn't run until Site Controls' Turn On Script… and Turn On in the" \
+echo "ok: a Boost's script didn't run until the card's Turn On Script… and Turn On in the" \
   "dialog, then ran as the page loaded, though not in a private window; a change to its file" \
   "turned it off, and Cancel on what changed left it off." \
-  "Windows: $out/boost-script-New-site-controls.png, $out/boost-script-New-dialog.png," \
+  "Windows: $out/boost-script-New-card.png, $out/boost-script-New-dialog.png," \
   "$out/boost-script-Changed-dialog.png"

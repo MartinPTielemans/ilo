@@ -253,14 +253,14 @@ impl Shell {
         self.turn_on_tab_boost_script(tab, cx);
     }
 
-    /// Site Controls' Turn On Script… for the site of `tab`'s page.
+    /// Turn On Script… for the site of `tab`'s page, as the card asks.
     pub fn turn_on_tab_boost_script(&mut self, tab: u64, cx: &mut Context<Self>) {
         if let Some((profile, site)) = self.boost_site(tab) {
             self.turn_on_boost_script(profile, &site, cx);
         }
     }
 
-    /// Turn On Script…, the user's own click in the card, Site Controls or the Library, and
+    /// Turn On Script…, the user's own click in the card or the Library, and
     /// nothing else (#2297): the browser's dialog, with the script whole, or what changed since
     /// the text last turned on, which is shown only while the core says it's that text. What turns
     /// on is the bytes the dialog showed.
