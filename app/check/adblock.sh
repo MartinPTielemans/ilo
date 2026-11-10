@@ -110,9 +110,8 @@ expect "^browser: loaded $tab ${ads}.id=1\$" \
   "the tab kept fbclid in its address: $(grep "^browser: loaded $tab " "$log" | tail -1)"
 expect "^browser: title $tab $blocked\$" "the page without fbclid didn't block its ad"
 
-# Off for the site in the Site Controls, which reload the page with its ad, and on again. With no
-# extension turned on but the ad blocker, the panel's first row's middle is at y 262, as in the
-# clear run.
+# Off for the site with the Site Controls' shield, which reloads the page with its ad, and on again.
+# The panel logs where it drew the shield.
 controls="^browser: site controls http://127.0.0.1:$port: [^;]*; "
 open_site_controls() {
   send key l cmd
@@ -125,31 +124,31 @@ open_site_controls() {
 }
 open_site_controls
 expect "${controls}Ad blocking On" "the Site Controls didn't list ad blocking as on, first"
-send click 207 262
-expect '^browser: site controls set ad blocking off$' "a click on Block ads and trackers didn't run"
+click_placed send shield
+expect '^browser: site controls set ad blocking off$' "a click on the shield didn't run"
 expect "^browser: title $tab ad script loaded, element shown\$" \
   "off for the site, the page didn't load its ad script and show its ad"
 expect "${controls}Ad blocking Off" "the Site Controls didn't show ad blocking as off for the site"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-off-for-site.png" || fail "no window to capture"
-send click 207 262
+click_placed send shield
 expect '^browser: site controls set ad blocking on$' "a second click didn't turn it on again"
 expect "^browser: title $tab $blocked\$" "on again, the page didn't block its ad"
-# From the keyboard: Tab takes the ring down the tiles to the row, however many tiles the system
-# has, and space and return turn it off and on as clicks do (#1382).
+# From the keyboard: Tab takes the ring along the tiles to the shield, the row's last, however
+# many tiles the system has, and space and return turn it off and on as clicks do (#1382).
 keyed() { grep '^browser: site controls keyed ' "$log" | tail -1 | cut -d' ' -f5-; }
 for _ in 1 2 3 4 5 6 7 8; do
   send key tab
   expect '^browser: site controls keyed ' "Tab didn't move the Site Controls' ring"
   [ "$(keyed)" = AdBlocking ] && break
 done
-[ "$(keyed)" = AdBlocking ] || fail "Tab didn't reach Block ads and trackers: the ring is on $(keyed)"
+[ "$(keyed)" = AdBlocking ] || fail "Tab didn't reach the shield: the ring is on $(keyed)"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls-keyed.png" || fail "no window to capture"
 send key space
-expect '^browser: site controls set ad blocking off$' "space on the ringed row didn't turn ad blocking off"
+expect '^browser: site controls set ad blocking off$' "space on the ringed shield didn't turn ad blocking off"
 expect "^browser: title $tab ad script loaded, element shown\$" \
   "off from the keyboard, the page didn't load its ad script and show its ad"
 send key return
-expect '^browser: site controls set ad blocking on$' "return on the ringed row didn't turn it on again"
+expect '^browser: site controls set ad blocking on$' "return on the ringed shield didn't turn it on again"
 expect "^browser: title $tab $blocked\$" "on again from the keyboard, the page didn't block its ad"
 send key escape
 expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
@@ -157,9 +156,8 @@ expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 # Off for the site again, Settings lists it under Block ads and trackers, and its Turn On turns it
 # on again there.
 open_site_controls
-send click 207 262
-expect '^browser: site controls set ad blocking off$' \
-  "a third click on Block ads and trackers didn't run"
+click_placed send shield
+expect '^browser: site controls set ad blocking off$' "a third click on the shield didn't run"
 expect "^browser: title $tab ad script loaded, element shown\$" \
   "off for the site again, the page didn't load its ad script and show its ad"
 send key escape

@@ -687,16 +687,12 @@ expect "^browser: title $r granted\$" "Allow didn't grant the page"
 expect '^browser: sidebar tools shown$' \
   "Clear and the URL field's buttons didn't fade in under the pointer once the question closed"
 
-# The Site Controls list the site's permissions as Chrome's page info does, here the one Allow gave.
-# The panel hangs from the button at 206 64: 238 wide from x 87, its beak's tip 9 pt above its body
-# at y 91. With the ad blocker the one extension turned on, its first row's middle is at y 262, the
-# rows 43 apart, Block ads and trackers first, Reset permissions last, and the footer's middle 74
-# below the last row's top.
+# The Site Controls list what differs for the site of Chrome's page info, here the permission Allow
+# gave. The panel hangs from the button at 206 64, and logs where it drew each part, which the
+# clicks below read (click_placed).
 controls="^browser: site controls http://localhost:$port: "
-row_y() { echo $((262 + 43 * $1)); }
-footer_y() { echo $((262 - 16 + 43 * ($(listed | wc -l)) + 74)); }
-# The rows the Site Controls listed last, one a line, in their order: ad blocking, then the
-# permissions.
+# What the Site Controls reported last, one a line, in their order: ad blocking, Developer Mode,
+# then the permissions.
 listed() {
   grep "$controls" "$log" | tail -1 | sed 's/^[^;]*; //' | tr ',' '\n' | sed 's/^ //'
 }
@@ -713,37 +709,48 @@ expect '^browser: site controls settled$' "the Site Controls didn't finish openi
 none_since '^browser: command edit-url' || fail "a click on Site Controls opened the command bar"
 ../tools/window-screenshot.sh "$pid" "$out/site-controls.png" || fail "no window to capture"
 # Its value's menu offers Chrome's three, and Block blocks the site at once.
-i=$(listed | grep -n '^Window management ' | cut -d: -f1)
-post click 207 $(row_y $((i - 1)))
+click_placed post "line Window management"
 expect '^browser: menu shown Allow (checked), Block, Ask$' \
   "the value of Window management didn't offer Allow, Block and Ask"
 send choose Block
 expect '^browser: site controls set Window management Block$' "Block in the menu didn't run"
 expect "${controls}[^;]*; .*Window management Block" \
   "the Site Controls didn't show Window management as blocked"
-# Developer Mode is on by itself for localhost, and its row turns it off and on for the site, which
-# the tab draws each time.
+# Developer Mode is on by itself for localhost, and its switch shows while it's on (#2334): a click
+# turns it off for the site, which the tab draws, and the switch leaves. "…" then has Turn On
+# Developer Mode, which turns it on again from the command bar's command and closes the panel.
 listed | grep -qx 'Developer Mode On' ||
   fail "the Site Controls didn't list localhost in Developer Mode"
 grep -q "^browser: page $r developer mode 1\$" "$log" ||
   fail "the localhost tab wasn't in Developer Mode"
-i=$(listed | grep -n '^Developer Mode ' | cut -d: -f1)
-send click 207 $(row_y $((i - 1)))
+click_placed send "switch Developer Mode"
 expect '^browser: site controls set developer mode off$' \
   "a click on Developer Mode didn't turn it off"
 expect "${controls}[^;]*; .*Developer Mode Off" "the Site Controls didn't show Developer Mode off"
 expect "^browser: page $r developer mode 0\$" "the tab didn't leave Developer Mode"
-send click 207 $(row_y $((i - 1)))
-expect '^browser: site controls set developer mode on$' \
-  "a second click on Developer Mode didn't turn it on"
+expect '^browser: site controls more at ' "the Site Controls didn't move their footer up"
+click_placed send more
+expect "^browser: menu shown .*, $(cased 'Turn On Developer Mode'), " \
+  "out of Developer Mode the … menu didn't offer to turn it on"
+send choose "$(cased 'Turn On Developer Mode')"
+expect "^browser: site controls run $(cased 'Turn On Developer Mode')\$" \
+  "Turn On Developer Mode didn't run"
 expect "^browser: page $r developer mode 1\$" "the tab didn't go back to Developer Mode"
+expect '^browser: site controls hidden$' "the Site Controls didn't close for Turn On Developer Mode"
+away
+send move $sidebar_point
+expect '^browser: sidebar tools shown$' "the URL field's buttons didn't fade in"
+send click $site_controls_point
+expect '^browser: site controls settled$' "the Site Controls didn't open again in Developer Mode"
+logged '^browser: site controls switch Developer Mode at ' ||
+  fail "back in Developer Mode the Site Controls didn't show its switch"
 # http has no certificate to show, so the lock doesn't take the click.
 lock=$((step + 1))
-send click 120 $(footer_y)
-# Share closes them and hangs the system's share menu from its tile, at 122 118. Linux has no share
-# menu, so no Share tile, and escape closes them there instead.
+click_placed send lock
+# Share closes them and hangs the system's share menu from its tile. Linux has no share menu, so no
+# Share tile, and escape closes them there instead.
 if [ "$(uname)" = Darwin ]; then
-  send click 122 118
+  click_placed send "tile share"
   expect '^browser: site controls run share$' "a click on Share didn't run it"
   expect "^browser: share http://localhost:$port/index.html\$" "Share didn't share the page"
   expect '^browser: site controls hidden$' "the Site Controls didn't leave for Share"
@@ -895,7 +902,7 @@ send move $sidebar_point
 expect '^browser: sidebar tools shown$' "the URL field's buttons didn't fade in"
 send click $site_controls_point
 expect '^browser: site controls settled$' "the Site Controls didn't open again"
-send click 207 $(row_y $(listed | wc -l))
+click_placed send "line Reset [a-z]*"
 expect '^browser: site controls reset$' "Reset permissions didn't run"
 expect "${controls}" "the Site Controls didn't list the permissions again after the reset"
 send click $page_point
@@ -913,7 +920,7 @@ send move $sidebar_point
 expect '^browser: sidebar tools shown$' "the URL field's buttons didn't fade in"
 send click $site_controls_point
 expect '^browser: site controls settled$' "the Site Controls didn't open for their … menu"
-send click 298 $(footer_y)
+click_placed send more
 more_menu=$(cased 'Clear Cache, Clear Cookies, New Boost…, View Boosts…, Manage Extensions…, Add Extension…, All Site Settings…')
 expect "^browser: menu shown $more_menu\$" "the … menu didn't list Arc's items"
 send choose "$(cased 'All Site Settings…')"
@@ -1226,7 +1233,7 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   send window 1
   go_from_bar "127.0.0.1:$port/engine.html"
   expect "^browser: title $tab engine safari\$" "the site's engine page left Safari's engine"
-  # The Site Controls list it in the first row, and Off forgets it, brings its session back to
+  # The Site Controls show its switch, and Off forgets it, brings its session back to
   # Chromium and shows the page there.
   away
   send move $sidebar_point
@@ -1236,8 +1243,8 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
     "the Site Controls didn't list Safari's engine"
   expect '^browser: site controls settled$' "the Site Controls didn't open in Safari's engine"
   ../tools/window-screenshot.sh "$pid" "$out/site-controls-engine.png" || fail "no window to capture"
-  post click 207 $(row_y 0)
-  expect "^browser: menu shown On (checked), Off\$" "Safari's engine's row didn't offer On and Off"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On (checked), Off\$" "Safari's engine's switch didn't offer On and Off"
   send choose Off
   expect "^browser: site controls set Safari's engine Off\$" "Off in the menu didn't run"
   expect "^browser: copied [0-9]* cookies and [0-9]* storage items for 127.0.0.1 back to Chromium\$" \
@@ -1282,8 +1289,8 @@ elif [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect "^browser: site controls http://127.0.0.1:$port: .*; Safari's engine off\$" \
     "the Site Controls didn't offer Safari's engine for the site turned off"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the site turned off"
-  post click 207 $(row_y 0)
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On after Off"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On after Off"
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
   expect "^browser: system engine $tab on\$" "On didn't turn Safari's engine on for the site turned off"
@@ -1320,8 +1327,8 @@ if [ "$drm_done" = "Safari's engine" ]; then
   grep "$controls" "$log" | tail -1 | grep -q "; Safari's engine off\$" ||
     fail "the Site Controls didn't offer Safari's engine for the closed site: $(grep "$controls" "$log" | tail -1)"
   ../tools/window-screenshot.sh "$pid" "$out/site-controls-offered.png" || fail "no window to capture"
-  post click 207 $(row_y 0)
-  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's switch didn't offer On"
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
   expect "^browser: system engine $tab on\$" "On didn't show the page in Safari's engine"
@@ -1440,7 +1447,7 @@ listed_launch() {
   tab=$(sed -n 's/^browser: title \([0-9]*\) engine .*/\1/p' "$log" | head -1)
 }
 # Opens the Site Controls of the tab shown, which list $1 for Safari's engine, and chooses $2 in its
-# row, whose menu checks $3.
+# switch's menu, which checks $3.
 listed_controls() {
   away
   send move $sidebar_point
@@ -1450,8 +1457,8 @@ listed_controls() {
     "the Site Controls didn't list the listed host's Safari's engine $1: $(grep '^browser: site controls http' "$log" | tail -1)"
   expect '^browser: site controls settled$' "the Site Controls didn't open at the listed host"
   ../tools/window-screenshot.sh "$pid" "$out/site-controls-listed-$1.png" || fail "no window to capture"
-  post click 207 $(row_y 0)
-  expect "^browser: menu shown $3\$" "Safari's engine's row didn't offer On and Off"
+  click_placed post "switch Safari's engine"
+  expect "^browser: menu shown $3\$" "Safari's engine's switch didn't offer On and Off"
   send choose "$2"
   expect "^browser: site controls set Safari's engine $2\$" "$2 in the menu didn't run"
 }
