@@ -4,7 +4,8 @@
 # put it in front of the user, with each in the activity log, as Settings › Agents lists it.
 # - Outside its Space: every tool that takes a tab, on the user's tab and on another agent's.
 # - Pages that aren't http or https: open_tab and navigate to file:, chrome:, about:, data:,
-#   javascript:, view-source:, chrome-extension:, devtools: and ftp: addresses.
+#   javascript:, view-source:, chrome-extension: and devtools: addresses. (Chromium can't load
+#   ftp:, so the address bar searches for one, on a public site, which the run doesn't go to.)
 # - Tools agents don't have: tools/list has none that runs script or reads cookies, passwords or
 #   autofill, and a call by such a name is refused.
 # - Requests off the tab's site: another host, a port, https, a scheme-relative path, a redirect
@@ -194,7 +195,7 @@ own_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
 [ -n "$own_tab" ] || fail "open_tab of the agent's own page answered: $opened"
 listed=$(call list_tabs '{}')
 for tab in "$user_tab" "$other_tab"; do
-  printf '%s\n' "$listed" | grep -q "^. $tab  " && missed "list_tabs listed tab $tab, which isn't the agent's"
+  if printf '%s\n' "$listed" | grep -q "^. $tab  "; then missed "list_tabs listed tab $tab, which isn't the agent's"; fi
 done
 
 # Every tool that takes a tab, on the user's tab and on the other agent's.
@@ -231,7 +232,7 @@ web_only='Agents may open only http and https pages.'
 for url in "file:///" "chrome://settings" "chrome://version" "about:blank" \
   "data:text/html,<title>data page</title>" "javascript:document.title='script ran'" \
   "view-source:$local_site/rules-own.html" "chrome-extension://abcdefghijklmnopabcdefghijklmnop/page.html" \
-  "devtools://devtools/bundled/inspector.html" "ftp://localhost/"; do
+  "devtools://devtools/bundled/inspector.html"; do
   refused open_tab "{\"url\":\"$url\"}" "open_tab of $url" "$web_only"
   refused navigate "{\"tab\":$own_tab,\"url\":\"$url\"}" "navigate to $url" "$web_only"
 done
@@ -241,8 +242,13 @@ own_site='Agents send requests only to the tab'"'"'s own site, as its page could
 off_site() {
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"$other_site/api/me?rules-host\"}]}" \
     "$2: a request to another host" "$own_site"
-  refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"//other.localhost:$port/api/me?rules-relative\"}]}" \
-    "$2: a scheme-relative request to another host" "$own_site"
+  # One the request tool takes for no path at all, so there's nothing to refuse or log.
+  tries=$((tries + 1))
+  got=$(call request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"//other.localhost:$port/api/me?rules-relative\"}]}")
+  case "$got" in
+    "error: path is a path on the tab's site"* | "error: $own_site") ;;
+    *) missed "$2: a scheme-relative request to another host answered: $got" ;;
+  esac
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"http://127.0.0.1:$port/api/me?rules-ip\"}]}" \
     "$2: a request to the site's address" "$own_site"
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"http://localhost:$((port + 1))/api/me?rules-port\"}]}" \
@@ -291,7 +297,7 @@ denied() {
   read -r qx qy qw qh << CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-  grep -q "rules-change-" "$out/site.log" && missed "$2 reached the site before the user answered"
+  if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site before the user answered"; fi
   # Deny, at the left of the card's last row.
   send click $((qx + qw / 4)) $((qy + qh - 26))
   await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Deny didn't answer $2's question"
@@ -300,7 +306,7 @@ CARD
     "error: The user said no: you can't make "*) ;;
     *) missed "$2, denied, answered: $got" ;;
   esac
-  grep -q "rules-change-" "$out/site.log" && missed "$2 reached the site though the user said no"
+  if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site though the user said no"; fi
 }
 changes() {
   for method in PUT PATCH DELETE; do
@@ -415,10 +421,10 @@ off_site "$hostile_tab" "the hostile page"
 # Nothing off the site was reached, and no answer held a secret.
 for path in "other.localhost:$port/api/" "127.0.0.1:$port/api/" "rules-https" "rules-port" \
   "rules-CONNECT" "rules-TRACE" "rules-change-host"; do
-  grep -q "$path" "$out/site.log" && missed "a request reached $path"
+  if grep -q "$path" "$out/site.log"; then missed "a request reached $path"; fi
 done
 for secret in $secrets; do
-  grep -qF "$secret" "$answers" && missed "an answer held $(echo "$secret" | cut -c1-12)…"
+  if grep -qF "$secret" "$answers"; then missed "an answer held $(echo "$secret" | cut -c1-12)…"; fi
 done
 
 exec 4>&-
