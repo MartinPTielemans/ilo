@@ -57,6 +57,7 @@ launch_count() {
   step=0
   if [ -n "$2" ]; then
     set -- "--daily-count-url=$2"
+    own_count_logs="$own_count_logs $log"
   else
     set --
   fi

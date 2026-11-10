@@ -121,6 +121,30 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# A prod build or a released package sends its daily count to ilo's hosted server 30 s in, which
+# counted each check's launch on a fresh profile as a new user (#2303). Each such launch starts on
+# the profile $1 with the count off, as Settings › Privacy leaves it, which every release since
+# 0.1.10 honours, so its log says "daily count not sent: off" and nothing leaves. count.sh alone
+# sends counts, to a server of its own.
+count_off() {
+  mkdir -p "$1"
+  : > "$1/no-daily-count"
+}
+# The logs of launches that named a count server of the run's own, as count.sh's do.
+own_count_logs=
+# Fails the check if a launch's log says a count was sent and it named no server of the run's own:
+# that count reached the hosted server. check.sh asks after each run.
+counted_nowhere() {
+  for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
+    case " $own_count_logs " in
+      *" $counted "*) ;;
+      *)
+        log=$counted
+        fail "$counted says a daily count was sent with no server of the run's own: the launch needs count_off"
+        ;;
+    esac
+  done
+}
 # Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
