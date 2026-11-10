@@ -12,4 +12,5 @@ Part of the [UX parity checklist](README.md), whose top says what the columns me
 | [ ] | Boosts: the editor without code | 4 | Customize… on the card; the theme picker's form beside the sidebar; ground and links dots, Invert lightness, the faces the OS has, size 90–150 %, case, Shuffle, ⌘Z; one block of the site's file rewritten whole; escape or a click outside closes it; look ours | Arc |
 | [ ] | Boosts: script changed outside the browser | 4 | stays off until the user turns it on again, with scripts | principle 3 |
 | [ ] | Boosts: starting one anywhere | 4 | New Boost…, Edit Boost… once the site has one, in the sidebar's + menu and in a Today tab's menu in Customize Page…'s place, besides the command bar and Site Controls; none on a page that can't have one | Arc |
+| [ ] | Boosts: View Boosts… in the Window menu | 4 | after View Media…, as Arc's; opens Library › Boosts and closes it from there; none in a private window or an agent's Space, nor with Settings' switch off | Arc |
 | [ ] | Boosts: no agent path | 4 | agents can't read, write or turn on a Boost; none in an agent's Space or a private window | decision 8 |

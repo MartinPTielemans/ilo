@@ -705,7 +705,6 @@ impl BoostEditor {
         };
         let site = self.editing.as_ref().map(|editing| editing.site.clone());
         let name = boost_style::named(&typed).filter(|name| Some(name) != site.as_ref());
-        // check.sh reads this line.
         log!(
             "browser: boost editor renamed {}",
             name.as_deref().unwrap_or("-")

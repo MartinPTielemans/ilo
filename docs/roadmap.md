@@ -24,7 +24,7 @@ ungoogled-chromium built as Chrome's framework from `engine/series`, with embedd
 
 Sidebar, Spaces (with the Agent Space kind in the data model), command bar, split view, archive, profiles, extensions (including install prompts and popups), ad blocking on from the first page, passwords and autofill, downloads, find in page, DevTools, import from Arc and Chrome, Sparkle updates, signing and notarization.
 
-**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.12, signed and notarized, and Sparkle updates it. 454 of 477 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
+**Done when** the parity checklist's MVP items pass and the performance gate holds. **Partly met:** everything ships in 0.1.13, signed and notarized, and Sparkle updates it. 454 of 477 MVP rows pass, and #2178 lists the open rows no other issue tracks. The gate doesn't hold.
 
 ## Phase 4: polish, parity and agents
 

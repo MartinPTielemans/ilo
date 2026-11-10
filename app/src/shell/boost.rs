@@ -314,7 +314,6 @@ impl Shell {
         let Some(path) = boosts::with(|boosts| boosts.file(profile, site)) else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: boost edit {site}");
         let changes = boosts::with(|boosts| boosts.reload(profile));
         self.browser.show_boosts(changes, cx);
@@ -328,6 +327,8 @@ impl Shell {
         if self.library.is_some() && self.section == super::library::Section::Boosts {
             self.list_boosts(cx);
         }
+        // Settings' switch takes Window › View Boosts… away, and gives it back.
+        self.update_menus(cx);
         cx.notify();
     }
 

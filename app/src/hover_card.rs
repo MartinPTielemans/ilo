@@ -467,7 +467,6 @@ pub fn forget_all(cx: &mut App) {
         let count = card.pictures.len();
         card.pictures.clear();
         card.let_go(cx);
-        // check.sh reads this line.
         log!("browser: hover card pictures dropped {count}");
     });
 }

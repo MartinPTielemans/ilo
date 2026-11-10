@@ -402,3 +402,36 @@ fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
     assert_eq!(host.take(), ["zap 10 true"]);
     assert!(card(&shell, cx).is_some(), "Zap brought no card back");
 }
+
+/// Window › View Boosts… opens Library › Boosts. Settings' switch off takes it away and on gives
+/// it back, and an agent's Space has none.
+#[gpui::test]
+fn window_view_boosts_opens_the_list(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    let offered = |host: &Recorder| host.menu_bar.borrow().boosts;
+    shell.update(cx, |shell, cx| shell.boosts_changed(cx));
+    assert!(offered(&host));
+    shell.update(cx, |shell, cx| shell.run(Command::ViewBoosts, "ui", cx));
+    cx.run_until_parked();
+    let section = shell.read_with(cx, |shell, _| shell.library_open.then_some(shell.section));
+    assert_eq!(section, Some(crate::shell::library::Section::Boosts));
+    shell.update(cx, |shell, cx| {
+        crate::boosts::with(|boosts| boosts.set_all_off(true));
+        shell.boosts_changed(cx);
+    });
+    assert!(
+        !offered(&host),
+        "View Boosts… stayed with Settings' switch off"
+    );
+    shell.update(cx, |shell, cx| {
+        crate::boosts::with(|boosts| boosts.set_all_off(false));
+        shell.boosts_changed(cx);
+    });
+    assert!(
+        offered(&host),
+        "View Boosts… didn't come back with the switch on"
+    );
+    host.space_agents.borrow_mut().insert(1, "claude".into());
+    shell.update(cx, |shell, cx| shell.boosts_changed(cx));
+    assert!(!offered(&host), "an agent's Space offered View Boosts…");
+}

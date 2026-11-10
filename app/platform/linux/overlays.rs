@@ -681,7 +681,6 @@ pub extern "C" fn host_show_dialog(ui_view: *mut c_void, x: f64, y: f64, width: 
     lend_keyboard(window, view, true);
     gpui_linux::set_overlay_pointer(view, None);
     show_over(view, ui_view, bounds, radius, true, left_dialog);
-    // check.sh reads this line.
     eprintln!("browser: dialog window shown");
 }
 
@@ -715,7 +714,6 @@ pub(crate) fn dialog_leaving() {
     gpui_linux::set_overlay_pointer(view, Some(&[]));
     gpui_linux::set_overlay_keyboard(view, false, left_dialog);
     lend_keyboard(window, view, false);
-    // check.sh reads this line.
     eprintln!("browser: dialog gives the keyboard back");
 }
 

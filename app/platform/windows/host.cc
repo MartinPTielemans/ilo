@@ -1398,7 +1398,7 @@ void ReleaseKeys(HWND from) {
   HWND to = g_keys_for ? g_keys_for : (from ? from : GetFocus());
   g_keys_for = nullptr;
   if (!g_held_keys.empty()) {
-    // check.sh reads this line, which names the window that took them as the Mac's does.
+    // It names the window that took them as the Mac's does.
     fprintf(stderr, "browser: held %zu key events for %s\n", g_held_keys.size(),
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
@@ -4576,7 +4576,6 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
     });
     const std::wstring model = BrowserModelId();
     if (model.empty()) {
-      // check.sh reads this line.
       fprintf(stderr, "browser: needs you posted %llu: no AppUserModelID\n",
               static_cast<unsigned long long>(id));
       return;
@@ -5203,7 +5202,6 @@ void host_set_little_status_item(void (*clicked)(void)) {
   if (!clicked) {
     if (g_tray_clicked) {
       TrayIcon(NIM_DELETE);
-      // check.sh reads this line.
       fprintf(stderr, "browser: notification icon removed\n");
     }
     g_tray_clicked = nullptr;
@@ -5225,7 +5223,6 @@ void host_set_little_status_item(void (*clicked)(void)) {
                              nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     g_taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
   }
-  // check.sh reads this line.
   fprintf(stderr, "browser: notification icon %s\n", TrayIcon(NIM_ADD) ? "shown" : "refused");
 }
 

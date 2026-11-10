@@ -34,7 +34,6 @@ pub fn profiles_changed(profiles: &[(u64, String)]) {
         .filter_map(|(id, name)| Some((name.clone(), folder(*id)?)))
         .collect();
     browser::shell::move_old_picks(&old, &named);
-    // check.sh reads this line.
     log!(
         "browser: command bar picks moved into {} profiles' folders",
         named.len()

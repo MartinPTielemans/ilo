@@ -166,6 +166,16 @@ both_are "rgb(0, 128, 0)" "⌘Z left the editor's ground on a page"
 send key escape
 expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
 
+# Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
+send menubar Window
+expect '^browser: menu bar Window: .*, View Media…, View Boosts…, ' \
+  "Window has no View Boosts… after View Media…"
+send menu 'View Boosts…'
+expect '^browser: command view-boosts via ui$' "Window › View Boosts… didn't run"
+expect '^browser: library section boosts$' "View Boosts… didn't open the Library on Boosts"
+send menu 'View Boosts…'
+expect '^browser: library hidden$' "View Boosts… didn't close the Library"
+
 # With its file gone, the page is its own again, as the core hears for a Boost turned off.
 rm -f "$file"
 expect "^browser: boost shown $host (0 bytes)\$" "the Boost's file going didn't take its CSS away"
@@ -176,6 +186,7 @@ echo "ok: a site's Boost showed on its page as it loaded and at once as its file
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
   "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
   "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
+  "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
   "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png, $out/boost-edited.png"

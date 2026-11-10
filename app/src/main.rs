@@ -332,7 +332,6 @@ fn leave_agent_space(window: bc::bc_id) {
             && unsafe { bc::bc_space_profile(space) } == profile
     });
     if let Some(home) = home {
-        // check.sh reads this line.
         log!("browser: window {window} left space {shown} of an agent for space {home}");
         unsafe { bc::bc_window_show_space(window, home) };
     }
@@ -663,7 +662,6 @@ unsafe extern "C" fn agent_request_done(
         cut: response.cut,
         error: text(response.error),
     };
-    // check.sh reads this line.
     log!(
         "browser: agent request {request} answered {} {}",
         response.status,

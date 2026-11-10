@@ -319,7 +319,7 @@ by_scheme() {
     # As in Chrome, nothing opens. The pop-up goes first, then 2 s more for a launch the
     # default-handler check could still start, which would show in the stand-in's file.
     seen '^browser: tab [0-9]* closed$' 10 "$started" || true
-    sleep 2
+    sleep 2 # the 2 s a launch could still start in
     if grep -q "^$scheme://$2" "$handled"; then
       record "$1" "$2" "opened the app though the pop-up had gone"
     else

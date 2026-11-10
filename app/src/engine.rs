@@ -967,7 +967,6 @@ impl Browser for Engine {
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App) {
         let profile = unsafe { bc::bc_space_profile(space) };
         let url = browser::notes::new_document(&name(bc::bc_profile_notes_service, profile));
-        // check.sh waits for this line.
         log!(
             "browser: new note {url}{}",
             if beside.is_some() { " split" } else { "" }
@@ -2035,7 +2034,6 @@ impl Browser for Engine {
         let id = self.window;
         cx.defer(move |_| {
             let Some(main) = main_window_for(space) else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no main window for {tab}");
                 return;
             };
@@ -2100,7 +2098,6 @@ impl Browser for Engine {
             let home = home_in_profile(own_home, profile);
             let Some(opened) = home.and_then(|home| open_little(from.unwrap_or(window), home, cx))
             else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no Space in profile {profile}");
                 return;
             };

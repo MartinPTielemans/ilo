@@ -116,7 +116,7 @@ pub(crate) fn give_held_keys(view: *mut c_void) {
     let Some(cx) = CX.with_borrow(Clone::clone).filter(|_| !held.is_empty()) else {
         return;
     };
-    // check.sh reads this line, which names the window that took them as the Mac's does.
+    // It names the window that took them as the Mac's does.
     log!("browser: held {} key events for GPUIPanel", held.len());
     // After the update that showed the overlay, which a key would come inside, and before GPUI
     // reads the keys typed since, as the task runs before it dispatches its Wayland queue.
