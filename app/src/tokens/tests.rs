@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "shell/away_mark.rs",
+        "0x2f2f2f",
+        "mock only (#2338): the dark sidebar as the preview draws it on Linux, sampled",
+    ),
+    (
+        "shell/away_mark.rs",
+        "0xd9d9d9",
+        "mock only (#2338): the light sidebar as the preview draws it on Linux, sampled",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
