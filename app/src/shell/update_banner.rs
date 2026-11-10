@@ -589,7 +589,8 @@ mod tests {
     }
 
     /// With the updater's checks off, every update is a manual one: the open banner offers Update
-    /// Automatically under its button, which turns them on and goes, the banner staying open.
+    /// Automatically under its button, which turns them on and goes, the banner staying open in
+    /// its plain form. Settings' switch turns them off again.
     #[gpui::test]
     fn with_checks_off_the_open_banner_offers_to_turn_them_on(cx: &mut TestAppContext) {
         let (shell, updater) = shell(cx);
@@ -616,6 +617,15 @@ mod tests {
         // Gone, a second click asks nothing.
         shell.update(cx, |shell, cx| shell.click_update_offer(cx));
         assert_eq!(*updater.asked.borrow(), ["automatic on"]);
+        // Settings' switch, which reads and sets these, turns it off again, and the offer comes
+        // back.
+        cx.update(|cx| updates::set_automatic(false, cx));
+        assert_eq!(*updater.asked.borrow(), ["automatic on", "automatic off"]);
+        assert_eq!(cx.update(|cx| updates::automatic(cx)), Some(false));
+        assert_eq!(
+            open_height(&shell, cx),
+            UPDATE_BANNER_OPEN + OFFER_TOP + OFFER
+        );
     }
 
     /// Turned off in Settings while an update waits, the banner offers it at once, and turned on
