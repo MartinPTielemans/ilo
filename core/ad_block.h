@@ -50,6 +50,47 @@ std::vector<std::string> AdBlockingOffSites(Profile* profile);
 // what it loaded until it reloads.
 void TurnOnAdBlockingOnSite(Profile* profile, const std::string& site);
 
+// Settings › Ad blocking's model, which uBlock Origin applies today and a native engine could take
+// over (#2069) without the header or Settings changing. The filter lists and the user's own
+// filters are the browser's, kept with the Spaces (UserSettings), for every profile; each change
+// applies at once, as a change of the policy the core gives uBlock Origin, which its background
+// page hears (app/fetch-ublock.sh).
+
+// One of its filter lists, as Settings shows it.
+struct AdBlockList {
+  std::string key;
+  // default, ads, privacy, malware, multipurpose, annoyances or regions.
+  std::string group;
+  std::string title;
+  bool on = false;
+};
+
+// Its filter lists, by group and title, each on as the user or an administrator's policy says, or
+// else as it comes. Empty until they've been read, a moment after the first profile loads.
+std::vector<AdBlockList> AdBlockLists();
+
+// Whether an administrator's policy for uBlock Origin chose its lists, which then are as it says
+// and SetAdBlockList doesn't change.
+bool AdBlockListsLocked();
+
+// Turns the list of |key|, one of AdBlockLists, on or off.
+void SetAdBlockList(const std::string& key, bool on);
+
+// The user's own filters, one a line: as they set them, else check.sh's, else none; or an
+// administrator's, where AdBlockFiltersLocked.
+std::string AdBlockFilters();
+
+// Whether an administrator's policy for uBlock Origin set its filters, which SetAdBlockFilters
+// then doesn't change.
+bool AdBlockFiltersLocked();
+
+// Makes |filters|, one a line, the user's own.
+void SetAdBlockFilters(const std::string& filters);
+
+// How many requests it blocked on |contents|'s page, as its action's badge counts them, such as
+// "12" or ">1k", or "" while it blocked none.
+std::string AdBlockedOn(content::WebContents* contents);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AD_BLOCK_H_

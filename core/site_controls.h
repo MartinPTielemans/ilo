@@ -5,7 +5,9 @@
 #include <string>
 
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "browser_core/public/browser_core.h"
+#include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "components/page_info/page_info.h"
 #include "components/page_info/page_info_ui.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -22,7 +24,9 @@ namespace browser_core {
 // blocker runs on it.
 // One tab's at a time, while the app's panel shows, and meanwhile its window tells of every
 // turned-on extension's action.
-class SiteControls : public PageInfoUI, public content::WebContentsObserver {
+class SiteControls : public PageInfoUI,
+                     public content::WebContentsObserver,
+                     public extensions::ExtensionActionDispatcher::Observer {
  public:
   // See bc_tab_site_controls and the calls after it.
   static void Open(bc_id tab);
@@ -64,6 +68,13 @@ class SiteControls : public PageInfoUI, public content::WebContentsObserver {
   void MediaPictureInPictureChanged(bool is_picture_in_picture) override;
   void WebContentsDestroyed() override;
 
+  // extensions::ExtensionActionDispatcher::Observer, for the ad blocker's count, which its action's
+  // badge holds:
+  void OnExtensionActionUpdated(extensions::ExtensionAction* action,
+                                content::WebContents* contents,
+                                content::BrowserContext* context) override;
+  void OnShuttingDown() override;
+
   // Tells the app from a task of its own: PageInfo reports inside the app's calls that change a
   // permission, and a burst of changes is one call.
   void Changed();
@@ -88,6 +99,9 @@ class SiteControls : public PageInfoUI, public content::WebContentsObserver {
   bool system_engine_ = false;
   bool system_engine_offered_ = false;
   bool reporting_ = false;
+  base::ScopedObservation<extensions::ExtensionActionDispatcher,
+                          extensions::ExtensionActionDispatcher::Observer>
+      actions_{this};
   base::WeakPtrFactory<SiteControls> weak_factory_{this};
 };
 
