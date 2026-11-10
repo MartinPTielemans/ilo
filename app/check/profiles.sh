@@ -727,11 +727,14 @@ expect "^browser: splits\(.* \)\{0,1\}$shown+[0-9][0-9]*" "New Note Split's note
 ../tools/window-screenshot.sh "$pid" "$out/new-note-split.png" || fail "no window to capture"
 # Off in Settings › Features, as its neighbours can be, New Note leaves the + menu and ⌃⇧N does
 # nothing; on again, ⌃⇧N opens one (#1636). Its switch: Settings' Features section, then ⌘W.
+# Settings opens again on the section it showed last, so Features is clicked only the first time.
 new_note_switch() {
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings for New Note's switch"
-  send clickkey $(drawn "toolbar Features")
-  expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+  if [ "$1" = off ]; then
+    send clickkey $(drawn "toolbar Features")
+    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
+  fi
   settings_drew Features
   send clickkey $(drawn "switch new note")
   expect "^browser: new note $1\$" "a click on New Note's switch didn't turn it $1"
