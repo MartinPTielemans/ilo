@@ -1,0 +1,209 @@
+{
+  "url": "https://www.ikea.com/us/en/cat/billy-bookcases-58288/",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "div.plp-navigation-slot-wrapper:nth-of-type(1) > div > div",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "text": "BILLY bookcasesSeriesBILLY seriesBILLY bookcases{\"@context\":",
+          "nth": 2
+        }
+      },
+      "rect": {
+        "x": 48,
+        "y": 138,
+        "w": 1169,
+        "h": 76.84375
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div.plp-mastercard.plp-fragment-wrapper:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > a.link",
+        "fp": {
+          "tag": "a",
+          "href": "www.ikea.com/us/en/p/billy-bookcase-white-20522046/",
+          "landmark": "section#product-list",
+          "nth": 0
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "ol > li:nth-of-type(1) > a.hnf-link",
+        "fp": {
+          "tag": "a",
+          "href": "www.ikea.com/us/en/cat/series-series/",
+          "landmark": "nav",
+          "text": "Series"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "div.plp-range-introduction-slot-wrapper:nth-of-type(2) > div",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "text": "Being a Swedish design classic and icon is very nice, of cou",
+          "nth": 1
+        }
+      },
+      "rect": {
+        "x": 48,
+        "y": 254.84375,
+        "w": 574.5,
+        "h": 56
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div.g1su26hm.v1w72ds5 > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.ikea.com/us/en/search/",
+          "landmark": "div#7535fec0-aaed-11f1-901c-47d3913f48e9",
+          "text": "Explore more"
+        }
+      },
+      "link": {
+        "path": "div.plp-range-introduction-slot-wrapper:nth-of-type(2) > div > p:nth-of-type(2) > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.ikea.com/addon-app/storageone/billy/web/latest/us/en/",
+          "landmark": "main",
+          "text": "Design your own with the BILLY planner"
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "div.search-box-wrapper:nth-of-type(1) > form.search-box-form",
+        "fp": {
+          "tag": "form",
+          "role": "search",
+          "landmark": "header",
+          "text": "Clear the search input fieldSearch"
+        }
+      },
+      "rect": {
+        "x": 633.34375,
+        "y": 69,
+        "w": 407.65625,
+        "h": 48
+      },
+      "tag": "form",
+      "at": {
+        "x": 848,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 408,
+        "h": null
+      },
+      "video": null,
+      "input": {
+        "path": "#ikea-search-input",
+        "fp": {
+          "tag": "input",
+          "id": "ikea-search-input",
+          "role": "combobox",
+          "label": "Search by product",
+          "name": "q",
+          "landmark": "header"
+        }
+      }
+    },
+    "hide": {
+      "target": {
+        "path": "div.hnf-menu:nth-of-type(2) > div > nav",
+        "fp": {
+          "tag": "nav",
+          "label": "Open the navigation menu",
+          "landmark": "header",
+          "text": "ProductsRoomsDealsDesign & ideasServices"
+        }
+      },
+      "rect": {
+        "x": 186.359375,
+        "y": 70,
+        "w": 406.984375,
+        "h": 45.984375
+      },
+      "tag": "nav"
+    },
+    "size": {
+      "target": {
+        "path": "a.bv16r1m > span > img",
+        "fp": {
+          "tag": "img",
+          "src": "www.ikea.com/images/billy-bookshelf-16ca81ee40520fda6b493464c5ce7fa3.jpg",
+          "landmark": "div#7535fec0-aaed-11f1-901c-47d3913f48e9"
+        }
+      },
+      "rect": {
+        "x": 48,
+        "y": 379.84375,
+        "w": 771.53125,
+        "h": 433.984375
+      },
+      "tag": "img",
+      "size": {
+        "w": 463,
+        "h": null
+      }
+    }
+  },
+  "input": {
+    "path": "#ikea-search-input",
+    "fp": {
+      "tag": "input",
+      "id": "ikea-search-input",
+      "role": "combobox",
+      "label": "Search by product",
+      "name": "q",
+      "landmark": "header"
+    }
+  },
+  "recordedAt": "2026-11-10T16:16:58.325Z",
+  "site": {
+    "id": "shop2",
+    "kind": "a shop's product page",
+    "url": "https://www.ikea.com/us/en/p/billy-bookcase-white-00263850/"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "size": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

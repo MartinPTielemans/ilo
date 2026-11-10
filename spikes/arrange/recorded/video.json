@@ -1,0 +1,184 @@
+{
+  "url": "https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "div.mw-content-ltr.mw-parser-output > div.mw-heading.mw-heading2:nth-of-type(1)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#mw-imagepage-content",
+          "text": "Summary[edit]"
+        }
+      },
+      "rect": {
+        "x": 264,
+        "y": 885.375,
+        "w": 737,
+        "h": 43.9375
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div.mw-content-ltr.mw-parser-output > div.mw-heading.mw-heading2:nth-of-type(3)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#mw-imagepage-content",
+          "text": "Assessment[edit]"
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "div.mw-heading.mw-heading2:nth-of-type(1) > span.mw-editsection > a",
+        "fp": {
+          "tag": "a",
+          "href": "commons.wikimedia.org/w/index.php",
+          "landmark": "div#mw-imagepage-content",
+          "text": "edit",
+          "nth": 0
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "div.multilingual > div.description.pl:nth-of-type(2)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#mw-imagepage-content",
+          "text": "Polski: Big Buck Bunny – krótkometrażowy film animowany zrea"
+        }
+      },
+      "rect": {
+        "x": 385.84375,
+        "y": 967.453125,
+        "w": 603.15625,
+        "h": 41.78125
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div.multilingual > div.description.cs:nth-of-type(3)",
+        "fp": {
+          "tag": "div",
+          "landmark": "div#mw-imagepage-content",
+          "text": "Čeština: Big Buck Bunny - je krátký animovaný film vytvořený"
+        }
+      },
+      "link": {
+        "path": "div.description.pl:nth-of-type(2) > i > a.extiw",
+        "fp": {
+          "tag": "a",
+          "href": "pl.wikipedia.org/wiki/Big_Buck_Bunny",
+          "landmark": "div#mw-imagepage-content",
+          "text": "Big Buck Bunny"
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "#file > span > span.mw-tmh-player.video",
+        "fp": {
+          "tag": "span",
+          "landmark": "div#file",
+          "text": "Duration: 10 minutes and 35 seconds.10:35Subtitles available",
+          "nth": 1
+        }
+      },
+      "rect": {
+        "x": 264,
+        "y": 178.640625,
+        "w": 737,
+        "h": 414.5625
+      },
+      "tag": "span",
+      "at": {
+        "x": 776,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 480,
+        "h": null
+      },
+      "video": {
+        "path": "#mwe_player_0_placeholder",
+        "fp": {
+          "tag": "video",
+          "id": "mwe_player_0_placeholder",
+          "landmark": "div#file"
+        }
+      },
+      "input": null
+    },
+    "hide": {
+      "target": {
+        "path": "div.vector-header-end:nth-of-type(2) > nav.vector-user-links.vector-user-links-wide",
+        "fp": {
+          "tag": "nav",
+          "label": "Personal tools",
+          "landmark": "header",
+          "text": "English Appearance Donate Create account Log in Personal too"
+        }
+      },
+      "rect": {
+        "x": 910.171875,
+        "y": 17,
+        "w": 310.828125,
+        "h": 32
+      },
+      "tag": "nav"
+    }
+  },
+  "away": {
+    "path": "#ca-talk > a.new",
+    "fp": {
+      "tag": "a",
+      "href": "commons.wikimedia.org/w/index.php",
+      "landmark": "li#ca-talk",
+      "text": "Discussion"
+    }
+  },
+  "input": {
+    "path": "#searchInput",
+    "fp": {
+      "tag": "input",
+      "id": "searchInput",
+      "label": "Search Wikimedia Commons",
+      "name": "search",
+      "landmark": "div#simpleSearch"
+    }
+  },
+  "recordedAt": "2026-11-10T16:17:02.542Z",
+  "site": {
+    "id": "video",
+    "kind": "a video page",
+    "url": "https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

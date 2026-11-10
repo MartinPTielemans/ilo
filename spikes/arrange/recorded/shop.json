@@ -1,0 +1,209 @@
+{
+  "url": "https://www.ifixit.com/products/pro-tech-toolkit",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "div.flex.w-full:nth-of-type(1) > div.group.relative",
+        "fp": {
+          "tag": "div",
+          "landmark": "section#product-overview",
+          "text": "Magnetic Project Mat$19.95",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 859,
+        "y": 854,
+        "w": 348,
+        "h": 50
+      },
+      "tag": "div",
+      "ref": {
+        "path": "div.prerendered.prose > p:nth-of-type(4)",
+        "fp": {
+          "tag": "p",
+          "landmark": "div#radix-_R_2d8jcav5ubsij9fivb_",
+          "text": "Our care and use guide provides all the details about the co"
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "div.flex.w-full:nth-of-type(1) > div.group.relative > div.flex.flex-col:nth-of-type(2) > a.font-medium",
+        "fp": {
+          "tag": "a",
+          "href": "www.ifixit.com/products/magnetic-project-mat",
+          "landmark": "section#product-overview",
+          "text": "Magnetic Project Mat"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "div.leading-tight > p",
+        "fp": {
+          "tag": "p",
+          "landmark": "main",
+          "text": "Shop the Holiday Gift Guide Free Shipping on Domestic Orders"
+        }
+      },
+      "rect": {
+        "x": 471.375,
+        "y": 84,
+        "w": 322.25,
+        "h": 40
+      },
+      "tag": "p",
+      "ref": {
+        "path": "div.flex.w-full > div.flex.h-12",
+        "fp": {
+          "tag": "div",
+          "landmark": "main",
+          "text": "Pro Tech ToolkitToolkitsToolsStore",
+          "nth": 3
+        }
+      },
+      "link": {
+        "path": "div.leading-tight > p > a",
+        "fp": {
+          "tag": "a",
+          "href": "www.ifixit.com/Store/Black-Friday-Holiday",
+          "landmark": "main",
+          "text": "Shop the Holiday Gift Guide"
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "#desktop-search-form > div.relative.flex-grow > div.w-full.relative > form.w-full",
+        "fp": {
+          "tag": "form",
+          "landmark": "div#desktop-search-form",
+          "text": "/"
+        }
+      },
+      "rect": {
+        "x": 561.796875,
+        "y": 14,
+        "w": 395.984375,
+        "h": 40
+      },
+      "tag": "form",
+      "at": {
+        "x": 860,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 396,
+        "h": null
+      },
+      "video": null,
+      "input": {
+        "path": "#desktop-search-form > div.relative.flex-grow > div.w-full.relative > form.w-full > div.relative.flex > input.instant-search-input.w-full",
+        "fp": {
+          "tag": "input",
+          "label": "search",
+          "landmark": "div#desktop-search-form"
+        }
+      }
+    },
+    "hide": {
+      "target": {
+        "path": "div.flex.h-full:nth-of-type(1) > nav.mr-4.hidden",
+        "fp": {
+          "tag": "nav",
+          "landmark": "header",
+          "text": "Fix Any ThingRepair GuidesLearn how to fix just about anythi"
+        }
+      },
+      "rect": {
+        "x": 162,
+        "y": 0,
+        "w": 383.796875,
+        "h": 68
+      },
+      "tag": "nav"
+    },
+    "size": {
+      "target": {
+        "path": "div.sticky.self-start:nth-of-type(1) > div.w-full:nth-of-type(1) > div:nth-of-type(1) > div.min-w-0.flex-1 > div.relative > div.overflow-hidden:nth-of-type(1) > div.flex > div.min-w-0.shrink-0:nth-of-type(1) > div.relative.flex > div.absolute.flex:nth-of-type(2) > div.relative.size-full > img",
+        "fp": {
+          "tag": "img",
+          "src": "cdn.shopify.com/s/files/1/0045/4092/4007/files/ckpuwVFwUFVCivaY_886e6aeb-2f68-4886-8dd3-fc2c3c838c50.jpg",
+          "landmark": "section#product-overview",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 56,
+        "y": 521,
+        "w": 713,
+        "h": 713
+      },
+      "tag": "img",
+      "size": {
+        "w": 428,
+        "h": null
+      }
+    }
+  },
+  "away": {
+    "path": "li.inline-flex.items-center:nth-of-type(2) > a.line-clamp-1.cursor-pointer",
+    "fp": {
+      "tag": "a",
+      "href": "www.ifixit.com/Tools/Toolkits",
+      "landmark": "nav",
+      "text": "Toolkits"
+    }
+  },
+  "input": {
+    "path": "#desktop-search-form > div.relative.flex-grow > div.w-full.relative > form.w-full > div.relative.flex > input.instant-search-input.w-full",
+    "fp": {
+      "tag": "input",
+      "label": "search",
+      "landmark": "div#desktop-search-form"
+    }
+  },
+  "recordedAt": "2026-11-10T16:16:57.726Z",
+  "site": {
+    "id": "shop",
+    "kind": "a shop's product page",
+    "url": "https://www.ifixit.com/products/pro-tech-toolkit"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "size": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}

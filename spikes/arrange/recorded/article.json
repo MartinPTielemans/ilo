@@ -1,0 +1,184 @@
+{
+  "url": "https://en.wikipedia.org/wiki/History_of_the_Internet",
+  "viewport": {
+    "w": 1280,
+    "h": 800
+  },
+  "picks": {
+    "settle": {
+      "target": {
+        "path": "#mwDA",
+        "fp": {
+          "tag": "p",
+          "id": "mwDA",
+          "landmark": "section#mwAQ",
+          "text": "The Internet originated in the efforts of scientists and eng"
+        }
+      },
+      "rect": {
+        "x": 264,
+        "y": 209.390625,
+        "w": 737,
+        "h": 208
+      },
+      "tag": "p",
+      "ref": {
+        "path": "#mwLA",
+        "fp": {
+          "tag": "p",
+          "id": "mwLA",
+          "landmark": "section#mwAQ",
+          "text": "ARPA awarded contracts in 1969 for the development of the AR"
+        }
+      },
+      "where": "after",
+      "link": {
+        "path": "#mwDQ",
+        "fp": {
+          "tag": "a",
+          "id": "mwDQ",
+          "href": "en.wikipedia.org/wiki/Internet",
+          "landmark": "p#mwDA",
+          "text": "Internet"
+        }
+      }
+    },
+    "trade": {
+      "target": {
+        "path": "tr:nth-of-type(2) > td.sidebar-image",
+        "fp": {
+          "tag": "td",
+          "landmark": "table#mwCw",
+          "text": "An Opte Project visualization of routing paths through a por"
+        }
+      },
+      "rect": {
+        "x": 691.75,
+        "y": 250.078125,
+        "w": 308.75,
+        "h": 195.53125
+      },
+      "tag": "td",
+      "ref": {
+        "path": "tr:nth-of-type(4) > td.sidebar-content > div.sidebar-list.mw-collapsible > div.sidebar-list-content.mw-collapsible-content:nth-of-type(2) > ul",
+        "fp": {
+          "tag": "ul",
+          "landmark": "table#mwCw",
+          "text": "Access Activism Slacktivism Censorship Data activism Democra"
+        }
+      },
+      "link": {
+        "path": "span.skin-invert > a.mw-file-description",
+        "fp": {
+          "tag": "a",
+          "href": "en.wikipedia.org/wiki/File:Internet_map_1024_-_transparent,_inverted.png",
+          "landmark": "table#mwCw"
+        }
+      }
+    },
+    "float": {
+      "target": {
+        "path": "#mwAs4 > span.mw-tmh-player.video",
+        "fp": {
+          "tag": "span",
+          "landmark": "span#mwAs4",
+          "nth": 0
+        }
+      },
+      "rect": {
+        "x": 744,
+        "y": 7590.265625,
+        "w": 256,
+        "h": 147
+      },
+      "tag": "span",
+      "at": {
+        "x": 1000,
+        "y": 96
+      },
+      "pin": "screen",
+      "size": {
+        "w": 256,
+        "h": null
+      },
+      "video": {
+        "path": "#mwAs8_placeholder",
+        "fp": {
+          "tag": "video",
+          "id": "mwAs8_placeholder",
+          "landmark": "span#mwAs4"
+        }
+      },
+      "input": null
+    },
+    "hide": {
+      "target": {
+        "path": "div.vector-header-end:nth-of-type(2) > nav.vector-user-links.vector-user-links-wide",
+        "fp": {
+          "tag": "nav",
+          "label": "Personal tools",
+          "landmark": "header",
+          "text": "Appearance Donate Create account Log in Personal tools Donat"
+        }
+      },
+      "rect": {
+        "x": 1018.734375,
+        "y": 25,
+        "w": 202.265625,
+        "h": 16
+      },
+      "tag": "nav"
+    }
+  },
+  "away": {
+    "path": "#ca-nstab-main > a",
+    "fp": {
+      "tag": "a",
+      "href": "en.wikipedia.org/wiki/History_of_the_Internet",
+      "landmark": "li#ca-nstab-main",
+      "text": "Article"
+    }
+  },
+  "input": {
+    "path": "#searchInput",
+    "fp": {
+      "tag": "input",
+      "id": "searchInput",
+      "label": "Search Wikipedia",
+      "name": "search",
+      "landmark": "div#simpleSearch"
+    }
+  },
+  "recordedAt": "2026-11-10T16:16:59.289Z",
+  "site": {
+    "id": "article",
+    "kind": "a long article",
+    "url": "https://en.wikipedia.org/wiki/History_of_the_Internet"
+  },
+  "today": {
+    "settle": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "trade": {
+      "path": 1,
+      "fp": 1,
+      "refPath": 1,
+      "refFp": 1
+    },
+    "float": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    },
+    "hide": {
+      "path": 1,
+      "fp": 1,
+      "refPath": null,
+      "refFp": null
+    }
+  }
+}
