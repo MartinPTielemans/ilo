@@ -180,6 +180,12 @@ pub struct Suggestion {
     /// The account's other computer the page is open on, which the row names at its end, or
     /// empty (#1234).
     pub computer: SharedString,
+    /// The day an archived tab at the page closed, such as "today", which ↩ reopens as the tab it
+    /// was rather than loading afresh, and its row says at its end with Reopen; or empty (#2337).
+    pub closed: SharedString,
+    /// The day a page only in the profile's history was last visited, such as "yesterday", which
+    /// its row says at its end; or empty (#2337).
+    pub visited: SharedString,
 }
 
 /// A tab open on one of the account's other computers, as sync last brought it (#1234).
@@ -327,7 +333,10 @@ impl Suggestion {
             return Icon::Glyph(section.glyph());
         }
         match self.kind() {
-            Kind::Page if self.tab == 0 && self.removable => Icon::Glyph("icons/clock.svg"),
+            // An archived tab comes back as itself, so it has its favicon as an open tab does.
+            Kind::Page if self.tab == 0 && self.removable && self.closed.is_empty() => {
+                Icon::Glyph("icons/clock.svg")
+            }
             Kind::Page => Icon::Favicon,
             Kind::Search => Icon::Glyph("icons/search.svg"),
             Kind::Command => Icon::Glyph(self.command.map_or(COMMAND_GLYPH, command_glyph)),
@@ -2900,6 +2909,12 @@ impl CommandBar {
         if !row.computer.is_empty() {
             spoken = format!("{spoken}, open on {}", row.computer);
         }
+        if !row.closed.is_empty() {
+            spoken = format!("{spoken}, Closed {}, Reopen", row.closed);
+        }
+        if !row.visited.is_empty() {
+            spoken = format!("{spoken}, Visited {}", row.visited);
+        }
         spoken
     }
 
@@ -3060,6 +3075,42 @@ impl CommandBar {
                         .child(row.computer.clone()),
                 )
             })
+            // An archived tab's row ends with the day it closed and Reopen, on a tile as Switch to
+            // Tab's arrow is, as ↩ brings it back as it was; a page only in history's, with the
+            // day it was visited, in words alone, as ↩ only loads it (#2337).
+            .when(!row.closed.is_empty(), |line| {
+                let tint = if selected { label } else { dim };
+                let tile = div()
+                    .size(px(ICON_BOX))
+                    .flex_none()
+                    .mr(px(3.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(CHIP_RADIUS))
+                    .bg(if selected {
+                        label
+                    } else {
+                        palette.plate(ARROW_TILE)
+                    })
+                    .child(svg().path("icons/rotate-ccw.svg").size(px(14.)).text_color(
+                        if selected {
+                            accent
+                        } else {
+                            palette.on_overlay(ARROW)
+                        },
+                    ));
+                let said = format!("Closed {} · Reopen", row.closed);
+                line.child(div().flex_1())
+                    .child(div().flex_none().mr(px(7.)).text_color(tint).child(said))
+                    .child(tile)
+            })
+            .when(!row.visited.is_empty(), |line| {
+                let tint = if selected { label } else { dim };
+                let said = format!("Visited {}", row.visited);
+                line.child(div().flex_1())
+                    .child(div().flex_none().mr(px(7.)).text_color(tint).child(said))
+            })
             // An agent's row ends with its model, or when its limit resets if it's at it.
             .when_some(row.task.as_ref().and_then(TaskRow::end), |line, said| {
                 line.child(div().flex_1())
@@ -3067,7 +3118,8 @@ impl CommandBar {
             })
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
-                line.when(row.tab == 0, |line| line.child(div().flex_1()))
+                let ended = row.tab != 0 || !row.closed.is_empty() || !row.visited.is_empty();
+                line.when(!ended, |line| line.child(div().flex_1()))
                     .child(self.remove_button(index, selected, cx))
             })
     }

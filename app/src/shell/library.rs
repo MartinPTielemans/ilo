@@ -127,6 +127,8 @@ use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 
+#[cfg(test)]
+use crate::tokens::shell::library::FILTER_X;
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
@@ -136,7 +138,7 @@ use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_TOP;
 use crate::tokens::shell::library::SEARCH_WIDTH;
 use crate::tokens::shell::library::SEARCH_X;
-use crate::tokens::shell::library::{FILTER_GAP, FILTER_WIDTH, FILTER_X};
+use crate::tokens::shell::library::{FILTER_GAP, FILTER_PAD, FILTER_WIDTH};
 
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
@@ -194,6 +196,34 @@ pub struct Archived {
     pub archived: f64,
     /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
     pub little: bool,
+    /// The Space it closed in, which History names on its row while it lists more than one
+    /// (#2337), or 0 when that isn't known.
+    pub space: u64,
+}
+
+/// A page the profile's history has, which History lists beside the closed tabs and a click
+/// opens in a new tab (#2337).
+#[derive(Clone)]
+pub struct Visited {
+    pub url: SharedString,
+    pub title: SharedString,
+    /// When it was last visited that day, in milliseconds since the Unix epoch.
+    pub visited: f64,
+}
+
+/// When a History row's tab closed or its page was visited, under its day's heading: the time
+/// today and yesterday, with the weekday this week and last, and the date before.
+fn history_when(at: f64, starts: [f64; 4]) -> String {
+    use chrono::{Local, TimeZone};
+    let Some(time) = Local.timestamp_millis_opt(at as i64).single() else {
+        return String::new();
+    };
+    let format = match starts.iter().position(|&start| at >= start) {
+        Some(0 | 1) => "%H:%M",
+        Some(_) => "%a %H:%M",
+        None => "%-d %b",
+    };
+    time.format(format).to_string()
 }
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
@@ -421,6 +451,10 @@ pub(super) struct Library {
     list: ListState,
     /// What Archived Tabs lists, the Filter button's choice.
     only: Only,
+    /// Whether History's closed tabs listed are of more than one Space, which their rows then
+    /// name, and the starts of the days its rows' times are read by.
+    named: bool,
+    starts: [f64; 4],
     /// The downloads the log last said Downloads lists, for check.sh.
     logged: Option<String>,
     /// The past task whose page Agents shows in its list's place, by its id (#1080).
@@ -442,6 +476,10 @@ pub(super) enum Only {
     Little,
     /// The tasks dismissed from the sidebar's foot.
     Tasks,
+    /// History's closed tabs alone, of every window (#2337).
+    Closed,
+    /// History's visited pages alone.
+    Visited,
 }
 
 impl Only {
@@ -452,7 +490,20 @@ impl Only {
             Only::All => "All",
             Only::Little => "Little ilo",
             Only::Tasks => "Tasks",
+            Only::Closed => "Closed Tabs",
+            Only::Visited => "Visited",
         }
+    }
+
+    /// History's Filter menu, None for a line: All, then what comes back as it was, Little ilo's
+    /// under the closed tabs, then the pages visited. Little ilo and Tasks only while there are
+    /// some, as a menu's item shows only while it has something to act on.
+    fn history_menu(little: bool, tasks: bool) -> Vec<Option<Only>> {
+        let mut menu = vec![Some(Only::All), None, Some(Only::Closed)];
+        menu.extend(little.then_some(Some(Only::Little)));
+        menu.extend(tasks.then_some(Some(Only::Tasks)));
+        menu.extend([None, Some(Only::Visited)]);
+        menu
     }
 }
 
@@ -462,6 +513,8 @@ enum Item {
     Heading(&'static str),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
+    /// The visited page at this index of `Shell::visited`, in History.
+    Visit(usize),
     /// The task at this index of `Shell::archived_tasks`.
     Task(usize),
     /// The past task at this index of `Shell::agent_history`.
@@ -514,6 +567,27 @@ impl Shell {
         if self.section == Section::Archive {
             self.filter(true, cx);
         }
+    }
+
+    /// The profile's visited pages changed, all of them, newest first, which makes Archived Tabs
+    /// History (#2337).
+    pub fn set_visited(&mut self, visited: Vec<Visited>, cx: &mut Context<Self>) {
+        self.visited = Some(visited);
+        if self.section == Section::Archive {
+            self.filter(true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Types `text` in the Library's search field, for the preview.
+    pub fn preview_search(&mut self, text: &str, window: &Window, cx: &mut Context<Self>) {
+        if let Some(library) = &self.library {
+            let caret = text.len();
+            (library.search.clone()).update(cx, |search, cx| {
+                search.set_text(text.to_string().into(), caret, window, cx)
+            });
+        }
+        self.filter(false, cx);
     }
 
     /// The tasks in the Archive changed, all of them, the last to leave the foot first. A private
@@ -853,6 +927,23 @@ impl Shell {
         self.view_section(Section::Spaces, cx);
     }
 
+    /// Opens the Library on its Archived Tabs, or History, for the preview.
+    pub fn show_archive(&mut self, cx: &mut Context<Self>) {
+        self.view_section(Section::Archive, cx);
+    }
+
+    /// Picks History's filter by its log name, closed, little, visited or tasks, for the preview.
+    pub fn preview_history_filter(&mut self, name: &str, cx: &mut Context<Self>) {
+        let only = match name {
+            "closed" => Only::Closed,
+            "little" => Only::Little,
+            "visited" => Only::Visited,
+            "tasks" => Only::Tasks,
+            _ => Only::All,
+        };
+        self.filter_archive(only, cx);
+    }
+
     /// Opens the Library on its Agents, for the preview.
     pub fn show_agents(&mut self, cx: &mut Context<Self>) {
         self.view_section(Section::Agents, cx);
@@ -878,6 +969,7 @@ impl Shell {
             Section::Media => "Search Media…",
             Section::Downloads => "Search Downloads…",
             Section::Spaces => "",
+            Section::Archive if self.visited.is_some() => "Search History…",
             Section::Archive => "Search Archive…",
             Section::Agents => "Search Agents…",
             Section::Boosts => "Search Boosts…",
@@ -895,6 +987,8 @@ impl Shell {
             items: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(ARCHIVE_OVERDRAW)),
             only: Only::All,
+            named: false,
+            starts: [0.; 4],
             logged: None,
             opened: None,
             sites: Vec::new(),
@@ -1055,17 +1149,24 @@ impl Shell {
             }
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
-        let filtered = self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty();
+        let filtered = self.archive.iter().any(|tab| tab.little)
+            || !self.archived_tasks.is_empty()
+            || self
+                .visited
+                .as_ref()
+                .is_some_and(|visited| !visited.is_empty());
         let only = if filtered { library.only } else { Only::All };
+        let starts = self.browser.day_starts();
+        library.starts = starts;
         // Each with the time it's listed by, newest first.
         let found: Vec<(Item, f64)> = match self.section {
             Section::Spaces => Vec::new(),
             Section::Archive => {
                 let tabs = (self.archive.iter().enumerate())
                     .filter(|(_, tab)| match only {
-                        Only::All => true,
+                        Only::All | Only::Closed => true,
                         Only::Little => tab.little,
-                        Only::Tasks => false,
+                        Only::Tasks | Only::Visited => false,
                     })
                     .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
                     .map(|(index, tab)| (Item::Tab(index), tab.archived));
@@ -1076,6 +1177,31 @@ impl Shell {
                     })
                     .map(|(index, task)| (Item::Task(index), task.left));
                 let mut listed: Vec<_> = tabs.chain(tasks).collect();
+                // History's closed tabs name their Space while they're of more than one, Little
+                // ilo counting as one.
+                let places: std::collections::HashSet<(bool, u64)> = (listed.iter())
+                    .filter_map(|(item, _)| match item {
+                        Item::Tab(index) => {
+                            let tab = &self.archive[*index];
+                            Some((tab.little, if tab.little { 0 } else { tab.space }))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                library.named = places.len() > 1;
+                // A page that is also a closed tab shows once, as the closed tab, and a page
+                // visited more than once a day once, at its last visit (#2337).
+                let day = |time: f64| ((time - starts[0]) / 86_400_000.).floor() as i64;
+                let mut seen = std::collections::HashSet::new();
+                let closed: std::collections::HashSet<&str> =
+                    self.archive.iter().map(|tab| tab.url.as_ref()).collect();
+                let visits = (self.visited.iter().flatten().enumerate())
+                    .filter(|_| matches!(only, Only::All | Only::Visited))
+                    .filter(|(_, page)| !closed.contains(page.url.as_ref()))
+                    .filter(|(_, page)| seen.insert((page.url.as_ref(), day(page.visited))))
+                    .filter(|(_, page)| query.is_empty() || found(&page.title) || found(&page.url))
+                    .map(|(index, page)| (Item::Visit(index), page.visited));
+                listed.extend(visits);
                 listed.sort_by(|a, b| b.1.total_cmp(&a.1));
                 listed
             }
@@ -1113,7 +1239,6 @@ impl Shell {
                 media
             }
         };
-        let starts = self.browser.day_starts();
         let mut items = Vec::new();
         if self.section == Section::Agents && !found.is_empty() {
             items.push(Item::Clear);
@@ -1234,8 +1359,18 @@ impl Shell {
     /// Whether Archived Tabs has the Filter button: while the archive holds a Little ilo tab or a
     /// task, which are what it picks out.
     fn archive_filtered(&self) -> bool {
+        let kinds = [
+            !self.archive.is_empty(),
+            !self.archived_tasks.is_empty(),
+            self.visited
+                .as_ref()
+                .is_some_and(|visited| !visited.is_empty()),
+        ];
+        let history = self.visited.is_some() && kinds.iter().filter(|kind| **kind).count() > 1;
         self.section == Section::Archive
-            && (self.archive.iter().any(|tab| tab.little) || !self.archived_tasks.is_empty())
+            && (history
+                || self.archive.iter().any(|tab| tab.little)
+                || !self.archived_tasks.is_empty())
     }
 
     /// What the list shows, the Filter button's choice while it has the button.
@@ -1252,8 +1387,18 @@ impl Shell {
     /// The Filter button's menu: All, Little ilo's tabs or the tasks alone, the one shown checked.
     fn archive_filter_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let only = self.archive_only();
-        let entries = (Only::MENU.iter())
-            .map(|each| MenuEntry::new(each.label(), true).checked(*each == only))
+        let menu = match self.visited.is_some() {
+            true => Only::history_menu(
+                self.archive.iter().any(|tab| tab.little),
+                !self.archived_tasks.is_empty(),
+            ),
+            false => Only::MENU.into_iter().map(Some).collect(),
+        };
+        let entries = (menu.iter())
+            .map(|each| match each {
+                Some(each) => MenuEntry::new(each.label(), true).checked(*each == only),
+                None => MenuEntry::line(),
+            })
             .collect();
         let shell = cx.weak_entity();
         self.browser.context_menu(
@@ -1262,7 +1407,7 @@ impl Shell {
             false,
             self.menu_look(),
             Box::new(move |chosen, cx| {
-                if let Some(&only) = chosen.and_then(|chosen| Only::MENU.get(chosen)) {
+                if let Some(&Some(only)) = chosen.and_then(|chosen| menu.get(chosen)) {
                     shell
                         .update(cx, |shell, cx| shell.filter_archive(only, cx))
                         .ok();
@@ -1283,6 +1428,8 @@ impl Shell {
             Only::All => "all",
             Only::Little => "little",
             Only::Tasks => "tasks",
+            Only::Closed => "closed",
+            Only::Visited => "visited",
         };
         log!("browser: archive filter {name}");
         self.filter(true, cx);
@@ -1331,8 +1478,13 @@ impl Shell {
         else {
             return;
         };
+        // History says Reopen, as ⇧⌘T's Reopen Closed Tab and the command bar's row do (#2337).
+        let reopen = match self.visited.is_some() {
+            true => "Reopen Tab",
+            false => "Restore Tab",
+        };
         let entries = vec![
-            MenuEntry::new("Restore Tab", true),
+            MenuEntry::new(reopen, true),
             MenuEntry::new("Copy URL", true),
             MenuEntry::line(),
             MenuEntry::new("Delete from Archive", true).destructive(),
@@ -1431,6 +1583,16 @@ impl Shell {
     /// search, that nothing matches.
     fn empty_line(&self, section: Section, unsearched: bool) -> &'static str {
         let tasks = self.archive_only() == Only::Tasks;
+        if section == Section::Archive && !tasks && self.visited.is_some() {
+            return match (self.archive_only(), unsearched) {
+                (Only::Visited, true) => "Pages you visit show here.",
+                (Only::Visited, false) => "No visited pages match.",
+                (Only::Closed | Only::Little, true) => "Closed Today tabs stay here for 30 days.",
+                (Only::Closed | Only::Little, false) => "No closed tabs match.",
+                (_, true) => "Pages you visit and tabs you close show here.",
+                (_, false) => "No pages match.",
+            };
+        }
         match (section, unsearched) {
             (Section::Spaces, _) => "",
             (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
@@ -1539,17 +1701,12 @@ impl Shell {
         let search = library.search.clone();
         // The Filter button takes the field's end, while there's something to filter.
         let filtered = self.archive_filtered();
-        let field_width = if filtered {
-            FILTER_X - FILTER_GAP - SEARCH_X
-        } else {
-            SEARCH_WIDTH
-        };
+        // The field takes what the Filter button, at its end, leaves of the row.
         let field = div()
             .id("library-search")
-            .absolute()
-            .left(px(SEARCH_X))
-            .top(px(SEARCH_TOP))
-            .w(px(field_width))
+            .relative()
+            .flex_1()
+            .min_w_0()
             .h(px(SEARCH_HEIGHT))
             .flex()
             .items_center()
@@ -1583,12 +1740,15 @@ impl Shell {
                 Only::All => "Filter",
                 only => only.label(),
             };
+            // History's grows past Arc's width to fit "Closed Tabs", from its end (#2337).
+            let history = self.visited.is_some();
             div()
                 .id("library-filter")
-                .absolute()
-                .left(px(FILTER_X))
-                .top(px(SEARCH_TOP))
-                .w(px(FILTER_WIDTH))
+                .flex_none()
+                .when(history, |button| {
+                    button.min_w(px(FILTER_WIDTH)).px(px(FILTER_PAD))
+                })
+                .when(!history, |button| button.w(px(FILTER_WIDTH)))
                 .h(px(SEARCH_HEIGHT))
                 .flex()
                 .items_center()
@@ -1664,9 +1824,17 @@ impl Shell {
         if spaces {
             return panel.child(self.space_cards(cx));
         }
-        panel
+        let search_row = div()
+            .absolute()
+            .left(px(SEARCH_X))
+            .top(px(SEARCH_TOP))
+            .w(px(SEARCH_WIDTH))
+            .flex()
+            .gap(px(FILTER_GAP))
             .child(field)
-            .children(filter)
+            .children(filter);
+        panel
+            .child(search_row)
             .child(
                 div()
                     .absolute()
@@ -2235,6 +2403,7 @@ impl Shell {
                     .into_any_element();
             }
             Item::Tab(tab) => tab,
+            Item::Visit(page) => return self.visited_item(page, cx),
             Item::Task(task) => return self.archived_task_item(task, cx),
             Item::Past(past) => return self.past_task_item(past, cx),
             Item::Clear => return self.agents_clear_item(cx),
@@ -2264,6 +2433,24 @@ impl Shell {
             self.page_favicons.get(&url).cloned().flatten(),
         );
         let host = SharedString::from(host(&url).to_string());
+        // History's says what the row is and when, and names the Space while it lists more
+        // than one (#2337).
+        let host = match (self.visited.is_some(), &self.library) {
+            (true, Some(library)) => {
+                let when = history_when(tab.archived, library.starts);
+                let space = match tab.little {
+                    true => Some(SharedString::from("Little ilo")),
+                    false => (self.spaces.iter())
+                        .find(|space| space.id == tab.space)
+                        .map(|space| space.name.clone()),
+                };
+                match space.filter(|_| library.named) {
+                    Some(space) => format!("Closed {when} in {space} · {host}").into(),
+                    None => format!("Closed {when} · {host}").into(),
+                }
+            }
+            _ => host,
+        };
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -2394,6 +2581,129 @@ impl Shell {
                     ),
             )
             .into_any_element()
+    }
+
+    /// A visited page's line in History, as a closed tab's: its favicon, its title over when it
+    /// was visited and its host. A click opens it in a new tab and closes the Library, and a
+    /// right-click shows its menu (#2337).
+    fn visited_item(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let (Some(page), Some(library)) = (
+            self.visited.as_ref().and_then(|visited| visited.get(index)),
+            &self.library,
+        ) else {
+            return div().into_any_element();
+        };
+        let url = page.url.clone();
+        let title = match page.title.is_empty() {
+            true => url.clone(),
+            false => page.title.clone(),
+        };
+        let when = history_when(page.visited, library.starts);
+        let about = SharedString::from(format!("Visited {when} · {}", host(&url)));
+        if !self.page_favicons.contains_key(&url) {
+            self.page_favicons.insert(url.clone(), None);
+            self.browser.page_favicon(&url, cx);
+        }
+        let icon = favicon(
+            &self.palette,
+            self.page_favicons.get(&url).cloned().flatten(),
+        );
+        let (open, menu) = (url.clone(), url);
+        div()
+            .h(px(ARCHIVED_PITCH))
+            .pl(px(ARCHIVED_LEFT))
+            .pr(px(ARCHIVED_RIGHT))
+            .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
+            .child(
+                div()
+                    .id(("visited", index))
+                    .size_full()
+                    .relative()
+                    .rounded(px(ARCHIVED_RADIUS))
+                    .block_mouse_except_scroll()
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        log!("browser: history open {open}");
+                        shell.browser.open_at(&[open.to_string()], false, 0, 0, cx);
+                        shell.set_library(false, cx);
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
+                            shell.visited_menu(menu.clone(), event.position, cx)
+                        }),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(ARCHIVED_FAVICON_X))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(icon),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .pl(px(ARCHIVED_TEXT_X))
+                            .pr(px(12.))
+                            .child(text_line(
+                                title,
+                                text::BODY,
+                                17.,
+                                self.palette.text(UNSELECTED_TITLE),
+                            ))
+                            .child(text_line(
+                                about,
+                                text::SMALL,
+                                15.,
+                                self.palette.text(SECONDARY),
+                            )),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The menu a right-click on a visited page's row shows: open it in a new tab, copy its URL,
+    /// or take it out of the profile's history, as the command bar's Remove from History does.
+    fn visited_menu(&mut self, url: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let entries = vec![
+            MenuEntry::new("Open in New Tab", true),
+            MenuEntry::new("Copy URL", true),
+            MenuEntry::line(),
+            MenuEntry::new("Remove from History", true).destructive(),
+        ];
+        let shell = cx.weak_entity();
+        self.browser.context_menu(
+            entries,
+            position,
+            false,
+            self.menu_look(),
+            Box::new(move |chosen, cx| {
+                shell
+                    .update(cx, |shell, cx| match chosen {
+                        Some(0) => {
+                            shell.browser.open_at(&[url.to_string()], false, 0, 0, cx);
+                            shell.set_library(false, cx);
+                        }
+                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(3) => {
+                            if let Some(visited) = &mut shell.visited {
+                                visited.retain(|page| page.url != url);
+                            }
+                            shell.filter(true, cx);
+                        }
+                        _ => {}
+                    })
+                    .ok();
+            }),
+            cx,
+        );
     }
 
     /// Reads the window's profile's past tasks, as Library › Agents shows them, leaving those that
@@ -3195,6 +3505,7 @@ impl Shell {
             Section::Media => ("icons/image.svg", "Media"),
             Section::Downloads => ("icons/arrow-down-to-line.svg", "Downloads"),
             Section::Spaces => ("icons/spaces.svg", "Spaces"),
+            Section::Archive if self.visited.is_some() => ("icons/rotate-ccw-clock.svg", "History"),
             Section::Archive => ("icons/archive.svg", "Archived Tabs"),
             Section::Agents => ("icons/square-mouse-pointer.svg", "Agents"),
             Section::Boosts => ("icons/paintbrush.svg", "Boosts"),
@@ -4009,6 +4320,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little: false,
+            space: 0,
         };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
@@ -4031,6 +4343,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little,
+            space: 0,
         };
         shell.update(cx, |shell, cx| {
             shell.section = Section::Archive;

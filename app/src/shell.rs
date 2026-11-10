@@ -171,7 +171,7 @@ pub use keys::{
     recorded, reserved, shortcut_found, user_keys, view_binding, web_keystroke, written_as,
 };
 pub(crate) use library::bytes;
-pub use library::{Archived, Captured, Download, DownloadAction, DownloadState};
+pub use library::{Archived, Captured, Download, DownloadAction, DownloadState, Visited};
 use library::{MediaVideo, RECEDE_X, Section};
 pub use menu_bar::{MenuBar, ProfileChoice, SidebarBackup};
 use menus::MenuAction;
@@ -1612,6 +1612,9 @@ pub struct Shell {
     pane_corner: (f32, f32, f32),
     /// Every Space's archived tabs, newest first, and the favicons asked for their URLs.
     archive: Vec<Archived>,
+    /// The profile's visited pages, newest first, which History lists beside the closed tabs in
+    /// Archived Tabs' place: none while the browser gives none, as today (#2337, a mock so far).
+    visited: Option<Vec<Visited>>,
     page_favicons: HashMap<SharedString, Option<Arc<Image>>>,
     /// The profile's downloads, newest first, and the file icons asked for them.
     downloads: Vec<Download>,
@@ -2107,6 +2110,7 @@ impl Shell {
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
+            visited: None,
             agent_history: Vec::new(),
             show_restored: None,
             talk: None,

@@ -247,6 +247,7 @@ pub(crate) unsafe extern "C" fn archive_changed(
             title: text(tab.title),
             archived: tab.archived,
             little: tab.little,
+            space: 0,
         })
         .collect();
     // check.sh waits for this line.

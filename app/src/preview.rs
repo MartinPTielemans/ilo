@@ -27,8 +27,8 @@ use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
     self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Volume,
-    WindowButton,
+    Match, MediaAction, MenuBar, MenuEntry, Page, Shell, SpaceEntry, Split, Trouble, Visited,
+    Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -179,6 +179,152 @@ const ARCHIVE: [(&str, &str, f64); 6] = [
     ("", "https://example.org/", 12.),
 ];
 const DAY: f64 = 86_400_000.;
+const HOUR: f64 = 3_600_000.;
+
+// History's visited pages (#2337, PREVIEW_HISTORY): pages visited hours and days ago, newest
+// first. Wikipedia is also a closed tab, so it shows once, as the closed tab.
+const VISITED: [(&str, &str, f64); 12] = [
+    (
+        "Rust Programming Language",
+        "https://www.rust-lang.org/",
+        0.02,
+    ),
+    ("Wikipedia", "https://www.wikipedia.org/", 0.06),
+    ("Hacker News", "https://news.ycombinator.com/", 0.08),
+    ("MDN Web Docs", "https://developer.mozilla.org/en-US/", 0.15),
+    ("OpenStreetMap", "https://www.openstreetmap.org/", 0.3),
+    (
+        "HTTP - Wikipedia",
+        "https://en.wikipedia.org/wiki/HTTP",
+        0.9,
+    ),
+    (
+        "The Rust Programming Language",
+        "https://doc.rust-lang.org/book/",
+        1.05,
+    ),
+    (
+        "Internet for people, not profit — Mozilla",
+        "https://www.mozilla.org/",
+        1.3,
+    ),
+    (
+        "Internet Archive: Digital Library",
+        "https://archive.org/",
+        2.2,
+    ),
+    (
+        "World Wide Web - Wikipedia",
+        "https://en.wikipedia.org/wiki/World_Wide_Web",
+        2.4,
+    ),
+    ("BBC Weather", "https://www.bbc.com/weather", 3.),
+    ("Welcome to Python.org", "https://www.python.org/", 7.),
+];
+
+// PREVIEW_HISTORY=long's day: each page's title, address, how many hours ago, and whether it's a
+// tab that closed then rather than a page visited. Hacker News is visited twice and OpenStreetMap
+// is a closed tab too, so each shows once.
+const LONG_DAY: [(&str, &str, f64, bool); 21] = [
+    (
+        "Rust Programming Language",
+        "https://www.rust-lang.org/",
+        0.2,
+        false,
+    ),
+    (
+        "HashMap in std::collections - Rust",
+        "https://doc.rust-lang.org/std/collections/struct.HashMap.html",
+        0.5,
+        true,
+    ),
+    ("Hacker News", "https://news.ycombinator.com/", 0.7, false),
+    (
+        "MDN Web Docs",
+        "https://developer.mozilla.org/en-US/",
+        1.1,
+        true,
+    ),
+    (
+        "Array.prototype.map() - JavaScript | MDN",
+        "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/map",
+        1.4,
+        false,
+    ),
+    ("Hacker News", "https://news.ycombinator.com/", 1.8, false),
+    ("OpenStreetMap", "https://www.openstreetmap.org/", 2., true),
+    (
+        "Wikipedia, the free encyclopedia",
+        "https://en.wikipedia.org/wiki/Main_Page",
+        2.3,
+        false,
+    ),
+    (
+        "HTTP - Wikipedia",
+        "https://en.wikipedia.org/wiki/HTTP",
+        2.6,
+        false,
+    ),
+    (
+        "RFC 9110: HTTP Semantics",
+        "https://www.rfc-editor.org/rfc/rfc9110",
+        3.,
+        true,
+    ),
+    (
+        "Can I use... Support tables for HTML5, CSS3, etc",
+        "https://caniuse.com/",
+        3.3,
+        false,
+    ),
+    ("web.dev", "https://web.dev/", 3.7, false),
+    (
+        "For Developers - The Chromium Projects",
+        "https://www.chromium.org/developers/",
+        4.1,
+        true,
+    ),
+    ("BBC Weather", "https://www.bbc.com/weather", 4.5, false),
+    (
+        "The Rust Programming Language",
+        "https://doc.rust-lang.org/book/",
+        5.,
+        false,
+    ),
+    (
+        "crates.io: Rust Package Registry",
+        "https://crates.io/",
+        5.4,
+        true,
+    ),
+    ("Docs.rs", "https://docs.rs/", 5.9, false),
+    (
+        "Welcome to Python.org",
+        "https://www.python.org/",
+        6.3,
+        false,
+    ),
+    (
+        "OpenStreetMap",
+        "https://www.openstreetmap.org/",
+        6.8,
+        false,
+    ),
+    ("W3C", "https://www.w3.org/", 7.2, true),
+    ("IANA — Home", "https://www.iana.org/", 7.6, false),
+];
+
+/// PREVIEW_HISTORY=all, closed, visited, empty, search, long, hover, menu or menu-visited shows
+/// the Library's History, a mock of #2337, in that state, its search for "wiki" with =search; and
+/// PREVIEW_HISTORY_BEFORE=1 shows the same state in today's Archived Tabs, which lists only the
+/// closed tabs, for the mock's "before".
+fn preview_history() -> Option<String> {
+    std::env::var("PREVIEW_HISTORY").ok()
+}
+
+fn preview_history_before() -> bool {
+    std::env::var_os("PREVIEW_HISTORY_BEFORE").is_some()
+}
 
 // The downloads: one running, one paused, one held, and finished ones, newest first, with their
 // bytes so far and in all, and how many days ago they started.
@@ -342,6 +488,8 @@ impl Fake {
                 archived,
                 // Every fourth, so the archive's filter shows (Little ilo).
                 little: id % 4 == 0,
+                // The rest in turn of the first Space and Reading, which History names.
+                space: TABS.len() as u64 + 1 + id % 2,
             })
             .collect();
         self.later(cx, move |shell, cx| shell.set_archive(archive, cx));
@@ -2124,6 +2272,58 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // The three places a result can be (#2337): an open tab, a closed tab in the archive and a
+        // page only in the history, as today's bar shows them with PREVIEW_HISTORY_BEFORE=1.
+        "places" => {
+            let after = !preview_history_before();
+            let closed = |day: &str, row: Suggestion| Suggestion {
+                removable: true,
+                closed: if after { day.into() } else { "".into() },
+                ..row
+            };
+            let visited = |day: &str, row: Suggestion| Suggestion {
+                removable: true,
+                visited: if after { day.into() } else { "".into() },
+                ..row
+            };
+            let rows = vec![
+                page(
+                    "Rust Programming Language",
+                    "",
+                    "https://www.rust-lang.org/",
+                    4,
+                ),
+                search("rust"),
+                closed(
+                    "today",
+                    page(
+                        "HashMap in std::collections - Rust",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/std/collections/struct.HashMap.html",
+                        0,
+                    ),
+                ),
+                visited(
+                    "yesterday",
+                    page(
+                        "The Rust Programming Language",
+                        "doc.rust-lang.org",
+                        "https://doc.rust-lang.org/book/",
+                        0,
+                    ),
+                ),
+                closed(
+                    "Saturday",
+                    page(
+                        "crates.io: Rust Package Registry",
+                        "crates.io",
+                        "https://crates.io/",
+                        0,
+                    ),
+                ),
+            ];
+            ("rust", rows)
+        }
         "sites" => (
             "wik",
             vec![
@@ -2311,10 +2511,42 @@ fn main() {
                         spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
                     }
                     let first_archived = first_space + count as u64;
-                    let archive = (first_archived..)
+                    let history = preview_history();
+                    let mut archive: Vec<_> = (first_archived..)
                         .zip(ARCHIVE)
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
+                    let mut visited: Vec<Visited> = VISITED
+                        .iter()
+                        .map(|&(title, url, days)| Visited {
+                            url: url.into(),
+                            title: title.into(),
+                            visited: now() - days * DAY,
+                        })
+                        .collect();
+                    match history.as_deref() {
+                        Some("empty") => {
+                            archive.clear();
+                            visited.clear();
+                        }
+                        Some("long") => {
+                            let at = |hours: f64| now() - hours * HOUR;
+                            let closed = LONG_DAY.iter().filter(|each| each.3);
+                            archive = (first_archived..)
+                                .zip(closed)
+                                .map(|(id, &(title, url, hours, _))| (id, title, url, at(hours)))
+                                .collect();
+                            visited = (LONG_DAY.iter())
+                                .filter(|each| !each.3)
+                                .map(|&(title, url, hours, _)| Visited {
+                                    url: url.into(),
+                                    title: title.into(),
+                                    visited: at(hours),
+                                })
+                                .collect();
+                        }
+                        _ => {}
+                    }
                     let first_download = first_archived + ARCHIVE.len() as u64;
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
@@ -2376,6 +2608,9 @@ fn main() {
                     shell.set_profiles(vec![(0, "Default".into())], cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
+                    if history.is_some() && !preview_history_before() {
+                        shell.set_visited(visited, cx);
+                    }
                     // The shell forgets what it knows of a tab in no list, so the lists come first.
                     shell.set_favorites(favorites.iter().map(|&tab| (tab, 0)).collect(), cx);
                     for (&tab, (title, url, icon)) in favorites.iter().zip(FAVORITES) {
@@ -2624,6 +2859,23 @@ fn main() {
             match window {
                 // PREVIEW_LIBRARY=1 opens the Library, and PREVIEW_LIBRARY=downloads, =spaces or
                 // =agents opens it there; =rename opens its Spaces with the first card's name in its field.
+                Ok(window) if preview_history().is_some() => {
+                    window
+                        .update(cx, |shell, window, cx| {
+                            shell.show_archive(cx);
+                            match preview_history().as_deref() {
+                                // Today's archive has neither filter, so its "before" lists all.
+                                Some(filter @ ("closed" | "visited"))
+                                    if !preview_history_before() =>
+                                {
+                                    shell.preview_history_filter(filter, cx)
+                                }
+                                Some("search") => shell.preview_search("wiki", window, cx),
+                                _ => {}
+                            }
+                        })
+                        .ok();
+                }
                 Ok(window) if std::env::var_os("PREVIEW_LIBRARY").is_some() => {
                     window
                         .update(cx, |shell, window, cx| {
@@ -2799,6 +3051,12 @@ fn main() {
                     preview_menu(shell.into(), bounds, &what, gpui::MouseButton::Right, cx);
                 }
             }
+            // PREVIEW_HOVER=<x>,<y> puts the pointer there in the window, as over a History row.
+            if let Ok(what) = std::env::var("PREVIEW_HOVER") {
+                if let Some(shell) = shell_window {
+                    preview_hover(shell.into(), &what, cx);
+                }
+            }
             // PREVIEW_CLICK=<x>,<y> clicks there in the window, as on an archived tab's row.
             if let Ok(what) = std::env::var("PREVIEW_CLICK") {
                 if let Some(shell) = shell_window {
@@ -2871,6 +3129,31 @@ fn preview_menu(
             })
             .ok();
         press_keys(window, keys, cx).await;
+    })
+    .detach();
+}
+
+/// Moves the pointer to `what`, "<x>,<y>" in the window, once the shell has drawn its rows.
+fn preview_hover(shell: gpui::AnyWindowHandle, what: &str, cx: &mut App) {
+    let mut parts = what.split(',').map(|part| part.trim().parse::<f32>().ok());
+    let (Some(Some(x)), Some(Some(y))) = (parts.next(), parts.next()) else {
+        return;
+    };
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(1500))
+            .await;
+        let event = gpui::MouseMoveEvent {
+            position: point(px(x), px(y)),
+            pressed_button: None,
+            modifiers: gpui::Modifiers::default(),
+        };
+        shell
+            .update(cx, |_, window, cx| {
+                window.dispatch_event(gpui::PlatformInput::MouseMove(event), cx);
+                window.refresh();
+            })
+            .ok();
     })
     .detach();
 }
