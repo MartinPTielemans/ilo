@@ -7,6 +7,7 @@
 
 #include "content/public/browser/content_browser_client.h"
 
+class GURL;
 class Profile;
 
 namespace content {
@@ -43,8 +44,8 @@ void SetUpAdBlock();
 bool IsAdBlocker(const std::string& id);
 
 // Holds a page that starts before it's ready in the page's profile, as at launch, until it is, so
-// it blocks from the first page. The browser's own (native_ad_block.h) holds none, and gives the
-// page what it hides and runs from its start.
+// it blocks from the first page. The browser's own (native_ad_block.h) holds none, gives the page
+// what it hides and runs from its start, and shows a tab's page the lists block a warning instead.
 void AddAdBlockHold(content::NavigationThrottleRegistry& registry);
 
 // Turns it on or off in every profile loaded, as UserSettings().ad_blocking says, once the
@@ -61,6 +62,10 @@ void ProxyForAdBlock(content::BrowserContext* context,
                      const url::Origin& request_initiator,
                      const net::IsolationInfo& isolation_info,
                      network::URLLoaderFactoryBuilder& factory_builder);
+
+// Whether the user turned it off on the site of |url| in |context|'s profile, where it neither
+// blocks nor hides anything, nor warns of a page.
+bool AdBlockingOffAt(content::BrowserContext* context, const GURL& url);
 
 // Whether it blocks on the site of |contents|'s page, or nullopt where that's not the user's to
 // change there: a page that isn't http(s), a private window, or with it off in the profile.
