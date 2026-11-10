@@ -32,9 +32,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, launch_picture, link_preview, link_target, log, log_in, menu, offer,
-    passwords, site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
+    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
+    zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
