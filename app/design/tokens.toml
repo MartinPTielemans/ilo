@@ -949,6 +949,12 @@ media-title = 12.0
 media-button = 24.0
 media-control = 28.0
 media-glyph = 14.0
+# Arc 1.171's Adjust Tab Volume opens a drawer that grows the card media-drawer, its bottom staying
+# put, with a slider. Ours: the drawer sits between the title row and the controls, so they stay
+# under the pointer; the slider's track and knob.
+media-drawer = 33.0
+media-slider-track = 4.0
+media-slider-knob = 12.0
 # Favorites taller than this much of the window scroll with the list instead of staying put
 # (Ardia), so they never leave the rows too little room.
 tall-favorites = 0.4
@@ -1788,10 +1794,12 @@ check-stroke = 2.25
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
 # rested on it `wait` (ours, as the sidebar's reveal waits), and a card put away folds and fades
-# over `fold` as the ones above close up (ours).
+# over `fold` as the ones above close up (ours). A card's volume drawer opens and closes over
+# `drawer` (ours: Arc's isn't timed).
 open = 0.2
 wait = 0.1
 fold = 0.2
+drawer = 0.2
 
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media

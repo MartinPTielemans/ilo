@@ -48,17 +48,22 @@ env:
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
-    webrtc tab-drag count ranking everyday
+    webrtc tab-drag count ranking everyday hosts policies translate
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
-    favorites cards extensions adblock adblock-lists private little capture passwords preview
-    access dialogs crash import quit onboarding passkeys appearance about sync sync-account
+    favorites cards extensions adblock adblock-lists private little capture passwords preview access
+    dialogs crash import quit onboarding passkeys appearance about sync sync-account sync-devices
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
+    window windows
+    media
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
     keychain: it checks the Mac's Keychain across a change of signing identity, in a check VM
+    scripting: AppleScript is the Mac's alone
+    filled: it hides the Dock and the menu bar, so it runs only in a Mac check VM
 
 jobs:
   # Whether to check this commit: a scheduled run, in ilo itself and not a fork, checks only a commit
@@ -386,6 +391,31 @@ jobs:
             echo "::warning::Input methods failed. Its log: ime.log in the artifact."
           fi
           printf 'ime\t%s\n' "$result" | tee -a "$RESULTS"
+
+      # A run that failed and left Crashpad's dump in its folder (check/lib.sh) crashed, and the dump's
+      # frames in the app can be named only from this build's libBrowser.so, which the job throws
+      # away (#2223): its symbol table goes in the leg's artifact then, and only then.
+      - name: Symbols
+        if: ${{ !cancelled() && steps.engine.outputs.found == 'true' }}
+        env:
+          SESSION: ${{ matrix.session }}
+          RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+        run: |
+          out=$RUNNER_TEMP/check
+          where=
+          [ "$SESSION" != wayland ] || where=wayland/
+          crashed=
+          if [ -f "$RESULTS" ]; then
+            while IFS="$(printf '\t')" read -r run result; do
+              case $result in failed*) ;; *) continue ;; esac
+              ! find "$out/$where$run" -name '*.dmp' 2> /dev/null | grep -q . || crashed="$crashed $run"
+            done < "$RESULTS"
+          fi
+          [ -n "$crashed" ] || { echo "No run crashed, so no symbols are kept."; exit 0; }
+          mkdir -p "$out/symbols"
+          objcopy --only-keep-debug target/release/libBrowser.so "$out/symbols/libBrowser.so.debug"
+          id=$(readelf -n target/release/libBrowser.so | sed -n 's/^ *Build ID: //p')
+          echo "::warning::$crashed crashed: libBrowser.so's symbols, build id $id, are in symbols/ in the artifact. addr2line -f -C -e libBrowser.so.debug names a frame's offset."
 
       # The check job puts the legs' files back together as one check-linux artifact.
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}

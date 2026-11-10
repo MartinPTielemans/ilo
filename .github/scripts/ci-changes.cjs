@@ -23,6 +23,8 @@ const JOBS = {
 // The gate itself: a change to it could hide what it skips.
 const RUNS_EVERYTHING = [
   /^\.github\/workflows\/ci\.yml$/,
+  /^\.github\/scripts\/tree-proven\.sh$/,
+  /^\.github\/actions\/tree-proof\//,
   /^\.github\/scripts\/ci-changes\.cjs$/,
   /^\.github\/actions\/ci-changes\//,
 ];

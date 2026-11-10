@@ -1,0 +1,56 @@
+# Fails a pull request that changes a parity row's tick anywhere but a docs/parity-ticks-YYYY-MM-DD
+# branch, the integrator's daily bookkeeping PR: a feature's PR names its rows on its "Parity:" line instead
+# (#2204). New rows, and a row's target or source, are the feature's and pass. The roadmap's counts
+# are prose, which this doesn't read.
+name: Parity ticks
+
+on:
+  pull_request:
+    paths: ['docs/ux-parity/**']
+
+permissions: {}
+
+concurrency:
+  group: parity-ticks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ticks:
+    name: Parity ticks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # The merge commit and its first parent, the base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Rows whose tick changed
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          case "$HEAD_REF" in
+            docs/parity-ticks-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) echo "the day's ticks PR"; exit 0 ;;
+          esac
+          git diff -U0 HEAD^1 HEAD -- docs/ux-parity/ | python3 -I -c '
+          import re, sys
+          rows = {}
+          path = None
+          for line in sys.stdin:
+              if line.startswith("+++ "):
+                  path = line[6:].strip()
+                  continue
+              row = re.match(r"([-+])\| *(\[.\]) *\|+ *([^|]*?) *\|", line)
+              if row:
+                  side, done, item = row.groups()
+                  rows.setdefault((path, item), {})[side] = done
+          changed = [(path, item, ticks["-"], ticks["+"]) for (path, item), ticks in rows.items()
+                     if len(ticks) == 2 and ticks["-"] != ticks["+"]]
+          for path, item, was, now in changed:
+              print(f"::error file={path}::{item}: {was} to {now}. Name the row on the PR body\x27s "
+                    "Parity: line; the daily docs/parity-ticks-<date> PR ticks it (#2204).")
+          sys.exit(1 if changed else 0)
+          '

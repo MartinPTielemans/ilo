@@ -99,6 +99,7 @@ bool host_drive_window_part(void* hwnd, double x, double y, double width, double
                             const char* path, long* pixels_wide, long* pixels_high);
 void* host_drive_little_tray(void);
 bool host_drive_little_tray_click(void);
+bool host_drive_little_tray_place(RECT* icon, RECT* area);
 }
 
 namespace {
@@ -1763,10 +1764,23 @@ bool Run(const std::string& line) {
   }
   // The notification area's Little ilo icon, as the Mac's driver has the menu bar's button:
   // "browser: status item shown" or "none", or with click what Explorer sends for a click on it,
-  // as the driver can't reach Explorer's area or its flyout.
+  // as the driver can't reach Explorer's area or its flyout. With place, where Explorer draws it:
+  // "browser: status item at <left> <top> <right> <bottom> in area <left> <top> <right> <bottom>",
+  // the notification area's rectangle, in the screen's pixels, or "placed nowhere".
   if (action == "statusitem") {
     if (rest == "click") {
       return host_drive_little_tray_click();
+    }
+    RECT icon{}, area{};
+    if (rest == "place") {
+      if (!host_drive_little_tray_place(&icon, &area)) {
+        fprintf(stderr, "browser: status item placed nowhere\n");
+      } else {
+        fprintf(stderr, "browser: status item at %ld %ld %ld %ld in area %ld %ld %ld %ld\n",
+                icon.left, icon.top, icon.right, icon.bottom, area.left, area.top, area.right,
+                area.bottom);
+      }
+      return true;
     }
     fprintf(stderr, "browser: status item %s\n", host_drive_little_tray() ? "shown" : "none");
     return true;

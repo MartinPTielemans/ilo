@@ -40,7 +40,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 use xkbcommon::xkb;
 
-use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, settings_window};
+use crate::{CX, WINDOWS, bc, drive, floats, overlays, panels, reveal_window, settings_window};
 
 /// The modifiers, as drive.rs's X states hold them, which are the xkb masks of the keymap the
 /// driver's keyboard has.
@@ -52,6 +52,8 @@ const MODIFIER_KEYS: [(u16, u32); 3] = [(CONTROL, 29), (ALT, 56), (SHIFT, 42)];
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
+const BTN_SIDE: u32 = 0x113;
+const BTN_EXTRA: u32 = 0x114;
 /// The pointer's positions per point, so a point between pixels keeps its place.
 const SUBPOINTS: f64 = 100.;
 /// sway's IPC messages.
@@ -520,7 +522,8 @@ fn focused_settings(nodes: &[Node]) -> Option<Node> {
 fn overlay_frame(view: *mut c_void) -> Option<(bc::bc_id, gpui::Bounds<gpui::Pixels>)> {
     let (ui_view, bounds) = (overlays::placed(view))
         .or_else(|| panels::placed(view))
-        .or_else(|| floats::placed(view))?;
+        .or_else(|| floats::placed(view))
+        .or_else(|| reveal_window::placed(view))?;
     let id = WINDOWS
         .with_borrow(|windows| windows.iter().find(|w| w.ui_view == ui_view).map(|w| w.id))?;
     Some((id, bounds))
@@ -1139,6 +1142,17 @@ pub(crate) fn run(action: &str, line: &str) -> Option<Option<()>> {
                 click(x, y, BTN_LEFT, 0, true)?;
             }
             Some(())
+        })(),
+        // A mouse's side buttons, which evdev names side and extra.
+        "sideclick" => (|| {
+            let (x, y) = drive::point(&mut words)?;
+            let (x, y) = in_driven(x, y)?;
+            let which = match words.next()? {
+                "back" => BTN_SIDE,
+                "forward" => BTN_EXTRA,
+                _ => return None,
+            };
+            click(x, y, which, 0, false)
         })(),
         "clickkey" | "rightclickkey" | "doubleclickkey" => (|| {
             let (x, y) = drive::point(&mut words)?;

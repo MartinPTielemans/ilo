@@ -1,0 +1,31 @@
+# Records that a job passed on the tree it checked out, as an artifact named for the job and the
+# tree, which a later push of the same tree to main finds and skips the job for
+# (.github/scripts/tree-proven.sh, #2198). A pull request's tree is its merge with the base, as it
+# was tested. Only a run of this repository's own code records one: a fork's pull request runs the
+# fork's workflow, which could record a tree it never tested.
+name: Tree proof
+description: Record that this job passed on the tree it checked out.
+inputs:
+  job:
+    description: The job's key, as tree-proven.sh is asked for it, such as "app-linux-test"
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: tree
+      if: >-
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        tree=$(git rev-parse 'HEAD^{tree}')
+        echo "tree=$tree" >> "$GITHUB_OUTPUT"
+        echo "$GITHUB_SHA $tree" > "$RUNNER_TEMP/tree-proof"
+    - if: steps.tree.outputs.tree
+      uses: actions/upload-artifact@v4
+      with:
+        name: proven-${{ inputs.job }}-${{ steps.tree.outputs.tree }}
+        path: ${{ runner.temp }}/tree-proof
+        retention-days: 7
+        overwrite: true
