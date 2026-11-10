@@ -97,7 +97,13 @@ jobs:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/3', matrix.shard) || '' }}
+    # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
+    # its share of the runs (.github/scripts/runs.sh, #2271). Any other list is one job's.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || '[0]') }}
     runs-on: windows-2022
     timeout-minutes: 120
     permissions:
@@ -139,6 +145,19 @@ jobs:
         run: ../.github/scripts/main-check.sh rerun
 
       - run: ../engine/fetch.sh > /dev/null
+
+      # The runs this job does.
+      - id: runs
+        env:
+          RUNS: ${{ inputs.runs }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          case $RUNS in
+          '') runs=$WINDOWS_RUNS ;;
+          all) runs=$(../.github/scripts/runs.sh shard "$SHARD") ;;
+          *) runs=$RUNS ;;
+          esac
+          echo "list= $(echo $runs) " | tee -a "$GITHUB_OUTPUT"
 
       # The runs call python3, which the runner names python. The access run reads UI Automation
       # with comtypes (tools/uia-tree.sh).
@@ -328,7 +347,7 @@ jobs:
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit check-linux.yml builds, when the runs include one.
       - id: server
-        if: ${{ (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
+        if: ${{ (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -370,19 +389,18 @@ jobs:
           key: ilo-server-windows-882f2736e5a3b228543ae33b821aeeb52f80426d
 
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
+      # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
+      # the complete job reads.
       - name: Runs
         env:
-          RUNS: ${{ inputs.runs }}
+          RUNS: ${{ steps.runs.outputs.list }}
+          SHARD: ${{ matrix.shard }}
+          RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
         run: |
           out=$RUNNER_TEMP/check
-          mkdir -p "$out"
-          # check.sh's own list, the runs it does with no names and the ones it does only when named.
-          all=$(sed -n 's/^runs="\(\$runs \)\{0,1\}\(.*\)"$/\2/p; s/^named="\(.*\)"$/\1/p' check.sh | tr '\n' ' ')
-          case $RUNS in
-          '') runs=$WINDOWS_RUNS ;;
-          all) runs=$all ;;
-          *) runs=$RUNS ;;
-          esac
+          mkdir -p "$out" "$(dirname "$RESULTS")"
+          all=$(../.github/scripts/runs.sh shard "$SHARD")
+          runs=$RUNS
           # check.sh runs on Windows, and the app has a driver there, only once
           # feat/windows-drive-454 is in.
           windows=
@@ -440,6 +458,7 @@ jobs:
               result="skipped: ${why:-not tried on Windows yet}"
               ;;
             esac
+            printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
           { echo; sh check/quarantine.sh list windows; } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -494,9 +513,48 @@ jobs:
       - if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: check-windows
+          name: check-windows${{ matrix.shard != 0 && format('-{0}', matrix.shard) || '' }}
           path: ${{ runner.temp }}/check
           if-no-files-found: ignore
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-windows-${{ matrix.shard }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+
+  # A run with no result, such as one its job's time ran out before, fails the check, so a run
+  # missing from the summary can't read as passed (#2271).
+  complete:
+    needs: [engine, check]
+    if: ${{ !cancelled() && needs.engine.outputs.found == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts
+            app/check.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: results-windows-*
+          path: ${{ runner.temp }}/results
+          merge-multiple: true
+      - env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          named=
+          case $RUNS in '' | all) ;; *) named=$RUNS ;; esac
+          if missing=$(.github/scripts/runs.sh missing "$RUNNER_TEMP/results" $named); then
+            echo "Every run has a result."
+          else
+            echo "::error::No result for: $missing. A check job ran out of time or stopped before them, or check.sh has no such run."
+            printf 'Failed: no result for %s.\n' "$missing" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
   # dispatched run reports too, as its pass is the only one the night won't repeat on that commit.
