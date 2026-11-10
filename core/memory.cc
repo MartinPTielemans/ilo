@@ -22,6 +22,7 @@
 #include "base/task/updateable_sequenced_task_runner.h"
 #include "base/threading/sequence_bound.h"
 #include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/timer/timer.h"
 #include "browser_core/host.h"
 #include "browser_core/memory_index.h"
@@ -187,9 +188,12 @@ class Memory : public base::SupportsUserData::Data, public history::HistoryServi
     index_.PostTaskWithThisObject(base::BindOnce(
         [](ui::AXTreeUpdate update, std::set<std::string, std::less<>> readable, GURL url,
            std::string site, std::string title, MemoryIndex* index) {
+          base::ElapsedTimer timer;
           std::string text = TextOf(update, readable);
-          if (!text.empty()) {
-            index->Add(url.spec(), site, title, text, base::Time::Now());
+          if (!text.empty() && index->Add(url.spec(), site, title, text, base::Time::Now())) {
+            // check/perf.sh counts these, and says what keeping a page took off the UI thread.
+            LOG(ERROR) << "browser: memory kept a page in "
+                       << timer.Elapsed().InMicrosecondsF() / 1000 << " ms";
           }
         },
         std::move(update), std::move(readable), std::move(url), std::move(site),

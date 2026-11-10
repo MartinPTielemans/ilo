@@ -27,6 +27,10 @@
 # process of its own, so each time from a key includes one process start, which the run says.
 
 serve
+# #2324's spike: every launch has the memory on, as a profile whose user said yes has it, so each row
+# is what it costs; spike/memory-2324-2 runs the same app with it off.
+memory=on
+export BROWSER_MEMORY=$memory
 perf_dir="$out/perf"
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
@@ -224,6 +228,7 @@ pid=$!
 exec 3> "$out/drive"
 await "^browser: title [0-9]* p1 fcp " || fail "the session's first page didn't paint"
 send click $page_point
+[ "$memory" != on ] || await 'browser: memory open$' || fail "the memory didn't open"
 
 # The session, once the page has the active app's keyboard.
 perf_session() {
@@ -334,6 +339,12 @@ else
 fi
 exec 3>&-
 quit
+if [ "$memory" = on ]; then
+  sed -n 's/^.*browser: memory kept a page in \([0-9.]*\) ms$/\1/p' "$log" > "$perf_dir/kept"
+  perf_row memory-kept "Memory, pages kept in the session, each off the UI thread" \
+    "$(wc -l < "$perf_dir/kept" | tr -d ' ') pages, $(perf_stats '%.1f' < "$perf_dir/kept") ms" \
+    "none: #2324's spike"
+fi
 
 # Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
 # for the gate's rows that compare with it: memory at 1, 10 and 20 tabs and idle at 1 and 20, on the
