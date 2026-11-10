@@ -156,6 +156,7 @@ use agent_events::*;
 mod links;
 use links::*;
 mod little_ilo;
+mod sign_in_close;
 use little_ilo::*;
 mod keys;
 use keys::*;

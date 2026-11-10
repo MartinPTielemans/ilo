@@ -85,6 +85,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "third_party/blink/public/common/web_preferences/web_preferences.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -400,6 +401,18 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     if (!in_memory && relative_partition_path.empty() &&
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
+    }
+  }
+
+  // Chrome's, but a tab the UI lets close itself (bc_tab_set_page_may_close) may, as Blink refuses
+  // window.close() to a page its own script didn't open once it has more than one history entry.
+  void OverrideWebPreferences(content::WebContents* web_contents,
+                              content::SiteInstance& main_frame_site,
+                              blink::web_pref::WebPreferences* prefs) override {
+    ChromeContentBrowserClient::OverrideWebPreferences(web_contents, main_frame_site, prefs);
+    const Tab* tab = Tab::FromWebContents(web_contents);
+    if (tab && tab->page_may_close()) {
+      prefs->allow_scripts_to_close_windows = true;
     }
   }
 

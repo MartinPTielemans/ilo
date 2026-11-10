@@ -182,6 +182,10 @@ class Tab : public content::WebContentsObserver,
   void Media(int action);
   bool muted() const;
 
+  // Whether the page may close the tab with window.close(), as bc_tab_set_page_may_close.
+  void SetPageMayClose(bool may);
+  bool page_may_close() const { return page_may_close_; }
+
   // The page the system's engine shows in place of Chromium's (system_engine.h), else null. Its
   // WebContents stays, unloaded, with the history it had.
   platform::SystemPage* system_page() const { return system_page_.get(); }
@@ -387,6 +391,7 @@ class Tab : public content::WebContentsObserver,
   bool last_press_held_command_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
+  bool page_may_close_ = false;
   // Whether the app was last told the pointer is on a link.
   bool link_target_ = false;
   // The favicon the app was last told of.
