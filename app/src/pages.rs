@@ -299,13 +299,23 @@ pub(crate) unsafe extern "C" fn tab_permission_asked(
         }
         _ => {
             let site = string(site);
+            let quiet = unsafe { bc::bc_tab_permission_quiet(tab) };
+            // check.sh reads this line.
             log!(
-                "browser: page {tab} asks {site} to {}",
-                permissions.join("; ")
+                "browser: page {tab} asks {site} to {}{}",
+                permissions.join("; "),
+                if quiet { ", quietly" } else { "" }
             );
+            if quiet {
+                let site = site.clone();
+                agents_core::update(move |agents, cx| {
+                    agents.page_held_notifications(tab, &site, cx)
+                });
+            }
             Some(shell::Question {
                 site: site.into(),
                 permissions: permissions.into_iter().map(Into::into).collect(),
+                quiet,
             })
         }
     };

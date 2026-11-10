@@ -640,6 +640,55 @@ impl Shell {
                 )
                 .child(frame)
         });
+        // A request to show notifications held quietly, its bell before the leaf's place: a press
+        // opens the Site Controls at Notifications, whose Allow or Block answers it (#2323).
+        let bell_end = leaf_end + if leaf.is_some() { TOOL_PITCH } else { 0. };
+        let bell = self.held_notifications(self.field_tab()).map(|site| {
+            let tab = self.field_tab();
+            let tip: SharedString = format!("{site} wants to send notifications").into();
+            self.field_tool("notification-bell", bell_end)
+                .opacity(1.)
+                .when(self.a11y, |button| button.button_named(tip.clone()))
+                .block_mouse_except_scroll()
+                .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+                .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                    let frame = shell.bell_drawn.get();
+                    let tip = (*hovered && shell.dragging().is_none())
+                        .then(|| {
+                            frame.map(|frame| {
+                                (
+                                    Tip::named(tip.clone()),
+                                    Anchor::under(frame, shell.viewport),
+                                )
+                            })
+                        })
+                        .flatten();
+                    shell.hover_tip(tip, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.browser.tooltip(None, cx);
+                        crate::site_controls::open_at_permission("notifications", cx);
+                        shell.run(Command::SiteControls, "bell", cx);
+                    }),
+                )
+                .child(
+                    svg()
+                        .path("icons/bell-off.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.glyph(NAV)),
+                )
+                .child(super::permission::card_listener(
+                    "notification bell",
+                    &self.bell_drawn,
+                    tab,
+                ))
+        });
+        if bell.is_none() {
+            self.bell_drawn.set(None);
+        }
         let engine = self.engine_mark(self.field_tab());
         // The password manager's key, after the host (ours, for Chrome's key icon): a click brings
         // back the offer showing another tab closed, or opens the Site Controls, which list the
@@ -685,6 +734,10 @@ impl Shell {
             Some(_) => text_end.max(leaf_end + URL_BUTTON_SIZE),
             None => text_end,
         };
+        let text_end = match bell {
+            Some(_) => text_end.max(bell_end + URL_BUTTON_SIZE),
+            None => text_end,
+        };
         // A button, as it is: a press opens the command bar on the URL, where it's edited. It's
         // called what it shows, the host.
         let field = div().id("url-field").when(self.a11y, |field| {
@@ -727,6 +780,7 @@ impl Shell {
             .children(engine)
             .children(key)
             .children(translate)
+            .children(bell)
             .children(leaf)
             .children(devtools)
             .children(copy)

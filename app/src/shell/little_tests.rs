@@ -780,6 +780,7 @@ fn a_question_hangs_under_the_bar_and_the_page_makes_room(cx: &mut TestAppContex
         let question = Question {
             site: "signin.example".into(),
             permissions,
+            quiet: false,
         };
         shell.set_question(10, Some(question), cx);
     });

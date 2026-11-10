@@ -520,6 +520,9 @@ pub struct Activity {
     pub by: SharedString,
 }
 
+/// Why an agent's log has a page's request to show notifications as not done.
+const HELD_FOR_YOU: &str = "Only you can answer it, from the bell in the URL field.";
+
 /// An agent the user connected.
 #[derive(Clone, Debug)]
 pub struct Agent {
@@ -2980,6 +2983,28 @@ impl Agents {
             }
         };
         _ = reply.send(ToolResult::text(answer));
+    }
+
+    /// `tab`'s page asks `site` to show notifications with no click behind it, which the browser
+    /// holds quietly for the user (#2323). In an agent's Space it goes in the agent's log, as a
+    /// question only the user answers: the agent gets no answer to give, as with the card. Once
+    /// for each time the page asks, as Chrome asks again when its tab is shown again.
+    pub fn page_held_notifications(&mut self, tab: u64, site: &str, cx: &App) {
+        let ids: Vec<String> = (self.agents.iter())
+            .map(|agent| agent.client.id().to_string())
+            .collect();
+        for agent in ids {
+            let space = self.browser.agent_space(&agent);
+            if space == 0 || !self.browser.space_tab_ids(space, cx).contains(&tab) {
+                continue;
+            }
+            let last = self.activity(&agent).next();
+            if last.is_some_and(|entry| entry.action == "notifications" && entry.site == site) {
+                return;
+            }
+            self.note(&agent, "notifications", site, HELD_FOR_YOU);
+            return;
+        }
     }
 
     /// The user pinned, unpinned or moved `tab`, which makes its pin theirs.

@@ -2426,7 +2426,10 @@ impl Settings {
             cx,
         );
         let prompts_line = match prompts {
-            true => "Calls and chat need it. A site you allowed or blocked keeps its choice.",
+            // When a site may ask as a card, and when it waits behind the bell (#2323).
+            true => {
+                "A site asks when you press its button for it. Otherwise a bell in the URL field waits."
+            }
             false => "Off: no site can ask. A site you allowed or blocked keeps its choice.",
         };
         let prompts = setting(

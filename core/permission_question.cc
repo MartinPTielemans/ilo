@@ -1,5 +1,6 @@
 #include "browser_core/permission_question.h"
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <utility>
@@ -14,7 +15,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_request.h"
+#include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_constants.h"
 #include "components/url_formatter/elide_url.h"
 
@@ -71,6 +74,22 @@ void PermissionQuestion::Answer(bc_id tab, int answer) {
       delegate.Dismiss(std::monostate());
       break;
   }
+}
+
+bool PermissionQuestion::Quiet(bc_id tab) {
+  auto found = Questions().find(tab);
+  if (found == Questions().end() || !found->second->delegate_) {
+    return false;
+  }
+  const auto& requests = found->second->delegate_->Requests();
+  // A request that doesn't say whether it had a gesture asks as a card, as all did before.
+  return !requests.empty() &&
+         std::ranges::all_of(
+             requests, [](const std::unique_ptr<permissions::PermissionRequest>& request) {
+               return request->GetContentSettingsType() == ContentSettingsType::NOTIFICATIONS &&
+                      request->GetGestureType() ==
+                          permissions::PermissionRequestGestureType::NO_GESTURE;
+             });
 }
 
 void PermissionQuestion::Changed(bc_id tab) {

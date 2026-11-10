@@ -457,6 +457,7 @@ mod tests {
             let question = Question {
                 site: "netflix.com".into(),
                 permissions: Vec::new(),
+                quiet: false,
             };
             shell.set_question(10, Some(question), cx);
             assert!(shell.drm_note().is_none());

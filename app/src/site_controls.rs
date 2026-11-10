@@ -542,6 +542,8 @@ struct Open {
     shown: Option<Instant>,
     /// What the keyboard's ring is on, from the first Tab or arrow until a press.
     keyed: Option<Stop>,
+    /// The permission whose row it rings once the core has read the site, by its lasting name.
+    at_permission: Option<&'static str>,
     settled: bool,
     /// Once it's closing: when, and how far it had opened.
     closing: Option<(Instant, f32)>,
@@ -716,6 +718,9 @@ pub struct SiteControls {
     open: Option<Open>,
     /// An assistive app asks for the tree, so the panel names what it draws.
     a11y: bool,
+    /// The permission, by Chrome's lasting name, whose row the next opening rings, as a held
+    /// request's bell opens it at Notifications (#2323).
+    at_permission: Option<&'static str>,
 }
 
 struct SiteControlsWindow(WindowHandle<SiteControls>);
@@ -769,6 +774,7 @@ pub fn open_at(
             focus: cx.focus_handle(),
             open: None,
             a11y: false,
+            at_permission: None,
         })
     });
     match window {
@@ -808,10 +814,12 @@ pub fn show(
             .as_ref()
             .is_some_and(|open| open.closing.is_none())
         {
+            panel.at_permission = None;
             return panel.close("toggle", cx);
         }
         let (at, beak) = placed(place, window);
         log_extensions(&extensions);
+        let at_permission = panel.at_permission.take();
         panel.open = Some(Open {
             tab,
             at,
@@ -825,6 +833,7 @@ pub fn show(
             tip: None,
             shown: None,
             keyed: None,
+            at_permission,
             settled: false,
             closing: None,
             _leave: None,
@@ -832,6 +841,12 @@ pub fn show(
         panel.host.read(tab);
         cx.notify();
     });
+}
+
+/// Has the panel's next opening ring the row of the permission Chrome calls `key`, such as
+/// "notifications", once the core has read the site, if the site lists it.
+pub fn open_at_permission(key: &'static str, cx: &mut App) {
+    update(cx, |panel, _, _| panel.at_permission = Some(key));
 }
 
 /// The core read the site of `tab`'s page, or it changed.
@@ -845,6 +860,15 @@ pub fn changed(tab: u64, site: Site, cx: &mut App) {
         log!("browser: site controls {}", describe(&site));
         let height = layout(&site, open.extensions.len(), open.beak.is_some()).height;
         let first = open.site.is_none();
+        // Opened at a permission, its row is ringed, as the keyboard's Tab would ring it.
+        let at = (open.at_permission.take())
+            .and_then(|key| site.permissions.iter().find(|each| each.key == key))
+            .map(|permission| Stop::Permission(permission.kind));
+        if let Some(stop) = at {
+            // check.sh reads this line.
+            log!("browser: site controls keyed {stop:?}");
+            open.keyed = Some(stop);
+        }
         open.site = Some(site);
         let shape = corners(open.beak, height);
         if first {
