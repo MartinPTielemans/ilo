@@ -753,6 +753,10 @@ typedef struct bc_sync_device {
 #define BC_SYNC_TROUBLE_THROTTLED 2
 // Sync stopped after an error it doesn't recover from while the browser runs.
 #define BC_SYNC_TROUBLE_STOPPED 3
+// A newer version of the browser on another of the account's devices wrote the Spaces in a form
+// this one can't read whole, so this device stopped syncing them, rather than write over what it
+// can't read, until it's updated. The rest still syncs.
+#define BC_SYNC_TROUBLE_UPDATE 4
 
 // How sync is keeping up with the server, as Settings › Sync says while it shows.
 typedef struct bc_sync_activity {

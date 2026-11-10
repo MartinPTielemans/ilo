@@ -11,6 +11,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversions.h"
@@ -23,6 +24,7 @@
 #include "browser_core/space_default.h"
 #include "browser_core/space.h"
 #include "browser_core/sync_spaces.pb.h"
+#include "browser_core/sync_spaces_newer.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/profiles/profile.h"
@@ -80,6 +82,15 @@ std::optional<Entity> Parse(const syncer::EntityData& data) {
     return std::nullopt;
   }
   return entity;
+}
+
+// A change of what a newer ilo wrote.
+bool Newer(const std::unique_ptr<syncer::EntityChange>& change) {
+  if (change->type() == syncer::EntityChange::ACTION_DELETE) {
+    return false;
+  }
+  const std::optional<Entity> entity = Parse(change->data());
+  return entity && WrittenByNewer(*entity);
 }
 
 std::unique_ptr<syncer::EntityData> DataOf(const Entity& entity) {
@@ -200,10 +211,12 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   }
 
   void Changed() {
-    if (store_ && !timer_.IsRunning()) {
+    if (store_ && !paused_ && !timer_.IsRunning()) {
       timer_.Start(FROM_HERE, kSettle, base::BindOnce(&Bridge::Look, base::Unretained(this)));
     }
   }
+
+  bool paused() const { return paused_; }
 
   // syncer::DataTypeSyncBridge:
   std::unique_ptr<syncer::MetadataChangeList> CreateMetadataChangeList() override {
@@ -230,7 +243,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         });
     std::optional<syncer::ModelError> error =
         ApplyIncrementalSyncChanges(std::move(metadata_changes), std::move(changes));
-    if (!error && untouched && account_has_spaces) {
+    if (!error && !paused_ && untouched && account_has_spaces) {
       Drop(untouched->id());
     }
     return error;
@@ -240,6 +253,17 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       std::unique_ptr<syncer::MetadataChangeList> metadata_changes,
       syncer::EntityChangeList changes) override {
     if (!store_) {
+      return std::nullopt;
+    }
+    // What a newer ilo wrote can't go in the sidebar, or be written again from it, without losing
+    // what this version can't read, so the Spaces stop syncing here until ilo is updated. The
+    // batch's metadata isn't kept, so the account sends it again to the updated browser.
+    if (paused_ || std::ranges::any_of(changes, Newer)) {
+      if (!paused_) {
+        LOG(ERROR) << "browser: sync spaces paused, as a newer ilo wrote them";
+      }
+      paused_ = true;
+      timer_.Stop();
       return std::nullopt;
     }
     std::unique_ptr<syncer::DataTypeStore::WriteBatch> batch =
@@ -305,6 +329,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     known_.clear();
     waiting_.clear();
     restoring_ = false;
+    paused_ = false;
     if (!store_) {
       return;
     }
@@ -375,7 +400,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   // different, and each that's gone.
   void Look() {
     // Before the session is back there are no Spaces, which isn't the user deleting them all.
-    if (!store_ || !change_processor()->IsTrackingMetadata() || Space::All().empty()) {
+    if (!store_ || paused_ || !change_processor()->IsTrackingMetadata() || Space::All().empty()) {
       return;
     }
     // The store writes as each change goes; the session a while after. So the first look after a
@@ -580,6 +605,9 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
   std::set<std::string> waiting_;
   // Until the first look after the store is read.
   bool restoring_ = true;
+  // A newer ilo wrote the account's Spaces, so this device stopped syncing them, until it signs
+  // out or the browser starts again.
+  bool paused_ = false;
   base::OneShotTimer timer_;
   base::WeakPtrFactory<Bridge> weak_factory_{this};
 };
@@ -614,6 +642,10 @@ void Changed() {
   for (const auto& [profile, bridge] : Bridges()) {
     bridge->Changed();
   }
+}
+
+bool NeedsUpdate() {
+  return std::ranges::any_of(Bridges(), [](const auto& each) { return each.second->paused(); });
 }
 
 }  // namespace browser_core::sync_spaces

@@ -2,6 +2,10 @@
 // chromium-sync-ilo-types.patch): one of the user's Spaces, or a pinned tab or folder in one, by
 // its node (space.h). Each is an entity of its own, so a rename, a move or a delete sends only what
 // changed. A Space's Today tabs stay on the device.
+//
+// A field or kind added here stops the Spaces syncing on a device with an older ilo, which can't
+// write an entity again without losing what it can't read (sync_spaces_newer.h), until it's
+// updated. A version older than that check makes a Space of a kind it doesn't know.
 
 syntax = "proto2";
 
