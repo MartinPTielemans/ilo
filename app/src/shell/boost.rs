@@ -180,9 +180,20 @@ impl Shell {
         let palette = Palette::of(theme.and_then(|each| each.theme).as_ref(), Tone::Dark);
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
         let window = self.browser.window();
+        // The page's favicon, a one-colour one in the ink, as the sidebar draws it on the dark
+        // sheet.
+        let icon = (self.tabs.get(&self.field_tab()))
+            .and_then(|each| each.favicon.clone())
+            .map(
+                |favicon| match super::tile_theme::ink_copy(&favicon, Tone::Dark) {
+                    Some(copy) => gpui::ImageSource::from(copy),
+                    None => gpui::ImageSource::from(favicon),
+                },
+            );
         boost_editor::show(
             window,
             site,
+            icon,
             style,
             on,
             At::Row(anchor),

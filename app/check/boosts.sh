@@ -6,8 +6,9 @@
 
 serve
 # The page says in its title how #ad and its body look, each time that changes, so the run reads
-# what the Boost does to it.
+# what the Boost does to it. Its icon, the site's, is the one the editor's header shows.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>Boosted</title>
+<link rel="icon" href="icon.png">
 <body style="margin:0;background:rgb(51, 51, 51)">
 <div id="ad" style="height:100vh;background:#c33;color:#fff">an ad</div>
 <script>
