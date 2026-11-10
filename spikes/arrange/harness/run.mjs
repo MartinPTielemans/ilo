@@ -36,8 +36,9 @@ const log = (...a) => console.log(`[${siteId}]`, ...a);
 
 // The page's own view, from its main world: what it could notice of the arrangement.
 const WATCH = `(() => {
-  const w = { style: 0, other: 0, child: 0, since: 0 };
+  const w = { style: 0, other: 0, child: 0, since: 0, toggle: 0 };
   window.__spikeWatch = w;
+  for (const t of ['beforetoggle', 'toggle']) addEventListener(t, () => w.toggle++, true);
   new MutationObserver((rs) => { for (const r of rs) {
     if (r.type === 'attributes') (r.attributeName === 'style' ? w.style++ : w.other++); else w.child++; } })
     .observe(document, { attributes: true, childList: true, subtree: true, attributeFilter: undefined });
@@ -293,6 +294,9 @@ async function scenario(name, arrangement, rec, opts = {}) {
       r.geometryReads = s.geometryReads;
       r.flash = flashes(s, arrangement.at === 'commit' ? await p.page.evaluate(() => window.__spikeFrames) : null);
     }
+    if (arrangement && arrangement.changes.some((c) => c.kind === 'trade')) {
+      r.tradeAt = await p.inWorld(`(() => { const s = globalThis.__ILO_ARRANGE__.state().find((x) => x.kind === 'trade'); return s ? { applied: s.applied, why: s.why, intended: s.intended, rect: s.rect } : null; })()`);
+    }
     const w0 = await p.page.evaluate(() => ({ ...window.__spikeWatch }));
     // The page's own updates over 10 s, and whether the arrangement still holds after them.
     await sleep(10000);
@@ -304,7 +308,8 @@ async function scenario(name, arrangement, rec, opts = {}) {
       // What the site's own script reads of the moved element.
       r.mainWorldSees = await p.page.evaluate((path) => {
         try { const el = document.querySelector(path); if (!el) return null;
-          return { position: getComputedStyle(el).position, display: getComputedStyle(el).display, style: (el.getAttribute('style') || '').slice(0, 240), connected: el.isConnected, parent: el.parentElement && el.parentElement.localName };
+          let open = false; try { open = el.matches(':popover-open'); } catch {}
+          return { position: getComputedStyle(el).position, display: getComputedStyle(el).display, style: (el.getAttribute('style') || '').slice(0, 240), connected: el.isConnected, parent: el.parentElement && el.parentElement.localName, popover: el.getAttribute('popover'), popoverOpen: open, toggles: window.__spikeWatch.toggle };
         } catch { return null; } }, arrangement.changes[0].target.path);
     }
     if (opts.idle) {
@@ -387,6 +392,125 @@ async function measure() {
   log('done', results.runs.length, 'runs');
 }
 
+// Two blocks under one parent in a column, one at least three times the other's height, for a
+// trade whose room changes most.
+const TALL = `(() => { const D = globalThis.__ILO_ARRANGE__.describe, H = innerHeight;
+  const ok = (e) => { const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    return r.width > 200 && r.height >= 30 && r.height < H * 1.5 && r.top + scrollY < H * 3 && /^(block|flex|flow-root)$/.test(cs.display) && !/absolute|fixed|sticky/.test(cs.position) && cs.float === 'none'; };
+  const main = document.querySelector('main, [role=main], article, #content, #main') || document.body;
+  for (const par of main.querySelectorAll('*')) {
+    const pcs = getComputedStyle(par);
+    if (/grid|table|inline/.test(pcs.display) || (/flex/.test(pcs.display) && !/column/.test(pcs.flexDirection))) continue;
+    const kids = [...par.children].filter(ok);
+    for (const a of kids) for (const b of kids) {
+      const ha = a.getBoundingClientRect().height, hb = b.getBoundingClientRect().height;
+      if (a !== b && ha >= hb * 3 && Math.abs(a.getBoundingClientRect().width - b.getBoundingClientRect().width) < 400) return { target: D(a), ref: D(b), sizes: [ha, hb] };
+    }
+  }
+  return null; })()`;
+
+// Every element's inline style and box, in document order, with the scroll: what a preview taken
+// away must leave as it found.
+const SNAP = `(() => { const els = [...document.querySelectorAll('body *')].slice(0, 6000);
+  const q = (n) => Math.round(n * 2) / 2;
+  return { sx: scrollX, sy: scrollY, sh: document.documentElement.scrollHeight, sw: document.documentElement.scrollWidth,
+    els: els.map((e) => { const r = e.getBoundingClientRect();
+      return [e.localName + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\\s+/)[0] : ''),
+        e.getAttribute('style') || '', e.hasAttribute('popover') ? 1 : 0, q(r.left), q(r.top + scrollY), q(r.width), q(r.height)]; }) }; })()`;
+
+function snapDiff(a, b, churn) {
+  const d = { scroll: [b.sx - a.sx, b.sy - a.sy], size: [b.sw - a.sw, b.sh - a.sh], count: b.els.length - a.els.length, style: 0, geometry: 0, samples: [] };
+  const n = Math.min(a.els.length, b.els.length);
+  for (let i = 0; i < n; i++) {
+    if (churn && churn.has(i)) continue;
+    const x = a.els[i], y = b.els[i];
+    const st = x[1] !== y[1] || x[2] !== y[2], geo = x[3] !== y[3] || x[4] !== y[4] || x[5] !== y[5] || x[6] !== y[6];
+    if (st) d.style++;
+    if (geo) d.geometry++;
+    if ((st || geo) && d.samples.length < 4) d.samples.push({ el: y[0], was: x.slice(1), now: y.slice(1) });
+  }
+  return d;
+}
+const churnOf = (a, b) => { const s = new Set(); const n = Math.min(a.els.length, b.els.length);
+  for (let i = 0; i < n; i++) if (a.els[i].join('|') !== b.els[i].join('|')) s.add(i); return s; };
+
+// A carry's preview from a placed page: the page with its float, hide and size placed, then one
+// settle and one trade shown and taken away, each where the user would be looking.
+async function previews(rec) {
+  const placed = changesOf(rec, ['float', 'hide', 'size']);
+  const p = await open(null, { strategy: 'place', finder: 'path', test: true, changes: placed });
+  await load(p, site.url);
+  const out = [];
+  try {
+    for (const kind of ['settle', 'trade']) {
+      const [c] = changesOf(rec, [kind]);
+      if (!c) continue;
+      c.id = 'preview-' + kind;
+      await settleOn(p, rec.picks[kind].target);
+      const a0 = await p.inWorld(SNAP);
+      await sleep(400);
+      const a1 = await p.inWorld(SNAP);
+      const churn = churnOf(a0, a1);
+      const m0 = await metrics(p.cdp);
+      const shown = await p.inWorld(`new Promise((res) => { const A = globalThis.__ILO_ARRANGE__, t0 = performance.now();
+        const r = A.preview(${JSON.stringify(c)}), sy = scrollY;
+        requestAnimationFrame(() => { const f1 = performance.now() - t0;
+          requestAnimationFrame(() => res({ ...r, frameStartMs: f1, shownMs: performance.now() - t0, scrollShift: scrollY - sy })); }); })`);
+      const m1 = await metrics(p.cdp);
+      shown.layoutMs = Math.round((m1.LayoutDuration - m0.LayoutDuration) * 1e5) / 100;
+      shown.styleMs = Math.round((m1.RecalcStyleDuration - m0.RecalcStyleDuration) * 1e5) / 100;
+      shown.state = await p.inWorld(`globalThis.__ILO_ARRANGE__.state().find((s) => s.id === ${JSON.stringify(c.id)})`);
+      // The rest a carry waits before showing, then the pointer moves on.
+      await sleep(400);
+      const back = await p.inWorld(`new Promise((res) => { const A = globalThis.__ILO_ARRANGE__, t0 = performance.now(), sy = scrollY;
+        const r = A.unpreview(${JSON.stringify(c.id)});
+        requestAnimationFrame(() => requestAnimationFrame(() => res({ ...r, shownMs: performance.now() - t0, scrollShift: scrollY - sy }))); })`);
+      const b = await p.inWorld(SNAP);
+      back.diff = snapDiff(a1, b, churn);
+      back.churn = churn.size;
+      back.clean = back.diff.style === 0 && back.diff.geometry === 0 && back.diff.scroll.every((x) => x === 0) && back.diff.count === 0;
+      out.push({ kind, shown, back });
+      log('preview', kind, JSON.stringify({ shownMs: shown.shownMs, applied: shown.applied, why: shown.why, clean: back.clean, diff: back.diff.style + '/' + back.diff.geometry }));
+    }
+  } catch (e) { out.push({ error: String(e.message || e).split('\n')[0] }); }
+  out.errors = p.errors.length;
+  await p.close();
+  return out;
+}
+
+async function calls() {
+  const rec = JSON.parse(readFileSync(recordedFile, 'utf8'));
+  const results = { site: siteId, url: site.url, at: new Date().toISOString(), picks: Object.keys(rec.picks), runs: [] };
+  results.runs.push(await scenario('control', null, rec, { capture: 'control.png', checks: false }));
+  if (rec.picks.trade) {
+    const trade = changesOf(rec, ['trade']);
+    results.runs.push(await scenario('trade/transform', { strategy: 'place', tradeBy: 'transform', finder: 'path', test: true, changes: trade }, rec, { capture: 'trade-transform.png', checks: false }));
+    results.runs.push(await scenario('trade/settles', { strategy: 'place', finder: 'path', test: true, changes: trade }, rec, { capture: 'trade-settles.png' }));
+  }
+  // A tall and a short block, picked on the page as it is today.
+  const p = await open(null, null);
+  await load(p, site.url);
+  const tall = await p.inWorld(TALL).catch(() => null);
+  await p.close();
+  results.tallPick = tall && { sizes: tall.sizes, target: tall.target.path, ref: tall.ref.path };
+  if (tall) {
+    const ch = [{ id: 'trade', kind: 'trade', target: tall.target, ref: tall.ref }];
+    results.runs.push(await scenario('trade/settles-tall', { strategy: 'place', finder: 'path', test: true, changes: ch }, rec, { capture: 'trade-tall.png', checks: false }));
+  }
+  // The top layer for settled and floated elements: what the page sees, and whether clicks and
+  // typing land.
+  for (const kind of ['settle', 'float']) {
+    if (!rec.picks[kind]) continue;
+    results.runs.push(await scenario(`${kind}/place`, { strategy: 'place', finder: 'path', test: true, changes: changesOf(rec, [kind]) }, rec));
+    results.runs.push(await scenario(`${kind}/top`, { strategy: 'place', top: true, finder: 'path', test: true, changes: changesOf(rec, [kind]) }, rec, { capture: `${kind}-top.png` }));
+  }
+  results.previews = await previews(rec);
+  results.runs.push(await scenario('all/place-top', { strategy: 'place', top: true, finder: 'path', test: true, changes: changesOf(rec, ['settle', 'trade', 'float', 'hide', 'size']) }, rec, { idle: true, capture: 'after-top.png', checks: false }));
+  writeFileSync(join(out, 'calls.json'), JSON.stringify(results, null, 2));
+  log('done', results.runs.length, 'runs');
+}
+
 if (mode === 'record') await record();
+else if (mode === 'calls') await calls();
 else if (mode === 'refind') await refind();
 else await measure();
