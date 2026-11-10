@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.6"
+version = "0.1.12"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -648,10 +648,12 @@ dependencies = [
  "gpui_windows",
  "image",
  "libc",
+ "lyon",
  "plist",
  "raw-window-handle",
  "rusqlite",
  "serde_json",
+ "tiny-skia",
  "unicode-properties",
  "unicode-segmentation",
  "wayland-client",
