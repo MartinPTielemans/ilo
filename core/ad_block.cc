@@ -25,6 +25,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "browser_core/extensions.h"
 #include "browser_core/hooks.h"
 #include "browser_core/session.h"
 #include "chrome/browser/browser_process.h"
@@ -394,6 +395,8 @@ void LoadInto(Profile* profile) {
   }
   Followers()[profile] = std::make_unique<Follower>(profile);
   Load(profile);
+  // Here, as the last of the profile's extensions has loaded and none has run yet.
+  HoldExtensionsForSafeStart(profile);
 }
 
 }  // namespace

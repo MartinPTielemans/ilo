@@ -1108,6 +1108,23 @@ Each system's own updater downloads an update in the background and then says it
 - The first launch after an update opens its release notes, its entry in the site's changelog, as a tab in the main window, as What's New does. The Mac's and Windows' updaters keep the notes as they install the update, for its first launch. On Linux, where the update can come from outside ilo (GNOME Software, `flatpak update`), the profile keeps the last version that ran, and a newer one opens its notes. A first run or a downgrade opens nothing (#1495).
 - Measure Arc's update prompt, if one can still be triggered.
 
+### Safe start
+
+Ours (the owner's call, #2345): Arc and Chrome have none. When ilo crashes at launch twice in a row, the next launch starts with extensions and Boosts not loaded, so an extension or a Boost that crashes it can't keep it from opening.
+
+- **At launch** is the first minute after the window shows. A crash after it counts nothing, as one hours into use isn't a launch problem. The count is one small mark in the app's folder, "Last launch", saying where the last launch got to. It's written as the window shows, once more a minute later by a single timer, with nothing after it, and as ilo quits. It's never sent anywhere.
+- **What's held.** The profile's extensions, the ad blocker included, are held for that launch before any of them runs. That's Chrome's own state for an extension whose process crashed, so nothing is saved. Chrome's extensions page still lists each one with its switch as the user left it, and its Remove. The browser's own component extensions, themes, and any extension a policy keeps on stay. Boosts don't show, and Settings' Boosts switch reads as the user left it.
+- **The card.** It sits at the sidebar's foot, 6 over the footer, under the update banner and any media player. It has the row plate's inset and radius, and the pressed plate's ink on the window's opaque look.
+  - The circle-alert glyph sits in the rows' icon column, on the first line of the title.
+  - The title, "ilo closed unexpectedly twice", is in body type, medium weight.
+  - Under it, in small secondary words: "Extensions and Boosts are off for now, so ads aren’t blocked.", or without the last clause while Settings' ad blocking is off.
+  - Both wrap on the title column, and the card grows to their lines, as the list gives up its room.
+  - Below them come Turn Back On, an accent button, and "Manage Extensions…" in small secondary words that brighten under the pointer. It opens Chrome's extensions page in a new tab.
+  - It has no ×: the hold lasts the launch, so the card does too. It's in every window, private ones too, with no toast, badge or modal.
+- **The way out.** Turn Back On restarts ilo with its windows and tabs into a normal launch. Any quit ends a safe start too, so the next launch is normal.
+- **Agents** can't start or end one: no tool does either. The MCP server stays up through it.
+- **Every OS** is the same: the mark, the count and the card are the app's, and the core holds the extensions on each.
+
 ### Sync
 
 Ours, through Settings › Sync (Settings). The account keeps the same on each of its devices: the Spaces, with their names, colours, icons, themes, pinned tabs, folders and Today tabs in their order, and the first profile's bookmarks, passwords and open tabs. An agent's Space stays on its device, and so do a window's own Space, a private window and Little ilo. The other computers' tabs outside their Spaces are found in the command bar (Command bar › Rows). The server holds it all encrypted with the account's secret, which only the devices have, and knows a device only by its kind, such as "ilo on Mac", never by its name.

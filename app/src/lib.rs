@@ -128,6 +128,7 @@ pub mod notes;
 pub mod offer;
 pub mod palette;
 pub mod passwords;
+pub mod safe_start;
 pub mod settings_card;
 pub mod settings_column;
 pub mod settings_rows;
