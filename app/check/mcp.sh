@@ -1022,7 +1022,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   # the agent's lines as one unsent message. Text that isn't one key arrives exact, with no
   # composition left open, and a long text loses nothing on a busy page (#2355). Each field says
   # what it holds in the title; the run writes what each came to, then checks them.
-  printf '%s' '<script>
+  printf '%s' '<meta charset=utf-8><script>
 function report(name, text) { document.title = name + " " + text.replace(/\n/g, "|"); }
 let composing = false;
 addEventListener("compositionstart", () => composing = true);
