@@ -26,6 +26,7 @@
 #include "base/time/time.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
+#include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
@@ -74,6 +75,14 @@ constexpr base::TimeDelta kQuiet = base::Milliseconds(500);
 constexpr base::TimeDelta kFrame = base::Hertz(60);
 // What the wheel starts, a scroll or nothing to scroll, has started by then (#1627).
 constexpr base::TimeDelta kSettle = base::Milliseconds(400);
+// What an agent hears when the input would reach an extension's control, which the activity log
+// has too.
+constexpr char kExtensionCovers[] =
+    "An extension's control covers that spot on the page, and agents can't act on an "
+    "extension's controls. Ask the user if it's in the way.";
+constexpr char kExtensionKeyboard[] =
+    "An extension's control has the keyboard in this tab, and agents can't act on an "
+    "extension's controls. Click the page outside it first, or ask the user.";
 // How long a hidden page keeps drawing after an agent's last action, for its next one.
 constexpr base::TimeDelta kRest = base::Seconds(30);
 // Ours: how long a navigation that became a download keeps its action's answer for the download.
@@ -285,7 +294,10 @@ base::ListValue AgentTree(base::ListValue nodes, const std::set<int64_t>& passwo
   for (base::Value& node : nodes) {
     base::DictValue* dict = node.GetIfDict();
     const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
-    if (!id || under_fields.contains(*id)) {
+    // What an extension's content script made is the extension's, not the page's: no ref, and no
+    // text read as the page's (engine/patches/ours/chromium-agent-extension-nodes.patch marks it,
+    // and each node inside it).
+    if (!id || under_fields.contains(*id) || Has(*dict, "fromExtension")) {
       continue;
     }
     dict->Remove("value");
@@ -785,7 +797,22 @@ void AgentPage::PressInView() {
                     return;
                   }
                   page->Point(*shown);
-                  page->Listen(base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                  page->Covered(
+                      slot, at,
+                      base::BindOnce(
+                          [](base::WeakPtr<AgentPage> page, int slot, gfx::PointF at,
+                             bool covered) {
+                            if (!page || !page->job_) {
+                              return;
+                            }
+                            if (covered) {
+                              page->RefuseExtension(kExtensionCovers);
+                              return;
+                            }
+                            page->Listen(
+                                base::BindOnce(&AgentPage::ClickAt, page, slot, at, size_t{0}));
+                          },
+                          page, slot, at));
                 },
                 page, slot, box->CenterPoint()));
       },
@@ -1132,6 +1159,11 @@ void AgentPage::Focus(int64_t element, bool submit) {
                page->Fail("The element can't take typing. Take a new snapshot.");
                return;
              }
+             // Focusing it can bring an extension's menu, which may take the keyboard.
+             if (page->KeysInExtension()) {
+               page->RefuseExtension(kExtensionKeyboard);
+               return;
+             }
              // What the field holds is selected, so the text replaces it.
              const base::DictValue select = base::DictValue()
                                                 .Set("key", "a")
@@ -1179,6 +1211,10 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
     Fail(
         "There's no such key. Press Enter, Tab, Escape, Backspace, Delete, Space, an arrow, "
         "PageUp, PageDown, Home or End.");
+    return;
+  }
+  if (KeysInExtension()) {
+    RefuseExtension(kExtensionKeyboard);
     return;
   }
   HideSuggestions();
@@ -1245,15 +1281,33 @@ void AgentPage::TurnWheel(bool down) {
 }
 
 void AgentPage::Wheel(const gfx::RectF& area, bool down) {
-  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
   const gfx::PointF at = area.CenterPoint();
+  // The main frame's session, where the wheel goes, finds what's there as the wheel would.
+  Covered(0, at,
+          base::BindOnce(
+              [](base::WeakPtr<AgentPage> page, gfx::PointF at, bool down, float height,
+                 bool covered) {
+                if (!page || !page->job_) {
+                  return;
+                }
+                if (covered) {
+                  page->RefuseExtension(kExtensionCovers);
+                  return;
+                }
+                page->TurnWheelAt(at, down, height);
+              },
+              weak_factory_.GetWeakPtr(), at, down, area.height()));
+}
+
+void AgentPage::TurnWheelAt(gfx::PointF at, bool down, float height) {
+  wheel_ = std::make_unique<WheelWatch>(GetWebContents());
   Send("Input.dispatchMouseEvent",
        base::DictValue()
            .Set("type", "mouseWheel")
            .Set("x", at.x())
            .Set("y", at.y())
            .Set("deltaX", 0)
-           .Set("deltaY", (down ? 0.8 : -0.8) * area.height()),
+           .Set("deltaY", (down ? 0.8 : -0.8) * height),
        base::BindOnce(
            [](base::WeakPtr<AgentPage> page, bool down, const base::DictValue*) {
              if (page) {
@@ -1750,6 +1804,107 @@ void AgentPage::HideSuggestions() {
           autofill::ContentAutofillClient::FromWebContents(&GetWebContents())) {
     client->HideSuggestions(autofill::SuggestionHidingReason::kHiddenByCaller, std::nullopt);
   }
+}
+
+void AgentPage::Covered(int slot, gfx::PointF at, base::OnceCallback<void(bool)> then) {
+  Send("DOM.getNodeForLocation",
+       base::DictValue().Set("x", static_cast<int>(at.x())).Set("y", static_cast<int>(at.y())),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int slot, base::OnceCallback<void(bool)> then,
+              const base::DictValue* found) {
+             if (!page) {
+               return;
+             }
+             const std::optional<int> node = found ? found->FindInt("backendNodeId") : std::nullopt;
+             // Nothing there the page can say, as over its margin: what's found next is the page's.
+             if (!node) {
+               std::move(then).Run(false);
+               return;
+             }
+             page->Send(
+                 "DOM.describeNode", base::DictValue().Set("backendNodeId", *node),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, int slot, int node,
+                        base::OnceCallback<void(bool)> then, const base::DictValue* described) {
+                       if (!page) {
+                         return;
+                       }
+                       // A frame's element: the frame it holds takes the input, and one that
+                       // isn't a web page's is an extension's, or the browser's.
+                       const std::string* frame =
+                           described ? described->FindStringByDottedPath("node.frameId") : nullptr;
+                       bool other = false;
+                       if (frame) {
+                         page->GetWebContents().GetPrimaryMainFrame()->ForEachRenderFrameHost(
+                             [&other, frame](content::RenderFrameHost* each) {
+                               if (each->GetDevToolsFrameToken().ToString() == *frame &&
+                                   !IsWebFrame(each)) {
+                                 other = true;
+                               }
+                             });
+                       }
+                       if (other) {
+                         std::move(then).Run(true);
+                         return;
+                       }
+                       page->Send(
+                           "Accessibility.getPartialAXTree",
+                           base::DictValue()
+                               .Set("backendNodeId", node)
+                               .Set("fetchRelatives", false),
+                           base::BindOnce(
+                               [](base::OnceCallback<void(bool)> then,
+                                  const base::DictValue* tree) {
+                                 const base::ListValue* nodes =
+                                     tree ? tree->FindList("nodes") : nullptr;
+                                 bool made = false;
+                                 for (size_t i = 0; nodes && i < nodes->size(); ++i) {
+                                   if (const base::DictValue* dict = (*nodes)[i].GetIfDict()) {
+                                     made = made || Has(*dict, "fromExtension");
+                                   }
+                                 }
+                                 std::move(then).Run(made);
+                               },
+                               std::move(then)),
+                           slot);
+                     },
+                     page, slot, *node, std::move(then)),
+                 slot);
+           },
+           weak_factory_.GetWeakPtr(), slot, std::move(then)),
+       slot);
+}
+
+bool AgentPage::KeysInExtension() {
+  content::RenderFrameHost* focused = GetWebContents().GetFocusedFrame();
+  return focused && !IsWebFrame(focused);
+}
+
+void AgentPage::RefuseExtension(std::string why) {
+  static constexpr std::pair<int, const char*> kActions[] = {
+      {BC_AGENT_PAGE_CLICK, "click"},           {BC_AGENT_PAGE_TYPE, "type"},
+      {BC_AGENT_PAGE_TYPE_SUBMIT, "type"},      {BC_AGENT_PAGE_KEY, "press_key"},
+      {BC_AGENT_PAGE_SCROLL_DOWN, "scroll"},    {BC_AGENT_PAGE_SCROLL_UP, "scroll"},
+      {BC_AGENT_PAGE_SELECT, "select_option"},
+  };
+  const char* action = "click";
+  for (const auto& [each, name] : kActions) {
+    if (job_ && job_->action == each) {
+      action = name;
+    }
+  }
+  const Space* space = Space::Holding(tab_);
+  if (space && space->agent() && Host().agent_activity) {
+    // check.sh reads it in the log, as Settings › Agents lists it.
+    const bc_agent_activity entry = {
+        .agent = space->agent()->id.c_str(),
+        .tab = tab_,
+        .action = action,
+        .refused = why.c_str(),
+    };
+    Host().agent_activity(Host().context, &entry);
+  }
+  Fail(std::move(why));
 }
 
 // static
