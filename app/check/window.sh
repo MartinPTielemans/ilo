@@ -1090,15 +1090,28 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
+# Probe: pid, CPU seconds and process type of each of the browser's processes.
+probe_procs() {
+  for p in $(pgrep -f -- "$procs"); do
+    type=$(tr '\0' '\n' < "/proc/$p/cmdline" 2> /dev/null | sed -n 's/^--type=//p' | head -1)
+    sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null |
+      awk -v p="$p" -v hz="$(getconf CLK_TCK)" -v type="${type:-browser}" '{ printf "%s %.2f %s\n", p, ($12 + $13) / hz, type }'
+  done
+}
 # rest_cpu: $rest, the CPU in seconds the browser's processes take in 4 s with the pointer still,
 # below the rows. Not in a subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
   local from
+  probe_procs > "$out/rest-before.txt"
   from=$(cpu)
   sleep 4 # the window measured
   set -- $from $(cpu)
+  probe_procs > "$out/rest-after.txt"
+  # Probe: each process's CPU in the 4 s, over 0.05 s.
+  awk 'NR == FNR { t[$1] = $2; next } ($2 - t[$1]) > 0.05 { printf "probe: rest cpu %.2f s pid %s %s\n", $2 - t[$1], $1, $3 }' \
+    "$out/rest-before.txt" "$out/rest-after.txt"
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
 rest_cpu
