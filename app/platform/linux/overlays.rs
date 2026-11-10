@@ -289,6 +289,9 @@ pub extern "C" fn host_show_overlay(
         lend_keyboard(window, view, true);
     }
     if shrinking {
+        // GPUI still shows the one fading, without the keys, and a press as it went, such as the
+        // one that shows it again, left it: shown anew, that leave isn't this showing's (#2237).
+        gpui_linux::hide_overlay(view, || {});
         gpui_linux::set_overlay_pointer(view, None);
     }
     let Growth {
