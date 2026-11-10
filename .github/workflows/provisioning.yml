@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   profile:
+    # Proven in run 42880572985; off while the update proof runs.
+    if: ${{ false }}
     runs-on: macos-15
     timeout-minutes: 20
     env:
@@ -200,6 +202,8 @@ jobs:
   # from that DMG, the ad hoc signature and tools/install.sh's, each launched with a throwaway
   # profile folder. The DMG stays on the runner: it's uploaded nowhere, not even as an artifact.
   resign:
+    # Proven in run 42880572985; off while the update proof runs.
+    if: ${{ false }}
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -410,6 +414,8 @@ jobs:
   # step fails, so Sign and notarize never runs. Here the failure is let through, and Sign and
   # notarize skipped as the job's failure would skip it, to show what's left after it.
   missing:
+    # Proven in run 42880572985; off while the update proof runs.
+    if: ${{ false }}
     runs-on: macos-15
     timeout-minutes: 30
     env:
@@ -487,4 +493,379 @@ jobs:
         if: ${{ always() }}
         with:
           name: missing
+          path: ${{ runner.temp }}/out
+
+  # An update over a user's copy, with the runner's own login keychain, never a mock one: the
+  # released 0.1.14 in /Applications, on the prod profile in Application Support, saves a login
+  # and gets a cookie through the app, then #2364's copy (tools/release.sh with the profile and
+  # release.plist, notarized) replaces it on that profile, then 0.1.14 again. Each launch passes
+  # only if no Keychain dialog comes (no new SecurityAgent, and the page comes within its time),
+  # the server sees the cookie, the saved password fills, and "ilo Safe Storage" is the one item
+  # with the cdat 0.1.14 made it with.
+  update:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: 0.1.14
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Released app
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/released" build
+          sw_vers | tee "$RUNNER_TEMP/out/macos.txt"
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          ditto "$RUNNER_TEMP/mnt/ilo.app" build/Browser.app
+          ditto "$RUNNER_TEMP/mnt/ilo.app" "$RUNNER_TEMP/released/ilo.app"
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+          [ ! -e /Applications/ilo.app ]
+          [ ! -e "$HOME/Library/Application Support/ilo" ]
+
+      # The keychains as the runner has them, which the signing step puts back as they were.
+      - name: Runner's Keychain
+        run: |
+          out=$RUNNER_TEMP/out
+          {
+            echo "default: $(security default-keychain -d user)"
+            echo "search list:"; security list-keychains -d user
+            login=$(security login-keychain -d user | sed 's/^ *"//; s/"$//')
+            echo "login: $login"
+            security show-keychain-info "$login" 2>&1
+            echo "ilo Safe Storage items: $(security dump-keychain 2> /dev/null | grep -c '"svce"<blob>="ilo Safe Storage' || true)"
+          } | tee "$out/keychain-runner.txt"
+          security default-keychain -d user | sed 's/^ *"//; s/"$//' > "$RUNNER_TEMP/default-keychain.txt"
+          security list-keychains -d user | sed 's/^ *"//; s/"$//' > "$RUNNER_TEMP/search-list.txt"
+
+      # A login form posting to /login, which sets a cookie for a day and sends the browser on, and
+      # a server noting each request's cookie header, never the form's body.
+      - name: Site
+        run: |
+          out=$RUNNER_TEMP/out
+          site=$RUNNER_TEMP/site
+          mkdir -p "$site" "$RUNNER_TEMP/server"
+          uuidgen | tr -d - | tr A-F a-f > "$RUNNER_TEMP/token"
+          printf '%s' 'function painted(then) {
+            let done = false;
+            const call = () => done || (done = true, then());
+            new PerformanceObserver((entries, observer) => { observer.disconnect(); call(); })
+              .observe({type: "paint", buffered: true});
+            let first;
+            const frame = time => { first ??= time; time - first > 600 ? call() : done || requestAnimationFrame(frame); };
+            requestAnimationFrame(frame);
+          }' > "$site/painted.js"
+          # app/check/site.sh's login page.
+          printf '%s' '<title>loading</title><script src="painted.js"></script>
+          <form method="post" action="login">
+          <input id=user name=username autocomplete=username
+            style="position:fixed;left:0;top:0;width:100%;height:50%;font:24px system-ui">
+          <input id=pass name=password type=password autocomplete=current-password
+            style="position:fixed;left:0;top:50%;width:100%;height:50%;font:24px system-ui">
+          <button style="position:fixed;right:0;bottom:0;width:1px;height:1px"></button>
+          </form>
+          <script>
+          let shown = false;
+          painted(() => { shown = true; document.title = "login"; });
+          let filled = false;
+          setInterval(() => {
+            if (shown && pass.matches(":autofill") != filled) {
+              filled = !filled;
+              document.title = filled ? "filled" : "cleared";
+            }
+          }, 100);
+          </script>' > "$site/login.html"
+          echo '<!doctype html><title>welcome</title><p>Signed in.' > "$site/welcome.html"
+          cat > "$RUNNER_TEMP/server/serve.py" <<'PY'
+          import http.server, sys, time
+
+          site, port, notes, token = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+
+          class Site(http.server.SimpleHTTPRequestHandler):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, directory=site, **kwargs)
+
+              def note(self):
+                  with open(notes, "a") as f:
+                      f.write(f"{time.strftime('%H:%M:%S')} {self.command} {self.path} "
+                              f"cookie={self.headers.get('Cookie') or 'none'}\n")
+
+              def end_headers(self):
+                  self.send_header("Cache-Control", "no-store")
+                  super().end_headers()
+
+              def do_GET(self):
+                  self.note()
+                  super().do_GET()
+
+              def do_POST(self):
+                  self.note()
+                  self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                  self.send_response(303)
+                  self.send_header("Location", "/welcome.html")
+                  self.send_header("Set-Cookie", f"session={token}; Max-Age=86400; Path=/; HttpOnly")
+                  self.send_header("Content-Length", "0")
+                  self.end_headers()
+
+              def log_message(self, *args):
+                  pass
+
+          http.server.ThreadingHTTPServer(("127.0.0.1", port), Site).serve_forever()
+          PY
+          nohup python3 -I "$RUNNER_TEMP/server/serve.py" "$site" 8765 "$out/server.log" "$(cat "$RUNNER_TEMP/token")" \
+            > "$out/server-stderr.log" 2>&1 &
+          for _ in $(seq 50); do curl -sf -o /dev/null http://127.0.0.1:8765/welcome.html && break; sleep 0.1; done
+          : > "$out/server.log"
+          cat > "$RUNNER_TEMP/drive.sh" <<'SH'
+          # Launches /Applications/ilo.app on the prod profile and drives it, as app/check/lib.sh does.
+          out=$RUNNER_TEMP/out
+          app=/Applications/ilo.app
+          site=http://127.0.0.1:8765/
+          token=$(cat "$RUNNER_TEMP/token")
+          profile="$HOME/Library/Application Support/ilo"
+          step=0
+          # What the Keychain did, for a launch that failed: the screen, which shows a dialog, the
+          # system's lines about it, and the app's.
+          fail() {
+            echo "FAIL ($phase): $*" | tee -a "$out/result.txt"
+            screencapture -x "$out/fail-$phase.png" 2> /dev/null || true
+            echo "SecurityAgent: $(pgrep -lx SecurityAgent | tr '\n' ' ')"
+            log show --last 10m --style compact --predicate 'process == "SecurityAgent" OR process == "securityd" OR process == "secd" OR eventMessage CONTAINS[c] "Safe Storage"' \
+              2> /dev/null | grep -v '^Filtering' | tail -80 | tee "$out/fail-$phase-system.txt" || true
+            grep -i -e keychain -e 'cookie key' -e errSec -e 'os_crypt' -e 'Safe Storage' -e 'encrypt' "$log" | tail -40 || true
+            exit 1
+          }
+          # A SecurityAgent that wasn't there before the launch is the Keychain's dialog.
+          no_dialog() {
+            local now
+            now=$(pgrep -x SecurityAgent | sort | tr '\n' ' ' || true)
+            [ "$now" = "$agents" ] || fail "a SecurityAgent came (pids $now, before the launch: ${agents:-none}): a Keychain dialog"
+          }
+          # Waits up to $2 tenths of a second for a line matching $1 after drive step $3, else 0.
+          await() {
+            for _ in $(seq "$2"); do
+              sed -n "/^browser: drive ${3:-0}: /,\$p" "$log" | grep -q "$1" && return 0
+              [ "${3:-0}" = 0 ] && grep -q "$1" "$log" && return 0
+              no_dialog
+              grep -q '^exited ' "$log" && fail "the app exited, waiting for \"$1\""
+              sleep 0.1
+            done
+            return 1
+          }
+          expect() { await "$1" 100 "$step" || fail "$2"; }
+          send() {
+            step=$((step + 1))
+            echo "$*" >&3
+            await "^browser: drive $step done" 300 || fail "the driver didn't finish \"$*\""
+            grep -q "^browser: drive $step: can't do that" "$log" && fail "the driver can't do \"$*\""
+            active=$(grep "^browser: drive $step done" "$log" | sed 's/.*active \([01]\).*/\1/')
+          }
+          launch() {
+            log=$out/$phase.log
+            step=0
+            # Sparkle checks no feed, so it can't put another version in place at the quit.
+            defaults write app.ilo.browser SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+            agents=$(pgrep -x SecurityAgent | sort | tr '\n' ' ' || true)
+            served=$(wc -l < "$out/server.log")
+            started=$(date '+%Y-%m-%d %H:%M:%S')
+            exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+            fifo=$RUNNER_TEMP/drive-$phase
+            mkfifo "$fifo"
+            (env -u BROWSER_PROFILE_DIR BROWSER_DRIVE=1 BROWSER_URL="${site}login.html" "$exe" --enable-logging=stderr --v=0 \
+              < "$fifo" >> "$log" 2>&1; echo "exited $?" >> "$log") &
+            exec 3> "$fifo"
+            echo "$phase: launched $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist") at $started, SecurityAgent before: ${agents:-none}"
+          }
+          # The login page's title, as the app logs it: within 90 s, or the launch waits on something.
+          titled() {
+            await "^browser: title [0-9]* $1\$" 900 || fail "the login page didn't say \"$1\" within 90 s of the launch"
+            tab=$(grep "^browser: title [0-9]* $1\$" "$log" | tail -1 | sed 's/^browser: title \([0-9]*\) .*/\1/')
+            pid=$(pgrep -n -f "^$exe" || true)
+          }
+          # The server saw request $1 since the launch with the cookie the login got.
+          sent() {
+            tail -n +"$((served + 1))" "$out/server.log" | grep " $1 cookie=" | sed "s/$token/<token>/g" | tee -a "$out/$phase-requests.txt" || true
+            tail -n +"$((served + 1))" "$out/server.log" | grep " $1 cookie=" | grep -q "session=$token" ||
+              fail "the server didn't see the cookie on $1"
+          }
+          # SIGTERM, which Chromium takes for the session ending, as a logout does.
+          quit() {
+            no_dialog
+            kill -TERM "$pid"
+            for _ in $(seq 300); do grep -q '^exited ' "$log" && break; sleep 0.1; done
+            grep -q '^exited ' "$log" || fail "the app didn't quit within 30 s"
+            exec 3>&-
+            for _ in $(seq 100); do pgrep -f "$app/" > /dev/null || break; sleep 0.1; done
+            pkill -9 -f "$app/" || true
+            no_dialog
+            log show --start "$started" --style compact --predicate 'process == "SecurityAgent" OR eventMessage CONTAINS[c] "Safe Storage" OR (sender == "AppleMobileFileIntegrity" AND eventMessage CONTAINS "ilo")' \
+              2> /dev/null | grep -v '^Filtering' | tail -40 > "$out/$phase-system.txt" || true
+            echo "system lines: $(grep -c . "$out/$phase-system.txt")"; cat "$out/$phase-system.txt"
+            echo "the app's Keychain lines:"
+            grep -i -e keychain -e 'cookie key' -e errSec -e 'os_crypt' -e 'Safe Storage' "$log" | tee "$out/$phase-keychain-lines.txt" || echo "(none)"
+          }
+          # The cookie key's item, never its secret: where it is, its attributes and its access.
+          record() {
+            {
+              echo "== $phase"
+              echo "app: $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist"), $(codesign -dvv "$app" 2>&1 | grep -e '^Authority=Developer' -e '^TeamIdentifier' | tr '\n' ' ')"
+              echo "embedded.provisionprofile: $([ -e "$app/Contents/embedded.provisionprofile" ] && echo yes || echo no)"
+              echo "designated requirement: $(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')"
+              echo "KeychainKeySignature: $(defaults read app.ilo.browser KeychainKeySignature 2>&1)"
+              echo "KeychainKeyTries: $(defaults read app.ilo.browser KeychainKeyTries 2>&1 | tr '\n' ' ')"
+              echo "items named ilo Safe Storage: $(security dump-keychain 2> /dev/null | grep -c '"svce"<blob>="ilo Safe Storage"$' || true)"
+              echo "spares (moving): $(security dump-keychain 2> /dev/null | grep -c '"svce"<blob>="ilo Safe Storage (moving)"$' || true)"
+              security find-generic-password -s "ilo Safe Storage" -a ilo 2>&1 || echo "find-generic-password: status $?"
+              echo "-- its access"
+              perl -e 'alarm shift; exec @ARGV' 30 security dump-keychain -a 2> /dev/null |
+                awk '/^keychain: /{ if (item ~ /"svce"<blob>="ilo Safe Storage"/) printf "%s", item; item = "" } { item = item $0 "\n" } END { if (item ~ /"svce"<blob>="ilo Safe Storage"/) printf "%s", item }' |
+                grep -v -e '^ *0x' || true
+            } | tee "$out/item-$phase.txt"
+            sed -n 's/^ *"cdat"<timedate>=//p' "$out/item-$phase.txt" > "$out/cdat-$phase.txt"
+          }
+          # The same item 0.1.14 made: one of it, no spare, its cdat unchanged, and no regrant.
+          same_item() {
+            grep -q '^items named ilo Safe Storage: 1$' "$out/item-$phase.txt" || fail "not one ilo Safe Storage item: $(grep '^items named' "$out/item-$phase.txt")"
+            grep -q '^spares (moving): 0$' "$out/item-$phase.txt" || fail "a spare item was left"
+            [ -s "$out/cdat-released.txt" ] && cmp -s "$out/cdat-released.txt" "$out/cdat-$phase.txt" ||
+              fail "the item's cdat is $(cat "$out/cdat-$phase.txt"), not $(cat "$out/cdat-released.txt")"
+            grep -q -e 'the cookie key regranted' -e "the cookie key couldn't be read" -e 'the cookie key came back' -e 'the cookie key is left' "$log" &&
+              fail "the app touched the cookie key: $(grep 'the cookie key' "$log")"
+            echo "$phase: the same item, cdat $(cat "$out/cdat-$phase.txt")"
+          }
+          # Another copy, launched on the same profile: no dialog, the saved login fills, the cookie
+          # is sent, and the item is the same.
+          relaunch() {
+            launch
+            titled filled
+            echo "$phase: the login page filled the saved password in, tab $tab, pid $pid"
+            sent /login.html
+            quit
+            record
+            same_item
+            echo "PASS ($phase): no Keychain dialog, the cookie sent, the password filled, the same item" | tee -a "$out/result.txt"
+          }
+          SH
+          bash -n "$RUNNER_TEMP/drive.sh"
+
+      # 0.1.14 as a user has it, on a fresh prod profile: through the app, it logs in, saves the
+      # password from its offer, gets the cookie, and fills the password in on the next visit.
+      - name: 0.1.14 saves a login
+        run: |
+          phase=released
+          ditto "$RUNNER_TEMP/released/ilo.app" /Applications/ilo.app
+          . "$RUNNER_TEMP/drive.sh"
+          launch
+          titled login
+          echo "the login page drew, tab $tab, pid $pid"
+          send click 600 60
+          [ "$active" = 1 ] || fail "the app wasn't the active one, so the page ignored the click"
+          send key a cmd
+          send type check@example.test
+          send key tab
+          send key a cmd
+          send type hunter2.check
+          send key return
+          expect "^browser: offer $tab save check@example.test " "the login brought no offer to save"
+          expect '^browser: offer shown$' "the offer wasn't shown"
+          expect "^browser: offer $tab takes input\$" "the offer never took input"
+          send layout
+          child=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: layout child' | grep ' 320x180$' | head -1 | sed 's/^browser: layout child //')
+          [ -n "$child" ] || fail "the offer's card isn't over the browser window"
+          ox=${child%%,*}; oy=${child#*,}; oy=${oy%% *}
+          send click $((ox + 56)) $((oy + 70))
+          send key return
+          expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save the password"
+          expect '^browser: offer hidden$' "saving didn't hide the offer"
+          tail -n +"$((served + 1))" "$out/server.log" | grep -q ' POST /login cookie=' || fail "the form didn't post"
+          sent /welcome.html
+          send key l cmd
+          expect '^browser: command bar shown$' "⌘L didn't open the command bar"
+          send type 127.0.0.1:8765/login.html
+          send key return
+          expect "^browser: title $tab filled\$" "the login page didn't fill the saved password in"
+          sent /login.html
+          quit
+          find "$profile" -maxdepth 2 \( -name Cookies -o -name 'Login Data' \) -exec ls -la {} + || true
+          record
+          grep -q '^items named ilo Safe Storage: 1$' "$out/item-$phase.txt" || fail "0.1.14 left $(grep '^items named' "$out/item-$phase.txt") in the Keychain"
+          [ -s "$out/cdat-released.txt" ] || fail "no cdat"
+          echo "PASS ($phase): 0.1.14 saved the login and got the cookie; its item's cdat is $(cat "$out/cdat-released.txt")" | tee -a "$out/result.txt"
+
+      # release.yml's Keychain step, but beside the runner's keychains rather than in their place,
+      # and the step after it, then tools/release.sh. The keychains go back as they were, and the
+      # app from the notarized DMG replaces 0.1.14 in /Applications.
+      - name: Sign as #2364
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          MAC_NOTARY_KEY: ${{ secrets.MAC_NOTARY_KEY }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          keychain=$RUNNER_TEMP/release.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          xargs security list-keychains -d user -s "$keychain" < "$RUNNER_TEMP/search-list.txt"
+          security default-keychain -d user -s "$keychain"
+          printf %s "$MAC_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)
+          [ -n "$identity" ]
+          printf %s "$MAC_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials notary --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$MAC_NOTARY_KEY_ID" --issuer "$MAC_NOTARY_ISSUER_ID"
+          rm "$RUNNER_TEMP/notary.p8"
+          status=0
+          ../tools/check-profile.sh "$identity" && SIGN_IDENTITY=$identity ../tools/release.sh || status=$?
+          security default-keychain -d user -s "$(cat "$RUNNER_TEMP/default-keychain.txt")"
+          xargs security list-keychains -d user -s < "$RUNNER_TEMP/search-list.txt"
+          security delete-keychain "$keychain"
+          echo "default: $(security default-keychain -d user)"; security list-keychains -d user
+          [ "$status" = 0 ]
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/signed" build/release/ilo.dmg > /dev/null
+          rm -rf /Applications/ilo.app
+          ditto "$RUNNER_TEMP/signed/ilo.app" /Applications/ilo.app
+          hdiutil detach "$RUNNER_TEMP/signed" > /dev/null
+          xcrun stapler validate /Applications/ilo.app
+          spctl -a -t exec -vv /Applications/ilo.app 2>&1
+          codesign -d --entitlements - --xml /Applications/ilo.app 2> /dev/null | plutil -p - | tee "$RUNNER_TEMP/out/update-entitlements.txt"
+          cmp /Applications/ilo.app/Contents/embedded.provisionprofile entitlements/developer-id.provisionprofile
+
+      - name: "#2364's copy over it"
+        run: |
+          phase=update
+          . "$RUNNER_TEMP/drive.sh"
+          [ -e "$app/Contents/embedded.provisionprofile" ] || fail "/Applications/ilo.app isn't #2364's copy"
+          relaunch
+
+      - name: 0.1.14 back over it
+        run: |
+          phase=back
+          . "$RUNNER_TEMP/drive.sh"
+          rm -rf "$app"
+          ditto "$RUNNER_TEMP/released/ilo.app" "$app"
+          [ ! -e "$app/Contents/embedded.provisionprofile" ] || fail "/Applications/ilo.app isn't 0.1.14"
+          relaunch
+
+      - name: Result
+        if: ${{ always() }}
+        run: |
+          cat "$RUNNER_TEMP/out/result.txt" 2> /dev/null || echo "no result"
+          for phase in released update back; do cat "$RUNNER_TEMP/out/item-$phase.txt" 2> /dev/null || true; done
+          echo "== server"; cat "$RUNNER_TEMP/out/server.log" 2> /dev/null | sed "s/$(cat "$RUNNER_TEMP/token")/<token>/g" || true
+          pkill -f serve.py || true
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: update
           path: ${{ runner.temp }}/out
