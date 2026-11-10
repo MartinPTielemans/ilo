@@ -24,6 +24,10 @@ on:
       runs:
         description: The runs to do, such as "load tabs", or "all"; empty for the ones the Mac runner passes
         default: ''
+      rebuild:
+        description: Build the app, even if a check of this commit kept one
+        type: boolean
+        default: false
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -119,13 +123,38 @@ jobs:
               { echo "::error::$setting stayed on"; exit 1; }
           done
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
+      # The app another check of this commit built, if one kept it (app-artifact.sh), unless a run
+      # asked for builds one of its own with build.sh updates, which needs the build's target/.
+      - id: kept
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.runs }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          run=
+          case " $RUNS " in
+          *" all "* | *" updates "* | *" nightly "* | *" update-checks "*) ;;
+          *) [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-mac-$GITHUB_SHA") ;;
+          esac
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+      - if: ${{ steps.kept.outputs.run != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: app-mac-${{ github.sha }}
+          path: ${{ runner.temp }}/app
+          run-id: ${{ steps.kept.outputs.run }}
+          github-token: ${{ github.token }}
+      - id: unpacked
+        if: ${{ steps.kept.outputs.run != '' }}
+        run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+
+      - if: ${{ steps.kept.outputs.run == '' }}
         run: rustup update stable --no-self-update
 
       # Every ref reads main's build cache, and main alone saves one: a copy saved by each
       # branch pushed main's out of the repository's 10 GB (#1969).
       - id: cache
-        if: ${{ steps.engine.outputs.found == 'true' }}
+        if: ${{ steps.kept.outputs.run == '' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -135,8 +164,20 @@ jobs:
           key: check-mac-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
           restore-keys: check-mac-
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
+      - id: build
+        if: ${{ steps.kept.outputs.run == '' }}
         run: ./setup.sh prebuilt && ./build.sh
+
+      # For the next check of this commit, for 3 days.
+      - if: ${{ steps.build.outcome == 'success' }}
+        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
+      - if: ${{ steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-mac-${{ github.sha }}
+          path: ${{ runner.temp }}/app.tar
+          retention-days: 3
+          overwrite: true
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
