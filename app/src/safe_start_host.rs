@@ -70,7 +70,6 @@ pub(crate) fn start(cx: &mut App) {
         cx.background_executor().timer(after).await;
         cx.update(|_| {
             write(Mark::Running);
-            // check.sh reads this line.
             log!("browser: launch mark running");
         });
     })
