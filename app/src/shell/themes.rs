@@ -117,6 +117,23 @@ impl Shell {
         cx.refresh_windows();
     }
 
+    /// View › Appearance and Show Space Header as they came from the account (settings_synced):
+    /// the window draws with them and its menus say so, as when the user chose them here, but
+    /// nothing is kept again, as the core has them.
+    pub fn look_followed(&mut self, appearance: Appearance, header: bool, cx: &mut Context<Self>) {
+        cx.set_global(AppAppearance(appearance));
+        cx.set_global(super::LoneSpaceHeader(header));
+        if self.app_appearance == appearance && self.lone_header == header {
+            return;
+        }
+        self.app_appearance = appearance;
+        // check.sh waits for the outline the rows are drawn with next.
+        self.outline_changed |= self.lone_header != header;
+        self.lone_header = header;
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// Draws the window as if the system's appearance were `tone`, as the preview does to show
     /// either without changing the system's.
     pub fn force_tone(&mut self, tone: Option<Tone>) {

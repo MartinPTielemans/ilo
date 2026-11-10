@@ -175,7 +175,7 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
 pub(crate) unsafe extern "C" fn settings_synced(_: *mut c_void) {
     update_app_later(|cx| {
         little_windows_followed(cx);
-        settings::refresh(cx);
+        settings::look_followed(cx);
     });
 }
 

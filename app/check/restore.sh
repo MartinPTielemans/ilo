@@ -792,22 +792,17 @@ expect "^browser: title $l scrolled [1-9][0-9]*\$" "the tab put back loaded its 
 expect "^browser: page $l back [0-9]* forward [0-9]* loading 0 " "the tab put back didn't finish loading"
 ../tools/window-screenshot.sh "$pid" "$out/unloaded-scrolled.png" || fail "no window to capture"
 # A quit while a page is full screen, as a video is, keeps the window windowed: the page took it
-# full screen, and it would come back so with no video in it (#383). On Windows that quit crashes
-# (#1991).
-if windows; then
-  echo "skip: a quit with a page full screen, which crashes on Windows (#1991)."
-  exec 3>&-
-  quit
-else
-  send click $page_point
-  send key f
-  expect '^browser: page entered full screen$' "the long page didn't go full screen"
-  expect '^browser: window entered full screen$' "the window didn't go full screen with the page"
-  exec 3>&-
-  quit
-  grep -q '"fullscreen": *true' "$saved" &&
-    fail "the window was saved full screen for the page that was full screen at the quit"
-fi
+# full screen, and it would come back so with no video in it (#383). On Windows the quit closes the
+# window as its close button does, which ends the page's full screen from within Chrome's closing of
+# its tabs, and crashed there (#1991, #2068).
+send click $page_point
+send key f
+expect '^browser: page entered full screen$' "the long page didn't go full screen"
+expect '^browser: window entered full screen$' "the window didn't go full screen with the page"
+exec 3>&-
+quit
+grep -q '"fullscreen": *true' "$saved" &&
+  fail "the window was saved full screen for the page that was full screen at the quit"
 
 # Help › Restore Earlier Sidebar brings back the profile's sidebar from a backup, which the core
 # takes as it saves the Spaces, in the profile's directory. The sidebar it replaces becomes the

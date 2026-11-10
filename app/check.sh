@@ -7,7 +7,7 @@
 #   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
 #   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
 #   notifications calls battery battery-os policies hosts idle handback webrtc count translate
-#   pictures
+#   pictures boosts
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
@@ -106,7 +106,7 @@ runs="$runs split favorites cards extensions adblock adblock-lists windows priva
 runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures"
+runs="$runs handback webrtc count translate pictures boosts"
 named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
@@ -284,8 +284,6 @@ for run in ${*:-$runs}; do
   # Rules a run made, as import's from Arc, would send a later run's links to another Space and
   # put their rows under its clicks, so each run starts without them, as it does without Spaces.
   rm -f "$profile_dir/Link rules"
-  # And without Hide Space Header's choice, which spaces' makes and takes back.
-  rm -f "$profile_dir/Space Header"
   # And without the command bar's picks, which put a command picked first among equal matches
   # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
   # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
