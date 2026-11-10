@@ -39,6 +39,10 @@ fn bars_svg(angle: f32) -> String {
 
 const ICONS: &[(&str, &[u8])] = &[
     (
+        "icons/bell-off.svg",
+        include_bytes!("../../assets/icons/bell-off.svg"),
+    ),
+    (
         "icons/activity.svg",
         include_bytes!("../../assets/icons/activity.svg"),
     ),

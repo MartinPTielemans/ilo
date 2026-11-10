@@ -2235,6 +2235,10 @@ fn main() {
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
+            if let Ok(which) = std::env::var("PREVIEW_PRIVACY") {
+                preview_privacy(which, cx);
+                return;
+            }
             let account = std::env::var("PREVIEW_ACCOUNT").ok();
             if let Some(state) = account.as_deref().filter(|state| *state != "approve") {
                 preview_account(state, cx);
@@ -2412,6 +2416,18 @@ fn main() {
                     }
                     // PREVIEW_DRM=1 has the first tab's page ask for video ilo plays only in Apple's
                     // engine, so its note shows.
+                    // Mock (#2323): the first tab's page asks to send notifications.
+                    if std::env::var_os("PREVIEW_QUESTION").is_some() {
+                        let question = shell::Question {
+                            site: "en.wikipedia.org".into(),
+                            permissions: vec!["Show notifications".into()],
+                        };
+                        shell.set_question(1, Some(question), cx);
+                    }
+                    // Mock (#2323): the quiet form, a bell in the URL field.
+                    if std::env::var_os("PREVIEW_QUIET").is_some() {
+                        shell.set_battery_saver(Some(40), cx);
+                    }
                     if std::env::var_os("PREVIEW_DRM").is_some() {
                         shell.set_media_unsupported(1, "com.widevine.alpha", cx);
                     }
@@ -3081,8 +3097,16 @@ fn preview_site() -> Site {
                 6,
                 "notifications",
                 "Notifications",
-                Value::Allow,
-                "Allowed",
+                if std::env::var_os("PREVIEW_QUIET_BLOCKED").is_some() {
+                    Value::Block
+                } else {
+                    Value::Allow
+                },
+                if std::env::var_os("PREVIEW_QUIET_BLOCKED").is_some() {
+                    "Not allowed (default)"
+                } else {
+                    "Allowed"
+                },
                 &Value::ALL,
             ),
             permission(
@@ -3378,4 +3402,171 @@ fn preview_update(update: &str, cx: &mut App) {
         _ => Stage::Ready(version),
     };
     updates::changed(stage, cx);
+}
+
+/// Mock (#2323): Settings › Privacy's top rows, with the cookie-notice row where `which` puts it.
+fn preview_privacy(which: String, cx: &mut App) {
+    use browser::tokens::settings::{HEIGHT, WIDTH};
+    let (mut x, mut y) = (0., 0.);
+    unsafe { host_centered(WIDTH as f64, HEIGHT as f64, &mut x, &mut y) };
+    let bounds = Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(WIDTH), px(HEIGHT)),
+    );
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| {
+        cx.new(|cx| {
+            let dark = preview_tone() != Some(Tone::Light);
+            let look = browser::settings_rows::Look::settings(dark);
+            let search = cx.new(|cx| {
+                browser::text_input::TextInput::new("Search", cx)
+                    .placeholder_color(look.detail)
+                    .caret_color(look.ink)
+            });
+            PrivacyPage {
+                which,
+                card: Card::default(),
+                search,
+            }
+        })
+    });
+    if let Err(error) = opened {
+        log!("preview: couldn't open privacy: {error}");
+    }
+}
+
+struct PrivacyPage {
+    which: String,
+    card: Card,
+    search: gpui::Entity<browser::text_input::TextInput>,
+}
+
+impl gpui::Render for PrivacyPage {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use browser::palette::{INK, PAPER};
+        use browser::settings_card::Colors;
+        use browser::settings_column::{self, Section};
+        use browser::settings_rows::{Look, button, end, frame, group_lined, stop_switch, text};
+        use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, STAND_IN};
+        use browser::tokens::settings::{
+            FIRST_GROUP, GROUP_GAP, LEDE_LINE, LEDE_TOP, NAME, ROW_X, TEXT_X, TITLE,
+        };
+        use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
+        use browser::tokens::text;
+        use gpui::{ParentElement, Styled, div, rgb};
+        let dark = preview_tone() != Some(Tone::Light);
+        let look = Look::settings(dark);
+        let accent = rgb(NO_THEME_ACCENT);
+        let field = browser::settings_search::field(
+            &self.search,
+            if dark { rgb(PAPER) } else { rgb(INK) },
+            gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+            |_, _| {},
+            cx,
+        );
+        let column = settings_column::column(
+            Section::Privacy,
+            dark,
+            Rc::default(),
+            gpui::IntoElement::into_any_element(field),
+            None,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            window.is_a11y_active(),
+        );
+        let base = if dark { rgb(PAPER) } else { rgb(INK) };
+        let row = |name: &'static str, line: &'static str, on: bool| {
+            let switch = stop_switch(&look, name, name, on, 1., accent, false);
+            frame()
+                .child(text(&look, name, Some(line.into())))
+                .child(end([gpui::IntoElement::into_any_element(switch)]))
+        };
+        let group = |rows: Vec<gpui::Div>| group_lined(&look, rows.into_iter().map(|r| (r, ROW_X)));
+        let asking_off = self.which.contains("asking-off");
+        let cookies = row(
+            "Hide cookie notices",
+            "uBlock Origin's EasyList and uBlock filters Cookie Notices lists. Off on a site where ad blocking is off.",
+            true,
+        );
+        let ads = row(
+            "Block ads and trackers",
+            "uBlock Origin, built in. A site's Site Controls turn it off there.",
+            true,
+        );
+        let prompts = row(
+            "Let sites ask to send notifications",
+            if asking_off {
+                "Off: no site can ask. A site you allowed or blocked keeps its choice."
+            } else {
+                "Calls and chat need it. A site you allowed or blocked keeps its choice."
+            },
+            !asking_off,
+        );
+        let relay = row(
+            "Relay calls",
+            "Calls always go through a relay. Some apps won't connect, and calls may lag.",
+            false,
+        );
+        let clear = frame()
+            .child(text(
+                &look,
+                "Browsing data",
+                Some("History, cookies and cache, for one profile.".into()),
+            ))
+            .child(end([gpui::IntoElement::into_any_element(button(
+                &look, "clear", "Clear…",
+            ))]));
+        let mut blocks: Vec<gpui::Div> = match self.which.as_str() {
+            w if w.starts_with("nested") => vec![
+                group(vec![ads, cookies.pl(px(TEXT_X + 22.))]),
+                group(vec![prompts]),
+            ],
+            w if w.starts_with("today") => vec![group(vec![ads]), group(vec![prompts])],
+            _ => vec![group(vec![ads, cookies]), group(vec![prompts])],
+        };
+        blocks.push(group(vec![relay]));
+        blocks.push(group(vec![clear]));
+        let title = shell::display_text("Privacy", TITLE_SIZE, TITLE_LINE, cx)
+            .text_color(base.opacity(TITLE));
+        let lede = div()
+            .mt(px(LEDE_TOP))
+            .line_height(px(LEDE_LINE))
+            .text_color(base.opacity(browser::tokens::settings::DETAIL))
+            .child(concat!(
+                "What sites may do, and what ",
+                env!("APP_NAME"),
+                " sends."
+            ));
+        let head = div().px(px(TEXT_X)).child(title).child(lede);
+        let page = div().w_full().flex().flex_col().child(head).children(
+            blocks.into_iter().enumerate().map(|(i, b)| {
+                div()
+                    .mt(px(if i == 0 { FIRST_GROUP } else { GROUP_GAP }))
+                    .child(b)
+            }),
+        );
+        let colors = Colors {
+            line: look.line,
+            name: base.opacity(NAME),
+            heading: look.heading,
+        };
+        let card = self.card.draw("", page, dark, colors);
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(rgb(if dark { STAND_IN } else { LIGHT_STAND_IN }))
+            .font_family(browser::face::UI)
+            .text_size(px(text::BODY))
+            .text_color(look.ink)
+            .child(column)
+            .child(card)
+    }
 }

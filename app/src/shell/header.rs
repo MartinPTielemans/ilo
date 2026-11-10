@@ -632,12 +632,17 @@ impl Shell {
                         shell.show_battery_notice(cx);
                     }),
                 )
-                .child(
+                .child(if std::env::var_os("PREVIEW_QUIET").is_some() {
+                    svg()
+                        .path("icons/bell-off.svg")
+                        .size(px(URL_BUTTON_GLYPH))
+                        .text_color(self.palette.glyph(NAV))
+                } else {
                     svg()
                         .path("icons/leaf.svg")
                         .size(px(URL_BUTTON_GLYPH))
-                        .text_color(self.palette.accent),
-                )
+                        .text_color(self.palette.accent)
+                })
                 .child(frame)
         });
         let engine = self.engine_mark(self.field_tab());
