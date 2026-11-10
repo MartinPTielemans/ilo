@@ -697,6 +697,32 @@ jobs:
           name: notes
           path: notes
 
+      # A release never takes a quarantined check as passed silently (#2197): the summary lists the
+      # quarantine at its commit, for each OS. Only a summary, so it can't cost the release: the
+      # checkout and the step continue on an error.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
+        with:
+          path: source
+          persist-credentials: false
+          sparse-checkout: |
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
+      - name: Quarantine
+        continue-on-error: true
+        run: |
+          {
+            echo "## Quarantined checks"
+            echo
+            echo "These Check runs fail at times at this commit and don't fail it."
+            echo
+            for os in mac windows linux; do
+              sh source/app/check/quarantine.sh list "$os"
+              echo
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - run: |
           (cd assets && sha256sum -- ilo-* > SHA256SUMS)
           # The Mac's minimum, LSMinimumSystemVersion in app/build.sh.

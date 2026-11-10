@@ -44,13 +44,6 @@ jobs:
               ["vouch:trusted", "1f883d", "PR author is a collaborator or in the VOUCHED list."],
               ["vouch:unvouched", "fbca04", "PR author is not in the VOUCHED list yet."],
               ["vouch:denounced", "d1242f", "PR author is denounced in the VOUCHED list."],
-              // pr-size.yml.
-              ["size:XS", "0e8a16", "0-9 changed lines (tests left out in mixed PRs)."],
-              ["size:S", "5ebd3e", "10-29 changed lines (tests left out in mixed PRs)."],
-              ["size:M", "fbca04", "30-99 changed lines (tests left out in mixed PRs)."],
-              ["size:L", "fe7d37", "100-499 changed lines (tests left out in mixed PRs)."],
-              ["size:XL", "d93f0b", "500-999 changed lines (tests left out in mixed PRs)."],
-              ["size:XXL", "b60205", "1,000+ changed lines (tests left out in mixed PRs)."],
               // agent-context-budget.yml.
               ["agent-context-increase", "bfdadc", "A maintainer accepts this PR's growth of the agent context."],
             ];

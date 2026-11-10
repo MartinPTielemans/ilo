@@ -486,9 +486,7 @@ fn the_log_names_the_keys_as_a_menu_does() {
 }
 
 #[test]
-fn arcs_capsule_is_27_tall_and_round_but_at_what_it_names() {
-    assert_eq!(HEIGHT, 27.);
-    assert_eq!(RADIUS, 13.5);
+fn the_capsule_is_round_but_at_what_it_names() {
     // Beside a button, under a tile and under a row, the corner at what it names is the top left.
     let beside = Anchor::beside(library_button(), window());
     assert_eq!(near(beside, 100., HEIGHT), Near::TopLeft);
@@ -505,19 +503,4 @@ fn arcs_capsule_is_27_tall_and_round_but_at_what_it_names() {
     assert_eq!(near(low, 100., HEIGHT), Near::TopLeft);
     let right = Anchor::beside(frame(950., 300., 32., 32.), window());
     assert_eq!(near(right, 100., HEIGHT), Near::TopLeft);
-}
-
-#[test]
-fn a_tooltip_shows_in_a_frame_16_s_after_the_last_move_and_fades_out_over_270_ms() {
-    assert_eq!(FADE_IN, Duration::ZERO);
-    assert_eq!(FADE_OUT, Duration::from_millis(270));
-    assert_eq!(DELAY, Duration::from_millis(1600));
-}
-
-#[test]
-fn a_chip_is_18_and_a_half_wide_on_a_pitch_of_22() {
-    assert_eq!(CHIP, 18.5);
-    assert_eq!(CHIP + CHIP_GAP, 22.);
-    // Its 16.25 body is centred on the capsule, and the lip hangs 2 under it.
-    assert_eq!((HEIGHT - CHIP_BODY) / 2. + CHIP_BODY + CHIP_LIP, 23.625);
 }

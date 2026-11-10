@@ -7,16 +7,16 @@
 # B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists A's
 # tab, naming A, and opens it (#1234). A saves a login, which B lists, then removes, and A hears
 # it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
-# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and on
-# Windows, where each device's window takes the foreground from the others' as the run drives it
-# (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
+# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and
+# Wayland and on Windows, where each device's window takes the foreground from the others' as the
+# run drives it (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
   return 0
 fi
-if ! windows && { [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; }; then
-  echo "skip: sync-devices. It runs under Xvfb on Linux and on Windows so far, where the run reaches the clipboard and each copy's windows."
+if ! windows && { [ "$(uname)" != Linux ] || sway_xwayland; }; then
+  echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland and on Windows so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"

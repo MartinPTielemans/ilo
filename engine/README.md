@@ -2,7 +2,7 @@
 
 Chromium built as Chrome's framework (`//chrome:chrome_framework`), from ungoogled-chromium plus our patch series. `./setup.sh` prepares the tree in `.deps/src`, and `./build.sh` builds `Chromium.app`, with the framework in it, in `.deps/src/out/Release`. `./setup.sh dev` and `./build.sh dev` do the same for the dev build in `.deps/src/out/Dev`, which has no link-time optimization, so its framework relinks much faster, and checks Chromium's DCHECKs. Work on the core uses it.
 
-Work that doesn't change the core needs no build: `./fetch.sh` downloads the prebuilt engine built from the nearest commit in the checkout's history, a release `engine-mac-<commit>` of the repository `prebuilt.ini` names, [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), and the app uses it when there's no local build. A prebuilt engine has its commit's core, so `fetch.sh` refuses it once `core/public/browser_core.h` has changed; publish a new one with the API change (The Mac's prebuilt engine, below).
+Work that doesn't change the core needs no build: `./fetch.sh` downloads the prebuilt engine built from the nearest commit in the checkout's history, a release `engine-mac-<commit>` of the repository `prebuilt.ini` names, [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), and the app uses it when there's no local build. A prebuilt engine has its commit's core, so `fetch.sh` refuses it once `core/public/browser_core.h` has changed to the compiler; publish a new one with the API change (The Mac's prebuilt engine, below). An edit to comments, spacing or blank lines alone keeps it: `tools/core-same.sh` makes that call for `fetch.sh`, `app/build.rs`, the nights that build engines and CI's choice of jobs alike, so none of them disagree (#2195).
 
 ## Layout
 

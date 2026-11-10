@@ -718,6 +718,7 @@ impl Shell {
     /// with their shortcuts.
     pub(super) fn tab_menu(&mut self, tab: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.end_hovers(cx);
+        self.read_boosts_of(tab, cx);
         let row = Row::Tab(self.row_of(tab));
         // A right-click on a row not chosen lets the chosen ones go, as a plain click does.
         let chosen = self.chosen.contains(&self.row_of(tab));
@@ -1153,10 +1154,11 @@ impl Shell {
     }
 
     /// A Today tab's menu, as Arc's (docs/ux-spec.md › Tab list), with Remove Icon once it has
-    /// one, ours. Arc's Customize Page… is Boosts, which
-    /// the browser hasn't. Each item's agent path is the core call it makes, but Copy Link's and
-    /// Share's: the clipboard and the system's share services are the user's, outside the
-    /// browser, so agents get neither.
+    /// one, ours. Arc's Customize Page… is its Boost, here New Boost… or Edit Boost…, as Site
+    /// Controls' "…" names it. Each item's agent path is the core call it makes, but Copy Link's,
+    /// Share's and the Boost's: the clipboard and the system's share services are the user's,
+    /// outside the browser, and a Boost's CSS could carry a page's values out (decision 8), so
+    /// agents get none of them.
     fn today_tab_menu(
         &self,
         keys: &UserKeys,
@@ -1198,6 +1200,13 @@ impl Shell {
             Box::new(move |shell, cx| shell.rename_tab(tab, cx)),
         ));
         items.push(mute(tab, &page));
+        if let Some(title) = self.boost_entry(tab) {
+            items.push((
+                MenuEntry::new(title, true),
+                "boost",
+                Box::new(move |shell, cx| shell.open_boost_for(tab, cx)),
+            ));
+        }
         // While a page shares another tab, as Chrome's infobar offers it on the rest.
         if page.share_instead {
             items.push((
@@ -1622,14 +1631,22 @@ impl Shell {
     }
 
     /// The + button's menu, by Arc's menus' names for what it makes (ours: Arc's + menu isn't
-    /// recorded).
+    /// recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have one.
     pub(super) fn plus_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let items = [
+        let mut items = vec![
             ("New Space…", Command::NewSpace),
             ("New Folder…", Command::NewFolder),
             ("New Split View", Command::AddSplit),
             ("New Note", Command::NewNote),
         ];
+        self.read_boosts_of(self.field_tab(), cx);
+        if let Some(title) = self.boost_entry(self.field_tab()) {
+            let command = match title {
+                "Edit Boost…" => Command::EditBoost,
+                _ => Command::NewBoost,
+            };
+            items.push((title, command));
+        }
         let split = self.selected != 0 && self.panes(self.selected).len() < MAX_PANES;
         let enabled = |command| command != Command::AddSplit || split;
         let mut entries: Vec<MenuEntry> = items
@@ -1957,8 +1974,8 @@ mod tests {
         }
     }
 
-    /// A Today tab's menu is Arc's: its link, its look, its place, then archiving, with Move to
-    /// listing the Space it's in checked and New Space… under the rest.
+    /// A Today tab's menu is Arc's: its link, its look and Boost, its place, then archiving, with
+    /// Move to listing the Space it's in checked and New Space… under the rest.
     #[gpui::test]
     fn a_today_tabs_menu_is_arcs(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
@@ -1974,6 +1991,7 @@ mod tests {
                 "Change Icon…",
                 "Rename…",
                 "Mute (disabled)",
+                "New Boost…",
                 "Add Split View",
                 "Duplicate",
                 "Add to Folder › New Folder",

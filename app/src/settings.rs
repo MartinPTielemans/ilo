@@ -2301,10 +2301,34 @@ impl Settings {
                 [head].into_iter().chain(services).collect()
             }
         };
+        let boosts_on = !crate::boosts_host::all_off();
+        let boosts = self.toggle(
+            "boosts",
+            "Boosts",
+            boosts_on,
+            crate::boosts_host::set_all_on,
+            accent,
+            cx,
+        );
+        // Off, the line is the receipt, as Little ilo's is.
+        let boosts_line = match boosts_on {
+            true => {
+                "Your CSS and Zap on the sites you boost. New Boost in the command bar makes one."
+            }
+            false => "Off: no site shows its Boost. They stay in each profile's Boosts folder.",
+        };
+        let boosts = feature(
+            look,
+            "icons/paintbrush.svg",
+            "Boosts",
+            Some(boosts_line.into()),
+            vec![boosts],
+        );
         let mut blocks = vec![
             Block::Rows(little),
             Block::Rows(vec![peek]),
             Block::Rows(vec![mini_player]),
+            Block::Rows(vec![boosts]),
             Block::Rows(note),
         ];
         if self.widevine.read(cx).shown() {
@@ -4821,8 +4845,8 @@ fn shown(name: &str) -> String {
     name.replace("⌘1–⌘8", &tabs)
 }
 
-/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as the
-/// core keeps no settings of the app's own.
+/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as they
+/// stay with the computer (docs/ux-spec.md, Sync).
 fn shortcuts_path() -> String {
     format!("{}/Shortcuts", crate::profile_dir())
 }
@@ -4833,40 +4857,35 @@ pub fn read_shortcuts(cx: &mut App) {
     cx.set_global(UserKeys::parse(&text));
 }
 
-/// Where View › Appearance's choice is kept, beside the keys.
+/// Where View › Appearance's choice was kept before the core kept it, beside the keys.
 fn appearance_path() -> String {
     format!("{}/Appearance", crate::profile_dir())
 }
 
-/// Reads View › Appearance's choice, automatic if there's none.
-pub fn read_appearance(cx: &mut App) {
-    let text = std::fs::read_to_string(appearance_path()).unwrap_or_default();
-    cx.set_global(shell::AppAppearance(
-        Appearance::named(text.trim()).unwrap_or_default(),
-    ));
-}
-
-/// Where Show Space Header's choice is kept, beside View › Appearance's.
+/// Where Show Space Header's choice was kept before the core kept it.
 fn lone_header_path() -> String {
     format!("{}/Space Header", crate::profile_dir())
 }
 
-/// Reads whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at
-/// first. check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
-pub fn read_lone_header(cx: &mut App) {
-    let text = std::fs::read_to_string(lone_header_path())
-        .or_else(|_| std::env::var("BROWSER_SPACE_HEADER"))
-        .unwrap_or_default();
-    cx.set_global(shell::LoneSpaceHeader(text.trim() == "shown"));
+/// What an older version kept at `path`, which the core keeps from now on, so it goes.
+fn take_old(path: String) -> Option<String> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        log!("couldn't remove {path}: {error}");
+    }
+    Some(text)
 }
 
-pub fn save_lone_header(kept: bool) {
-    if let Err(error) = std::fs::write(lone_header_path(), if kept { "shown" } else { "hidden" }) {
-        log!("couldn't save the space header: {error}");
+/// View › Appearance's choice as the core keeps it.
+fn core_appearance() -> Appearance {
+    match unsafe { bc::bc_appearance() } {
+        1 => Appearance::Light,
+        2 => Appearance::Dark,
+        _ => Appearance::Automatic,
     }
 }
 
-/// Where Portrait Mode's background is kept, beside View › Appearance's choice.
+/// Where Portrait Mode's background is kept, in the profile.
 fn portrait_background_path() -> String {
     format!("{}/Portrait Background", crate::profile_dir())
 }
@@ -4885,10 +4904,43 @@ pub fn save_portrait_background(background: crate::capture::portrait::Background
     }
 }
 
-pub fn save_appearance(appearance: Appearance) {
-    if let Err(error) = std::fs::write(appearance_path(), appearance.name()) {
-        log!("couldn't save the appearance: {error}");
+/// Whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at first.
+/// check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
+fn lone_header_kept() -> bool {
+    let kept = unsafe { bc::bc_space_header() };
+    kept || std::env::var("BROWSER_SPACE_HEADER").is_ok_and(|env| env.trim() == "shown")
+}
+
+/// Reads View › Appearance's choice and Show Space Header's, which the core keeps, as they follow
+/// the account. Those an older version kept in files go to the core first.
+pub fn read_look(cx: &mut App) {
+    let old = take_old(appearance_path()).and_then(|text| Appearance::named(text.trim()));
+    if let Some(appearance) = old {
+        unsafe { bc::bc_set_appearance(crate::menu_bar::appearance_code(appearance)) };
     }
+    if let Some(text) = take_old(lone_header_path()) {
+        unsafe { bc::bc_set_space_header(text.trim() == "shown") };
+    }
+    cx.set_global(shell::AppAppearance(core_appearance()));
+    cx.set_global(shell::LoneSpaceHeader(lone_header_kept()));
+}
+
+/// View › Appearance's choice or Show Space Header's may have come from the account
+/// (settings_synced): every window and the host take them.
+pub fn look_followed(cx: &mut App) {
+    let appearance = core_appearance();
+    if appearance != shell::app_appearance(cx) {
+        // check.sh waits for this line.
+        log!("browser: appearance followed {}", appearance.name());
+        crate::menu_bar::give_host_appearance(appearance);
+    }
+    let header = lone_header_kept();
+    cx.set_global(shell::AppAppearance(appearance));
+    cx.set_global(shell::LoneSpaceHeader(header));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| {
+        shell.look_followed(appearance, header, cx)
+    });
+    refresh(cx);
 }
 
 /// Include Favorites in ⌘1–⌘8, kept with the user's keys.

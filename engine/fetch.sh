@@ -72,11 +72,17 @@ url=$repo/releases/download/engine-$platform-${commit:0:12}/$asset
 sha256=$(curl -fsSL "$url.sha256") || none "the release engine-$platform-${commit:0:12} has no $asset yet."
 
 # The engine holds the core of the commit it was built from. A different header would bind the app
-# to functions or layouts the engine doesn't have.
+# to functions or layouts the engine doesn't have. One that differs only in its comments is the same
+# to the compiler (tools/core-same.sh, #2195).
 git cat-file -e "$commit^{commit}" 2>/dev/null ||
   fail "the prebuilt engine's commit ${commit:0:12} isn't in this clone. Fetch the history with git fetch --unshallow."
-git diff --quiet "$commit" -- ../core/public/browser_core.h ||
-  none "core/public/browser_core.h has changed since the prebuilt engine (${commit:0:12}). Build the engine with engine/build.sh."
+status=0
+../tools/core-same.sh "$commit" - core/public/browser_core.h || status=$?
+case $status in
+0) ;;
+1) none "core/public/browser_core.h has changed since the prebuilt engine (${commit:0:12}). Build the engine with engine/build.sh." ;;
+*) fail "couldn't compare core/public/browser_core.h with the prebuilt engine's (${commit:0:12})." ;;
+esac
 
 dir=$PWD/.deps/prebuilt/$sha256
 if [ ! -d "$dir" ]; then
