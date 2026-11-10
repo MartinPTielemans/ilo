@@ -1,9 +1,10 @@
 # Temporary, for #2354, never for main: the Developer ID provisioning profile for app.ilo.browser,
-# made with the release's App Store Connect API key. It finds the bundle id (registering it for
-# macOS if it's missing), the Developer ID Application certificate in MAC_CERTIFICATE_P12, and a
-# MAC_APP_DIRECT profile for the two, which it reuses when one is active and makes otherwise. It
-# prints what the profile carries and uploads it: the profile ships inside every release, so it
-# isn't a secret. The key and the token made from it never leave the step's environment.
+# fetched with the release's App Store Connect API key, which can read profiles but not make them
+# (POST /v1/profiles answered 403 in run 42859998422), so the owner made it in the portal. The run
+# only reads: the bundle id, the Developer ID Application certificate in MAC_CERTIFICATE_P12, and
+# the active MAC_APP_DIRECT profile for the two. It prints what the profile carries and uploads it:
+# the profile ships inside every release, so it isn't a secret. The key and the token made from
+# it never leave the step's environment.
 name: Provisioning
 
 on:
@@ -105,7 +106,9 @@ jobs:
 
           jwt = token()
 
+          # Reads only: nothing is made or revoked at Apple.
           def call(method, path, body=None):
+              assert method == "GET"
               request = urllib.request.Request(API + path, method=method,
                                                data=None if body is None else json.dumps(body).encode())
               request.add_header("Authorization", "Bearer " + jwt)
@@ -124,13 +127,10 @@ jobs:
                  if b["attributes"]["identifier"] == bundle]
           for b in ids:
               print("FOUND the bundle id, already registered:", b["id"], json.dumps(b["attributes"]))
-          if ids:
-              bundle_id = ids[0]["id"]
-          else:
-              made = call("POST", "/v1/bundleIds", {"data": {"type": "bundleIds", "attributes": {
-                  "identifier": bundle, "name": "ilo", "platform": "MAC_OS"}}})["data"]
-              bundle_id = made["id"]
-              print("REGISTERED the bundle id for macOS:", bundle_id, json.dumps(made["attributes"]))
+          if not ids:
+              print("STOPPED: no bundle id", bundle)
+              sys.exit(1)
+          bundle_id = ids[0]["id"]
           capabilities = call("GET", f"/v1/bundleIds/{bundle_id}/bundleIdCapabilities")["data"]
           print("its capabilities:", json.dumps([c["attributes"] for c in capabilities]))
 
@@ -154,20 +154,13 @@ jobs:
               certs = [c["id"] for c in call("GET", f"/v1/profiles/{p['id']}/certificates?limit=200")["data"]]
               usable = (a["profileType"] == "MAC_APP_DIRECT" and a["profileState"] == "ACTIVE"
                         and certificate["id"] in certs)
-              print("profile:", p["id"], a["name"], a["profileType"], a["profileState"], a["uuid"],
-                    "created", a.get("createdDate"), "expires", a["expirationDate"],
-                    "<- reused" if usable and profile is None else "")
+              print("profile:", p["id"], json.dumps({k: v for k, v in a.items() if k != "profileContent"}),
+                    "certificates", certs, "<- REUSED" if usable and profile is None else "")
               if usable and profile is None:
                   profile = p
           if profile is None:
-              profile = call("POST", "/v1/profiles", {"data": {"type": "profiles",
-                  "attributes": {"name": name, "profileType": "MAC_APP_DIRECT"},
-                  "relationships": {
-                      "bundleId": {"data": {"type": "bundleIds", "id": bundle_id}},
-                      "certificates": {"data": [{"type": "certificates", "id": certificate["id"]}]}}}})["data"]
-              a = profile["attributes"]
-              print("MADE profile:", profile["id"], a["name"], a["profileType"], a["profileState"], a["uuid"],
-                    "expires", a["expirationDate"])
+              print("STOPPED: no active MAC_APP_DIRECT profile for", bundle, "with certificate", certificate["id"])
+              sys.exit(1)
           with open(os.path.join(os.environ["OUT"], "ilo.provisionprofile"), "wb") as f:
               f.write(base64.b64decode(profile["attributes"]["profileContent"]))
           PY
