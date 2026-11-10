@@ -4,7 +4,8 @@
 # engine/prebuilt.ini names, the one engine/fetch.sh would download. It exits 3 when they're the
 # same, so the night builds nothing, and 0 when they differ, when there's no such release or its
 # package isn't uploaded, or when it can't tell: a night it can't read builds.
-# The inputs are each workflow's push paths, and the core, which the night builds too.
+# The inputs are each workflow's push paths, and the core, which the night builds too. Comments in
+# the core's C++ don't count.
 # engine-linux.yml and engine-windows-cross.yml ask it on their schedules; a push or a dispatch
 # always builds. It's in tools/, not engine/, so a change to it doesn't start Core on Linux
 # (ci-changes.cjs). mac-nightly.sh beside it makes the same call for the Mac's.
@@ -51,9 +52,10 @@ tag=engine-$platform-${commit:0:12}
 # A build that failed between making its release and uploading to it left a tag with no engine.
 curl -fsSIL -o /dev/null "$repo/releases/download/$tag/$asset.sha256" ||
   build "$tag has no $asset."
-git diff --quiet "$commit" HEAD -- "${inputs[@]}"
+# A change to the core's comments alone is the same to the compiler (core-same.sh, #2195).
+tools/core-same.sh "$commit" HEAD "${inputs[@]}"
 case $? in
-0) same "$head has the core and engine of $tag." ;;
+0) same "$head has the core and engine of $tag, to the compiler." ;;
 1) build "$head's core or engine differs from $tag's." ;;
 *) build "couldn't compare $head with $tag." ;;
 esac

@@ -664,12 +664,16 @@ cat > "$crx/source/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Install", "version": "1", "permissions": ["tabs"],
  "host_permissions": ["https://example.org/*"]}
 EOF
-installed=$(python3 -I -c '
+# Packs $crx/source into the site's check.crx, or $1.crx, signed with the key made the first time,
+# so a later version is the same extension, and says its id.
+pack_crx() {
+python3 -I -c '
 import hashlib, io, os, struct, subprocess, sys, zipfile
 
 source, crx = sys.argv[1], sys.argv[2]
 key = os.path.join(os.path.dirname(source), "key.pem")
-subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
+if not os.path.exists(key):
+    subprocess.run(["openssl", "genrsa", "-out", key, "2048"], check=True, capture_output=True)
 public = subprocess.run(["openssl", "rsa", "-in", key, "-pubout", "-outform", "DER"],
                         check=True, capture_output=True).stdout
 archive = io.BytesIO()
@@ -698,7 +702,9 @@ header = field(2, field(1, public) + field(2, signature)) + field(10000, signed)
 with open(crx, "wb") as f:
     f.write(b"Cr24" + struct.pack("<II", 3, len(header)) + header + archive)
 print("".join(chr(ord("a") + int(c, 16)) for c in crx_id.hex()))
-' "$crx/source" "$out/site/check.crx") || fail "couldn't make the check's .crx"
+' "$crx/source" "$out/site/${1:-check}.crx"
+}
+installed=$(pack_crx) || fail "couldn't make the check's .crx"
 printf '{"download": {"default_directory": "%s", "prompt_for_download": false}}' \
   "$(native_path "$PWD/$out/downloads" | sed 's/\\/\\\\/g')" > "$crx/profile/Default/Preferences"
 log="$out/install.log"
@@ -738,6 +744,82 @@ send key return
 expect '^browser: dialog confirmed$' "return didn't confirm adding Check Install"
 expect "^browser: extensions menu.* $installed" "Check Install wasn't added"
 expect '^browser: extension question none$' "Chrome didn't hear the install was confirmed"
+# Its third version, asking for more again, is served first, from the updates.xml the second names
+# as where its updates come from.
+cat > "$crx/source/manifest.json" << EOF
+{"manifest_version": 3, "name": "Check Install", "version": "3",
+ "permissions": ["tabs", "history", "bookmarks"],
+ "host_permissions": ["https://example.org/*", "https://example.com/*"],
+ "update_url": "${site}updates.xml"}
+EOF
+[ "$(pack_crx check3)" = "$installed" ] || fail "the third version's .crx isn't the same extension"
+hash=$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+  "$out/site/check3.crx")
+printf "<?xml version='1.0' encoding='UTF-8'?>
+<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'><app appid='%s'>
+<updatecheck codebase='%scheck3.crx' version='3' hash_sha256='%s'/></app></gupdate>\n" \
+  "$installed" "$site" "$hash" > "$out/site/updates.xml"
+# Its next version, asking for more, from the page over the one added: Chrome asks again with the
+# browser's dialog, listing the new warnings (extension-update.png), and return updates it. Installed,
+# it asks the browser to check for its updates, as Chrome checks on its own only every 5 hours and
+# ignores --extensions-update-frequency.
+cat > "$crx/source/worker.js" << 'EOF'
+chrome.runtime.onInstalled.addListener(() => chrome.runtime.requestUpdateCheck(() => {}));
+EOF
+cat > "$crx/source/manifest.json" << EOF
+{"manifest_version": 3, "name": "Check Install", "version": "2", "permissions": ["tabs", "history"],
+ "host_permissions": ["https://example.org/*", "https://example.com/*"],
+ "update_url": "${site}updates.xml", "background": {"service_worker": "worker.js"}}
+EOF
+[ "$(pack_crx)" = "$installed" ] || fail "the second version's .crx isn't the same extension"
+send click $page_point
+send key y
+expect '^browser: dialog shown .*"Check Install"' "the second version didn't ask with the browser's dialog"
+asked=$(grep -c '^browser: dialog shown ' "$log" || true)
+grep "^browser: extension question $installed asks " "$log" | tail -1 | grep -q 'example.com' ||
+  fail "the second version's question didn't list its new site: $(grep 'extension question' "$log" | tail -1)"
+await '^browser: dialog settled$' || fail "the update's dialog didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/extension-update.png" || fail "no window to capture"
+expect '^browser: dialog takes input$' "the update's dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't confirm the second version"
+expect '^browser: extension question none$' "Chrome didn't hear the update was confirmed"
+# The third version comes from that check, where no one is asked, so Chrome turns it off. Turned on
+# again on Chrome's extensions page, as only the user can, it asks with the browser's dialog, listing
+# the new warning (extension-reenable.png), and return turns it on.
+# Off once the Extensions menu the app logs no longer lists it, within 60 s.
+for _ in $(seq 600); do
+  case "$(grep '^browser: extensions menu' "$log" | tail -1) " in *" $installed "*) ;; *) break ;; esac
+  sleep 0.1
+done
+case "$(grep '^browser: extensions menu' "$log" | tail -1) " in
+  *" $installed "*)
+    fail "the update it asked for didn't turn Check Install off within 60 s: $(grep -c updates.xml "$out/site.log" || true) asks for updates.xml, $(grep -c check3.crx "$out/site.log" || true) for check3.crx" ;;
+esac
+[ "$(grep -c '^browser: dialog shown ' "$log" || true)" = "$asked" ] ||
+  fail "the fetched update asked, where Chrome turns it off: $(grep '^browser: dialog shown ' "$log" | tail -1)"
+before=$(today)
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type "chrome://extensions/?id=$installed"
+send key return
+expect "^browser: loaded [0-9]* chrome://extensions/?id=$installed\$" \
+  "Chrome's extensions page didn't open on Check Install"
+# Its first control is the back arrow, which the page focuses as it shows, then the switch.
+send key tab
+send key space
+expect '^browser: dialog shown .*"Check Install"' \
+  "turning Check Install on again didn't ask with the browser's dialog"
+grep "^browser: extension question $installed asks " "$log" | tail -1 | grep -qi 'bookmarks' ||
+  fail "turning it on again didn't list its new warning: $(grep 'extension question' "$log" | tail -1)"
+await '^browser: dialog settled$' || fail "the re-enable dialog didn't settle"
+../tools/window-screenshot.sh "$pid" "$out/extension-reenable.png" || fail "no window to capture"
+expect '^browser: dialog takes input$' "the re-enable dialog never took input"
+send key return
+expect '^browser: dialog confirmed$' "return didn't confirm turning Check Install on"
+expect "^browser: extensions menu.* $installed" "confirmed, Check Install didn't come back on"
+send key w cmd
+expect "^browser: today $before\$" "⌘W didn't close Chrome's extensions page"
 before=$(today)
 send menu "Add Extension…"
 expect '^browser: command add-extension via ui$' "Add Extension… didn't reach the UI"
@@ -745,7 +827,7 @@ expect "^browser: today [0-9]* $before\$" "Add Extension… didn't open a tab"
 quit_by_key
 await '^browser: command quit via ' || fail "⌘Q didn't quit"
 exited
-echo "ok: a .crx from a page asks to be added with the browser's dialog, in Chrome's words, listing its warnings. Escape cancels it, return adds it, and Add Extension… opens a tab. Window: $out/extension-install.png"
+echo "ok: a .crx from a page asks to be added with the browser's dialog, in Chrome's words, listing its warnings. Escape cancels it, return adds it, its next version asking for more asks again with the new warnings, an update the browser fetches asking for more turns it off, turning it on again asks with the new warning, and Add Extension… opens a tab. Windows: $out/extension-install.png, $out/extension-update.png, $out/extension-reenable.png"
 
 # An extension whose own process crashes twice, across launches, is turned off: the browser's
 # dialog says so once, with Turn On Again, Keep Off and Remove…, and Turn On Again turns it on. Its

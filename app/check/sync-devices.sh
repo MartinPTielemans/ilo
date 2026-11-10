@@ -7,16 +7,16 @@
 # B's sync store, and a tab of A's agent's Space never does (#1796); B's command bar lists A's
 # tab, naming A, and opens it (#1234). A saves a login, which B lists, then removes, and A hears
 # it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
-# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and on
-# Windows, where each device's window takes the foreground from the others' as the run drives it
-# (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
+# asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and
+# Wayland and on Windows, where each device's window takes the foreground from the others' as the
+# run drives it (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
   return 0
 fi
-if ! windows && { [ "$(uname)" != Linux ] || [ "${BROWSER_HEADLESS:-xvfb}" != xvfb ]; }; then
-  echo "skip: sync-devices. It runs under Xvfb on Linux and on Windows so far, where the run reaches the clipboard and each copy's windows."
+if ! windows && { [ "$(uname)" != Linux ] || sway_xwayland; }; then
+  echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland and on Windows so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
@@ -45,26 +45,9 @@ new_space() {
   send type "$1"
   send key return
 }
-# What the clipboard holds, the X server's or Windows': its text, or with formats the formats it
-# holds.
-clipboard() {
-  if windows; then
-    python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true
-  else
-    timeout 5 xclip -selection clipboard -o ${1:+-t TARGETS} 2>/dev/null || true
-  fi
-}
 # The format that marks what clipboard managers are to skip (#641).
 hint=x-kde-passwordManagerHint
 ! windows || hint=ExcludeClipboardContentFromMonitorProcessing
-# The device's first browser window in front with the keyboard, as a click on it gives it. On
-# Windows the driver's window activates a window within its own copy alone, so the copy's window
-# takes the foreground from the others' too.
-forward() {
-  send window 1
-  ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
-    fail "$on's window couldn't take the foreground"
-}
 others=
 
 # A's list ends with none once B removes the login A saves, so A starts with none: the check's
@@ -89,13 +72,15 @@ send clickkey $at
 copied_at=$(date +%s)
 words=
 for _ in $(seq 30); do
-  words=$(clipboard)
-  [ "$(echo "$words" | wc -w)" = 24 ] && break
+  clipboard
+  words=$clipped
+  [ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] && break
   sleep 0.1
 done
-[ "$(echo "$words" | wc -w)" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
-clipboard formats | grep -qx "$hint" ||
-  fail "the copied words aren't marked for clipboard managers to skip: $(clipboard formats | tr '\n' ' ')"
+[ "$(echo "$words" | wc -w | tr -d " ")" = 24 ] || fail "Copy didn't put 24 words on the clipboard"
+clipboard formats
+echo "$clipped" | grep -qx "$hint" ||
+  fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
@@ -263,7 +248,8 @@ done
 while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
   sleep 1
 done
-[ -z "$(clipboard)" ] || fail "the clipboard still held the words 90 s after A copied them"
+clipboard
+[ -z "$clipped" ] || fail "the clipboard still held the words 90 s after A copied them"
 
 # B and C sign out without a question, as A keeps the account, and the server forgets them.
 for d in c b; do

@@ -1,0 +1,35 @@
+Customize Chrome's page handler CHECKs that its profile has the New Tab page's background
+services, which are the original profile's alone, so its page typed in a private window crashed
+the browser (#2070). Its WebUI config now refuses a profile the handler wouldn't take, as a URL
+Chrome has no page for, and ilo has no UI that opens it.
+
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.h
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.h
+@@ -53,6 +53,11 @@
+       : DefaultTopChromeWebUIConfig(
+             content::kChromeUIScheme,
+             chrome::kChromeUICustomizeChromeSidePanelHost) {}
++
++  // browser_core: the page's handler CHECKs that the profile has the New Tab
++  // page's background services, which a private profile hasn't, so the page
++  // typed in a private window crashed the browser. It's refused there instead.
++  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
+ };
+ 
+ // WebUI controller for chrome://customize-chrome-side-panel.top-chrome
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.cc
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.cc
+@@ -75,6 +75,13 @@
+                                       kChromeThemeCollectionElementId);
+ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CustomizeChromeUI, kChromeThemeElementId);
+ 
++bool CustomizeChromeUIConfig::IsWebUIEnabled(
++    content::BrowserContext* browser_context) {
++  Profile* profile = Profile::FromBrowserContext(browser_context);
++  return CustomizeChromePageHandler::IsSupported(
++      NtpCustomBackgroundServiceFactory::GetForProfile(profile), profile);
++}
++
+ CustomizeChromeUI::CustomizeChromeUI(content::WebUI* web_ui)
+     // Enable chrome.send to notify `ThemeHandler` to observe theme changes.
+     : TopChromeWebUIController(web_ui, true),

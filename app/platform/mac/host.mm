@@ -4025,6 +4025,51 @@ void host_copy_png(const uint8_t* png, size_t size) {
           [pasteboard.name isEqualToString:NSPasteboardNameGeneral] ? "general" : "private");
 }
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  NSScreen* screen = NSScreen.mainScreen;
+  NSURL* url = screen ? [NSWorkspace.sharedWorkspace desktopImageURLForScreen:screen] : nil;
+  NSImage* image = url ? [[NSImage alloc] initWithContentsOfURL:url] : nil;
+  if (!image) {
+    return false;
+  }
+  // Drawn at the display's size in pixels, filling it as the desktop does, so a 6K picture isn't
+  // encoded whole.
+  NSSize points = screen.frame.size;
+  CGFloat scale = screen.backingScaleFactor;
+  NSInteger width = (NSInteger)(points.width * scale), height = (NSInteger)(points.height * scale);
+  NSBitmapImageRep* bitmap =
+      [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nil
+                                              pixelsWide:width
+                                              pixelsHigh:height
+                                           bitsPerSample:8
+                                         samplesPerPixel:4
+                                                hasAlpha:YES
+                                                isPlanar:NO
+                                          colorSpaceName:NSCalibratedRGBColorSpace
+                                             bytesPerRow:0
+                                            bitsPerPixel:0];
+  if (!bitmap || image.size.width <= 0 || image.size.height <= 0) {
+    return false;
+  }
+  CGFloat fill = MAX(width / image.size.width, height / image.size.height);
+  NSSize drawn = NSMakeSize(image.size.width * fill, image.size.height * fill);
+  [NSGraphicsContext saveGraphicsState];
+  NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+  [image drawInRect:NSMakeRect((width - drawn.width) / 2, (height - drawn.height) / 2, drawn.width,
+                               drawn.height)
+           fromRect:NSZeroRect
+          operation:NSCompositingOperationCopy
+           fraction:1];
+  [NSGraphicsContext restoreGraphicsState];
+  NSData* data = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+  if (!data) {
+    return false;
+  }
+  png(context, (const uint8_t*)data.bytes, data.length);
+  return true;
+}
+
 void host_save_png(void* ui_view, const uint8_t* png, size_t size) {
   Browser* browser = BrowserWithView(ui_view);
   if (!browser || !browser->window) {

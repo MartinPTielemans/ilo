@@ -84,6 +84,8 @@ typedef struct bc_tab_state {
   bool audible;
   // The tab's sound is muted, by bc_tab_set_muted or an extension.
   bool muted;
+  // The tab's volume, from 0 to 1, as bc_tab_set_volume left it: 1 until it's set.
+  double volume;
   // The emoji bc_tab_set_icon gave the tab to show in place of its page's favicon, UTF-8, or empty.
   const char* icon;
   // What's wrong with the page: a BC_PAGE_ value. The UI and agents read the same one.
@@ -104,12 +106,13 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a next track, and whether it can float in Picture in Picture
-  // while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, and whether it can float in
+  // Picture in Picture while nothing of the page floats.
   bool media;
   bool media_playing;
   const char* media_title;
   const char* media_artist;
+  bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
@@ -874,6 +877,11 @@ typedef struct bc_host {
   // The press taken ended, at |x|,|y|. Return false to hand it back: the page gets the press and
   // its release, as a click, such as ⇧⌘'s on a link.
   bool (*tab_press_released)(void* context, bc_id tab, double x, double y);
+  // Zap (bc_tab_boost_zap) took a left press on the tab's page: |selector| is a CSS selector for
+  // what was under it, for the app to add to the site's Boost, or null for the body or nothing.
+  void (*tab_boost_zapped)(void* context, bc_id tab, const char* selector);
+  // Zap ended on the tab without the app asking: the page changed, or it isn't http(s).
+  void (*tab_boost_zap_ended)(void* context, bc_id tab);
   // No field of the app's opens for the key the keys typed after it are held for (bc_hold_keys):
   // the page kept it, neither the page nor the app used it, or it got no answer in a second. A host
   // that holds them itself gives them to the page now.
@@ -2206,10 +2214,16 @@ BC_EXPORT void bc_dismiss_archive_note(void);
 // Spaces.
 BC_EXPORT bool bc_haptics(void);
 BC_EXPORT void bc_set_haptics(bool haptics);
-// View › Appearance's choice, which pages' prefers-color-scheme follows: 0 the system's, 1 light,
-// 2 dark. The app gives it at launch and when it changes, except on the Mac, where pages follow
-// the app's NSAppearance instead.
+// View › Appearance's choice: 0 the system's, 1 light, 2 dark. The core keeps it with the Spaces,
+// and settings_synced says when it came from the account. Off the Mac, pages' prefers-color-scheme
+// follows it; on the Mac they follow the app's NSAppearance instead, which the app sets from it.
+BC_EXPORT int bc_appearance(void);
 BC_EXPORT void bc_set_appearance(int appearance);
+// Whether Show Space Header keeps a lone unnamed Space's name row, as the user chose: off by
+// default. The core keeps it with the Spaces, and settings_synced says when it came from the
+// account.
+BC_EXPORT bool bc_space_header(void);
+BC_EXPORT void bc_set_space_header(bool shown);
 // Whether the app asks before the user's Quit quits, as the user chose. The core keeps it with the
 // Spaces.
 BC_EXPORT bool bc_warn_before_quitting(void);
@@ -2805,6 +2819,18 @@ BC_EXPORT void bc_ad_blocking_turn_on_site(bc_id profile, const char* site);
 // it's how the user sees their tabs.
 BC_EXPORT void bc_tab_set_developer_mode(bc_id tab, bool on);
 
+// Boosts (docs/ux-spec.md › Boosts). Gives |site|, a host without "www." such as
+// "news.ycombinator.com", |css| in |profile|, which its pages and frames there take as they
+// commit, and those open now at once, as a style sheet the page's scripts can't reach. Empty or
+// null |css| takes it away. A private window's pages take their profile's. The app keeps the
+// Boosts, as plain files, and hands each over at launch and as it changes. The user's: agents get
+// none, as a Boost changes what the user sees.
+BC_EXPORT void bc_profile_set_boost(bc_id profile, const char* site, const char* css);
+// Turns Zap on or off on the tab's page. While on, a left press on the page goes to Zap instead,
+// tab_boost_zapped says what was under it, and an outline follows the pointer over what a press
+// would take. A new page ends it, with tab_boost_zap_ended. The user's, as bc_profile_set_boost.
+BC_EXPORT void bc_tab_boost_zap(bc_id tab, bool on);
+
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.
 BC_EXPORT void bc_tab_picture_in_picture(bc_id tab);
@@ -2958,6 +2984,13 @@ BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
 // doesn't. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_muted(bc_id tab, bool muted);
 
+// Sets the tab's volume, from 0 to 1, as Arc's Adjust Tab Volume: the sound of the page's audio and
+// video elements, those its media session plays, is scaled by it, under the page's own volume and
+// the tab's mute. Web Audio, calls and Safari's engine's pages play as they would. It stays with
+// the tab whatever page it's at; a quit, a duplicate and ⇧⌘T don't keep it. Then
+// tab_state_changed. Agents have no tool for it: an agent's tab is muted, and plays in the page.
+BC_EXPORT void bc_tab_set_volume(bc_id tab, double volume);
+
 // While a page shares a tab and the tab's state has share_instead, has the page share this tab's
 // page in its place, as Chrome's Share this tab instead does. The user's: agents get none, as it
 // would show a page to whoever the call reaches. Then tab_state_changed, for both tabs.
@@ -2968,10 +3001,11 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 #define BC_MEDIA_PAUSE 1
 #define BC_MEDIA_NEXT 2
 #define BC_MEDIA_PICTURE_IN_PICTURE 3
+#define BC_MEDIA_PREVIOUS 4
 
-// Plays, pauses, skips or floats the page's media in Picture in Picture, one of BC_MEDIA_, while
-// its state has media, and media_picture_in_picture for the last. Then tab_state_changed. The
-// user's: agents act in the page instead.
+// Plays, pauses, skips on or back or floats the page's media in Picture in Picture, one of
+// BC_MEDIA_, while its state has media, and media_picture_in_picture or media_previous for those.
+// Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one

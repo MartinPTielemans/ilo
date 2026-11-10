@@ -68,6 +68,10 @@ impl Host for Recorder {
     fn share(&self, png: &[u8], share: Share) {
         self.record(format!("share {} {share:?}", png.len()));
     }
+
+    fn desktop_picture(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// A picture as the core sends one.
@@ -482,6 +486,31 @@ fn it_takes_the_windows_look_as_it_changes(cx: &mut TestAppContext) {
     assert_eq!(mode.drawn(), Some(("menu", true)));
     mode.look(TAB, false);
     assert_eq!(mode.drawn(), Some(("menu", false)));
+}
+
+/// Portrait Mode asks for the page as it shows, without capture mode, and copies the picture it
+/// makes of it, larger than the page by its margin, and lets the core go of the page.
+#[gpui::test]
+fn portrait_mode_copies_the_page_on_its_background(cx: &mut TestAppContext) {
+    let mut mode = Mode::new(cx);
+    // The page is 8 pixels wide at 2 to a point.
+    let frame = rect(0., 0., 4., 3.);
+    let background = portrait::Background::White;
+    mode.cx
+        .cx
+        .update(|cx| portrait(TAB, frame, 1., background, cx));
+    mode.cx.run_until_parked();
+    assert_eq!(mode.calls(), [format!("capture {TAB} 1 view")]);
+    mode.captured(1);
+    let calls = mode.calls();
+    assert_eq!(calls[0], format!("end {TAB}"));
+    let copied: usize = (calls[1].strip_prefix("copy "))
+        .and_then(|size| size.parse().ok())
+        .expect("Portrait Mode copied nothing");
+    assert!(
+        copied > png().len(),
+        "the copy isn't the portrait: {calls:?}"
+    );
 }
 
 /// The middle of Edit's bar's `part`, for what's chosen at `chosen` in an 800 by 600 page: under

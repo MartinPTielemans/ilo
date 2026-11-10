@@ -1,7 +1,9 @@
 # Fails when a pull request makes AGENTS.md and the docs it links to larger than on its base
 # (tools/agent-context.sh). To accept growth on purpose, a maintainer adds the
-# agent-context-increase label. Adapted from T3 Code (https://github.com/pingdotgg/t3code, MIT) at
-# commit 570d4b03eef879bd60be3d74444046858c94dacd.
+# agent-context-increase label. A release's squash PR passes without it, as the PRs it folds each
+# passed here already (#2203): one commit on batch/<the version after the base's>, or on a replay's
+# batch/<that version>-<N>, from this repository. Adapted from T3 Code
+# (https://github.com/pingdotgg/t3code, MIT) at commit 570d4b03eef879bd60be3d74444046858c94dacd.
 name: Agent Context Budget
 
 on:
@@ -28,6 +30,9 @@ jobs:
       contents: read
     env:
       ALLOW_INCREASE: ${{ contains(github.event.pull_request.labels.*.name, 'agent-context-increase') }}
+      HEAD_REF: ${{ github.head_ref }}
+      COMMITS: ${{ github.event.pull_request.commits }}
+      SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       # The merge commit and its first parent, the base. Nothing is built or run but the measure.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +53,27 @@ jobs:
           echo "Agent context grew: $base -> $head bytes (+$((head - base)))."
           if [ "$ALLOW_INCREASE" = "true" ]; then
             echo "Accepted by the agent-context-increase label."
+            exit 0
+          fi
+          # A release's squash PR is named for the release it makes, the one after the base's
+          # version, so each release has one such branch, and one commit, which a lane's PR isn't.
+          # A squash replayed as a new commit goes on a new branch, never a force-push, so the name
+          # may end in -<N>, digits only.
+          version=$(git show HEAD^1:app/Cargo.toml | sed -n 's/^version = "\([0-9.]*\)"$/\1/p' | head -1)
+          IFS=. read -r major minor patch <<<"$version"
+          release=${HEAD_REF#batch/}
+          case ${release##*-} in
+            "$release") ;;
+            '' | *[!0-9]*) release= ;;
+            *) release=${release%-*} ;;
+          esac
+          case $release in
+            "$major.$minor.$((patch + 1))" | "$major.$((minor + 1)).0" | "$((major + 1)).0.0") next=1 ;;
+            *) next= ;;
+          esac
+          if [ "$HEAD_REF" != "${HEAD_REF#batch/}" ] && [ -n "$version" ] && [ -n "$next" ] &&
+            [ "$COMMITS" = 1 ] && [ "$SAME_REPO" = true ]; then
+            echo "Accepted as $release's release squash, whose folded PRs each passed this on their own."
             exit 0
           fi
           echo "::error file=AGENTS.md::Agent context grew by $((head - base)) bytes. Cut the added text, or ask a maintainer to add the agent-context-increase label."

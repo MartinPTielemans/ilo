@@ -37,6 +37,10 @@ pub(crate) unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: boo
         if restarting { ", restarting" } else { "" }
     );
     shell::quit_goes_ahead();
+    // Chrome closes the core's windows as this returns (OnAppExiting), and destroys their surfaces
+    // a task before the core says each has closed (window_closed): the overlays over them go now.
+    #[cfg(target_os = "linux")]
+    gpui_linux::embedder_windows_going();
     restarting && relaunch_into_update()
 }
 

@@ -20,6 +20,8 @@
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
 # Chrome and Firefox where each system keeps them. Arc has no Linux build, so on Linux it isn't
 # found and its steps are left out.
+# On the Mac a made-up Safari comes in last, its bookmarks kept from the app until it's given
+# Full Disk Access, which the import waits for and asks for.
 
 serve
 printf '%s' '<title>import ready</title>' > "$out/site/import.html"
@@ -645,6 +647,91 @@ else
     fail "the extension Brave pinned wasn't pinned once it came in"
   ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
 fi
+# On the Mac a made-up Safari comes in last, its Bookmarks.plist kept from the app as macOS keeps
+# ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
+# System Settings; back in the app without it, it says it's still waiting; with it, coming back
+# reads Safari and its bar, menu and Reading List come in as a Space, with its history, and a
+# second time adds nothing. The driver says the app came back to the front, which a run can't do.
+if [ "$(uname)" = Darwin ]; then
+  safari="$home/Library/Safari"
+  mkdir -p "$safari"
+  leaf() {
+    printf '<dict><key>WebBookmarkType</key><string>WebBookmarkTypeLeaf</string>'
+    printf '<key>URLString</key><string>%s</string>' "$1"
+    printf '<key>URIDictionary</key><dict><key>title</key><string>%s</string></dict></dict>' "$2"
+  }
+  list() {
+    printf '<dict><key>WebBookmarkType</key><string>WebBookmarkTypeList</string>'
+    printf '<key>Title</key><string>%s</string><key>Children</key><array>%s</array></dict>' "$1" "$2"
+  }
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+    printf '<key>WebBookmarkType</key><string>WebBookmarkTypeList</string><key>Children</key><array>'
+    list BookmarksBar "$(leaf https://safari-bar.example.org/ Bar)"
+    list BookmarksMenu "$(leaf https://safari-menu.example.org/ Menu)"
+    list com.apple.ReadingList "$(leaf https://safari-read.example.org/ Read)"
+    printf '</array></dict></plist>\n'
+  } > "$safari/Bookmarks.plist"
+  # Safari counts seconds from 2001: two pages visited an hour and two hours ago.
+  now=$(( $(date +%s) - 978307200 ))
+  sql "$safari/History.db" "
+    CREATE TABLE history_items(id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,
+      visit_count INTEGER NOT NULL);
+    CREATE TABLE history_visits(id INTEGER PRIMARY KEY, history_item INTEGER NOT NULL,
+      visit_time REAL NOT NULL, title TEXT);
+    INSERT INTO history_items(id, url, visit_count) VALUES
+      (1, 'https://history-five.example.org/', 2), (2, 'https://history-six.example.org/', 1);
+    INSERT INTO history_visits(history_item, visit_time, title) VALUES
+      (1, $now - 3600, 'Five'), (2, $now - 7200, 'Six');"
+  chmod 000 "$safari/Bookmarks.plist"
+  # Readable again whatever ends the run, or the artifact's upload stops at it.
+  trap 'cleanup; chmod 644 "$safari/Bookmarks.plist" 2> /dev/null || true' EXIT
+  send menu Import from Other Browsers…
+  expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for Safari"
+  settings_drew 'Import & Export'
+  send clickkey $(drawn "toolbar Passwords")
+  expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  settings_drew Passwords
+  send clickkey $(drawn "toolbar Import & Export")
+  expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+  settings_drew 'Import & Export'
+  expect '^browser: import found .*Safari' "Settings didn't find the made-up Safari once it showed again"
+  send clickkey $(drawn "import-from Safari")
+  expect '^browser: import pick Safari$' "Import… on Safari's row didn't show its choices"
+  expect '^browser: import from Safari needs full disk access$' \
+    "Safari's files kept from the app didn't ask for Full Disk Access"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari-access.png" || fail "no window to capture"
+  send clickkey $(drawn import-full-disk-access)
+  expect '^browser: open full disk access$' "Open System Settings didn't ask for System Settings' list"
+  # Back in the app from System Settings, which the driver stands in for: a run can't take the app
+  # from the front and bring it back, as macOS lets no background process make an app active.
+  send active
+  expect '^browser: import from Safari still needs full disk access$' \
+    "back in the app without access, the import didn't say it still waits"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari-still.png" || fail "no window to capture"
+  chmod 644 "$safari/Bookmarks.plist"
+  trap cleanup EXIT
+  send active
+  expect '^browser: import read Safari: ' "back in the app with access, the import didn't read Safari"
+  expect '^browser: import drawn pick$' "Safari's choices didn't draw once it was read"
+  send clickkey $(drawn import-go)
+  expect '^browser: import from Safari: 1 Spaces, 3 pinned tabs, 0 open tabs, 0 favorites, 2 pages, 0 addresses$' \
+    "Import didn't plan Safari's bookmarks, Reading List and history"
+  await '^browser: history added 2 to profile [0-9]*$' || fail "the core didn't add Safari's 2 pages"
+  expect '^browser: import done: 1 Space, 3 pinned tabs and 2 pages of history came in from Safari\.$' \
+    "the import didn't say what came from Safari"
+  ../tools/window-screenshot.sh "$pid" "$out/import-safari.png" || fail "no window to capture"
+  expect '^browser: import drawn done$' "Safari's import's end didn't draw"
+  click_drawn import-done
+  expect '^browser: import drawn list$' "Done didn't go back to the list"
+  send clickkey $(drawn "import-from Safari")
+  expect '^browser: import pick Safari$' "Import… didn't show Safari's choices again"
+  expect '^browser: import drawn pick$' "Safari's choices didn't draw"
+  click_drawn import-go
+  await '^browser: history added 0 to profile [0-9]*$' || fail "the core added Safari's pages again"
+  expect '^browser: import done: Everything from Safari is here already\.$' \
+    "the second import from Safari said it added something"
+fi
 quit
 [ -n "$arc" ] || echo "skip: import's Arc steps. Arc has no Linux build, so it's never found there."
 echo "ok: Settings › Import finds the fixture's Arc, Chrome and Firefox. From Arc come its Spaces,"
@@ -655,6 +742,7 @@ echo "  A bookmarks file comes in as a Space named Bookmarks, and a second time 
 echo "  A passwords file comes in, says how many, and is deleted when asked; a second one says its"
 echo "  changed login conflicted and kept the saved one; Settings' Passwords tab lists the three,"
 echo "  and the app menu's Import from Other Browsers… shows Import again."
+[ "$(uname)" != Darwin ] || echo "  Safari waits for Full Disk Access, then its bookmarks, Reading List and history come in, once."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
@@ -664,4 +752,5 @@ echo "  $out/import-folders.png, $out/import-extensions.png, $out/import-pinned-
 echo "  $out/import-again-list.png, $out/import-list.png, $out/import-pick.png, $out/import-done.png,"
 echo "  $out/import-again.png, $out/import-chrome.png, $out/import-firefox.png,"
 echo "  $out/import-bookmarks.png, $out/import-passwords.png,"
-echo "  $out/import-passwords-conflict.png, $out/import-personal.png"
+echo "  $out/import-passwords-conflict.png, $out/import-personal.png,"
+echo "  and on the Mac $out/import-safari-access.png, import-safari-still.png and import-safari.png"
