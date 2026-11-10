@@ -99,7 +99,11 @@ fn the_lists_and_filters_block_except_where_an_exception_lets_go() {
 fn a_bare_hostname_blocks_its_host_and_its_pages_as_ublock_origin_reads_it() {
     let folder = folder("hostnames");
     let malware = folder.join("assets/thirdparties/malware.txt");
-    fs::write(&malware, "! Title: URLhaus\n1.2.3.44\nBad.example\n@@ok.bad.example\n").unwrap();
+    fs::write(
+        &malware,
+        "! Title: URLhaus\n1.2.3.44\nBad.example\n@@ok.bad.example\n",
+    )
+    .unwrap();
     let mut setup = setup(&folder, "mine.example\n");
     setup.lists.push(malware);
     let engine = compile(&setup);
@@ -107,8 +111,14 @@ fn a_bare_hostname_blocks_its_host_and_its_pages_as_ublock_origin_reads_it() {
     let verdict = |url: &str, kind: &str| check(&engine, url, page, kind);
     assert_eq!(verdict("http://1.2.3.44/x.js", "script"), Verdict::Block);
     assert_eq!(verdict("http://11.2.3.44/x.js", "script"), Verdict::Allow);
-    assert_eq!(verdict("https://cdn.bad.example/x.js", "script"), Verdict::Block);
-    assert_eq!(verdict("https://ok.bad.example/x.js", "script"), Verdict::Allow);
+    assert_eq!(
+        verdict("https://cdn.bad.example/x.js", "script"),
+        Verdict::Block
+    );
+    assert_eq!(
+        verdict("https://ok.bad.example/x.js", "script"),
+        Verdict::Allow
+    );
     // The page itself, as a link opens it, from no page.
     let opened = |url: &str| check(&engine, url, url, "document");
     assert_eq!(opened("http://1.2.3.44/"), Verdict::Block);
@@ -145,6 +155,71 @@ fn only_a_whole_hostname_is_read_as_one() {
     ] {
         assert_eq!(is_hostname(pattern), hostname, "{pattern}");
     }
+}
+
+#[test]
+fn a_popup_filter_closes_the_pages_it_names_and_blocks_no_request() {
+    let folder = folder("popups");
+    let popups = folder.join("assets/thirdparties/popups.txt");
+    fs::write(
+        &popups,
+        "! Title: EasyList\n||pop.example^$popup\n@@||pop.example/ok^$popup\n\
+         ||both.example^$doc,popup\n||site.example^$popup,domain=news.example\n\
+         $popup,third-party,domain=spam.example\npop-only.example$popup\n",
+    )
+    .unwrap();
+    let mut setup = setup(&folder, "||mine.example^$popup\n");
+    setup.lists.push(popups);
+    let engine = compile(&setup);
+    let news = "https://news.example/";
+    let opened = |url: &str, from: &str| check(&engine, url, from, "popup");
+    assert_eq!(opened("https://pop.example/x", news), Verdict::Block);
+    assert_eq!(opened("https://pop.example/ok", news), Verdict::Allow);
+    assert_eq!(opened("https://both.example/", news), Verdict::Block);
+    assert_eq!(opened("https://site.example/", news), Verdict::Block);
+    assert_eq!(
+        opened("https://site.example/", "https://other.example/"),
+        Verdict::Allow
+    );
+    assert_eq!(
+        opened("https://any.example/", "https://spam.example/"),
+        Verdict::Block
+    );
+    assert_eq!(opened("https://any.example/", news), Verdict::Allow);
+    assert_eq!(
+        opened("https://www.pop-only.example/", news),
+        Verdict::Block
+    );
+    assert_eq!(opened("https://mine.example/", news), Verdict::Block);
+    // A filter of no type blocks the requests it names, but never closes a pop-up, as in uBlock
+    // Origin.
+    assert_eq!(opened("https://ads.example/", news), Verdict::Allow);
+    // A pop-up's filter blocks no request, nor the page opened from a link, but one that names a
+    // type too blocks that.
+    assert_eq!(
+        check(&engine, "https://pop.example/x", news, "script"),
+        Verdict::Allow
+    );
+    let page = |url: &str| check(&engine, url, url, "document");
+    assert_eq!(page("https://pop.example/x"), Verdict::Allow);
+    assert_eq!(page("https://both.example/"), Verdict::Block);
+}
+
+#[test]
+fn a_popup_filter_keeps_its_other_types_and_the_popups_get_its_other_options() {
+    let (rest, popups) = popups_apart(
+        "||a.example^$popup\n@@||b.example^$popup,domain=x.example\n||c.example^$doc,popup,3p\n\
+         $popup,third-party\nexample.com##.ad[href$=popup]\n||d.example^$script\n"
+            .to_string(),
+    );
+    assert_eq!(
+        rest,
+        "||c.example^$doc,3p\nexample.com##.ad[href$=popup]\n||d.example^$script\n"
+    );
+    assert_eq!(
+        popups,
+        "||a.example^\n@@||b.example^$domain=x.example\n||c.example^$3p\n*$third-party\n"
+    );
 }
 
 #[test]

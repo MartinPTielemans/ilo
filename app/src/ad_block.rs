@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use adblock::Engine;
+use adblock::Engine as Rules;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions};
 use adblock::request::Request;
 use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
@@ -28,6 +28,14 @@ pub struct Setup {
     pub lists: Vec<PathBuf>,
     /// The user's own filters, one a line.
     pub filters: String,
+}
+
+/// The compiled lists: what blocks, redirects and rewrites requests and what pages hide and run,
+/// and apart, the filters for pop-ups, as uBlock Origin keeps them. adblock-rust drops every `$popup`
+/// filter, and would match one without a type against a pop-up, which uBlock Origin never does.
+pub struct Engine {
+    rules: Rules,
+    popups: Rules,
 }
 
 /// What to do with a request (BC_AD_BLOCK_).
@@ -81,7 +89,9 @@ fn is_hostname(pattern: &str) -> bool {
     last.len() >= 2
         && edge(&last[0])
         && edge(&last[last.len() - 1])
-        && last.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        && last
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
         && labels.all(|label| {
             label.first().is_some_and(edge)
                 && label
@@ -115,27 +125,110 @@ fn hostnames_anchored(text: String) -> String {
     out
 }
 
+/// The request types a filter's options can name, as uBlock Origin and adblock-rust write them.
+const TYPES: &[&str] = &[
+    "doc",
+    "document",
+    "frame",
+    "subdocument",
+    "script",
+    "image",
+    "xhr",
+    "xmlhttprequest",
+    "css",
+    "stylesheet",
+    "media",
+    "font",
+    "object",
+    "ping",
+    "websocket",
+    "other",
+];
+
+/// The pattern and options of `line` if it's a network filter for pop-ups.
+fn popup_filter(line: &str) -> Option<(&str, Vec<&str>)> {
+    let cosmetic = ["##", "#@#", "#?#", "#$#", "#@?#", "#@$#"]
+        .iter()
+        .any(|at| line.contains(at));
+    let at = line
+        .rfind('$')
+        .filter(|_| !line.starts_with('!') && !cosmetic)?;
+    let options: Vec<&str> = line[at + 1..].split(',').collect();
+    options.contains(&"popup").then(|| (&line[..at], options))
+}
+
+/// `text` apart from its `$popup` filters, and those filters, each in the popups' engine without
+/// its types, since all it's asked about is pop-ups. A filter for pop-ups and other types too, as
+/// `$doc,popup` is, keeps the others in `text`: adblock-rust drops all of one that names `popup`.
+fn popups_apart(text: String) -> (String, String) {
+    if !text.lines().any(|line| popup_filter(line).is_some()) {
+        return (text, String::new());
+    }
+    let (mut rest, mut popups) = (String::with_capacity(text.len()), String::new());
+    for line in text.lines() {
+        let Some((pattern, options)) = popup_filter(line) else {
+            rest.push_str(line);
+            rest.push('\n');
+            continue;
+        };
+        let is_type = |option: &&str| TYPES.contains(&option.trim_start_matches('~'));
+        let (types, others): (Vec<&str>, Vec<&str>) = options
+            .iter()
+            .copied()
+            .filter(|option| *option != "popup")
+            .partition(is_type);
+        // An exception's pattern keeps its @@, and one of only options, any address.
+        let pattern = match pattern.trim_start_matches("@@") {
+            "" => format!("{pattern}*"),
+            _ => pattern.to_string(),
+        };
+        popups.push_str(&pattern);
+        if !others.is_empty() {
+            popups.push('$');
+            popups.push_str(&others.join(","));
+        }
+        popups.push('\n');
+        if types.iter().any(|option| !option.starts_with('~')) {
+            let kept: Vec<&str> = options
+                .into_iter()
+                .filter(|option| *option != "popup")
+                .collect();
+            rest.push_str(&format!("{pattern}${}\n", kept.join(",")));
+        }
+    }
+    (rest, popups)
+}
+
 /// Compiles `setup`'s lists and the user's filters, about 0.25 s for the lists uBlock Origin turns
 /// on, and gives it uBlock Origin's stand-ins and scriptlets. A list that can't be read is left out.
 pub fn compile(setup: &Setup) -> Engine {
-    let mut set = FilterSet::new(false);
+    let (mut set, mut popups) = (FilterSet::new(false), FilterSet::new(false));
+    let mut add = |text: String, options: ParseOptions| {
+        let (text, popup_text) = match options.format {
+            FilterFormat::Standard => popups_apart(text),
+            FilterFormat::Hosts => (text, String::new()),
+        };
+        set.add_filter_list(hostnames_anchored(text), options.clone());
+        if !popup_text.is_empty() {
+            popups.add_filter_list(hostnames_anchored(popup_text), options);
+        }
+    };
     for list in &setup.lists {
         match fs::read_to_string(list) {
             Ok(text) => {
                 let options = options(&setup.folder, list, &text);
-                let text = match options.format {
-                    FilterFormat::Standard => hostnames_anchored(text),
-                    FilterFormat::Hosts => text,
-                };
-                set.add_filter_list(text, options);
+                add(text, options);
             }
             Err(error) => crate::log!("browser: ad block list {}: {error}", list.display()),
         }
     }
-    set.add_filter_list(hostnames_anchored(setup.filters.clone()), ParseOptions::default());
-    let mut engine = Engine::new_with_filter_set(set);
-    engine.use_resources(resources(&setup.folder));
-    engine
+    add(setup.filters.clone(), ParseOptions::default());
+    let mut rules = Rules::new_with_filter_set(set);
+    rules.use_resources(resources(&setup.folder));
+    Engine {
+        rules,
+        popups: Rules::new_with_filter_set(popups),
+    }
 }
 
 /// What filters name in uBlock Origin's `folder`: its stand-ins and its scriptlets.
@@ -199,12 +292,21 @@ fn redirect_table(source: &str) -> Vec<(String, Vec<String>)> {
 }
 
 /// What the engine does with the request for `url`, of `kind` as filters name it, from the page at
-/// `source`.
+/// `source`. A "popup" is a page `source` opened, which only the popups' filters close.
 pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
+    if kind == "popup" {
+        let Ok(request) = Request::new(url, source, "other", "GET") else {
+            return Verdict::Allow;
+        };
+        return match engine.popups.check_network_request(&request).should_block() {
+            true => Verdict::Block,
+            false => Verdict::Allow,
+        };
+    }
     let Ok(request) = Request::new(url, source, kind, "GET") else {
         return Verdict::Allow;
     };
-    let result = engine.check_network_request(&request);
+    let result = engine.rules.check_network_request(&request);
     if result.should_block() {
         return match result.redirect {
             Some(redirect) => Verdict::Redirect(redirect),
@@ -221,7 +323,7 @@ pub fn check(engine: &Engine, url: &str, source: &str, kind: &str) -> Verdict {
 /// JSON object of its "hide" selectors, its "procedural" filters, the "exceptions" to generic
 /// hiding, its scriptlets' "script", and whether "generic" hiding applies.
 pub fn page(engine: &Engine, url: &str) -> String {
-    let resources = engine.url_cosmetic_resources(url);
+    let resources = engine.rules.url_cosmetic_resources(url);
     let sorted = |set: std::collections::HashSet<String>| {
         let mut all: Vec<String> = set.into_iter().collect();
         all.sort();
@@ -252,14 +354,17 @@ fn wrapped(script: &str) -> String {
 /// `exceptions` (page's), as bc_host's ad_block_hide writes them: a JSON array.
 pub fn hide(engine: &Engine, classes: &[String], ids: &[String], exceptions: &[String]) -> String {
     let exceptions = exceptions.iter().cloned().collect();
-    let mut selectors = engine.hidden_class_id_selectors(classes, ids, &exceptions);
+    let mut selectors = engine
+        .rules
+        .hidden_class_id_selectors(classes, ids, &exceptions);
     selectors.sort();
     serde_json::Value::from(selectors).to_string()
 }
 
 /// What `compile` makes of the same lists: one more each time it reads them differently, so an
-/// engine the last compile made isn't loaded. 2: bare hostnames anchored.
-const COMPILED: u32 = 2;
+/// engine the last compile made isn't loaded. 2: bare hostnames anchored. 3: pop-ups' filters apart,
+/// the file the two engines, the first's length before it.
+const COMPILED: u32 = 3;
 
 /// The compiled engine's name in the cache folder, for `setup` as its files are now: a change to
 /// a list, the filters, adblock-rust's version or COMPILED names another.
@@ -283,16 +388,13 @@ fn cache_name(setup: &Setup) -> String {
 pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
     let start = Instant::now();
     let file = cache.map(|cache| cache.join(cache_name(setup)));
-    if let Some(bytes) = file.as_ref().and_then(|file| fs::read(file).ok()) {
-        let mut engine = Engine::default();
-        if engine.deserialize(&bytes).is_ok() {
-            engine.use_resources(resources(&setup.folder));
-            crate::log!(
-                "browser: ad block engine loaded in {} ms",
-                start.elapsed().as_millis()
-            );
-            return engine;
-        }
+    if let Some(mut engine) = file.as_ref().and_then(|file| read(&fs::read(file).ok()?)) {
+        engine.rules.use_resources(resources(&setup.folder));
+        crate::log!(
+            "browser: ad block engine loaded in {} ms",
+            start.elapsed().as_millis()
+        );
+        return engine;
     }
     let engine = compile(setup);
     crate::log!(
@@ -310,10 +412,26 @@ pub fn load(setup: &Setup, cache: Option<&Path>) -> Engine {
             }
         }
         if fs::create_dir_all(cache).is_ok() {
-            _ = fs::write(&file, engine.serialize());
+            let (rules, popups) = (engine.rules.serialize(), engine.popups.serialize());
+            let mut bytes = Vec::with_capacity(8 + rules.len() + popups.len());
+            bytes.extend_from_slice(&(rules.len() as u64).to_le_bytes());
+            bytes.extend(rules);
+            bytes.extend(popups);
+            _ = fs::write(&file, bytes);
         }
     }
     engine
+}
+
+/// The engines `load` kept in `bytes`, or None for a file it didn't write.
+fn read(bytes: &[u8]) -> Option<Engine> {
+    let (length, rest) = bytes.split_first_chunk::<8>()?;
+    let (rules_bytes, popups_bytes) =
+        rest.split_at_checked(usize::try_from(u64::from_le_bytes(*length)).ok()?)?;
+    let (mut rules, mut popups) = (Rules::default(), Rules::default());
+    rules.deserialize(rules_bytes).ok()?;
+    popups.deserialize(popups_bytes).ok()?;
+    Some(Engine { rules, popups })
 }
 
 /// The engine the core asks, swapped whole as the setup changes, as a page's requests keep asking
