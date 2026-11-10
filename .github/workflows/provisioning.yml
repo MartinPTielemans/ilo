@@ -663,7 +663,9 @@ jobs:
             grep -q "^browser: drive $step: can't do that" "$log" && fail "the driver can't do \"$*\""
             active=$(grep "^browser: drive $step done" "$log" | sed 's/.*active \([01]\).*/\1/')
           }
+          # $1, a query, makes the page the launch opens a URL of its own, apart from the tabs it restores.
           launch() {
+            url=${site}login.html${1:+?$1}
             log=$out/$phase.log
             step=0
             # Sparkle checks no feed, so it can't put another version in place at the quit.
@@ -674,7 +676,7 @@ jobs:
             exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
             fifo=$RUNNER_TEMP/drive-$phase
             mkfifo "$fifo"
-            (env -u BROWSER_PROFILE_DIR BROWSER_DRIVE=1 BROWSER_URL="${site}login.html" "$exe" --enable-logging=stderr --v=0 \
+            (env -u BROWSER_PROFILE_DIR BROWSER_DRIVE=1 BROWSER_URL="$url" "$exe" --enable-logging=stderr --v=0 \
               < "$fifo" >> "$log" 2>&1; echo "exited $?" >> "$log") &
             exec 3> "$fifo"
             echo "$phase: launched $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist") at $started, SecurityAgent before: ${agents:-none}"
@@ -685,10 +687,14 @@ jobs:
             tab=$(grep "^browser: title [0-9]* $1\$" "$log" | tail -1 | sed 's/^browser: title \([0-9]*\) .*/\1/')
             pid=$(pgrep -n -f "^$exe" || true)
           }
-          # The server saw request $1 since the launch with the cookie the login got.
+          # The server saw request $1 since the launch with the cookie the login got, within 10 s.
           sent() {
-            tail -n +"$((served + 1))" "$out/server.log" | grep " $1 cookie=" | sed "s/$token/<token>/g" | tee -a "$out/$phase-requests.txt" || true
-            tail -n +"$((served + 1))" "$out/server.log" | grep " $1 cookie=" | grep -q "session=$token" ||
+            for _ in $(seq 100); do
+              tail -n +"$((served + 1))" "$out/server.log" | grep -F " $1 cookie=" | grep -q "session=$token" && break
+              sleep 0.1
+            done
+            tail -n +"$((served + 1))" "$out/server.log" | grep -F " $1 cookie=" | sed "s/$token/<token>/g" | tee -a "$out/$phase-requests.txt" || true
+            tail -n +"$((served + 1))" "$out/server.log" | grep -F " $1 cookie=" | grep -q "session=$token" ||
               fail "the server didn't see the cookie on $1"
           }
           # SIGTERM, which Chromium takes for the session ending, as a logout does.
@@ -737,12 +743,17 @@ jobs:
             echo "$phase: the same item, cdat $(cat "$out/cdat-$phase.txt")"
           }
           # Another copy, launched on the same profile: no dialog, the saved login fills, the cookie
-          # is sent, and the item is the same.
+          # is sent, and the item is the same. The restored tabs come back with the titles they had,
+          # "filled" among them, so only the new tab's own "login" and then "filled" count.
           relaunch() {
-            launch
-            titled filled
-            echo "$phase: the login page filled the saved password in, tab $tab, pid $pid"
-            sent /login.html
+            launch "$phase"
+            await "^browser: page [0-9]* .* ${url}\$" 900 || fail "no tab opened $url within 90 s of the launch"
+            tab=$(grep "^browser: page [0-9]* .* ${url}\$" "$log" | head -1 | sed 's/^browser: page \([0-9]*\) .*/\1/')
+            await "^browser: title $tab login\$" 900 || fail "the new tab's login page didn't draw within 90 s of the launch"
+            await "^browser: title $tab filled\$" 300 || fail "the saved password didn't fill in within 30 s of the page drawing"
+            pid=$(pgrep -n -f "^$exe" || true)
+            echo "$phase: the new tab $tab drew the login page and filled the saved password in, pid $pid"
+            sent "/login.html?$phase"
             quit
             record
             same_item
