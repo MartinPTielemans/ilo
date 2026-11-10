@@ -58,6 +58,53 @@ for (const strategy of ['place', 'reparent', 'clone']) {
     }
   }
 }
+// Trade as two settles: each element lands where the other was, at that place's width, and the
+// page keeps its width; reset puts both back.
+{
+  const t = rec.picks.trade;
+  const before = await (async () => { const { ctx, page } = await withArrangement({ changes: [] });
+    const r = await page.evaluate((t) => { const A = globalThis.__ILO_ARRANGE__; const a = document.querySelector(t.target.path).getBoundingClientRect(), b = document.querySelector(t.ref.path).getBoundingClientRect();
+      return { a: [a.left, a.top + scrollY, a.width], b: [b.left, b.top + scrollY, b.width] }; }, t);
+    await ctx.close(); return r; })();
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('trade')] });
+  const now = await page.evaluate((t) => { const A = globalThis.__ILO_ARRANGE__; const a = document.querySelector(t.target.path).getBoundingClientRect(), b = document.querySelector(t.ref.path).getBoundingClientRect();
+    return { a: [a.left, a.top + scrollY, a.width], b: [b.left, b.top + scrollY, b.width], ovf: document.documentElement.scrollWidth - document.documentElement.clientWidth, s: A.state()[0] }; }, t);
+  const near = (p, q) => Math.abs(p[0] - q[0]) < 2 && Math.abs(p[1] - q[1]) < 2 && Math.abs(p[2] - q[2]) < 2;
+  check(now.s.applied && !errors.length, `trade by settles: ${now.s.applied ? 'applied' : now.s.why} ${errors.join(' ')}`);
+  check(near(now.a, before.b) && near(now.b, before.a), `  each at the other's place and width: ${JSON.stringify(now)} vs ${JSON.stringify(before)}`);
+  check(now.ovf <= 0, `  no sideways scroll: ${now.ovf}`);
+  await page.evaluate(() => globalThis.__ILO_ARRANGE__.reset());
+  const left = await page.evaluate(() => [...document.querySelectorAll('[style]')].map((e) => e.localName + ' ' + e.getAttribute('style')));
+  check(left.length === 0, `  reset leaves no style: ${left.join('; ')}`);
+  await ctx.close();
+}
+// The top layer: a settled and a floated element are open popovers, on top where they're drawn,
+// and reset takes the attribute away.
+for (const kind of ['settle', 'float']) {
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', top: true, finder: 'path', test: true, changes: [change(kind)] });
+  const r = await page.evaluate((t) => { const A = globalThis.__ILO_ARRANGE__; const el = document.querySelector(t.path); el.scrollIntoView({ block: 'center' });
+    const b = el.getBoundingClientRect(), hit = document.elementFromPoint(b.left + b.width / 2, b.top + Math.min(b.height / 2, 20));
+    return { open: el.matches(':popover-open'), hits: !!hit && (el === hit || el.contains(hit)), s: A.state()[0] }; }, rec.picks[kind].target);
+  check(r.open && r.hits && r.s.applied && !errors.length, `${kind} in the top layer: open ${r.open}, hits ${r.hits}, ${r.s.applied ? 'applied' : r.s.why} ${errors.join(' ')}`);
+  check(Math.abs(r.s.rect.x - r.s.intended.x) < 2, `  drawn where meant: ${JSON.stringify(r.s.rect)} vs ${JSON.stringify(r.s.intended)}`);
+  await page.evaluate(() => globalThis.__ILO_ARRANGE__.reset());
+  const left = await page.evaluate(() => [...document.querySelectorAll('[style], [popover]')].map((e) => e.localName));
+  check(left.length === 0, `  reset leaves no style or popover: ${left.join(' ')}`);
+  await ctx.close();
+}
+// A carry's preview over a placed page: shown, then taken away, leaving every style and box as
+// it was.
+for (const kind of ['settle', 'trade']) {
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('hide'), change('size')] });
+  const snap = () => page.evaluate(() => [...document.querySelectorAll('body *')].map((e) => { const r = e.getBoundingClientRect(); return [e.getAttribute('style'), r.left, r.top, r.width, r.height].join('|'); }).join('\n'));
+  const before = await snap();
+  const c = { ...change(kind), id: 'p-' + kind };
+  const shown = await page.evaluate((c) => globalThis.__ILO_ARRANGE__.preview(c), c);
+  await page.evaluate((id) => globalThis.__ILO_ARRANGE__.unpreview(id), c.id);
+  const after = await snap();
+  check(shown.applied && before === after && !errors.length, `preview ${kind} over a placed page: ${shown.applied ? 'applied' : shown.why}, put back ${before === after ? 'clean' : 'NOT clean'} ${errors.join(' ')}`);
+  await ctx.close();
+}
 await browser.close();
 server.close();
 console.log(failed ? `${failed} failed` : 'all ok');

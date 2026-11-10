@@ -62,7 +62,26 @@
     if (el.style.getPropertyValue(prop) === value && el.style.getPropertyPriority(prop) === 'important') return;
     el.style.setProperty(prop, value, 'important');
   }
+  // |top|: a settled or floated element is shown in the top layer, as a manual popover, so no
+  // ancestor's stacking context or clipping can cover it. The page sees the attribute, the
+  // :popover-open state and the toggle events; the popover's own look is undone inline.
+  const lifted = new WeakSet();
+  function lift(el) {
+    if (!A.top || lifted.has(el) || !el.showPopover) return;
+    if (el.hasAttribute('popover')) return; // the site's own popover stays the site's
+    const cs = getComputedStyle(el);
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      for (const k of ['width', 'style', 'color']) set(el, `border-${side}-${k}`, cs.getPropertyValue(`border-${side}-${k}`));
+      set(el, `padding-${side}`, cs.getPropertyValue(`padding-${side}`));
+    }
+    set(el, 'color', cs.color); set(el, 'background-color', cs.backgroundColor);
+    set(el, 'overflow-x', cs.overflowX); set(el, 'overflow-y', cs.overflowY);
+    set(el, 'right', 'auto'); set(el, 'bottom', 'auto');
+    el.setAttribute('popover', 'manual');
+    try { el.showPopover(); lifted.add(el); } catch { el.removeAttribute('popover'); }
+  }
   function restore(el) {
+    if (lifted.has(el)) { try { el.hidePopover(); } catch {} el.removeAttribute('popover'); lifted.delete(el); }
     const m = saved.get(el);
     if (!m) return;
     for (const [prop, [v, p]] of m) v ? el.style.setProperty(prop, v, p) : el.style.removeProperty(prop);
@@ -105,6 +124,7 @@
   function unplace(s) {
     if (s.el) restore(s.el);
     if (s.ref) restore(s.ref);
+    if (s.keepers) { for (const k of s.keepers) restore(k); s.keepers = null; }
     if (s.clone) { s.clone.remove(); s.clone = null; }
     if (s.clone2) { s.clone2.remove(); s.clone2 = null; }
     s.applied = false;
@@ -151,7 +171,7 @@
     if (strat === 'reparent') return placeReparent(s);
     if (strat === 'clone') return placeClone(s);
     if (c.kind === 'settle') return strat === 'anchor' ? settleAnchor(s) : settle(s);
-    if (c.kind === 'trade') return trade(s);
+    if (c.kind === 'trade') return A.tradeBy === 'transform' ? trade(s) : tradeSettles(s);
     if (c.kind === 'float') return float(s);
   }
 
@@ -171,6 +191,7 @@
     const m0 = s.m0 != null ? s.m0 : (s.m0 = parseFloat(getComputedStyle(ref)[c.where === 'before' ? 'marginTop' : 'marginBottom']) || 0);
     set(ref, side, px(m0 + h));
     s.room = h;
+    lift(el);
     const rr = rect(ref);
     const o = origin(el);
     const y = c.where === 'before' ? rr.top - m0 - h : rr.bottom + m0;
@@ -219,6 +240,105 @@
     s.applied = true;
   }
 
+  // Trade as two settles: each element goes to the other's place and takes that place's width, so
+  // its content reflows, and the room kept there is its size at that width. Both leave the flow;
+  // a margin on the place's neighbour (or the parent's min size) keeps the room, measured once and
+  // corrected once. A place in a table or a grid has no room a margin can keep, and is refused.
+  function slotOf(el, skip) {
+    const parent = el.parentElement, pcs = getComputedStyle(parent), d = getComputedStyle(el).display;
+    let axis = 'column';
+    if (/table/.test(d) || /table/.test(pcs.display)) axis = 'table';
+    else if (/grid/.test(pcs.display)) axis = 'grid';
+    else if (/flex/.test(pcs.display)) axis = /column/.test(pcs.flexDirection) ? 'column' : 'row';
+    else if (/^inline/.test(d) && d !== 'inline-block') axis = 'inline';
+    const inFlow = (e) => !skip.includes(e) && e.getClientRects().length > 0 && !/absolute|fixed/.test(getComputedStyle(e).position);
+    let prev = el.previousElementSibling; while (prev && !inFlow(prev)) prev = prev.previousElementSibling;
+    let next = el.nextElementSibling; while (next && !inFlow(next)) next = next.nextElementSibling;
+    return { el, parent, axis, prev, next, r: rect(el), pr: rect(parent), prevR: prev && rect(prev), nextR: next && rect(next) };
+  }
+  function tradeSettles(s) {
+    const { el, ref } = s;
+    if (s.keepers) for (const k of s.keepers) restore(k);
+    restore(el); restore(ref);
+    const skip = [el, ref];
+    const sa = slotOf(el, skip), sb = slotOf(ref, skip);
+    for (const sl of [sa, sb]) if (sl.axis === 'table' || sl.axis === 'grid' || sl.axis === 'inline') { s.why = 'a place in a ' + sl.axis; s.keepers = []; return; }
+    sa.incoming = ref; sb.incoming = el;
+    const keepers = (s.keepers = []);
+    // Out of the flow, each at its new width.
+    for (const sl of [sa, sb]) {
+      const m = sl.incoming;
+      // Its own box sizing stays, as a fixed height would change with it: the width given is the
+      // one that makes its border box the place's.
+      const cs = getComputedStyle(m);
+      const edge = cs.boxSizing === 'border-box' ? 0 : ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth'].reduce((t, k) => t + (parseFloat(cs[k]) || 0), 0);
+      set(m, 'position', 'absolute'); set(m, 'margin', '0');
+      set(m, 'width', px(Math.max(0, sl.r.width - edge))); set(m, 'z-index', '1');
+
+    }
+    for (const sl of [sa, sb]) { const r = rect(sl.incoming); sl.inMain = sl.axis === 'row' ? r.width : r.height; sl.inCross = sl.axis === 'row' ? r.height : r.width; }
+    // Places beside each other share one room, in their order on the page.
+    const groups = [];
+    for (const sl of [sa, sb]) {
+      const g = groups.find((x) => x.parent === sl.parent && x.prev === sl.prev);
+      if (g) g.slots.push(sl); else groups.push({ parent: sl.parent, prev: sl.prev, next: sl.next, axis: sl.axis, slots: [sl] });
+    }
+    const placed = [];
+    for (const g of groups) {
+      const row = g.axis === 'row';
+      const start = (r) => (row ? r.left : r.top), end = (r) => (row ? r.right : r.bottom);
+      g.slots.sort((a, b) => start(a.r) - start(b.r));
+      if (g.next && g.slots.some((sl) => sl.next !== g.next)) g.next = g.slots[g.slots.length - 1].next;
+      const first = g.slots[0], last = g.slots[g.slots.length - 1];
+      const pcs = getComputedStyle(g.parent);
+      const contentStart = (pr) => (row ? pr.left + parseFloat(pcs.borderLeftWidth) + parseFloat(pcs.paddingLeft) : pr.top + parseFloat(pcs.borderTopWidth) + parseFloat(pcs.paddingTop));
+      // Gaps as the page had them: before the first place, between places, and after the last.
+      const before = start(first.r) - (g.prev ? end(first.prevR) : contentStart(first.pr));
+      const inner = g.slots.slice(1).map((sl, i) => start(sl.r) - end(g.slots[i].r));
+      const after = g.next ? start(last.nextR) - end(last.r) : 0;
+      const want = before + g.slots.reduce((t, sl) => t + sl.inMain, 0) + inner.reduce((t, x) => t + x, 0) + after;
+      // The room: from the neighbour before to the one after, or to the parent's edge.
+      const span = () => {
+        const a = g.prev ? end(rect(g.prev)) : contentStart(rect(g.parent));
+        const b = g.next ? start(rect(g.next)) : (row ? rect(g.parent).right : rect(g.parent).bottom);
+        return b - a;
+      };
+      let keeper, prop, base;
+      if (g.prev && g.next) { keeper = g.prev; prop = row ? 'margin-right' : 'margin-bottom'; }
+      else if (g.next) { keeper = g.next; prop = row ? 'margin-left' : 'margin-top'; }
+      else if (g.prev) { keeper = g.prev; prop = row ? 'margin-right' : 'margin-bottom'; }
+      else { keeper = g.parent; prop = row ? 'min-width' : 'min-height'; }
+      keepers.push(keeper);
+      base = parseFloat(getComputedStyle(keeper).getPropertyValue(prop)) || 0;
+      if (!g.next) {
+        // The last places of their parent: the parent's own size keeps the room.
+        if (keeper !== g.parent) { keepers.push(g.parent); }
+        const pr = rect(g.parent), cs0 = start(first.r) - contentStart(first.pr);
+        const need = cs0 + g.slots.reduce((t, sl) => t + sl.inMain, 0) + inner.reduce((t, x) => t + x, 0);
+        const have = (row ? pr.width : pr.height);
+        if (need > have - 1) set(g.parent, row ? 'min-width' : 'min-height', px(need));
+      } else {
+        for (let i = 0; i < 2; i++) { const d = want - span(); if (Math.abs(d) < 0.5) break; base += d; set(keeper, prop, px(base)); }
+      }
+      // Each incoming element at its place, in order, across at the place's own offset.
+      let at = (g.prev ? end(rect(g.prev)) : contentStart(rect(g.parent))) + before;
+      const prNow = rect(g.parent);
+      g.slots.forEach((sl, i) => {
+        const m = sl.incoming, o = origin(m);
+        const cross = row ? prNow.top + (sl.r.top - sl.pr.top) : prNow.left + (sl.r.left - sl.pr.left);
+        const x = row ? at : cross, y = row ? cross : at;
+        set(m, 'left', px(x - o.x)); set(m, 'top', px(y - o.y));
+        placed.push({ m, x, y });
+        at += sl.inMain + (inner[i] || 0);
+        // A row's height doesn't grow for an element out of the flow: its parent keeps the room.
+        if (row && sl.inCross > sl.r.height + 0.5) { keepers.push(g.parent); set(g.parent, 'min-height', px(sl.pr.height + sl.inCross - sl.r.height)); }
+      });
+    }
+    const mine = placed.find((p) => p.m === el);
+    const reflow = (m) => Math.max(0, m.scrollWidth - m.clientWidth);
+    s.intended = { x: mine.x, y: mine.y, w: sb.r.width, h: rect(el).height, sizes: { a: [sa.r.width, sa.r.height], b: [sb.r.width, sb.r.height] }, reflow: { el: reflow(el), ref: reflow(ref) } };
+    s.applied = true;
+  }
   // Float: over the page, at a place in the document (pin page) or on the screen (pin screen).
   function float(s) {
     const { c, el } = s;
@@ -227,6 +347,7 @@
     set(el, 'width', px(w));
     set(el, 'margin', '0');
     set(el, 'z-index', '2147483000');
+    lift(el);
     if (c.pin === 'screen') {
       set(el, 'position', 'fixed');
       set(el, 'left', px(c.at.x)); set(el, 'top', px(c.at.y));
@@ -351,6 +472,25 @@
   globalThis.__ILO_ARRANGE__ = {
     reset,
     reapply: () => { on = true; layoutAll('reapply'); },
+    // A carry's preview: one more change placed over what's placed now, and taken away again.
+    preview: (c) => {
+      const s = { c, el: null, ref: null, n: 0, refN: 0, applied: false, room: 0, why: '', preview: true };
+      live.push(s);
+      const t = performance.now();
+      layoutAll('preview');
+      return { ms: performance.now() - t, applied: s.applied, why: s.why };
+    },
+    unpreview: (id) => {
+      const i = live.findIndex((s) => s.preview && s.c.id === id);
+      if (i < 0) return null;
+      const s = live[i];
+      const t = performance.now();
+      unplace(s);
+      live.splice(i, 1);
+      // What's placed goes back where the page now puts it, without the preview.
+      layoutAll('unpreview');
+      return { ms: performance.now() - t };
+    },
     state: () => live.map((s) => {
       const r = s.el && s.el.isConnected ? s.el.getBoundingClientRect() : null;
       return {
