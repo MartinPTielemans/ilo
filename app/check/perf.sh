@@ -484,7 +484,17 @@ fi
 # DevTools opens its tabs in front, as a link from another app does, a couple of seconds apart, and
 # shows them through the tab strip, as ⌘1–⌘8 do; ilo's are timed from ↩ in ⌘T's bar and from the
 # key. A profile of its own, launched once first, as ilo's was.
-if [ "$(uname)" = Darwin ]; then
+# CHECK_CHROME names another, such as Chrome for Testing on the owner's Mac, whose own Chrome a run
+# never launches or quits: off CI, there's none without it.
+chrome_id=com.google.Chrome
+if [ -n "${CHECK_CHROME:-}" ]; then
+  chrome=$CHECK_CHROME
+  chrome_procs=${chrome%/MacOS/*}
+  [ "$(uname)" != Darwin ] || chrome_id=$(defaults read "$chrome_procs/Info" CFBundleIdentifier)
+  [ "$(uname)" = Darwin ] || chrome_procs=$chrome
+elif [ -z "${CI:-}" ]; then
+  chrome=none
+elif [ "$(uname)" = Darwin ]; then
   chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   chrome_procs="/Applications/Google Chrome.app/Contents"
 elif windows; then
@@ -602,7 +612,7 @@ chrome_quit() {
     # Without /F, taskkill asks its windows to close, as their close button does.
     taskkill //PID "$(cat "/proc/$pid/winpid")" > /dev/null 2>&1 || true
   elif [ "$(uname)" = Darwin ]; then
-    osascript -e 'tell application id "com.google.Chrome" to quit' || true
+    osascript -e "tell application id \"$chrome_id\" to quit" || true
   else
     kill -INT "$pid" 2> /dev/null || true
   fi
@@ -627,7 +637,11 @@ chrome_quit() {
 if [ "$active" != 1 ]; then
   :
 elif [ ! -x "$chrome" ]; then
-  echo "skip: perf's Chrome on this runner. It has none at $chrome."
+  if [ -n "${CI:-}" ] || [ -n "${CHECK_CHROME:-}" ]; then
+    echo "skip: perf's Chrome on this runner. It has none at $chrome."
+  else
+    echo "skip: perf's Chrome. Off CI, CHECK_CHROME names the one to run, as the owner's own never is."
+  fi
 else
   snap_procs=$chrome_procs
   : > "$perf_dir/chrome.log"
