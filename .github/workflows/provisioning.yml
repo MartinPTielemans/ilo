@@ -193,3 +193,163 @@ jobs:
         with:
           name: provisioning
           path: ${{ runner.temp }}/out
+
+  # The released 0.1.14, signed again by tools/release.sh with the release's Developer ID, the
+  # profile and app/entitlements/release.plist, then ad hoc, then by tools/install.sh, and each
+  # launched with a throwaway profile folder. Nothing is notarized: there's no notarytool profile,
+  # so release.sh stops after signing the DMG.
+  resign:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: 0.1.14
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Released app
+        run: |
+          mkdir -p "$RUNNER_TEMP/out" "$RUNNER_TEMP/dmg" build
+          sw_vers | tee "$RUNNER_TEMP/out/macos.txt"
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p ilo-mac-arm64.dmg -D "$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/mnt" "$RUNNER_TEMP/dmg/ilo-mac-arm64.dmg" > /dev/null
+          ditto "$RUNNER_TEMP/mnt/ilo.app" build/Browser.app
+          hdiutil detach "$RUNNER_TEMP/mnt" > /dev/null
+
+      # As release.yml's Keychain step, without the notarization key.
+      - name: Keychain
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/release.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          printf %s "$MAC_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)
+          [ -n "$identity" ]
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      # A Developer ID run without the profile, and one claiming a key the profile doesn't grant.
+      - name: Refusals
+        run: |
+          out=$RUNNER_TEMP/out
+          set +e
+          PROVISIONING_PROFILE=$RUNNER_TEMP/none ../tools/release.sh > "$out/refuse-no-profile.txt" 2>&1
+          echo "exit $?" >> "$out/refuse-no-profile.txt"
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.web-browser.public-key-credential bool true' entitlements/release.plist
+          ../tools/release.sh > "$out/refuse-passkey.txt" 2>&1
+          echo "exit $?" >> "$out/refuse-passkey.txt"
+          git checkout -- entitlements/release.plist
+          set -e
+          tail -n 3 "$out/refuse-no-profile.txt" "$out/refuse-passkey.txt"
+          grep -q "isn't a provisioning profile" "$out/refuse-no-profile.txt"
+          grep -q '^exit 1$' "$out/refuse-no-profile.txt"
+          grep -q "doesn't grant com.apple.developer.web-browser.public-key-credential = true" "$out/refuse-passkey.txt"
+          grep -q '^exit 1$' "$out/refuse-passkey.txt"
+          [ ! -e build/release ]
+
+      - name: Developer ID
+        run: |
+          out=$RUNNER_TEMP/out
+          set +e
+          ../tools/release.sh > "$out/release.txt" 2>&1
+          echo "exit $?" >> "$out/release.txt"
+          set -e
+          tail -n 25 "$out/release.txt"
+          grep -q "but not notarized" "$out/release.txt"
+          mkdir -p "$RUNNER_TEMP/apps/developer-id"
+          ditto build/release/ilo.app "$RUNNER_TEMP/apps/developer-id/ilo.app"
+
+      - name: Ad hoc
+        env:
+          SIGN_IDENTITY: '-'
+        run: |
+          ../tools/release.sh > "$RUNNER_TEMP/out/adhoc.txt" 2>&1
+          mkdir -p "$RUNNER_TEMP/apps/ad-hoc"
+          ditto build/release/ilo.app "$RUNNER_TEMP/apps/ad-hoc/ilo.app"
+
+      - name: install.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/apps/install"
+          ../tools/install.sh "$RUNNER_TEMP/apps/install" 2>&1 | tail -3
+
+      - name: Signatures
+        run: |
+          for kind in developer-id ad-hoc install; do
+            app=$RUNNER_TEMP/apps/$kind/ilo.app
+            {
+              echo "== $kind: codesign -dvv"
+              codesign -dvv "$app" 2>&1 | grep -e '^Identifier' -e '^Authority' -e '^TeamIdentifier' -e '^Runtime' -e '^Timestamp'
+              echo "== $kind: codesign -d --entitlements -"
+              codesign -d --entitlements - --xml "$app" 2> /dev/null | plutil -p -
+              echo "== $kind: embedded.provisionprofile"
+              if [ -e "$app/Contents/embedded.provisionprofile" ]; then
+                security cms -D -i "$app/Contents/embedded.provisionprofile" > "$RUNNER_TEMP/embedded.plist"
+                /usr/libexec/PlistBuddy -c 'Print :Name' -c 'Print :UUID' -c 'Print :ExpirationDate' -c 'Print :Entitlements' "$RUNNER_TEMP/embedded.plist"
+              else
+                echo "(none)"
+              fi
+              echo "== $kind: codesign --verify --deep --strict"
+              codesign --verify --deep --strict --verbose=2 "$app" 2>&1 | tail -2
+            } | tee "$RUNNER_TEMP/out/signature-$kind.txt"
+          done
+
+      # Each copy, launched as the checks launch the app, until its page's title is in its log.
+      - name: Launch
+        run: |
+          out=$RUNNER_TEMP/out
+          site=$RUNNER_TEMP/site
+          mkdir -p "$site"
+          echo '<!doctype html><title>ilo launched</title>' > "$site/ready.html"
+          (cd "$site" && python3 -I -m http.server 8765 --bind 127.0.0.1 > "$out/site.log" 2>&1) &
+          failed=
+          for kind in developer-id ad-hoc install; do
+            app=$RUNNER_TEMP/apps/$kind/ilo.app
+            exe=$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$app/Contents/Info.plist")
+            id=$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")
+            defaults write "$id" SULastCheckTime -date "$(date -u '+%Y-%m-%d %H:%M:%S +0000')"
+            # Each copy is signed differently, so the cookie key's item from the one before would ask.
+            security delete-generic-password -s "ilo Safe Storage" > /dev/null 2>&1 || true
+            log=$out/launch-$kind.log
+            fifo=$RUNNER_TEMP/drive-$kind
+            mkfifo "$fifo"
+            start=$(date '+%Y-%m-%d %H:%M:%S')
+            (BROWSER_DRIVE=1 BROWSER_URL=http://localhost:8765/ready.html BROWSER_PROFILE_DIR=$RUNNER_TEMP/profile-$kind \
+              "$exe" --enable-logging=stderr --v=0 < "$fifo" >> "$log" 2>&1; echo "exited $?" >> "$log") &
+            exec 3> "$fifo"
+            seen=
+            for _ in $(seq 900); do
+              grep -q 'browser: title [0-9]* ilo launched' "$log" && { seen=1; break; }
+              grep -q '^exited ' "$log" && break
+              sleep 0.1
+            done
+            pid=$(pgrep -n -f "^$exe" || true)
+            if [ -n "$seen" ] && [ -n "$pid" ]; then echo "$kind: launched, pid $pid, page title in its log"; else echo "$kind: DID NOT LAUNCH"; failed=1; fi
+            grep -e 'browser: title' -e '^exited' "$log" | cut -c1-300
+            log show --start "$start" --style compact --predicate 'sender == "AppleMobileFileIntegrity" OR process == "amfid" OR eventMessage CONTAINS[c] "provisioning profile"' 2> /dev/null |
+              grep -i -e ilo -e "$id" | tail -10 > "$out/amfi-$kind.txt" || true
+            echo "AMFI lines naming the app: $(wc -l < "$out/amfi-$kind.txt")"; cat "$out/amfi-$kind.txt"
+            exec 3>&-
+            [ -z "$pid" ] || kill "$pid" 2> /dev/null || true
+            for _ in $(seq 100); do pgrep -f "$app/" > /dev/null || break; sleep 0.1; done
+            pkill -9 -f "$app/" || true
+          done
+          [ -z "$failed" ]
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: resign
+          path: ${{ runner.temp }}/out
