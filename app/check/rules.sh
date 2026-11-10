@@ -89,9 +89,10 @@ say({"jsonrpc": "2.0", "method": "notifications/initialized"})
 say({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
      "params": {"name": "open_tab", "arguments": {"url": url}}})
 text = json.loads(client.stdout.readline())["result"]["content"][0]["text"]
-print(text.split(".")[0].split(" ")[-1])
+print(text.split(".")[0].split(" ")[-1], flush=True)
 client.stdin.close()
 client.wait(timeout=30)
+# The timer's thread would hold the process for its 30 s.
 import os
 os._exit(0)
 PY
