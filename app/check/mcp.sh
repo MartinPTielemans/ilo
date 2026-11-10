@@ -1053,18 +1053,19 @@ CARD
   read_id=$(sed -n 's/^browser: settings request \([0-9]*\) GET at .*/\1/p' "$log" | sort -nu | tail -1)
   [ -n "$read_id" ] && [ "$allowed_id" != "$denied_id" ] ||
     fail "Settings › Agents didn't list the read and both changes: $(grep '^browser: settings request ' "$log")"
-  # Opens the request $1 and checks its line says it shows $2. The oldest first, the lowest, so a
-  # row opened doesn't move the next one.
+  # Opens the request $1, sent with the method $2, and checks its line says it shows $3. The oldest
+  # first, the lowest, so a row opened doesn't move the next one. The name is whole, as in_sight
+  # finds a scrolled row by its fixed text.
   open_request() {
-    in_sight "request $1 [A-Z]*" || fail "Settings › Agents didn't draw request $1"
+    in_sight "request $1 $2" || fail "Settings › Agents didn't draw request $1"
     send clickkey $at
     expect "^browser: settings request $1 opened " "a click on request $1 didn't open it"
     shown=$(sed -n "s/^browser: settings request $1 opened //p" "$log" | tail -1)
-    [ "$shown" = "$2" ] || fail "request $1 opened to show \"$shown\", not \"$2\""
+    [ "$shown" = "$3" ] || fail "request $1 opened to show \"$shown\", not \"$3\""
   }
-  open_request "$read_id" "to http://localhost:$port/api/me, sent: "
-  open_request "$allowed_id" "to http://localhost:$port/api/items, sent: title: Milk"
-  open_request "$denied_id" "to http://localhost:$port/api/items, not sent: title: Milk"
+  open_request "$read_id" GET "to http://localhost:$port/api/me, sent: "
+  open_request "$allowed_id" POST "to http://localhost:$port/api/items, sent: title: Milk"
+  open_request "$denied_id" POST "to http://localhost:$port/api/items, not sent: title: Milk"
   ../tools/window-screenshot.sh "$pid" "$out/settings-agents-requests.png" || fail "no window to capture"
   # Back to General, for the visits below to click Agents.
   send clickkey $(drawn "toolbar General")
