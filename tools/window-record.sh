@@ -51,6 +51,20 @@ final class Finished: NSObject, SCRecordingOutputDelegate {
   }
 }
 
+// A stream can end by itself before it's stopped, and then stopping it says only that it had
+// (-3808, #2280), so this says why it ended and when, a line check.sh's FAIL carries.
+final class Ended: NSObject, SCStreamDelegate {
+  var began: Date?
+  var planned = 0.0
+  func stream(_ stream: SCStream, didStopWithError error: Error) {
+    let when = began.map {
+      String(format: "%.1f s into %.1f s", Date().timeIntervalSince($0), planned)
+    } ?? "before its first frame"
+    let line = "the stream ended by itself \(when): \(error)\n"
+    FileHandle.standardError.write(Data(line.utf8))
+  }
+}
+
 let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
 let windows = content.windows.filter { $0.owningApplication?.processID == pid }
 // The largest normal window; a process can also own invisible helper windows.
@@ -76,7 +90,9 @@ recording.outputFileType = .mp4
 recording.videoCodecType = .h264
 let finished = Finished()
 let output = SCRecordingOutput(configuration: recording, delegate: finished)
-let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+let ended = Ended()
+ended.planned = seconds
+let stream = SCStream(filter: filter, configuration: config, delegate: ended)
 try? FileManager.default.removeItem(at: out)
 try stream.addRecordingOutput(output)
 // The handler forms, since Swift can pick a startCapture() that returns before capture starts.
@@ -85,6 +101,7 @@ try await withCheckedThrowingContinuation { (started: CheckedContinuation<Void, 
     if let error { started.resume(throwing: error) } else { started.resume() }
   }
 }
+ended.began = Date()
 print("recording")
 fflush(stdout)
 try await Task.sleep(for: .seconds(seconds))

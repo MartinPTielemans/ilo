@@ -225,6 +225,11 @@ impl Shell {
             })
             .collect();
         log!("browser: extension actions {}", shown.join(" "));
+        let actions = self.extension_actions.iter().chain(&self.unpinned_actions);
+        let driven = std::env::var_os("BROWSER_DRIVE").is_some();
+        if let Some(line) = titles_line(actions, driven) {
+            log!("{line}");
+        }
         // The panel takes them only while it shows for the tab.
         let grid = self.site_controls_extensions();
         self.browser
@@ -792,13 +797,29 @@ fn fit_actions(places: usize, count: usize) -> (usize, bool) {
     }
 }
 
+/// The actions' titles as a line for check.sh, whose extension says in its title how far its
+/// popup's page has got (#2241), or None unless the driver runs the app (BROWSER_DRIVE): a title
+/// can say what the user does, as an unread count, so the app never writes it in normal use.
+fn titles_line<'a>(
+    actions: impl Iterator<Item = &'a ExtensionAction>,
+    driven: bool,
+) -> Option<String> {
+    let titles: Vec<String> = (actions.filter(|_| driven))
+        .map(|action| format!("{}={}", action.id, action.title))
+        .collect();
+    driven.then(|| format!("browser: extension titles {}", titles.join(" | ")))
+}
+
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
 
     use gpui::{AppContext, TestAppContext, point, px};
 
-    use super::{Extension, ExtensionAction, ExtensionCommand, UserKeys, command_for, fit_actions};
+    use super::{
+        Extension, ExtensionAction, ExtensionCommand, UserKeys, command_for, fit_actions,
+        titles_line,
+    };
     use crate::shell::{Command, Folders, Shell, recorder::Recorder};
     use crate::site_controls;
 
@@ -1198,5 +1219,21 @@ mod tests {
         assert_eq!(fit_actions(1, 5), (0, true));
         // With no place at all, the Extensions menu runs them.
         assert_eq!(fit_actions(0, 1), (0, false));
+    }
+
+    /// The titles line, which can say what the user does, is written only while the driver runs
+    /// the app, as for check.sh, and is silent in normal use.
+    #[test]
+    fn action_titles_are_logged_only_for_the_driver() {
+        let action = ExtensionAction {
+            title: "3 unread".into(),
+            ..action("check", true)
+        };
+        let line = titles_line(std::iter::once(&action), true);
+        assert_eq!(
+            line.as_deref(),
+            Some("browser: extension titles check=3 unread")
+        );
+        assert_eq!(titles_line(std::iter::once(&action), false), None);
     }
 }

@@ -84,7 +84,25 @@ cat > "$extensions/popup/manifest.json" << 'EOF'
 EOF
 echo '<body style="width:240px;height:120px;display:grid;place-items:center;font:16px system-ui">
 the popup<script src="popup.js"></script></body>' > "$extensions/popup/popup.html"
-echo 'chrome.action.setBadgeText({text: "1"});' > "$extensions/popup/popup.js"
+# Its action's title says "(loading)" as its page loads and "(painted)" once it has painted, as
+# site.sh's painted() tells, for close_popup to say which a missed escape came after (#2241).
+cat > "$extensions/popup/popup.js" << 'EOF2'
+chrome.action.setBadgeText({text: "1"});
+chrome.action.setTitle({title: "Check Popup (loading)"});
+let done = false;
+const call = () =>
+  done || (done = true, chrome.action.setTitle({title: "Check Popup (painted)"}));
+new PerformanceObserver((entries, observer) => {
+  observer.disconnect();
+  call();
+}).observe({type: "paint", buffered: true});
+let first;
+const frame = time => {
+  first ??= time;
+  time - first > 600 ? call() : done || requestAnimationFrame(frame);
+};
+requestAnimationFrame(frame);
+EOF2
 cat > "$extensions/third/manifest.json" << 'EOF'
 {"manifest_version": 3, "name": "Check Third", "version": "1",
  "action": {"default_popup": "popup.html"}, "options_ui": {"page": "options.html"},
@@ -199,9 +217,27 @@ close_popup() {
     how="a click on its action"
   else
     send key escape
-    how=escape
+    how="escape, $(painted_by_escape), the keyboard in $key, focus on $focus,"
   fi
   expect '^browser: extension popup none$' "$how didn't close the extension's popup"
+}
+# Whether Check Popup's page had said it painted by the escape just sent, by its action's title
+# since the popup showed, which the app logs while its action is pinned or the Site Controls show.
+painted_by_escape() {
+  awk -v popup="$popup" -v escape="^browser: drive $step: " '
+    $0 == "browser: extension popup " popup { said = "not yet" }
+    /^browser: extension titles / {
+      listed = index($0, popup "=") > 0
+      if (said && index($0, popup "=Check Popup (loading)")) said = "not yet"
+      if (said && index($0, popup "=Check Popup (painted)")) said = "painted"
+    }
+    $0 ~ escape {
+      if (!said) print "with no popup shown"
+      else if (said == "painted") print "its page painted"
+      else if (listed) print "its page not yet painted"
+      else print "its page'"'"'s paint unseen, as its action isn'"'"'t listed"
+      exit
+    }' "$log"
 }
 if [ "$(uname)" = Linux ]; then
   echo "skip: the extension's popup taking the keyboard and escape closing it: on Linux the core gives the keyboard to a page alone (#708)."

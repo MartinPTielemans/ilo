@@ -804,6 +804,10 @@ class Account : public syncer::SyncServiceObserver,
       activity->trouble = BC_SYNC_TROUBLE_STOPPED;
       return;
     }
+    if (sync_spaces::NeedsUpdate()) {
+      activity->trouble = BC_SYNC_TROUBLE_UPDATE;
+      return;
+    }
     // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.
     const syncer::ModelNeutralState cycle =
         service->GetLastCycleSnapshotForDebugging().model_neutral_state();

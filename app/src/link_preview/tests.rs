@@ -48,8 +48,10 @@ impl Host for Recorder {
     fn close(&self, tab: u64) {
         self.push(format!("close {tab}"));
     }
-    fn keep(&self, window: u64, tab: u64) {
-        self.push(format!("keep {window} {tab}"));
+    fn keep(&self, window: u64, tab: u64, archived: Option<u64>) {
+        let archived =
+            archived.map_or(String::new(), |archived| format!(" of archived {archived}"));
+        self.push(format!("keep {window} {tab}{archived}"));
     }
     fn kept_archived(&self, window: u64, archived: u64, _: &mut App) {
         self.push(format!("kept archived {archived} in {window}"));
@@ -266,7 +268,12 @@ fn an_archived_tabs_preview_closes_leaving_it_and_keeps_restoring_it(cx: &mut Te
     let calls = shown.calls();
     assert_eq!(
         &calls[calls.len() - 4..],
-        ["release", "keep 1 10", "hide", "kept archived 5 in 1"]
+        [
+            "release",
+            "keep 1 10 of archived 5",
+            "hide",
+            "kept archived 5 in 1"
+        ]
     );
 }
 

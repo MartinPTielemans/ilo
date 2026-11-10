@@ -129,6 +129,11 @@ class AgentPage : public content::WebContentsObserver,
   void Still(base::ListValue last);
 
   void Click();
+  // Presses the job's element once it's ready. One outside the page's view, where scrolling
+  // didn't bring it, is focused first unless it has been (|focused|), as a skip link is.
+  void Press(bool focused);
+  // Presses the element where it is in its frame's view, with the agent's pointer over it.
+  void PressInView();
   // As a user's click at |at|, in the viewport of the frame of the session at |slot|: the pointer
   // comes, presses and lets go, from |step| on, each once the last is in, then the page settles.
   void ClickAt(int slot, gfx::PointF at, size_t step);

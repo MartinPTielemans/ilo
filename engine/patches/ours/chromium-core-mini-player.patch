@@ -5,19 +5,22 @@ it and the window never hears the press; while the core's hook is set it's the w
 the core moves it as a caption would, through Widget::RunMoveLoop. The core also places it, the
 first time 10 pt from the top right of the screen's work area, then where the last was left, which
 it hears as each one closes or hides. It keeps that across launches in local state, in a pref of
-its own that it registers through Chrome's RegisterLocalState.
+its own that it registers through Chrome's RegisterLocalState. Once Chrome has laid out the
+window's controls, the core gives it Dia's look: its corners, rim, scrim and top buttons, which it
+reaches through the window's getters. Its controls fade over Dia's 200 ms, not Chrome's 250.
 
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
-@@ -3,6 +3,7 @@
+@@ -3,6 +3,8 @@
  // found in the LICENSE file.
  
  #include "chrome/browser/ui/views/overlay/video_overlay_window_views.h"
 +#include "browser_core/hooks.h"  // nogncheck
++#include "base/functional/callback_helpers.h"  // browser_core
  
  #include <memory>
  #include <string>
-@@ -207,6 +208,19 @@
+@@ -207,6 +209,23 @@
  
  }  // namespace
  
@@ -33,11 +36,15 @@ its own that it registers through Chrome's RegisterLocalState.
 +                                              const gfx::Rect& work_area) = nullptr;
 +void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window) =
 +    nullptr;
++// browser_core: the core gives the window its look once Chrome has laid out its controls
++// (//browser_core/hooks.h).
++void (*g_browser_core_mini_player_laid_out)(VideoOverlayWindowViews* window) =
++    nullptr;
 +
  // OverlayWindow implementation of FrameView.
  class OverlayWindowFrameView : public views::FrameView {
    METADATA_HEADER(OverlayWindowFrameView, views::FrameView)
-@@ -260,6 +274,11 @@
+@@ -260,6 +279,11 @@
      }
  
      // Allows for dragging and resizing the window.
@@ -49,7 +56,7 @@ its own that it registers through Chrome's RegisterLocalState.
      return (window_component == HTNOWHERE) ? HTCAPTION : window_component;
    }
  #if BUILDFLAG(IS_CHROMEOS)
-@@ -522,6 +541,12 @@
+@@ -522,6 +546,12 @@
    gfx::Point default_origin =
        gfx::Point(window_diff_width - buffer, window_diff_height - buffer);
  
@@ -62,7 +69,7 @@ its own that it registers through Chrome's RegisterLocalState.
    if (has_been_shown_) {
      // Make sure window is displayed entirely in the work area.
      origin.SetToMin(default_origin);
-@@ -696,6 +721,11 @@
+@@ -696,6 +726,11 @@
  
    MaybeUpdateMeetsUserInteraction(*event);
  
@@ -74,7 +81,45 @@ its own that it registers through Chrome's RegisterLocalState.
    views::Widget::OnMouseEvent(event);
  }
  
-@@ -1720,6 +1750,10 @@
+@@ -1055,6 +1090,23 @@
+   return controls_top_scrim_view_;
+ }
+ 
++// browser_core: for the core's look (//browser_core/hooks.h).
++views::View* VideoOverlayWindowViews::GetControlsScrimView() const {
++  return controls_scrim_view_;
++}
++
++views::View* VideoOverlayWindowViews::GetControlsBottomScrimView() const {
++  return controls_bottom_scrim_view_;
++}
++
++views::View* VideoOverlayWindowViews::GetCloseControlsView() const {
++  return close_controls_view_;
++}
++
++views::View* VideoOverlayWindowViews::GetBackToTabControlsView() const {
++  return back_to_tab_button_;
++}
++
+ void VideoOverlayWindowViews::SetUpViews() {
+   // View that is displayed when video is hidden. ------------------------------
+   // Adding an extra pixel to width/height makes sure controls background cover
+@@ -1482,6 +1534,13 @@
+ }
+ 
+ void VideoOverlayWindowViews::OnUpdateControlsBounds() {
++  // browser_core: the core's look, once Chrome's layout is done, on every way out
++  // (//browser_core/hooks.h).
++  base::ScopedClosureRunner laid_out;
++  if (g_browser_core_mini_player_laid_out) {
++    laid_out.ReplaceClosure(base::BindOnce(g_browser_core_mini_player_laid_out,
++                                           base::Unretained(this)));
++  }
+   controls_container_view_->SetSize(GetBounds().size());
+ 
+   // Adding an extra pixel to width/height makes sure the scrim covers the
+@@ -1720,6 +1779,10 @@
  }
  
  void VideoOverlayWindowViews::Close() {
@@ -85,7 +130,7 @@ its own that it registers through Chrome's RegisterLocalState.
    views::Widget::Close();
    MaybeUnregisterFrameSinkHierarchy();
    if (fade_animator_) {
-@@ -1801,6 +1835,10 @@
+@@ -1801,6 +1864,10 @@
  }
  
  void VideoOverlayWindowViews::Hide() {
@@ -96,7 +141,7 @@ its own that it registers through Chrome's RegisterLocalState.
    // If there is an existing overlay view, remove it now.
    RemoveOverlayViewIfExists();
    views::Widget::Hide();
-@@ -2034,6 +2072,14 @@
+@@ -2034,6 +2101,14 @@
    MaybeUnregisterFrameSinkHierarchy();
  }
  
@@ -111,7 +156,7 @@ its own that it registers through Chrome's RegisterLocalState.
  void VideoOverlayWindowViews::OnGestureEvent(ui::GestureEvent* event) {
    MaybeUpdateMeetsUserInteraction(*event);
  
-@@ -2041,6 +2087,11 @@
+@@ -2041,6 +2116,11 @@
    // hide the controls.
    hide_controls_timer_.Reset();
  
@@ -133,6 +178,18 @@ its own that it registers through Chrome's RegisterLocalState.
  
    // display::DisplayObserver:
    void OnDisplayMetricsChanged(const display::Display& display,
+@@ -167,6 +168,11 @@
+   views::View* GetControlsContainerView() const;
+   views::View* GetTitleView() const;
+   views::View* GetControlsTopScrimView() const;
++  // browser_core: for the core's look (//browser_core/hooks.h).
++  views::View* GetControlsScrimView() const;
++  views::View* GetControlsBottomScrimView() const;
++  views::View* GetCloseControlsView() const;
++  views::View* GetBackToTabControlsView() const;
+ 
+   gfx::Size& GetNaturalSize();
+ 
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
 @@ -3,6 +3,7 @@
@@ -166,3 +223,16 @@ its own that it registers through Chrome's RegisterLocalState.
    // This is intentionally last.
    RegisterLocalStatePrefsForMigration(registry);
  }
+--- a/chrome/browser/ui/views/overlay/overlay_controls_fade_animation.cc
++++ b/chrome/browser/ui/views/overlay/overlay_controls_fade_animation.cc
+@@ -9,7 +9,9 @@
+ 
+ namespace {
+ 
+-constexpr base::TimeDelta kDuration = base::Milliseconds(250);
++// browser_core: the Mini Player's controls and scrim fade over 200 ms, as Dia's do
++// (docs/ux-parity/phase-4.md).
++constexpr base::TimeDelta kDuration = base::Milliseconds(200);
+ 
+ }  // namespace
+ 
