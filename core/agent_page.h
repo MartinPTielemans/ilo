@@ -159,6 +159,8 @@ class AgentPage : public content::WebContentsObserver,
   // Turns the wheel at the middle of |area|, in the viewport's CSS pixels, by most of its height,
   // then answers with the tree, or that nothing scrolled.
   void Wheel(const gfx::RectF& area, bool down);
+  // Turns it at |at|, by most of |height|, once nothing of an extension's is there.
+  void TurnWheelAt(gfx::PointF at, bool down, float height);
   void Scrolled(bool down);
   void ScrollTo();
   void History(bool forward);
@@ -197,6 +199,17 @@ class AgentPage : public content::WebContentsObserver,
   void IsPassword(int64_t element, base::OnceCallback<void(std::optional<bool>)> then);
   // Closes Chrome's autofill and password suggestions, which the keys would otherwise pick from.
   void HideSuggestions();
+  // Whether an extension's control is what input at |at|, in the viewport of the frame of the
+  // session at |slot|, would land on: a frame that isn't a web page's, as an extension's own is,
+  // or what an extension's content script put in the page (engine/patches/ours/
+  // chromium-agent-extension-nodes.patch). Agents never act on an extension's controls.
+  void Covered(int slot, gfx::PointF at, base::OnceCallback<void(bool)> then);
+  // Whether the keyboard is in a frame that isn't a web page's, as an extension's menu is when it
+  // has taken focus. An agent's keys go nowhere then.
+  bool KeysInExtension();
+  // Refuses the job, as what it would act on is an extension's: the agent hears |why|, and the
+  // activity log has it.
+  void RefuseExtension(std::string why);
 
   // The slot of the session |frame| is in, or -1 if there's none.
   int SlotOf(content::RenderFrameHost* frame);

@@ -22,8 +22,12 @@
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
 # types, each answered with what changed in the outline alone, and not into a frame's password
 # field. Its text leaves out a frame an extension puts in
-# the page, which isn't the page's. Its keys, typed or pressed, go to the page alone, and Escape
-# the page doesn't keep runs no Stop of ilo's. Where it acts in the page watched, its pointer and a
+# the page, which isn't the page's. Nor is the rest of what an extension puts there (#2355): its
+# button isn't in the outline, a click where its frame covers the page is refused, and so are keys
+# while its frame has the keyboard, each with an activity-log entry, and its listeners don't hear
+# the agent's keys. Neither the agent's click nor its ArrowDown and Enter in a login field opens or
+# accepts Chrome's suggestion of a saved login. Its keys, typed or pressed, go to the page alone,
+# and Escape the page doesn't keep runs no Stop of ilo's. Where it acts in the page watched, its pointer and a
 # ring with the element's ref show it. It opens a page, clicks its link, goes back, where the tab
 # takes the page's title again, scrolls, takes a screenshot and closes a tab, pins a tab of its own, unpins it and removes it, and a page that asks before it's left stays open, with no
 # dialog, until the agent discards it. Its download asks first, and Allow Once downloads the
@@ -72,7 +76,10 @@ cat > "$extension/manifest.json" << 'EOF'
   "manifest_version": 3,
   "name": "Frame check",
   "version": "1",
-  "content_scripts": [{"matches": ["http://localhost/frames.html*"], "js": ["content.js"]}],
+  "content_scripts": [
+    {"matches": ["http://localhost/frames.html*"], "js": ["content.js"]},
+    {"matches": ["http://localhost/covered.html*"], "js": ["covered.js"]}
+  ],
   "web_accessible_resources": [{"resources": ["frame.html"], "matches": ["http://localhost/*"]}]
 }
 EOF
@@ -81,6 +88,17 @@ frame.src = chrome.runtime.getURL("frame.html");
 document.body.append(frame);' > "$extension/content.js"
 printf '%s' '<p>Extension text</p><script src=frame.js></script>' > "$extension/frame.html"
 printf '%s' 'parent.postMessage("extension frame", "*");' > "$extension/frame.js"
+# On the covered page it adds a button of its own, a frame of its page over the page's button, as a
+# password manager's menu is, and a key listener of its own that marks the page when it hears one.
+printf '%s' 'const button = document.createElement("button");
+button.textContent = "Extension button";
+document.body.append(button);
+const frame = document.createElement("iframe");
+frame.src = chrome.runtime.getURL("frame.html");
+frame.style = "position: absolute; left: 0; top: 0; width: 300px; height: 120px; border: 0";
+document.body.append(frame);
+document.addEventListener("keydown", () => document.documentElement.dataset.heard = "1", true);' \
+  > "$extension/covered.js"
 # On Linux the app's notifications go to the desktop's server: check/notify-server.py, on a session
 # bus of the run's own, takes them and clicks them, as a desktop's does. Without dbus-daemon and
 # python3-gi, the run says it skips them.
@@ -988,6 +1006,54 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   closed=$(call close_tab "{\"tab\":$keys_tab}")
   case "$closed" in "Closed tab $keys_tab."*) ;; *) fail "closing the keys page answered: $closed" ;; esac
 
+  # An extension's controls in a page aren't the page's, and the agent can't act on them (#2355).
+  printf '%s' '<title>covered loading</title>
+<button style="position: absolute; left: 20px; top: 20px; width: 200px; height: 60px"
+  onclick="document.body.append(&quot;covered clicked&quot;)">Covered button</button>
+<input aria-label="Page field" style="position: absolute; left: 20px; top: 200px"
+  onkeydown="document.title = (document.documentElement.dataset.heard ? &quot;extension heard &quot; : &quot;page heard &quot;) + event.key">
+<button style="position: absolute; left: 20px; top: 260px"
+  onclick="document.querySelector(&quot;iframe&quot;).focus(); document.title = &quot;extension focused&quot;">Focus extension</button>
+<script>addEventListener("message", (event) => {
+  if (event.data === "extension frame") document.title = "covered";
+});</script>' > "$out/site/covered.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/covered.html\"}")
+  covered_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$covered_tab" ] || fail "open_tab of the covered page answered: $outline"
+  await_log "^browser: title $covered_tab covered\$" "the check's extension didn't cover the covered page"
+  outline=$(call snapshot "{\"tab\":$covered_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-covered.txt"
+  case "$outline" in
+    *"Extension button"*) fail "the outline had the extension's button: $outline" ;;
+    *'button "Covered button"'*'textbox "Page field"'*) ;;
+    *) fail "the covered page was outlined as: $outline" ;;
+  esac
+  refused=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of button "Covered button")\"}")
+  case "$refused" in
+    "error: An extension's control covers that spot"*) ;;
+    *) fail "clicking the button the extension's frame covers answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab click refused: An extension's control covers" \
+    "the refused click didn't reach the activity log"
+  clicked=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of textbox "Page field")\"}")
+  case "$clicked" in "Clicked"*) ;; *) fail "clicking the page's field answered: $clicked" ;; esac
+  pressed=$(call press_key "{\"tab\":$covered_tab,\"key\":\"ArrowDown\"}")
+  case "$pressed" in "Pressed ArrowDown."*) ;; *) fail "press_key in the page's field answered: $pressed" ;; esac
+  await_log "^browser: title $covered_tab [a-z]* heard ArrowDown\$" "the agent's key didn't reach the page"
+  grep -q "^browser: title $covered_tab extension heard " "$log" &&
+    fail "the extension's key listener heard the agent's key"
+  clicked=$(call click "{\"tab\":$covered_tab,\"ref\":\"$(ref_of button "Focus extension")\"}")
+  case "$clicked" in "Clicked"*) ;; *) fail "clicking Focus extension answered: $clicked" ;; esac
+  await_log "^browser: title $covered_tab extension focused\$" "the page didn't focus the extension's frame"
+  refused=$(call press_key "{\"tab\":$covered_tab,\"key\":\"Enter\"}")
+  case "$refused" in
+    "error: An extension's control has the keyboard"*) ;;
+    *) fail "press_key while the extension's frame had the keyboard answered: $refused" ;;
+  esac
+  await_log "^browser: agent activity mcp-client $covered_tab press_key refused: An extension's control has" \
+    "the refused key didn't reach the activity log"
+  call close_tab "{\"tab\":$covered_tab}" > /dev/null
+
   # It sends HTTP requests from its tab to the tab's own site, with the tab's session but never
   # seeing it: reads go at once, their answers without the cookie the site sets or the token in its
   # body, and a change asks first, every time, in a card whose Allow sends it and Deny doesn't.
@@ -1320,10 +1386,24 @@ CARD
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-empty.png" || fail "no window to capture"
   [ "$(children)" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
+  # Nor do the agent's keys, which would open the dropdown and accept its login (#2355).
+  call press_key "{\"tab\":$opened_tab,\"key\":\"ArrowDown\"}" > /dev/null
+  [ "$(children)" = "$shown" ] || fail "the agent's ArrowDown offered the saved login in a dropdown"
   grep -q "^browser: title $opened_tab filled\$" "$log" &&
     fail "Chrome filled the saved password in the agent's tab"
   outline=$(call snapshot "{\"tab\":$opened_tab}")
   case "$outline" in *hunter2*) fail "the login page's outline gave the password" ;; esac
+  # With nothing offered, its Enter submits the empty form, which goes on to the welcome page.
+  welcomes=$(grep -c "^browser: title $opened_tab welcome\$" "$log" || true)
+  call press_key "{\"tab\":$opened_tab,\"key\":\"Enter\"}" > /dev/null
+  await_more "^browser: title $opened_tab welcome\$" "$welcomes" ||
+    fail "the agent's Enter in the login field didn't submit the form"
+  grep -q "^browser: title $opened_tab filled\$" "$log" &&
+    fail "the agent's Enter accepted the saved login"
+  before=$(logins)
+  call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/login.html\"}" > /dev/null
+  await_more "^browser: title $opened_tab login\$" "$before" ||
+    fail "the login page didn't load in the agent's tab again"
   before=$(logins)
   take_over "to fill the login"
   await_log "^browser: title $opened_tab filled\$" "Take Over didn't fill the saved password in"
