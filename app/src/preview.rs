@@ -19,6 +19,7 @@ use browser::agents::task::{
 };
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
+use browser::boosts::Script;
 use browser::command_bar::{self, Suggestion};
 use browser::dialog;
 use browser::foot_bar;
@@ -452,8 +453,9 @@ fn preview_boost_folder() -> Option<std::path::PathBuf> {
 }
 
 impl Browser for Fake {
+    // PREVIEW_BOOST_SCRIPT's made-up Boosts are in a folder of their own.
     fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
-        preview_boost_folder()
+        (preview_boost_script().map(|_| preview_boosts_folder())).or_else(preview_boost_folder)
     }
 
     fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
@@ -2478,6 +2480,22 @@ fn main() {
                 preview_account(state, cx);
                 return;
             }
+            // PREVIEW_BOOST_SCRIPT=none, new, changed or too-large gives the profile made-up
+            // Boosts, example.com's with no script, as before scripts, or with its script off for
+            // that reason (#2297). The states are the ones the core would answer.
+            if let Some(script) = preview_boost_script() {
+                write_preview_boosts(script);
+                browser::boosts::with(|boosts| {
+                    boosts.load(0, preview_boosts_folder());
+                    for change in boosts.script_changes(0) {
+                        let state = match change.site.as_str() {
+                            "example.com" => script.unwrap_or(Script::New),
+                            _ => Script::On,
+                        };
+                        boosts.set_script_state(0, &change.site, state);
+                    }
+                });
+            }
             // PREVIEW_SIZE=<width>x<height> opens the window at that size.
             let (width, height) = std::env::var("PREVIEW_SIZE")
                 .ok()
@@ -2773,6 +2791,10 @@ fn main() {
                         (Some(_), _) => shell.set_selected(0, cx),
                         (None, _) if agent.is_some() => shell.set_selected(reading[0], cx),
                         (None, Some(&tab)) => shell.set_selected(tab, cx),
+                        // PREVIEW_BOOST_SCRIPT shows example.com, the fifth tab, whose Boost it is.
+                        (None, None) if preview_boost_script().is_some() => {
+                            shell.set_selected(TABS.len() as u64, cx)
+                        }
                         (None, None) => shell.set_selected(1, cx),
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
@@ -2871,6 +2893,7 @@ fn main() {
                                 Ok("downloads") => shell.run(Command::ViewDownloads, "preview", cx),
                                 Ok("spaces") => shell.show_spaces(cx),
                                 Ok("agents") => shell.show_agents(cx),
+                                Ok("boosts") => shell.run(Command::ViewBoosts, "preview", cx),
                                 Ok("rename") => {
                                     shell.show_spaces(cx);
                                     shell.preview_rename_card(window, cx);
@@ -3081,6 +3104,32 @@ fn main() {
                     log!("browser: preview swipe done");
                 })
                 .detach();
+            }
+            // PREVIEW_BOOST_DIALOG=new, changed or whole asks to turn on example.com's Boost
+            // script, new, changed since it was last turned on, or changed with no copy (#2297).
+            if let Ok(kind) = std::env::var("PREVIEW_BOOST_DIALOG") {
+                if !DIALOG_OPEN.replace(true) {
+                    dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
+                }
+                let site = "example.com";
+                let question = match kind.as_str() {
+                    "changed" => browser::boosts::script_question(
+                        site,
+                        browser::boosts::script_diff(site, PREVIEW_SCRIPT_BEFORE, PREVIEW_SCRIPT),
+                        browser::boosts::Asking::Changed,
+                    ),
+                    "whole" => browser::boosts::script_question(
+                        site,
+                        browser::boosts::script_text(site, PREVIEW_SCRIPT),
+                        browser::boosts::Asking::ChangedWhole,
+                    ),
+                    _ => browser::boosts::script_question(
+                        site,
+                        browser::boosts::script_text(site, PREVIEW_SCRIPT),
+                        browser::boosts::Asking::New,
+                    ),
+                };
+                dialog::ask_script(question, Box::new(|_, _| {}), cx);
             }
             // PREVIEW_PEEK=1 opens a link of the page shown in Peek, once the shell has laid the page
             // out, with the shell's page showing through the card, as it does on Linux and Windows.
@@ -3496,7 +3545,7 @@ fn preview_site() -> Site {
             "Connection is secure",
         ),
     };
-    Site {
+    let site = Site {
         site: site.into(),
         connection,
         connection_summary: summary.into(),
@@ -3547,8 +3596,118 @@ fn preview_site() -> Site {
             .then(|| "1 change no longer fits".into()),
         arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
             .then(|| "Changed outside ilo, off".into()),
+        boost_script: None,
+    };
+    // PREVIEW_BOOST_SCRIPT's site is example.com, its Boost on, its script as it says.
+    match preview_boost_script() {
+        Some(script) => Site {
+            site: "example.com".into(),
+            boost: Some(true),
+            boost_script: script,
+            ..site
+        },
+        None => site,
     }
 }
+
+/// PREVIEW_BOOST_SCRIPT's state for example.com's Boost script: none for no script, or off as it
+/// says. None without it.
+fn preview_boost_script() -> Option<Option<Script>> {
+    match std::env::var("PREVIEW_BOOST_SCRIPT").ok()?.as_str() {
+        "new" => Some(Some(Script::New)),
+        "changed" => Some(Some(Script::Changed)),
+        "too-large" => Some(Some(Script::TooLarge)),
+        _ => Some(None),
+    }
+}
+
+fn preview_boosts_folder() -> std::path::PathBuf {
+    std::env::temp_dir().join("ilo-preview-boosts")
+}
+
+/// Made-up Boosts, written afresh: example.com's, and two more for the Library's list.
+fn write_preview_boosts(script: Option<Script>) {
+    let folder = preview_boosts_folder().join(browser::boosts::FOLDER);
+    let _ = std::fs::remove_dir_all(&folder);
+    let _ = std::fs::create_dir_all(&folder);
+    let files = [
+        (
+            "example.com.css",
+            "/* example.com */\n.banner { display: none !important; } /* Zap */\n.promo { display: none !important; } /* Zap */\nbody { max-width: 72ch; margin: auto; }\nh1 { font-weight: 600; }\n",
+        ),
+        (
+            "recipes.example.css",
+            ".ad-slot { display: none !important; } /* Zap */\n",
+        ),
+        ("tracker.example.css", "main { font-size: 110%; }\n"),
+    ];
+    for (name, css) in files {
+        let _ = std::fs::write(folder.join(name), css);
+    }
+    // Another whose script runs, and one whose script is too large, for the Library's list.
+    if let Some(script) = script {
+        let example = match script {
+            Script::TooLarge => "//".repeat(browser::boosts::SCRIPT_LIMIT),
+            _ => PREVIEW_SCRIPT.to_owned(),
+        };
+        let _ = std::fs::write(folder.join("example.com.js"), example);
+        let _ = std::fs::write(folder.join("recipes.example.js"), PREVIEW_SCRIPT_BEFORE);
+        let large = "//".repeat(browser::boosts::SCRIPT_LIMIT);
+        let _ = std::fs::write(folder.join("tracker.example.js"), large);
+    }
+}
+
+/// A made-up Boost script for example.com, as last turned on.
+const PREVIEW_SCRIPT_BEFORE: &str = r#"// example.com: tidy the reading view.
+(() => {
+  const article = document.querySelector("main article");
+  if (!article) return;
+
+  // Keep the reading width the CSS sets.
+  article.classList.add("boost-reading");
+
+  // Show how long a read it is, under the title.
+  const words = article.innerText.split(/\s+/).length;
+  const minutes = Math.max(1, Math.round(words / 230));
+  const title = article.querySelector("h1");
+  const note = document.createElement("p");
+  note.className = "boost-read-time";
+  note.textContent = `${minutes} min read`;
+  title?.after(note);
+
+  // Open outside links in a new tab.
+  for (const link of article.querySelectorAll("a[href^='http']")) {
+    if (link.host !== location.host) link.target = "_blank";
+  }
+})();
+"#;
+
+/// The same script as its file is now, changed outside the browser.
+const PREVIEW_SCRIPT: &str = r#"// example.com: tidy the reading view.
+(() => {
+  const article = document.querySelector("main article");
+  if (!article) return;
+
+  // Keep the reading width the CSS sets.
+  article.classList.add("boost-reading");
+
+  // Show how long a read it is, under the title.
+  const words = article.innerText.split(/\s+/).length;
+  const minutes = Math.max(1, Math.round(words / 200));
+  const title = article.querySelector("h1");
+  const note = document.createElement("p");
+  note.className = "boost-read-time";
+  note.textContent = `${minutes} min read`;
+  title?.after(note);
+
+  // Open outside links in a new tab, and say where they go.
+  for (const link of article.querySelectorAll("a[href^='http']")) {
+    if (link.host === location.host) continue;
+    link.target = "_blank";
+    link.title = `Opens ${link.host}`;
+  }
+})();
+"#;
 
 /// Settings › Sync alone, on the card as Settings shows a section, in a window of Settings' size.
 fn preview_account(state: &str, cx: &mut App) {

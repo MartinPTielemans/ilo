@@ -158,6 +158,7 @@ pub(crate) unsafe extern "C" fn window_extension_question(
         fields: Vec::new(),
         check: None,
         on_return: dialog::Return::Action,
+        code: None,
     };
     let mut asked = false;
     if window == front().0 {
