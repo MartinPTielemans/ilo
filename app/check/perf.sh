@@ -130,6 +130,16 @@ perf_memory() {
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
 }
+# #2138, not for merge: the browser process's memory by the OS's own tools, as dissect.py says.
+perf_dissect() {
+  if [ -n "${MSYSTEM:-}" ] && [ ! -e "$out/vmmap/vmmap64.exe" ]; then
+    curl -sSfLo "$out/VMMap.zip" https://download.sysinternals.com/files/VMMap.zip &&
+      unzip -oq "$out/VMMap.zip" -d "$out/vmmap" || echo "perf: no VMMap"
+  fi
+  [ -z "${MSYSTEM:-}" ] || DISSECT_VMMAP=$(cygpath -w "$PWD/$out/vmmap/vmmap64.exe")
+  DISSECT_VMMAP=${DISSECT_VMMAP:-} python3 -I check/dissect.py "$perf_dir/memory-$1.json" "$perf_dir" \
+    "dissect-$1" || echo "perf: dissect $1 failed"
+}
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
   files=
@@ -264,6 +274,7 @@ perf_session() {
   done
   perf_until $((loaded + 15))
   perf_memory 20
+  perf_dissect 20
   perf_row memory-20 "Memory, 20 tabs" "${memory% *} MiB, ${memory#* } processes ($kinds)" \
     "Ardia 1082 MB, Chrome 919 MB (gate: ≤ Chrome)"
   perf_row newtab "New tab, ↩ in ⌘T's bar to page painted" \
@@ -426,6 +437,7 @@ else
     done
     perf_until $(($(date +%s) + 15))
     perf_memory chrome-20
+    perf_dissect chrome-20
     perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
     perf_idle chrome-idle-20
