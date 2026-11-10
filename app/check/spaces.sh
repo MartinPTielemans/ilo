@@ -289,15 +289,17 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # only once the app has asked for the tab's picture ("tab <a> picturing"). It keeps that reason
 # past the copy's answer until the page has been quiet for a whole tick of its 1 s timer, as the
 # copy's last frames reach the log after it. A frame with no picture asked for fails, and so does a
-# page that never goes quiet. The hidden stretch starts at whichever comes first, the core showing
+# page that never goes quiet. The page counts afresh at each "hidden". The hidden stretch starts at whichever comes first, the core showing
 # another tab or the page's "hidden", which can reach the log after the picture (#1678), so a
 # picture between the two counts and one from before them doesn't.
 hidden_state() {
   awk -v a="$a" '
-    function start() { asked = drawing = quiet = frames = ticks = 0; tick_frames = -1; why = "" }
+    function start() { asked = drawing = 0; why = ""; counts() }
+    function counts() { quiet = visible = frames = ticks = 0; tick_frames = -1 }
     BEGIN { start() }
     /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) { shown = 0; start() } }
-    $0 == "browser: title " a " hidden" { if (shown) { shown = 0; start() } }
+    $0 == "browser: title " a " hidden" { if (shown) { shown = 0; start() } else counts() }
+    index($0, "browser: title " a " visible ") == 1 { visible = 1; asked = 0 }
     index($0, "browser: tab " a " picturing ") == 1 { asked = drawing = 1; tick_frames = -1 }
     /^browser: handover picture copied / && index($0, "(tab " a ")") { drawing = 0; tick_frames = -1 }
     index($0, "browser: title " a " hidden f") == 1 {
@@ -309,16 +311,20 @@ hidden_state() {
       }
       frames = n[1]; ticks = n[2]
     }
-    END { print why != "" ? "ran: " why : quiet ? "quiet" : "running", "(" frames " frames, " ticks " ticks)" }' "$log"
+    END {
+      state = why != "" ? "ran: " why : visible ? "visible" : quiet ? "quiet" : "running"
+      print state, "(" frames " frames, " ticks " ticks)"
+    }' "$log"
 }
-# Before the tab shows again: the page has gone quiet, with no frame it had no reason for.
+# Before the tab shows again: the page has gone quiet, with no frame it had no reason for, or it's
+# shown already.
 hidden_quiet() {
   local state
   for _ in $(seq 300); do
     state=$(hidden_state)
     case $state in
     ran:*) fail "$1: $state" ;;
-    quiet*) return 0 ;;
+    quiet* | visible*) return 0 ;;
     esac
     kill -0 "$pid" 2>/dev/null || gone
     sleep 0.1
