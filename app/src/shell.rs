@@ -85,6 +85,7 @@ mod into_folder;
 mod keys;
 mod launch_room;
 mod library;
+pub mod snooze_mock;
 mod link;
 #[cfg(test)]
 mod link_previews;

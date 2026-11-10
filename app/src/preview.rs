@@ -2272,6 +2272,24 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
             ];
             ("clear", rows)
         }
+        // Mock only (#2350): Snooze Tab, one row a time, each with when it means at its end, and
+        // Pick a Date and Time… last, as the tab menu's submenu has them.
+        "snooze" => {
+            let snooze = |time: &str, when: &str| Suggestion {
+                text: "Snooze Tab".into(),
+                detail: time.to_string().into(),
+                command: Some(Command::CloseTab),
+                computer: when.to_string().into(),
+                ..Suggestion::default()
+            };
+            let mut rows: Vec<Suggestion> = shell::snooze_mock::TIMES
+                .iter()
+                .map(|(time, when)| snooze(time, when))
+                .collect();
+            rows.push(snooze("Pick a Date and Time…", ""));
+            rows.push(search("snooze"));
+            ("snooze", rows)
+        }
         // The three places a result can be (#2337): an open tab, a closed tab in the archive and a
         // page only in the history, as today's bar shows them with PREVIEW_HISTORY_BEFORE=1.
         "places" => {
@@ -2546,6 +2564,20 @@ fn main() {
                                 .collect();
                         }
                         _ => {}
+                    }
+                    // Mock only (#2350): PREVIEW_SNOOZE adds two snoozed tabs, Zed's from this
+                    // afternoon, back in Reading, and one from yesterday, back in the first
+                    // Space, with ids past the downloads' that History names in that order and
+                    // no fourth, which would be Little ilo's.
+                    if shell::snooze_mock::on() && history.is_some() {
+                        let id = |from: u64, rest: u64| (from..).find(|id| id % 4 == rest).unwrap();
+                        let zed = id(first_archived + 100, 1);
+                        let reference = id(zed + 1, 2);
+                        archive.push((zed, "Zed — The editor for what's next", "https://zed.dev/", now() - 0.02 * DAY));
+                        archive.push((reference, "The Rust Reference", "https://doc.rust-lang.org/reference/", now() - 1.2 * DAY));
+                        archive.sort_by(|a, b| b.3.total_cmp(&a.3));
+                        shell::snooze_mock::snooze(zed, "Wed 08:00");
+                        shell::snooze_mock::snooze(reference, "Mon 08:00");
                     }
                     let first_download = first_archived + ARCHIVE.len() as u64;
                     let downloads = (first_download..)
@@ -2865,7 +2897,7 @@ fn main() {
                             shell.show_archive(cx);
                             match preview_history().as_deref() {
                                 // Today's archive has neither filter, so its "before" lists all.
-                                Some(filter @ ("closed" | "visited"))
+                                Some(filter @ ("closed" | "visited" | "snoozed"))
                                     if !preview_history_before() =>
                                 {
                                     shell.preview_history_filter(filter, cx)

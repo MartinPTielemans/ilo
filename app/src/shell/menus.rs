@@ -121,7 +121,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(super) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
@@ -1286,6 +1286,12 @@ impl Shell {
             ));
         }
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
+        // Mock only (#2350): Snooze, next to Archive Tab, as it archives the tab until a time.
+        if super::snooze_mock::on() && !self.private() {
+            let snooze = items.len();
+            items.push((MenuEntry::new("Snooze", true), "", Box::new(|_, _| {})));
+            items.extend(super::snooze_mock::times_under(snooze));
+        }
         // Closing a Today tab archives it.
         items.push((
             MenuEntry::new("Archive Tab", true),

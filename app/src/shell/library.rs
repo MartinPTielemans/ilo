@@ -480,6 +480,8 @@ pub(super) enum Only {
     Closed,
     /// History's visited pages alone.
     Visited,
+    /// Mock only (#2350): the snoozed tabs alone, while there are some.
+    Snoozed,
 }
 
 impl Only {
@@ -492,6 +494,7 @@ impl Only {
             Only::Tasks => "Tasks",
             Only::Closed => "Closed Tabs",
             Only::Visited => "Visited",
+            Only::Snoozed => "Snoozed",
         }
     }
 
@@ -499,7 +502,12 @@ impl Only {
     /// under the closed tabs, then the pages visited. Little ilo and Tasks only while there are
     /// some, as a menu's item shows only while it has something to act on.
     fn history_menu(little: bool, tasks: bool) -> Vec<Option<Only>> {
-        let mut menu = vec![Some(Only::All), None, Some(Only::Closed)];
+        let mut menu = vec![Some(Only::All), None];
+        // Mock only (#2350): the tabs coming back by themselves, above the ones that won't.
+        if super::snooze_mock::any() {
+            menu.extend([Some(Only::Snoozed), None]);
+        }
+        menu.push(Some(Only::Closed));
         menu.extend(little.then_some(Some(Only::Little)));
         menu.extend(tasks.then_some(Some(Only::Tasks)));
         menu.extend([None, Some(Only::Visited)]);
@@ -939,6 +947,7 @@ impl Shell {
             "little" => Only::Little,
             "visited" => Only::Visited,
             "tasks" => Only::Tasks,
+            "snoozed" => Only::Snoozed,
             _ => Only::All,
         };
         self.filter_archive(only, cx);
@@ -1149,7 +1158,8 @@ impl Shell {
             }
         }
         let found = |text: &SharedString| text.to_lowercase().contains(&query);
-        let filtered = self.archive.iter().any(|tab| tab.little)
+        let filtered = super::snooze_mock::any()
+            || self.archive.iter().any(|tab| tab.little)
             || !self.archived_tasks.is_empty()
             || self
                 .visited
@@ -1163,10 +1173,15 @@ impl Shell {
             Section::Spaces => Vec::new(),
             Section::Archive => {
                 let tabs = (self.archive.iter().enumerate())
-                    .filter(|(_, tab)| match only {
-                        Only::All | Only::Closed => true,
-                        Only::Little => tab.little,
-                        Only::Tasks | Only::Visited => false,
+                    .filter(|(_, tab)| {
+                        let snoozed = super::snooze_mock::until(tab.id).is_some();
+                        match only {
+                            Only::All => true,
+                            Only::Closed => !snoozed,
+                            Only::Little => tab.little && !snoozed,
+                            Only::Snoozed => snoozed,
+                            Only::Tasks | Only::Visited => false,
+                        }
                     })
                     .filter(|(_, tab)| query.is_empty() || found(&tab.title) || found(&tab.url))
                     .map(|(index, tab)| (Item::Tab(index), tab.archived));
@@ -1430,6 +1445,7 @@ impl Shell {
             Only::Tasks => "tasks",
             Only::Closed => "closed",
             Only::Visited => "visited",
+            Only::Snoozed => "snoozed",
         };
         log!("browser: archive filter {name}");
         self.filter(true, cx);
@@ -1489,6 +1505,25 @@ impl Shell {
             MenuEntry::line(),
             MenuEntry::new("Delete from Archive", true).destructive(),
         ];
+        // Mock only (#2350): a snoozed tab's row brings it back now in Reopen Tab's place, as
+        // they'd do the same, and changes its time from the tab menu's list.
+        let entries = match super::snooze_mock::until(id) {
+            Some(_) => {
+                let mut entries = vec![
+                    MenuEntry::new("Bring Back Now", true),
+                    MenuEntry::new("Change Time", true),
+                ];
+                entries.extend(super::snooze_mock::times_under(1).into_iter().map(|item| item.0));
+                entries.extend([
+                    MenuEntry::line(),
+                    MenuEntry::new("Copy URL", true),
+                    MenuEntry::line(),
+                    MenuEntry::new("Delete from Archive", true).destructive(),
+                ]);
+                entries
+            }
+            None => entries,
+        };
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -2444,9 +2479,16 @@ impl Shell {
                         .find(|space| space.id == tab.space)
                         .map(|space| space.name.clone()),
                 };
-                match space.filter(|_| library.named) {
-                    Some(space) => format!("Closed {when} in {space} · {host}").into(),
-                    None => format!("Closed {when} · {host}").into(),
+                // Mock only (#2350): a snoozed tab says when it's back, and always where, as
+                // that's where it will show up by itself.
+                let until = super::snooze_mock::until(tab.id);
+                match (until, space.filter(|_| library.named || until.is_some())) {
+                    (Some(until), Some(space)) => {
+                        format!("Snoozed until {until} in {space} · {host}").into()
+                    }
+                    (Some(until), None) => format!("Snoozed until {until} · {host}").into(),
+                    (None, Some(space)) => format!("Closed {when} in {space} · {host}").into(),
+                    (None, None) => format!("Closed {when} · {host}").into(),
                 }
             }
             _ => host,

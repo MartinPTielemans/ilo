@@ -1025,6 +1025,10 @@ pub fn keystroke_label(keystroke: &str) -> String {
 /// `keystroke_label`, on the Mac or `off_the_mac`, for each key chip that spells a chord, such as
 /// Stop's ⌘. or Ctrl+., the way a menu does.
 pub(super) fn keystroke_label_on(keystroke: &str, off_the_mac: bool) -> String {
+    // Mock only (#2350): a snooze time shows in the shortcut's place, as written after `=`.
+    if let Some(words) = keystroke.strip_prefix('=') {
+        return words.to_string();
+    }
     match off_the_mac {
         true => keystroke_keys_on(keystroke, true).join("+"),
         false => keystroke_keys_on(keystroke, false).concat(),

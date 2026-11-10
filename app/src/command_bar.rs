@@ -339,6 +339,10 @@ impl Suggestion {
             }
             Kind::Page => Icon::Favicon,
             Kind::Search => Icon::Glyph("icons/search.svg"),
+            // Mock only (#2350): Snooze Tab's rows have Lucide's alarm clock.
+            Kind::Command if shell::snooze_mock::on() && self.text.starts_with("Snooze") => {
+                Icon::Glyph("icons/alarm-clock.svg")
+            }
             Kind::Command => Icon::Glyph(self.command.map_or(COMMAND_GLYPH, command_glyph)),
             Kind::Sum => Icon::None,
         }
