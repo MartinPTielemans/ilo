@@ -63,9 +63,16 @@ pub(crate) unsafe extern "C" fn ad_block_request(
         write_out(text, write, out);
         code as c_int
     };
-    match ad_block::check(&engine, &text(url), &text(source_url), &text(kind)) {
+    let (url, kind) = (text(url), text(kind));
+    match ad_block::check(&engine, &url, &text(source_url), &kind) {
         Verdict::Allow => bc::BC_AD_BLOCK_ALLOW as c_int,
-        Verdict::Block => bc::BC_AD_BLOCK_BLOCK as c_int,
+        Verdict::Block => {
+            // check.sh reads this line: the core closes the tab.
+            if kind == "popup" {
+                browser::log!("browser: ad block closed a pop-up at {url}");
+            }
+            bc::BC_AD_BLOCK_BLOCK as c_int
+        }
         Verdict::Redirect(stand_in) => answer(bc::BC_AD_BLOCK_REDIRECT, &stand_in),
         Verdict::Rewrite(url) => answer(bc::BC_AD_BLOCK_REWRITE, &url),
     }

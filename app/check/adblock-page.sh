@@ -2,8 +2,9 @@
 # from opening at all, as uBlock Origin's strict blocking does: a bare hostname, as URLhaus lists
 # them, blocks the host's pages, and the tab shows a warning in the page's place, which never
 # reached the server. Its Open anyway, pressed from the keyboard, opens the page, and the host's
-# pages for a while after. An agent's tab gets the warning with no way past it, though the user
-# let the host through.
+# pages for a while after. A pop-up filter closes the tab a page's link opens, before its page
+# reaches the server, as uBlock Origin does. An agent's tab gets the warning with no way past it,
+# though the user let the host through.
 
 # An engine from before the page warning lets the page through.
 if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
@@ -12,9 +13,14 @@ if ! engine_has ../core/native_ad_block.cc ../core/ad_block.cc; then
 fi
 serve
 printf '%s' '<title>the blocked page</title>' > "$out/site/blocked.html"
+# A page that's all a link to a pop-up, which a click anywhere on it opens in a new tab.
+printf '%s' '<title>the opener</title>
+<a href="popup.html" target="_blank" style="position:fixed;inset:0">a pop-up</a>' \
+  > "$out/site/opener.html"
+printf '%s' '<title>the pop-up</title>' > "$out/site/popup.html"
 # localhost, where the check's server is too, as a list writes a host: a line of its own.
 blocked="http://localhost:$port/blocked.html"
-filters=localhost
+filters="$(printf '%s\n' localhost '/popup.html$popup')"
 profile_dir="$PWD/$out/adblock-page/profile"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
@@ -46,6 +52,20 @@ expect "^browser: title $tab the blocked page\$" \
 served '/blocked\.html' "Open anyway didn't ask the server for the page"
 ../tools/window-screenshot.sh "$pid" "$out/adblock-page-opened.png" || fail "no window to capture"
 
+# A pop-up a filter names: its tab closes before the page reaches the server.
+go_from_bar "${site#http://}opener.html"
+expect "^browser: title $tab the opener\$" "the opener page didn't load"
+send click $page_point
+expect "^browser: ad block closed a pop-up at ${site}popup.html\$" \
+  "the pop-up filter didn't close the tab the link opened"
+# Its tab may close before the app lists it, so this reads the Today the app shows last.
+for _ in $(seq 30); do
+  [ "$(today)" = "$tab" ] && break
+  sleep 0.1
+done
+[ "$(today)" = "$tab" ] || fail "the pop-up's tab stayed: Today is \"$(today)\""
+grep -q '/popup\.html' "$out/site.log" && fail "the pop-up's page reached the server"
+
 # An agent's tab, on the host the user let through: the warning, and nothing past it.
 send agentspace claude-code Claude Code
 expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the driver didn't make the agent's Space"
@@ -57,5 +77,6 @@ expect "^browser: title $agent_tab Page blocked\$" \
 grep -q '/blocked\.html?agent' "$out/site.log" && fail "the agent's page reached the server"
 quit
 echo "ok: a host a list names on a line of its own never reached the server: the tab showed the" \
-  "warning, whose Open anyway, from the keyboard, opened the page. An agent's tab got the warning" \
+  "warning, whose Open anyway, from the keyboard, opened the page. A pop-up filter closed the tab" \
+  "a link opened before its page reached the server. An agent's tab got the warning" \
   "on the host the user let through. Windows: $out/adblock-page.png, $out/adblock-page-opened.png"
