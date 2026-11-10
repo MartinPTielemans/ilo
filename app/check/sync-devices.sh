@@ -83,6 +83,17 @@ done
 clipboard formats
 echo "$clipped" | grep -qx "$hint" ||
   fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
+# PROBE (#2179): A out of focus at its 90 s, as the user in another app would be.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  swaymsg 'workspace probe' > /dev/null || fail "probe: sway couldn't switch to an empty workspace"
+  while [ $(($(date +%s) - copied_at)) -lt 92 ]; do
+    sleep 1
+  done
+  clipboard
+  echo "probe: the clipboard at 92 s with A out of focus: [$clipped]"
+  [ -z "$clipped" ] || fail "probe: the clipboard still held the words 90 s after A copied them, with A out of focus"
+  swaymsg "[pid=$pid] focus" > /dev/null || fail "probe: sway couldn't focus A again"
+fi
 at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
