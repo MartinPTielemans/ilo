@@ -307,9 +307,11 @@ fi
 
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
-# from the start. The page's w opens one whose server never answers, so it never commits, and its
-# URL, which a page asked for, stays hidden until it does. A page already waiting as the appearance
-# changes keeps its colour on the Mac until it draws, so each colour gets a page opened after it.
+# from the start. The page's w opens one whose server never answers, so it never commits. Its URL
+# shows as Chrome's does for a tab a page opened and hasn't touched, once Chromium has the entry
+# it's on its way to, which comes before or after the tab's first report that it's loading (#2215).
+# A page already waiting as the appearance changes keeps its colour on the Mac until it draws, so
+# each colour gets a page opened after it.
 first=$(today)
 # Whether the colour "r g b" is black, or white with $2 light, as near as the capture keeps them.
 unpainted() {
@@ -329,7 +331,7 @@ for scheme in light dark; do
   send key w
   expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
   tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-  expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+  expect "^browser: page $tab back 0 forward 0 loading 1 \(${site}wait\)*\$" \
     "a tab opened to a page that hasn't come doesn't say it's loading"
   for _ in $(seq 20); do
     ../tools/window-screenshot.sh "$pid" "$out/before-paint-$scheme.png" ||
