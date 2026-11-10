@@ -1713,10 +1713,13 @@ pub struct Shell {
     update_banner: Option<update_banner::Waiting>,
     update_open: bool,
     update_restarting: bool,
+    /// The updater's checks are off, so the open banner offers to turn them on.
+    update_offer: bool,
     update_motion: Option<(f32, Instant)>,
     update_said: Option<&'static str>,
     /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
@@ -2080,9 +2083,11 @@ impl Shell {
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
             update_restarting: false,
+            update_offer: crate::updates::automatic(cx) == Some(false),
             update_motion: None,
             update_said: None,
             update_drawn: Rc::default(),
+            update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),

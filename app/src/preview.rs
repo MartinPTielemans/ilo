@@ -2225,6 +2225,13 @@ fn main() {
             browser::face::register(cx);
             shell::bind_keys(cx);
             browser::text_input::bind_keys(cx);
+            // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
+            // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
+            // as with the updater's automatic checks off.
+            let update = std::env::var("PREVIEW_UPDATE").ok();
+            if let Some(update) = &update {
+                preview_update(update, cx);
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -2631,6 +2638,15 @@ fn main() {
                                 _ => shell.run(Command::ViewLibrary, "preview", cx),
                             }
                         })
+                        .ok();
+                }
+                Ok(window)
+                    if update
+                        .as_deref()
+                        .is_some_and(|update| update.ends_with("-open")) =>
+                {
+                    window
+                        .update(cx, |shell, _, cx| shell.preview_update_banner_open(cx))
                         .ok();
                 }
                 Ok(_) => {}
@@ -3328,4 +3344,25 @@ impl account::Host for PreviewAccount {
             cx,
         );
     }
+}
+
+/// An updater that does nothing, at the stage PREVIEW_UPDATE names.
+fn preview_update(update: &str, cx: &mut App) {
+    use browser::updates::{self, Stage, Track, Updater};
+    struct Made;
+    impl updates::Host for Made {
+        fn check(&self, _: &mut App) {}
+        fn show(&self, _: &mut App) {}
+        fn restart(&self, _: &mut App) {}
+        fn follow(&self, _: Track, _: &mut App) {}
+    }
+    updates::start(Updater::Own, std::rc::Rc::new(Made), cx);
+    let off = std::env::var("PREVIEW_UPDATE_CHECKS").is_ok_and(|checks| checks == "off");
+    updates::checks(Some(!off), cx);
+    let version = Some("0.1.5".into());
+    let stage = match update.trim_end_matches("-open") {
+        "available" => Stage::Available(version),
+        _ => Stage::Ready(version),
+    };
+    updates::changed(stage, cx);
 }

@@ -52,6 +52,8 @@ pub(crate) fn start_updates(cx: &mut App) {
         updates::Updater::None
     };
     updates::start(updater, Rc::new(SystemUpdater), cx);
+    #[cfg(not(target_os = "linux"))]
+    updates::checks(Some(automatic_checks()), cx);
     updates::observe(cx, |cx| {
         let ready = updates::ready(cx);
         if MENUS.with_borrow(|menus| menus.update_ready) != ready {
@@ -230,6 +232,13 @@ impl updates::Host for SystemUpdater {
 
     /// Kept for the next launch, which reads it before the updater's first check. Linux offers no
     /// choice: a Flatpak updates only the branch it's installed from.
+    fn check_automatically(&self, on: bool, _: &mut App) {
+        #[cfg(not(target_os = "linux"))]
+        set_automatic_checks(on);
+        #[cfg(target_os = "linux")]
+        let _ = on;
+    }
+
     fn follow(&self, track: updates::Track, _: &mut App) {
         #[cfg(not(target_os = "linux"))]
         {
