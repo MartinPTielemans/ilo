@@ -2826,6 +2826,35 @@ BC_EXPORT void bc_profile_set_boost(bc_id profile, const char* site, const char*
 // would take. A new page ends it, with tab_boost_zap_ended. The user's, as bc_profile_set_boost.
 BC_EXPORT void bc_tab_boost_zap(bc_id tab, bool on);
 
+// A Boost's script, Boosts/<site>.js (#2297). It runs in the site's pages, in a world of their own,
+// from their next load, and only while its bytes are the ones the user turned on in this profile on
+// this computer: any change to the file turns it off. These say what the core makes of the bytes.
+#define BC_BOOST_SCRIPT_ON 0
+#define BC_BOOST_SCRIPT_NEW 1
+#define BC_BOOST_SCRIPT_CHANGED 2
+#define BC_BOOST_SCRIPT_TOO_LARGE 3
+// The largest script that runs, which the app names: "Script over 256 KB, off".
+#define BC_BOOST_SCRIPT_MAX_BYTES 262144
+
+// Gives |site| in |profile| the script the app read from its file, |size| bytes, or takes it away
+// with null |script|. Returns its BC_BOOST_SCRIPT_ state: the site's pages run it from their next
+// load only while it's BC_BOOST_SCRIPT_ON. The user's, as bc_profile_set_boost.
+BC_EXPORT int bc_profile_set_boost_script(bc_id profile, const char* site, const char* script,
+                                          size_t size);
+// The BC_BOOST_SCRIPT_ state of |script| for |site|, without giving it to the site's pages. The
+// app's copy of the text turned on, for the turn-on dialog's diff, is that text only while this
+// says BC_BOOST_SCRIPT_ON.
+BC_EXPORT int bc_profile_boost_script_state(bc_id profile, const char* site, const char* script,
+                                            size_t size);
+// Turn On, in the browser's own turn-on dialog, which only the user's click on Turn On Script…
+// opens: records |script|, the |size| bytes the dialog showed, as the script turned on for |site|,
+// and gives it to the site's pages from their next load. False for one over
+// BC_BOOST_SCRIPT_MAX_BYTES. The user's alone: no agent, page, sync, link or import calls it.
+BC_EXPORT bool bc_profile_turn_on_boost_script(bc_id profile, const char* site, const char* script,
+                                               size_t size);
+// Turn Off and Delete…: forgets the script turned on for |site|, which is then new, and off.
+BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
+
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.
 BC_EXPORT void bc_tab_picture_in_picture(bc_id tab);
@@ -3064,6 +3093,14 @@ BC_EXPORT void bc_trace_stop(void);
 // the ✕ on its row does: a pinned split stays a split. Then tab_state_changed, and
 // window_selected.
 BC_EXPORT void bc_tab_close(bc_id tab, bool split);
+
+// Whether the tab's page may close it with window.close(), as a sign-in's "you can close this tab"
+// page tries to once it's done. Chromium lets a page close only a tab its own script opened, or one
+// with a single history entry. The UI sets it for a Little ilo window's tab another app's link
+// opened, and clears it as the tab moves to the user's Space; the core clears it on any move to a
+// Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
+// follows. The user's alone: an agent's tab never has it.
+BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
 
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.

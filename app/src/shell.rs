@@ -58,6 +58,8 @@ mod close_tab;
 mod commands;
 mod conversation;
 #[cfg(test)]
+mod copy_tests;
+#[cfg(test)]
 mod corner_tests;
 mod display_face;
 #[cfg(test)]
@@ -614,6 +616,14 @@ use crate::tokens::text;
 pub struct NewNoteOn(pub bool);
 
 impl Global for NewNoteOn {}
+
+/// Whether links are copied without tracking, as Settings › Privacy keeps it for the app: on until
+/// the user turns it off (#2351). A window opened reads it, and `Shell::set_clean_links` tells the
+/// open ones.
+#[derive(Clone, Copy)]
+pub struct CleanLinksOn(pub bool);
+
+impl Global for CleanLinksOn {}
 
 #[derive(Clone, Default)]
 struct Tab {
@@ -1829,6 +1839,9 @@ pub struct Shell {
     /// Whether New Note is on, as Settings › Features has it (`NewNoteOn`): off, nothing offers
     /// or runs New Note or New Note Split.
     new_note: bool,
+    /// Whether links copy without tracking, as Settings › Privacy has it (`CleanLinksOn`): off,
+    /// every copy path gives the address as it is.
+    clean_links: bool,
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
@@ -2176,6 +2189,7 @@ impl Shell {
             app_appearance: Appearance::Automatic,
             little_windows: true,
             new_note: cx.try_global::<NewNoteOn>().is_none_or(|on| on.0),
+            clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             forced_tone: None,
             window_active: true,
@@ -2446,7 +2460,7 @@ impl Shell {
     }
 
     /// The tab whose row is `tab`'s: its split's first.
-    fn row_of(&self, tab: u64) -> u64 {
+    pub(super) fn row_of(&self, tab: u64) -> u64 {
         self.panes(tab)[0]
     }
 
