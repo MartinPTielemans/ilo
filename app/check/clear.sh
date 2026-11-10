@@ -752,6 +752,12 @@ else
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 fi
 none_since '^browser: site controls run certificate' "$lock" || fail "the lock ran without a certificate"
+# File › Share… shares the page shown too. A driven run shows no sheet, which would wait on a
+# choice, so its line is the proof. Linux has no share sheet.
+if [ "$(uname)" = Darwin ] || windows; then
+  send menu 'Share…'
+  expect "^browser: share http://localhost:$port/index.html\$" "File › Share… didn't share the page"
+fi
 # Hover still works once they've closed: the pointer out to the page hides the URL field's buttons,
 # and back over the sidebar shows them. While they were open the buttons stayed, as the pointer
 # over the sidebar keeps them.
