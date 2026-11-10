@@ -1,7 +1,8 @@
 # A site's Boost (#695): the CSS in its file in the profile's Boosts folder shows on its pages as
 # they load, and each save of the file at once; Edit Boost in the command bar opens its card, whose
-# Zap hides what the user clicks, now and in the file, until escape in the page ends it; and with
-# the file gone the page is its own again, as with a Boost turned off.
+# Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
+# Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
+# back; and with the file gone the page is its own again, as with a Boost turned off.
 
 serve
 # The page says in its title how #ad and its body look, each time that changes, so the run reads
@@ -55,6 +56,32 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 
+# A second window on the site, which takes the editor's changes as they're made.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+new_window_bar
+send window 2
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+send insert "${site}boost.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}boost.html\$" "the second window didn't load the page"
+other=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
+expect "^browser: title $other ad block rgb(0, 128, 0)\$" "the second window's page wasn't Boosted"
+send window 1
+send click $page_point
+# Waits for both windows' pages to say their body is $1, or fails with $2.
+both_are() {
+  for _ in $(seq 100); do
+    [ "$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      [ "$(grep "^browser: title $other " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      return 0
+    sleep 0.1
+  done
+  fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
+}
+
+
 bar_command edit-boost "Edit Boost" "edit boost"
 expect "^browser: boost card $tab opened\$" "Edit Boost opened no card"
 expect "^browser: boost card $tab at " "the Boost's card wasn't drawn"
@@ -63,8 +90,8 @@ read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 ../tools/window-screenshot.sh "$pid" "$out/boost-card.png" || fail "no window to capture"
-# Zap, the right of the card's two buttons.
-send click $((bx + bw * 3 / 4)) $((by + bh - 26))
+# Zap, the right of the card's two buttons, over Customize….
+send click $((bx + bw * 3 / 4)) $((by + bh - 62))
 expect "^browser: zap $tab on\$" "the card's Zap didn't turn Zap on"
 expect "browser: tab $tab zap on\$" "the core didn't start Zap on the page"
 send click $page_point
@@ -77,6 +104,40 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
+# Customize…, the last line of the card Zap leaves open, opens the editor in its place. Its clicks
+# are in its points: its arrow 13 wide, then the card, whose field is 340 wide and 176 tall, 8.5 in
+# and 48 down.
+send layout
+read -r bx by bw bh << EOF
+$(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+send click $((bx + bw / 2)) $((by + bh - 26))
+expect "^browser: boost editor for $host\$" "Customize… didn't open the Boost editor"
+expect '^browser: boost editor drawn$' "the Boost editor didn't draw itself on screen"
+../tools/window-screenshot.sh "$pid" "$out/boost-editor.png" || fail "no window to capture"
+# A click in the field, at (0.6, -0.6) of it, places the ground's dot, and both pages take its
+# colour at once.
+send clickkey 293.5 83.2
+expect "^browser: boost editor set $host ground 0.600 -0.600 dragged\$" \
+  "a click in the editor's field didn't place the ground's dot"
+grep -q "^/\* ground 0.600 -0.600 dragged \*/\$" "$file" ||
+  fail "the editor didn't keep its change in the Boost's file: $(cat "$file")"
+grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
+  fail "the editor's change took Zap's line away: $(cat "$file")"
+for _ in $(seq 100); do
+  ground=$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)
+  [ "$ground" != "rgb(0, 128, 0)" ] && break
+  sleep 0.1
+done
+[ "$ground" != "rgb(0, 128, 0)" ] || fail "the editor's ground didn't show on the page"
+both_are "$ground" "the second window's page didn't take the editor's ground"
+../tools/window-screenshot.sh "$pid" "$out/boost-edited.png" || fail "no window to capture"
+# ⌘Z, while the editor has the keyboard, takes it back on both.
+send key z cmd
+expect '^browser: boost editor undo$' "⌘Z didn't take the editor's change back"
+both_are "rgb(0, 128, 0)" "⌘Z left the editor's ground on a page"
+send key escape
+expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
 
 # With its file gone, the page is its own again, as the core hears for a Boost turned off.
 rm -f "$file"
@@ -86,5 +147,7 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
-  "with the file gone the page was its own again." \
-  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png"
+  "Customize… opened the editor, whose field coloured the page in both windows, ⌘Z took it" \
+  "back and escape closed it; with the file gone the page was its own again." \
+  "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png, $out/boost-editor.png," \
+  "$out/boost-edited.png"

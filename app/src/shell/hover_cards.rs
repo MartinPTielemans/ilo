@@ -34,7 +34,9 @@ impl Shell {
         if !hovered {
             return self.browser.hover_card(Hover::Left(tab), cx);
         }
-        let picker = theme_picker::is_open(cx) || icon_picker::is_open(cx);
+        let picker = theme_picker::is_open(cx)
+            || icon_picker::is_open(cx)
+            || crate::boost_editor::is_open(cx);
         let naming = self.renaming.is_some();
         let busy = self.dragging().is_some() || self.menu_row.is_some() || naming || picker;
         let Some(card) = self.card(tab).filter(|_| !busy) else {
@@ -349,6 +351,7 @@ impl Shell {
         crate::menu::dismissed(cx);
         crate::icon_picker::leave(cx);
         crate::theme_picker::leave(cx);
+        crate::boost_editor::leave(cx);
         crate::site_controls::dismissed(cx);
     }
 

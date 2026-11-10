@@ -539,6 +539,38 @@ pub(crate) extern "C" fn theme_picker_dismissed() {
     update_app(theme_picker::dismissed);
 }
 
+/// The Boost editor's requests, to the host's overlay window, over the window that asked, as the
+/// theme picker's.
+pub(crate) struct BoostEditorHost;
+
+impl boost_editor::Host for BoostEditorHost {
+    fn show(&self, window: u64, left: f32, top: f32, corners: &[(f32, f32, f32)]) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let shape: Vec<f64> = corners
+            .iter()
+            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+            .collect();
+        let (x, y, _) = corners[0];
+        let (left, top, width) = (left.into(), top.into(), boost_editor::WIDTH.into());
+        unsafe {
+            platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
+            platform::host_set_overlay_growth(BOOST_EDITOR, x.into(), y.into());
+            platform::host_show_overlay(BOOST_EDITOR, view, false, left, top, width);
+        }
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(BOOST_EDITOR) };
+    }
+}
+
+/// The user left the Boost editor, such as with a click outside it.
+pub(crate) extern "C" fn boost_editor_dismissed() {
+    update_app(boost_editor::dismissed);
+}
+
 /// The tooltip's requests, to the host's tooltip window, over the window the pointer is in.
 pub(crate) struct TooltipHost;
 

@@ -2900,7 +2900,7 @@ impl Shell {
     }
 
     /// Delete…: the Boost's file goes, once the user says so.
-    fn delete_boost(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
+    pub(super) fn delete_boost(&mut self, profile: u64, site: &str, cx: &mut Context<Self>) {
         let shell = cx.weak_entity();
         let site = site.to_owned();
         self.browser.confirm(

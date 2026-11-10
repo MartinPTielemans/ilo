@@ -3,6 +3,7 @@
 //! stay as they are, above or below it. The block starts with a comment that holds the edits, so
 //! the editor reads back what it wrote, not CSS it would have to parse.
 
+use crate::palette::{INK, PAPER};
 use crate::theme;
 
 /// The block's first and last lines.
@@ -225,7 +226,7 @@ impl Style {
     }
 
     /// The edits, as the block's second line keeps them.
-    fn state(&self) -> String {
+    pub fn state(&self) -> String {
         let dot =
             |name: &str, dot: Option<Dot>| dot.map(|Dot { x, y }| format!("{name} {x:.3} {y:.3}"));
         [
@@ -339,11 +340,7 @@ pub fn ink(ground: u32) -> u32 {
     };
     let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
     // White's contrast (1.05 / (L + 0.05)) against black's ((L + 0.05) / 0.05) meet at 0.179.
-    if luminance > 0.179 {
-        0x16140f
-    } else {
-        0xf3f0e8
-    }
+    if luminance > 0.179 { INK } else { PAPER }
 }
 
 fn hex(color: u32) -> String {
