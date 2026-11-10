@@ -3082,6 +3082,14 @@ BC_EXPORT void bc_trace_stop(void);
 // window_selected.
 BC_EXPORT void bc_tab_close(bc_id tab, bool split);
 
+// Whether the tab's page may close it with window.close(), as a sign-in's "you can close this tab"
+// page tries to once it's done. Chromium lets a page close only a tab its own script opened, or one
+// with a single history entry. The UI sets it for a Little ilo window's tab another app's link
+// opened, and clears it as the tab moves to the user's Space; the core clears it on any move to a
+// Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
+// follows. The user's alone: an agent's tab never has it.
+BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
+
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.
 
