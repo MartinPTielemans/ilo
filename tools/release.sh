@@ -5,7 +5,7 @@
 # The notarytool profile is NOTARY_PROFILE, else "notary" (xcrun notarytool store-credentials
 # notary). Without it the app is signed and packed but not notarized, and the run fails.
 # The app carries the Developer ID provisioning profile PROVISIONING_PROFILE names, else
-# app/branding/developer-id.provisionprofile, and app/entitlements/release.plist's keys.
+# app/entitlements/developer-id.provisionprofile, and app/entitlements/release.plist's keys.
 # SIGN_IDENTITY=- signs ad hoc, to try the signing without the key; it stops before the DMG, and
 # like the dev builds it has neither the profile nor release.plist's keys.
 # Usage: SIGN_IDENTITY="Developer ID Application: … (TEAMID)" tools/release.sh
@@ -29,52 +29,13 @@ if [ "$identity" != - ] && ! plutil -extract SUPublicEDKey raw "$built/Contents/
   exit 1
 fi
 
-# macOS stops an app at launch that claims a key its embedded profile doesn't grant, so a profile
-# that wouldn't do is refused here rather than shipped.
+# macOS won't start an app whose profile doesn't match it, so such a profile is refused here
+# rather than shipped (check-profile.sh).
 entitlements=$root/entitlements/app.plist
 if [ "$identity" != - ]; then
   entitlements=$root/entitlements/release.plist
-  provision=${PROVISIONING_PROFILE:-$root/branding/developer-id.provisionprofile}
-  granted=$(mktemp)
-  trap 'rm -f "$granted"' EXIT
-  if ! security cms -D -i "$provision" > "$granted" 2> /dev/null; then
-    echo "$provision isn't a provisioning profile. Make the Developer ID one (docs/releasing.md)." >&2
-    exit 1
-  fi
-  signer=$(security find-certificate -c "$identity" -Z | awk '/^SHA-1/ { print $3; exit }')
-  listed=
-  i=0
-  while certificate=$(plutil -extract "DeveloperCertificates.$i" raw -o - "$granted" 2> /dev/null); do
-    [ "$(echo "$certificate" | base64 -D | shasum -a 1 | cut -d ' ' -f 1 | tr a-f A-F)" != "$signer" ] || listed=1
-    i=$((i + 1))
-  done
-  if [ -z "$listed" ]; then
-    echo "$provision doesn't list the certificate of $identity. Make one that does (docs/releasing.md)." >&2
-    exit 1
-  fi
-  # Each key the app claims, but the hardened runtime's, which need no profile, has each of its
-  # values among the profile's, some of which are patterns such as <team>.*.
-  values() {
-    local printed
-    printed=$(/usr/libexec/PlistBuddy -c "Print :$2" "$1" 2> /dev/null) || return 0
-    echo "$printed" | sed -e '/^Array {$/d' -e '/^}$/d' -e 's/^ *//'
-  }
-  set -f
-  for key in $(plutil -convert xml1 -o - "$entitlements" | sed -n 's/^	<key>\(.*\)<\/key>$/\1/p'); do
-    case $key in com.apple.security.*) continue ;; esac
-    allowed=$(values "$granted" "Entitlements:$key")
-    for value in $(values "$entitlements" "$key"); do
-      ok=
-      for pattern in $allowed; do
-        case $value in $pattern) ok=1 ;; esac
-      done
-      if [ -z "$ok" ]; then
-        echo "$provision doesn't grant $key = $value, which $entitlements claims." >&2
-        exit 1
-      fi
-    done
-  done
-  set +f
+  provision=${PROVISIONING_PROFILE:-$root/entitlements/developer-id.provisionprofile}
+  PROVISIONING_PROFILE=$provision "$(dirname "$0")/check-profile.sh" "$identity"
 fi
 
 rm -rf "$out"
