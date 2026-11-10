@@ -1916,6 +1916,12 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   }
   // Never drawn, but Mission Control and the Window menu name the window by it.
   window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+  // #2375's question for a Mac VM, on this test branch alone (check/titlebar-right.sh): with the
+  // sidebar on the right, AppKit lays the window's buttons out from the window's right edge.
+  const char* right = getenv("BROWSER_SIDEBAR_RIGHT");
+  if (!browser->little && right && strcmp(right, "1") == 0) {
+    window.windowTitlebarLayoutDirection = NSUserInterfaceLayoutDirectionRightToLeft;
+  }
   // Under the UI's view, since the core keeps only the UI's and the page's views in its own.
   // The system's look until the shell says its Space's.
   browser->material = WindowMaterial(view.bounds, SystemIsLight());
