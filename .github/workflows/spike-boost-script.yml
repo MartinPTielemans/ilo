@@ -1,0 +1,26 @@
+# Runs spikes/boost-script on Linux's engine with its sandbox on. On this proof branch only.
+name: Spike boost-script
+on:
+  push:
+    branches: [spike/boost-script-2]
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs; the sandbox stays on.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: spikes/boost-script/run.sh "$RUNNER_TEMP/spike"
+      - if: always()
+        run: |
+          { echo '```json'; cat "$RUNNER_TEMP/spike/results.json" || tail -40 "$RUNNER_TEMP/spike/chrome.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-boost-script
+          path: ${{ runner.temp }}/spike
