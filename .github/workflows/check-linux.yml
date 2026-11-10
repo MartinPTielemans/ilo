@@ -57,7 +57,7 @@ env:
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media
+    media links notifications
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
