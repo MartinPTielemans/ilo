@@ -15,7 +15,8 @@
 # second for the window in front once the user is in it. From macOS 14, a page in Safari's engine,
 # which the Site Controls turn on for a page that asks for Widevine, moves to another window the
 # same way, and the window it left draws WebKit's picture of it, which the core gives from a task of
-# its own (#364: an answer inside the call that asked aborted the browser). A heavy page and a light
+# its own (#364: an answer inside the call that asked aborted the browser). Its page asks Apple's
+# site-safety service about no site, as Chromium's ask none. A heavy page and a light
 # one move between two windows every way a page moves, and the run says how long each stage of a
 # move takes.
 
@@ -331,11 +332,20 @@ if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 ]; then
   expect '^browser: site controls settled$' "the Site Controls didn't open at the drm page"
   post click 207 262
   expect "^browser: menu shown On, Off (checked)\$" "Safari's engine's row didn't offer On"
+  engine_from=$(date '+%Y-%m-%d %H:%M:%S')
   send choose On
   expect "^browser: site controls set Safari's engine On\$" "On in the menu didn't run"
   expect "^browser: system engine $d on\$" "On didn't show the drm page in Safari's engine"
   expect "^browser: loaded $d http://127.0.0.1:$port/drm.html\$" "Safari's engine didn't load the drm page"
   expect_late "^browser: title $d drm asked\$" "Safari's engine didn't answer the drm page's request"
+  # Its page asks Apple's site-safety service about no site, as Chromium's pages ask none (#2322).
+  # WebKit's check logs in the app's own process as it looks a URL up, at 127.0.0.1 too.
+  if engine_has ../core/platform/mac/system_page.mm; then
+    looked=$(log show --start "$engine_from" --style compact --info --predicate \
+      "processID == $pid AND (subsystem == \"com.apple.Safari.SafeBrowsing\" OR eventMessage CONTAINS \"beginSafeBrowsingCheck\")" |
+      grep -e 'SafeBrowsing' | head -3)
+    [ -z "$looked" ] || fail "Safari's engine's page asked the site-safety service: $looked"
+  fi
   # Safari's engine's page, taking the pane, may have closed them already.
   if none_since '^browser: site controls hidden$'; then
     send key escape
