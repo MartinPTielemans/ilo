@@ -23,10 +23,10 @@
 #   screen, then the same session, its tabs opened and shown by DevTools, and the run says how far
 #   ilo is from it on each row. Of those, memory at 10 and 20 tabs can fail the run.
 # - With CHECK_TRACE_CATEGORIES (check/lib.sh), each browser's 16 switches again at 20 tabs, in a
-#   launch of their own, traced with those through DevTools from the first switch to the last, as in
-#   #2377: perf/trace-ilo.json and trace-chrome.json, failing unless each has all 16 spans, and the
-#   Unix ms of each switch's key in traced-switch-keys and chrome-traced-switch-keys. Then ilo's
-#   switches to 4 tabs without their page, unseen 2 hours, in trace-ilo-discarded.json.
+#   launch of their own, the first 8 a second apart and the last 8 back to back, traced with those
+#   through DevTools from the first switch to the last, as in #2377: perf/trace-ilo.json and
+#   trace-chrome.json, and a row a switch in traced-switches.tsv, with its span, failing unless
+#   each switch to a loaded tab has one. ilo's then go to 4 tabs without their page, unseen 2 hours.
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
 # the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
@@ -69,16 +69,23 @@ new PerformanceObserver((list) => {
     }
   }
 }).observe({ type: "paint", buffered: true });
+// Each stamp is also a mark, which a trace with blink.user_timing has on its own clock, to pair the
+// trace's events with the run's Unix ms.
+const stamped = (n) => requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.title = `${id} shown ${n} ${Date.now()}`;
+  performance.mark(document.title);
+}));
 let shown = 0;
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState != "visible") {
-    return;
+  if (document.visibilityState == "visible") {
+    stamped(++shown);
   }
-  const n = ++shown;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    document.title = `${id} shown ${n} ${Date.now()}`;
-  }));
 });
+// A page loaded again in its tab as it's shown, as a tab without its page gets it back, has no
+// visibilitychange, so it's stamped shown 0. A new tab's page, which perf times to its paint, isn't.
+if (document.visibilityState == "visible" && performance.getEntriesByType("navigation")[0]?.type != "navigate") {
+  stamped(0);
+}
 </script>
 HTML
 page="${site}perf.html"
@@ -244,13 +251,18 @@ perf_open() {
   loaded=$(date +%s)
 }
 # 16 switches by ⌘1–⌘8 at 20 tabs, keeping the ms from the key to the page shown in the file $1,
-# to the core's report in $1-core and each key's Unix ms in $1-keys. ⌘1 is the newest Today tab,
-# which shows, so each key goes to another tab.
+# to the core's report in $1-core and each key's Unix ms in $1-keys, and a line a switch in $1-rows
+# for check/switch_table.py. ⌘1 is the newest Today tab, which shows, so each key goes to another
+# tab. With $2, the first 8 wait 1 s after their page shows, so each switch's work, and the hover
+# card's picture of the page it left after it, stand alone in a trace; the last 8 are back to back.
 perf_switches() {
   : > "$perf_dir/$1"
   : > "$perf_dir/$1-core"
   : > "$perf_dir/$1-keys"
+  : > "$perf_dir/$1-rows"
+  i=0
   for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
+    i=$((i + 1))
     perf_stamp
     pressed=$stamp
     send key "$k" cmd
@@ -261,12 +273,14 @@ perf_switches() {
     echo "$since" | sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' | head -1 \
       >> "$perf_dir/$1-core"
     expect "^browser: title $tab [^ ]* shown " "tab $tab didn't say it was shown after ⌘$k"
-    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
-      sed -n "s/^browser: title $tab [^ ]* shown [0-9]* //p" | tail -1)
+    title=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n "s/^browser: title $tab \([^ ]* shown [0-9]* [0-9]*\)$/\1/p" | tail -1)
+    shown=${title##* }
     echo $((shown - pressed)) >> "$perf_dir/$1"
+    echo "loaded $step ${title% *} $pressed $shown" | sed 's/ shown / /' >> "$perf_dir/$1-rows"
+    [ -z "${2:-}" ] || [ "$i" -gt 8 ] || sleep 1
   done
 }
-
 # The session, once the page has the active app's keyboard.
 perf_session() {
   perf_until $((started + 30))
@@ -352,13 +366,15 @@ quit
 # With CHECK_TRACE_CATEGORIES, each browser's 16 switches again at 20 tabs, in a launch of their own,
 # as tracing slows what it times and the session's rows stay untraced. DevTools traces from just
 # before the first switch to just after the last, so the buffer holds them all, where a whole
-# session's would overflow, and the run fails unless the trace has each switch's span: the trace is
-# what this leg is for. The browser logs where DevTools says, $2: ilo's client its own log, Chrome's
-# Chrome's. Traces into perf/$1, failing unless it has $3 switches' spans, or with $3 empty, saying
-# how many; the command after does what's traced.
+# session's would overflow. Each switch is a row of perf/traced-switches.tsv, with its span from the
+# trace, and the run fails unless each switch to a loaded tab has one: the trace is what this leg
+# is for.
+traced_tsv="$perf_dir/traced-switches.tsv"
+# Traces into perf/$1 what the command after does, through the DevTools client logging to $2, then
+# adds its switches, kept in perf/$4, to the table as browser $3's, with the browser's log $5.
 perf_trace() {
-  perf_trace_file=$1 perf_trace_log=$2 perf_trace_spans=$3
-  shift 3
+  perf_trace_file=$1 perf_trace_log=$2 perf_trace_browser=$3 perf_trace_rows=$4 perf_trace_app=$5
+  shift 5
   since=$(wc -l < "$perf_trace_log")
   echo "trace start $trace_categories" >&5
   perf_cdp_await "$perf_trace_log" "$since" '^cdp: tracing$' "DevTools didn't start tracing"
@@ -369,13 +385,10 @@ perf_trace() {
     "DevTools didn't write $perf_trace_file"
   ! tail -n +$((since + 1)) "$perf_trace_log" | grep -q "^cdp: traced .* lossy$" ||
     echo "perf: $perf_trace_file: the browser dropped some of the trace"
-  # grep -c counts none with a status of 1.
-  traced=$(python3 -I check/tab_switches.py "$perf_dir/$perf_trace_file" | grep -vc incomplete || true)
-  if [ -z "$perf_trace_spans" ]; then
-    echo "perf: $perf_trace_file has $traced switches' spans to tabs with their page"
-  elif [ "$traced" != "$perf_trace_spans" ]; then
-    fail "$perf_trace_file has $traced of its $perf_trace_spans switches' spans ($trace_categories)"
-  fi
+  [ -s "$traced_tsv" ] || printf 'browser\tkind\tpage\tshown\tkey_ms\tshown_ms\ttab_state\tspan_ms\tselected_ms\tlet_go_ms\n' > "$traced_tsv"
+  python3 -I check/switch_table.py "$perf_trace_browser" "$perf_dir/$perf_trace_file" \
+    "$perf_dir/$perf_trace_rows" ${perf_trace_app:+"$perf_trace_app"} >> "$traced_tsv" 2> "$perf_dir/traced-missing" ||
+    fail "$perf_trace_file lacks spans ($trace_categories): $(tr '\n' ';' < "$perf_dir/traced-missing")"
 }
 # Waits up to 60 s for a line matching $3 in the DevTools log $1 after its line $2, failing with $4.
 perf_cdp_await() {
@@ -394,39 +407,46 @@ perf_saw() {
   done
   return 1
 }
-# ilo's alone, as DevTools can't take a page from Chrome's tab: unseen 2 hours, each tab but the one
-# shown lets go of its page at the next switch, then 4 switches to tabs without it, from the key to
-# the page painted again, in perf/traced-discarded. #2377 asks for it, but it's a row beside the
-# switches, so a step that doesn't come says so rather than failing the run.
-perf_discarded() {
-  : > "$perf_dir/traced-discarded"
+# The 16 switches, then ilo's alone, as DevTools can't take a page from Chrome's tab: unseen 2
+# hours, each tab but the one shown lets go of its page at the next switch, ⌘2's, then ⌘3–⌘6 to 4
+# tabs without it, each from the key to its page shown again, in perf/traced-unloaded and their rows
+# with the 16's. They're rows beside the switches, so a step that doesn't come says so rather than
+# failing the run.
+perf_traced_ilo() {
+  perf_switches traced-switch spaced
+  : > "$perf_dir/traced-unloaded"
   send age 7200
+  perf_stamp
+  pressed=$stamp
   send key 2 cmd
   perf_saw 'browser: idle tabs checked$' ||
-    { echo "perf: unseen 2 hours, ⌘2 didn't check for idle tabs, so no discarded switches"; return 0; }
+    { echo "perf: unseen 2 hours, ⌘2 didn't check for idle tabs, so no switches to tabs without their page"; return 0; }
+  perf_saw "^browser: title [0-9]* t19 shown " &&
+    title=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title [0-9]* \(t19 shown [0-9]* [0-9]*\)$/\1/p" | tail -1) &&
+    echo "check $step ${title% *} $pressed ${title##* }" | sed 's/ shown / /' >> "$perf_dir/traced-switch-rows"
   for k in 3 4 5 6; do
+    page=t$((21 - k))
     perf_stamp
     pressed=$stamp
     send key "$k" cmd
-    if ! perf_saw "^browser: selected [0-9]* in "; then
-      echo "perf: ⌘$k didn't switch to a tab without its page"
-      return 0
-    fi
+    perf_saw "^browser: selected [0-9]* in " || { echo "perf: ⌘$k didn't switch to $page"; return 0; }
     tab=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
-    # The core's line, after Chromium's prefix.
-    if ! perf_saw "browser: tab $tab has its page" || ! perf_saw "^browser: title $tab t$((21 - k)) fcp "; then
-      echo "perf: tab $tab, by ⌘$k, didn't get its page back and paint it"
+    # The core's line, after Chromium's prefix. A page loaded as it's shown stamps shown 0.
+    if ! perf_saw "browser: tab $tab has its page" || ! perf_saw "^browser: title $tab $page shown 0 "; then
+      echo "perf: tab $tab, $page by ⌘$k, didn't get its page back and say it was shown"
       return 0
     fi
-    echo $(($(perf_painted "t$((21 - k))" "$step") - pressed)) >> "$perf_dir/traced-discarded"
+    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title $tab $page shown 0 //p" | tail -1)
+    echo $((shown - pressed)) >> "$perf_dir/traced-unloaded"
+    echo "unloaded $step $page 0 $pressed $shown" >> "$perf_dir/traced-switch-rows"
   done
 }
-# Rows $1, the traced switches to the page shown, and $1-span, Chrome's span for each in the trace $3,
-# labelled $2.
+# Rows $1, the traced switches to the page shown, and $1-span, the spans of browser $3's switches to
+# loaded tabs in the table, labelled $2.
 perf_traced_rows() {
   perf_row "$1" "$2, traced, to page shown" "$(perf_stats '%.0f' < "$perf_dir/$1") ms" "untraced's"
   perf_row "$1-span" "$2, traced, Chrome's span, tab strip to frame shown" \
-    "$(python3 -I check/tab_switches.py "$3" | grep -v incomplete | perf_stats '%.1f') ms" \
+    "$(awk -F '\t' -v b="$3" '$1 == b && $2 == "loaded" { print $8 }' "$traced_tsv" | perf_stats '%.1f') ms" \
     "Chrome 8 ms (gate: 16 ms)"
 }
 if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
@@ -444,12 +464,11 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
     perf_open "t$n" traced-newtab
   done
   perf_until $((loaded + 15))
-  perf_trace trace-ilo.json "$cdp_log" 16 perf_switches traced-switch
-  perf_traced_rows traced-switch "Tab switch" "$perf_dir/trace-ilo.json"
-  perf_trace trace-ilo-discarded.json "$cdp_log" "" perf_discarded
-  [ ! -s "$perf_dir/traced-discarded" ] || perf_row traced-discarded \
-    "Tab switch to a tab without its page, traced, key to page painted" \
-    "$(perf_stats '%.0f' < "$perf_dir/traced-discarded") ms" "none of its own"
+  perf_trace trace-ilo.json "$cdp_log" ilo traced-switch-rows "$log" perf_traced_ilo
+  perf_traced_rows traced-switch "Tab switch" ilo
+  [ ! -s "$perf_dir/traced-unloaded" ] || perf_row traced-unloaded \
+    "Tab switch to a tab without its page, traced, key to page shown" \
+    "$(perf_stats '%.0f' < "$perf_dir/traced-unloaded") ms" "none of its own"
   exec 3>&- 5>&-
   quit
   kill "$helper" 2> /dev/null || true
@@ -549,12 +568,15 @@ chrome_open() {
 }
 # The app's 16 switches by ⌘1–⌘8 at 20 tabs, to the same pages, $1<n>: ⌘2–⌘8 its tabs opened before
 # the last, 19 to 13, and ⌘1 the last, 20, which shows first, twice. Chrome's are through the tab
-# strip, keeping the ms from just before, as cdp.py stamps it, to the page shown in the file $2, and
-# each Unix ms before in $2-keys.
+# strip, keeping the ms from just before, as cdp.py stamps it, to the page shown in the file $2, each
+# Unix ms before in $2-keys and a line a switch in $2-rows. With $3, spaced as the app's.
 chrome_switches() {
   : > "$perf_dir/$2"
   : > "$perf_dir/$2-keys"
+  : > "$perf_dir/$2-rows"
+  i=0
   for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
+    i=$((i + 1))
     n=$((21 - k))
     [ "$k" != 1 ] || n=20
     tab=$(sed -n "s/^cdp: title \([^ ]*\) $1$n fcp .*/\1/p" "$log" | head -1)
@@ -562,8 +584,12 @@ chrome_switches() {
     echo "activate $tab" >&5
     chrome_await "^cdp: title $tab $1$n shown " "Chrome's $1$n didn't say it was shown" "$since"
     pressed=$(tail -n +$((since + 1)) "$log" | sed -n "s/^cdp: activating $tab at \([0-9]*\)$/\1/p" | head -1)
+    count=$(tail -n +$((since + 1)) "$log" | sed -n "s/^cdp: title $tab $1$n shown \([0-9]*\) .*/\1/p" | head -1)
+    shown=$(chrome_stamp "$1$n" shown "$since")
     echo "$pressed" >> "$perf_dir/$2-keys"
-    echo $(($(chrome_stamp "$1$n" shown "$since") - pressed)) >> "$perf_dir/$2"
+    echo $((shown - pressed)) >> "$perf_dir/$2"
+    echo "loaded - $1$n $count $pressed $shown" >> "$perf_dir/$2-rows"
+    [ -z "${3:-}" ] || [ "$i" -gt 8 ] || sleep 1
   done
 }
 # Quits Chrome as quit_app does the app, then ends what's left of it after $1 s, or 20.
@@ -687,8 +713,9 @@ else
         perf_until $((typed / 1000 + 2))
       done
       perf_until $((loaded + 15))
-      perf_trace trace-chrome.json "$log" 16 chrome_switches t chrome-traced-switch
-      perf_traced_rows chrome-traced-switch "Chrome here, tab switch" "$perf_dir/trace-chrome.json"
+      perf_trace trace-chrome.json "$log" chrome chrome-traced-switch-rows "" \
+        chrome_switches t chrome-traced-switch spaced
+      perf_traced_rows chrome-traced-switch "Chrome here, tab switch" chrome
       chrome_quit
     fi
     # ilo against Chrome on this machine, for each of the gate's rows. Memory at 10 and 20 tabs moves
