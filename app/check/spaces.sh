@@ -279,9 +279,10 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
 # preview. That's one run of frames once the app asks for the tab's picture, which may answer
-# only after the tab is shown again, so a step that keeps it hidden past 0.4 s sees one. It can last
-# a quarter of a second on a runner (#2239), so frames over less than 0.35 s pass: a page that went on
-# running would run from its hiding through the 0.4 s before any picture, over 0.38 s at least.
+# only after the tab is shown again, so a step that keeps it hidden past 0.4 s sees one. On runners
+# it has lasted 0.25 s in these steps and 0.41 s once in an earlier one (#2239), so frames over less
+# than 0.35 s pass: a page that went on running would run from its hiding through the 0.4 s before
+# any picture, over 0.38 s at least. A picture as slow as that one still fails here (#2239).
 # Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
 # the core showing another tab or the page's "hidden", which can reach the log after the picture
 # (#1678), so a picture between the two counts and one from before them doesn't.
