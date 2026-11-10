@@ -44,9 +44,13 @@ bool SecretAutocomplete(std::string_view autocomplete);
 // to it, so a field never reaches past the frame it's seen through.
 gfx::RectF IntoParent(const gfx::RectF& box, const gfx::RectF& frame);
 
-// The pixels of a picture of |picture|'s size that |box| covers, in the main frame's CSS pixels at
-// |scale| pixels each: every pixel it touches, inside the picture.
-gfx::Rect InPicture(const gfx::RectF& box, float scale, const gfx::Size& picture);
+// The pixels of a picture of |picture|'s size, of the view's |source| area, that |box| covers, in
+// the main frame's CSS pixels at |zoom| view points each: every pixel it touches, inside the
+// picture.
+gfx::Rect InPicture(const gfx::RectF& box,
+                    float zoom,
+                    const gfx::Rect& source,
+                    const gfx::Size& picture);
 
 // Paints each of |boxes| over with a hatch in its own background, as a filled field whose contents
 // are withheld looks in an agent's picture: filled, with nothing of the text, not even its length.

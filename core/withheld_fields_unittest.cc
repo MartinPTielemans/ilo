@@ -78,17 +78,27 @@ TEST(WithheldFieldsTest, AFieldInAFrameIsCutToTheFrame) {
 }
 
 // A field scrolled half out of view covers the half in the picture; at a zoom and on a 2x screen,
-// every pixel its box touches.
+// every pixel its box touches; and in a picture of part of the view, as a capture of an area is,
+// where it is in that part.
 TEST(WithheldFieldsTest, ItsBoxInThePicture) {
+  const gfx::Rect view(800, 600);
   const gfx::Size picture(800, 600);
-  EXPECT_EQ(InPicture(gfx::RectF(10, 580, 100, 40), 1, picture), gfx::Rect(10, 580, 100, 20));
-  EXPECT_EQ(InPicture(gfx::RectF(10, -20, 100, 40), 1, picture), gfx::Rect(10, 0, 100, 20));
+  EXPECT_EQ(InPicture(gfx::RectF(10, 580, 100, 40), 1, view, picture),
+            gfx::Rect(10, 580, 100, 20));
+  EXPECT_EQ(InPicture(gfx::RectF(10, -20, 100, 40), 1, view, picture), gfx::Rect(10, 0, 100, 20));
   // At 2x: twice the pixels.
-  EXPECT_EQ(InPicture(gfx::RectF(10, 20, 100, 40), 2, gfx::Size(1600, 1200)),
+  EXPECT_EQ(InPicture(gfx::RectF(10, 20, 100, 40), 1, view, gfx::Size(1600, 1200)),
             gfx::Rect(20, 40, 200, 80));
   // At 125% zoom on a 2x screen, 2.5 pixels a CSS pixel, with fractions rounded outwards.
-  EXPECT_EQ(InPicture(gfx::RectF(10.5f, 20, 100, 40.2f), 2.5f, gfx::Size(2000, 1500)),
+  EXPECT_EQ(InPicture(gfx::RectF(10.5f, 20, 100, 40.2f), 1.25f, view, gfx::Size(1600, 1200)),
             gfx::Rect(26, 50, 251, 101));
+  // An area of the view at 2x: the field from the area's corner, and only what's in it.
+  const gfx::Rect area(100, 200, 200, 100);
+  EXPECT_EQ(InPicture(gfx::RectF(110, 220, 50, 30), 1, area, gfx::Size(400, 200)),
+            gfx::Rect(20, 40, 100, 60));
+  EXPECT_EQ(InPicture(gfx::RectF(250, 280, 100, 40), 1, area, gfx::Size(400, 200)),
+            gfx::Rect(300, 160, 100, 40));
+  EXPECT_TRUE(InPicture(gfx::RectF(10, 20, 50, 30), 1, area, gfx::Size(400, 200)).IsEmpty());
 }
 
 // The hatch leaves nothing of the text, keeps the field's background and paints nothing outside.

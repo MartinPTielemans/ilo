@@ -21,6 +21,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -37,6 +38,7 @@
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -55,6 +57,7 @@
 #include "ui/accessibility/ax_mode.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/gfx/geometry/rect.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/geometry/size.h"
@@ -352,6 +355,19 @@ base::ListValue Tagged(base::ListValue nodes, const std::string& prefix, int slo
   return nodes;
 }
 
+// Why there's no picture, for the agent.
+constexpr char kNoPicture[] = "The page couldn't be pictured.";
+constexpr char kPictureChanged[] = "The page changed while it was pictured. Try again.";
+
+// DevTools attaches to each frame in another process below a session's, in a session of its own.
+base::DictValue AutoAttaching() {
+  return base::DictValue()
+      .Set("autoAttach", true)
+      .Set("waitForDebuggerOnStart", false)
+      .Set("flatten", true)
+      .Set("filter", base::ListValue().Append(base::DictValue().Set("type", "iframe")));
+}
+
 void Report(bc_id tab, uint64_t request, std::string text, bool error) {
   if (Host().agent_page_done) {
     Host().agent_page_done(Host().context, tab, request, text.c_str(), error);
@@ -490,6 +506,7 @@ AgentPage::~AgentPage() {
 }
 
 void AgentPage::Act(uint64_t request, int action, int64_t element, std::string text) {
+  acted_ = true;
   jobs_.push_back({request, action, element, std::move(text)});
   Next();
 }
@@ -1555,18 +1572,125 @@ void AgentPage::Screenshot() {
                     }
                   },
                   base::Unretained(this), request));
-  WithheldBoxes(base::BindOnce(&AgentPage::Picture, weak_factory_.GetWeakPtr(), request));
+  Draw(std::nullopt,
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, uint64_t request,
+              base::expected<SkBitmap, std::string> picture) {
+             if (!page || !page->job_ || page->job_->request != request) {
+               return;
+             }
+             if (!picture.has_value()) {
+               page->wait_.Stop();
+               page->Fail(std::move(picture.error()));
+               return;
+             }
+             // A page in a big window is millions of pixels, too many to encode on the UI thread.
+             base::ThreadPool::PostTaskAndReplyWithResult(
+                 FROM_HERE, {base::TaskPriority::USER_VISIBLE},
+                 base::BindOnce(
+                     [](const SkBitmap& picture) {
+                       std::optional<std::vector<uint8_t>> jpeg =
+                           gfx::JPEGCodec::Encode(picture, /*quality=*/75);
+                       return jpeg ? base::Base64Encode(*jpeg) : std::string();
+                     },
+                     std::move(*picture)),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
+                       if (!page || !page->job_ || page->job_->request != request) {
+                         return;
+                       }
+                       page->wait_.Stop();
+                       if (data.empty()) {
+                         page->Fail("The page couldn't be pictured.");
+                         return;
+                       }
+                       page->Answer(std::move(data), /*error=*/false);
+                     },
+                     page, request));
+           },
+           weak_factory_.GetWeakPtr(), request));
 }
 
-void AgentPage::Picture(uint64_t request, std::optional<Boxes> before) {
-  if (!job_ || job_->request != request) {
+// static
+void AgentPage::Picture(content::WebContents& contents,
+                        std::optional<gfx::Rect> area,
+                        Pictured done) {
+  CreateForWebContents(&contents);
+  AgentPage* page = FromWebContents(&contents);
+  // Posted, so the caller never hears inside its own call, and heard even if the page goes or its
+  // agent's session ends first.
+  done = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      base::BindPostTaskToCurrentDefault(std::move(done)),
+      base::expected<SkBitmap, std::string>(base::unexpected(kNoPicture)));
+  ++page->pictures_;
+  page->Draw(area, base::BindOnce(
+                       [](base::WeakPtr<AgentPage> page, Pictured done,
+                          base::expected<SkBitmap, std::string> picture) {
+                         if (page && --page->pictures_ == 0 && !page->acted_) {
+                           // Posted, as this may be inside DevTools' own reply.
+                           base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                               FROM_HERE, base::BindOnce(&AgentPage::Rest, page));
+                         }
+                         std::move(done).Run(std::move(picture));
+                       },
+                       page->weak_factory_.GetWeakPtr(), std::move(done)));
+}
+
+void AgentPage::Draw(std::optional<gfx::Rect> area, Pictured done) {
+  if (agent_host_) {
+    WithheldBoxes(
+        base::BindOnce(&AgentPage::Copy, weak_factory_.GetWeakPtr(), area, std::move(done)));
     return;
   }
+  // DevTools tells of the page's frames in other processes as it attaches to each level of them,
+  // and a frame not heard of yet would be hatched whole.
+  Send("Target.setAutoAttach", AutoAttaching(),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::optional<gfx::Rect> area, Pictured done,
+              const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             if (!result) {
+               std::move(done).Run(base::unexpected(kNoPicture));
+               return;
+             }
+             page->Attach(1, base::BindOnce(&AgentPage::Draw, page, area, std::move(done)));
+           },
+           weak_factory_.GetWeakPtr(), area, std::move(done)),
+       0);
+}
+
+void AgentPage::Attach(size_t slot, base::OnceClosure then) {
+  for (; slot < targets_.size(); ++slot) {
+    if (!targets_[slot].session.empty()) {
+      // Its reply comes after DevTools has told of the frames it attached to.
+      Send("Target.setAutoAttach", AutoAttaching(),
+           base::BindOnce(
+               [](base::WeakPtr<AgentPage> page, size_t slot, base::OnceClosure then,
+                  const base::DictValue*) {
+                 if (page) {
+                   page->Attach(slot + 1, std::move(then));
+                 }
+               },
+               weak_factory_.GetWeakPtr(), slot, std::move(then)),
+           static_cast<int>(slot));
+      return;
+    }
+  }
+  std::move(then).Run();
+}
+
+void AgentPage::Copy(std::optional<gfx::Rect> area,
+                     Pictured done,
+                     std::optional<Boxes> before) {
   content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
-  if (!before || !view) {
-    wait_.Stop();
-    Fail(before ? "The page couldn't be pictured."
-                : "The page changed while it was pictured. Try again.");
+  const gfx::Rect source =
+      !view ? gfx::Rect()
+            : gfx::IntersectRects(area.value_or(gfx::Rect(view->GetViewBounds().size())),
+                                  gfx::Rect(view->GetViewBounds().size()));
+  if (!before || source.IsEmpty()) {
+    std::move(done).Run(base::unexpected(before ? kNoPicture : kPictureChanged));
     return;
   }
   // A copy of the page's own surface, as the app's pictures of a page are (capture.cc). DevTools'
@@ -1580,37 +1704,33 @@ void AgentPage::Picture(uint64_t request, std::optional<Boxes> before) {
                                 GetWebContents().GetNativeView());
   }
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(), base::TimeDelta(),
+      source, gfx::Size(), base::TimeDelta(),
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, uint64_t request, Boxes before,
+          [](base::WeakPtr<AgentPage> page, gfx::Rect source, Pictured done, Boxes before,
              base::ScopedClosureRunner held, const content::CopyFromSurfaceResult& result) {
-            if (!page || !page->job_ || page->job_->request != request) {
+            if (!page) {
               return;
             }
             if (!result.has_value() || result->bitmap.drawsNothing()) {
-              page->wait_.Stop();
-              page->Fail("The page couldn't be pictured.");
+              std::move(done).Run(base::unexpected(kNoPicture));
               return;
             }
-            // Where the fields are after the copy too, as the page may have moved one meanwhile,
+            // Where the boxes are after the copy too, as the page may have moved one meanwhile,
             // as a smooth scroll does: each is painted over all the way from one box to the other.
-            page->WithheldBoxes(base::BindOnce(&AgentPage::Paint, page, request,
+            page->WithheldBoxes(base::BindOnce(&AgentPage::Paint, page, source, std::move(done),
                                                std::move(before), result->bitmap));
           },
-          weak_factory_.GetWeakPtr(), request, std::move(*before), std::move(held)));
+          weak_factory_.GetWeakPtr(), source, std::move(done), std::move(*before),
+          std::move(held)));
 }
 
-void AgentPage::Paint(uint64_t request,
+void AgentPage::Paint(gfx::Rect source,
+                      Pictured done,
                       Boxes before,
                       SkBitmap bitmap,
                       std::optional<Boxes> after) {
-  if (!job_ || job_->request != request) {
-    return;
-  }
-  content::RenderWidgetHostView* view = GetWebContents().GetRenderWidgetHostView();
-  if (!after || !view || view->GetViewBounds().width() <= 0) {
-    wait_.Stop();
-    Fail("The page changed while it was pictured. Try again.");
+  if (!after) {
+    std::move(done).Run(base::unexpected(kPictureChanged));
     return;
   }
   for (const auto& [element, box] : *after) {
@@ -1623,45 +1743,46 @@ void AgentPage::Paint(uint64_t request,
   // screen's pixels.
   const float zoom = static_cast<float>(
       blink::ZoomLevelToZoomFactor(content::HostZoomMap::GetZoomLevel(&GetWebContents())));
-  const float scale = zoom * static_cast<float>(bitmap.width()) /
-                      static_cast<float>(view->GetViewBounds().width());
+  const gfx::Size size(bitmap.width(), bitmap.height());
   std::vector<gfx::Rect> boxes;
   for (const auto& [element, box] : before) {
-    const gfx::Rect pixels =
-        InPicture(box, scale, gfx::Size(bitmap.width(), bitmap.height()));
+    const gfx::Rect pixels = InPicture(box, zoom, source, size);
     if (!pixels.IsEmpty()) {
       boxes.push_back(pixels);
     }
   }
-  // A page in a big window is millions of pixels, too many to paint and encode on the UI thread.
+  const float scale =
+      zoom * static_cast<float>(size.width()) / static_cast<float>(source.width());
+  // A page in a big window is millions of pixels, too many to paint on the UI thread.
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE},
       base::BindOnce(
-          [](const SkBitmap& bitmap, std::vector<gfx::Rect> boxes, float scale) {
+          [](const SkBitmap& bitmap, std::vector<gfx::Rect> boxes,
+             float scale) -> std::optional<SkBitmap> {
             SkBitmap picture;
             // Painted on a copy of its own, as the copy's pixels may be shared.
             if (!picture.tryAllocPixels(bitmap.info()) || !bitmap.readPixels(picture.pixmap())) {
-              return std::string();
+              return std::nullopt;
             }
             Hatch(picture, boxes, scale);
-            std::optional<std::vector<uint8_t>> jpeg =
-                gfx::JPEGCodec::Encode(picture, /*quality=*/75);
-            return jpeg ? base::Base64Encode(*jpeg) : std::string();
+            return picture;
           },
           std::move(bitmap), std::move(boxes), scale),
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, uint64_t request, std::string data) {
-            if (!page || !page->job_ || page->job_->request != request) {
+          [](Pictured done, std::optional<SkBitmap> picture) {
+            if (!picture) {
+              std::move(done).Run(base::unexpected(kNoPicture));
               return;
             }
-            page->wait_.Stop();
-            if (data.empty()) {
-              page->Fail("The page couldn't be pictured.");
-              return;
-            }
-            page->Answer(std::move(data), /*error=*/false);
+            std::move(done).Run(std::move(*picture));
           },
-          weak_factory_.GetWeakPtr(), request));
+          std::move(done)));
+}
+
+void AgentPage::Rest() {
+  if (!acted_ && !pictures_ && !job_ && jobs_.empty()) {
+    Detach();
+  }
 }
 
 AgentPage::Withholding::Withholding() = default;
@@ -1671,12 +1792,32 @@ void AgentPage::WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> the
   auto withholding = std::make_unique<Withholding>();
   withholding->frames = Frames();
   withholding->then = std::move(then);
+  // A frame below one whose fields are read that can't be read itself, as an extension's own, one
+  // not live or one whose session hasn't started, is hatched whole, as the outline leaves it out.
+  // What's in it is in its box.
+  content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
+  std::map<std::string, int> read;
+  for (const Frame& frame : withholding->frames) {
+    read[frame.id] = frame.slot;
+  }
+  main->ForEachRenderFrameHost([&](content::RenderFrameHost* host) {
+    content::RenderFrameHost* parent = host->GetParent();
+    if (!parent) {
+      return;
+    }
+    const std::string id = host->GetDevToolsFrameToken().ToString();
+    const auto above =
+        read.find(parent == main ? std::string() : parent->GetDevToolsFrameToken().ToString());
+    if (above != read.end() && !read.contains(id)) {
+      withholding->unread.emplace_back(above->second, id);
+    }
+  });
   ReadFields(std::move(withholding), 0);
 }
 
 void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next) {
   if (next >= withholding->frames.size()) {
-    NextField(std::move(withholding), 0);
+    Cover(std::move(withholding), 0);
     return;
   }
   const Frame& frame = withholding->frames[next];
@@ -1721,6 +1862,49 @@ void AgentPage::ReadFields(std::unique_ptr<Withholding> withholding, size_t next
            },
            weak_factory_.GetWeakPtr(), std::move(withholding), next, slot),
        slot);
+}
+
+void AgentPage::Cover(std::unique_ptr<Withholding> withholding, size_t next) {
+  if (next >= withholding->unread.size()) {
+    NextField(std::move(withholding), 0);
+    return;
+  }
+  const auto& [slot, frame] = withholding->unread[next];
+  const int in = slot;
+  Send("DOM.getFrameOwner", base::DictValue().Set("frameId", frame),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding, size_t next,
+              int slot, const base::DictValue* result) {
+             if (!page) {
+               return;
+             }
+             const std::optional<int> owner =
+                 result ? result->FindInt("backendNodeId") : std::nullopt;
+             // A frame whose element can't be found may show anything: no picture, rather.
+             if (!owner) {
+               std::move(withholding->then).Run(std::nullopt);
+               return;
+             }
+             page->Send(
+                 "DOM.getBoxModel", base::DictValue().Set("backendNodeId", *owner),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding,
+                        size_t next, int slot, int64_t element, const base::DictValue* result) {
+                       if (!page) {
+                         return;
+                       }
+                       // Its content box, where the frame's page shows.
+                       const base::ListValue* content =
+                           result ? result->FindListByDottedPath("model.content") : nullptr;
+                       page->Keep(std::move(withholding), slot, element,
+                                  content ? BoundsOf(*content) : std::nullopt, &AgentPage::Cover,
+                                  next + 1);
+                     },
+                     page, std::move(withholding), next, slot, ElementId(slot, *owner)),
+                 slot);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), next, in),
+       in);
 }
 
 void AgentPage::NextField(std::unique_ptr<Withholding> withholding, size_t next) {
@@ -1789,33 +1973,13 @@ void AgentPage::Withhold(std::unique_ptr<Withholding> withholding,
              if (!page) {
                return;
              }
-             // Its padding box, inside its border, where it shows what it holds. One with no box
-             // isn't drawn.
+             // Its padding box, inside its border, where it shows what it holds.
              const base::ListValue* padding =
                  result ? result->FindListByDottedPath("model.padding") : nullptr;
-             const std::optional<gfx::RectF> box = padding ? BoundsOf(*padding) : std::nullopt;
-             if (!box) {
-               page->NextField(std::move(withholding), next + 1);
-               return;
-             }
-             page->Lift(
-                 slot, *box,
-                 base::BindOnce(
-                     [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding,
-                        size_t next, std::optional<gfx::RectF> lifted) {
-                       if (!page) {
-                         return;
-                       }
-                       if (!lifted) {
-                         std::move(withholding->then).Run(std::nullopt);
-                         return;
-                       }
-                       if (!lifted->IsEmpty()) {
-                         withholding->boxes[withholding->fields[next].first] = *lifted;
-                       }
-                       page->NextField(std::move(withholding), next + 1);
-                     },
-                     page, std::move(withholding), next));
+             const int64_t element = withholding->fields[next].first;
+             page->Keep(std::move(withholding), slot, element,
+                        padding ? BoundsOf(*padding) : std::nullopt, &AgentPage::NextField,
+                        next + 1);
            },
            weak_factory_.GetWeakPtr(), std::move(withholding), next, slot),
        slot);
@@ -1871,6 +2035,36 @@ void AgentPage::Lift(int slot, gfx::RectF box, Then then) {
            },
            weak_factory_.GetWeakPtr(), up, box, std::move(then)),
        up);
+}
+
+void AgentPage::Keep(std::unique_ptr<Withholding> withholding,
+                     int slot,
+                     int64_t element,
+                     std::optional<gfx::RectF> box,
+                     void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
+                     size_t next) {
+  if (!box) {
+    (this->*go_on)(std::move(withholding), next);
+    return;
+  }
+  Lift(slot, *box,
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::unique_ptr<Withholding> withholding,
+              int64_t element, void (AgentPage::*go_on)(std::unique_ptr<Withholding>, size_t),
+              size_t next, std::optional<gfx::RectF> lifted) {
+             if (!page) {
+               return;
+             }
+             if (!lifted) {
+               std::move(withholding->then).Run(std::nullopt);
+               return;
+             }
+             if (!lifted->IsEmpty()) {
+               withholding->boxes[element] = *lifted;
+             }
+             ((*page).*go_on)(std::move(withholding), next);
+           },
+           weak_factory_.GetWeakPtr(), std::move(withholding), element, go_on, next));
 }
 
 void AgentPage::KeepTyped(const base::ListValue& nodes, int64_t element) {
@@ -2485,6 +2679,8 @@ void AgentPage::LetGo() {
                                   std::string("The agent's session with the tab ended."), true));
   }
   weak_factory_.InvalidateWeakPtrs();
+  acted_ = false;
+  pictures_ = 0;
   wheel_.reset();
   wait_.Stop();
   rest_.Stop();
@@ -2564,13 +2760,7 @@ void AgentPage::AutoAttach(int slot) {
   if (!agent_host_) {
     return;
   }
-  Send("Target.setAutoAttach",
-       base::DictValue()
-           .Set("autoAttach", true)
-           .Set("waitForDebuggerOnStart", false)
-           .Set("flatten", true)
-           .Set("filter", base::ListValue().Append(base::DictValue().Set("type", "iframe"))),
-       base::DoNothing(), slot);
+  Send("Target.setAutoAttach", AutoAttaching(), base::DoNothing(), slot);
 }
 
 void AgentPage::Detach() {

@@ -86,8 +86,17 @@ gfx::RectF IntoParent(const gfx::RectF& box, const gfx::RectF& frame) {
   return seen;
 }
 
-gfx::Rect InPicture(const gfx::RectF& box, float scale, const gfx::Size& picture) {
-  gfx::Rect pixels = gfx::ToEnclosingRect(gfx::ScaleRect(box, scale));
+gfx::Rect InPicture(const gfx::RectF& box,
+                    float zoom,
+                    const gfx::Rect& source,
+                    const gfx::Size& picture) {
+  if (source.IsEmpty()) {
+    return gfx::Rect();
+  }
+  gfx::RectF in_view = gfx::ScaleRect(box, zoom);
+  in_view.Offset(-source.OffsetFromOrigin());
+  const float scale = static_cast<float>(picture.width()) / static_cast<float>(source.width());
+  gfx::Rect pixels = gfx::ToEnclosingRect(gfx::ScaleRect(in_view, scale));
   pixels.Intersect(gfx::Rect(picture));
   return pixels;
 }
