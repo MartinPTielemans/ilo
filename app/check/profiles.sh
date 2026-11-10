@@ -591,13 +591,20 @@ expect '^browser: loaded [0-9]* chrome://settings/clearBrowserData$' \
   "Clear… didn't open Clear browsing data: $(grep '^browser: loaded' "$log" | tail -1)"
 send key w cmd
 # The command bar searches with the engine of the profile shown: the first's DuckDuckGo, the
-# second's Bing. Neither search waits for its page, and ⌘W closes its tab.
+# second's Bing. Neither search waits for its page, and ⌘W closes its tab once it's shown: sent
+# before, on GitHub's hosted Mac, it closed the tab shown before it (#2205).
+search_shown() {
+  expect "^browser: page [0-9]* back 0 forward 0 loading 1 $1" "the search didn't open its tab"
+  searched=$(grep "^browser: page [0-9]* back 0 forward 0 loading 1 $1" "$log" | tail -1 | cut -d' ' -f3)
+  expect "^browser: selected $searched\( in .*\)\{0,1\}\$" "the search's tab $searched wasn't shown"
+}
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type ilo profiles
 send key return
 expect '^browser: command bar go https://duckduckgo\.com/?q=ilo' \
   "the first profile's Space didn't search with DuckDuckGo: $(grep '^browser: command bar go' "$log" | tail -1)"
+search_shown 'https://duckduckgo\.com/?q=ilo'
 send key w cmd
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 after ⌘W closed the first Space's search didn't show the second Space"
@@ -608,6 +615,7 @@ send type ilo profiles
 send key return
 expect '^browser: command bar go https://www\.bing\.com/search?q=ilo' \
   "the second profile's Space didn't search with Bing: $(grep '^browser: command bar go' "$log" | tail -1)"
+search_shown 'https://www\.bing\.com/search?q=ilo'
 send key w cmd
 expect "^browser: selected $d\( in .*\)\{0,1\}\$" "⌘W didn't show the second Space's tab again"
 # The second profile's page downloads into the folder Change… gave it.
