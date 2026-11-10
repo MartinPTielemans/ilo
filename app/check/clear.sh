@@ -752,7 +752,6 @@ else
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
 fi
 none_since '^browser: site controls run certificate' "$lock" || fail "the lock ran without a certificate"
-none_since '^browser: site controls run certificate' "$lock" || fail "the lock ran without a certificate"
 # Hover still works once they've closed: the pointer out to the page hides the URL field's buttons,
 # and back over the sidebar shows them. While they were open the buttons stayed, as the pointer
 # over the sidebar keeps them.

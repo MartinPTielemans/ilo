@@ -842,7 +842,6 @@ send dragleave
 send dragdrop 100 345 text "dogs  and   cats"
 expect '^browser: dropped 1 in today 2$' "the dropped text wasn't taken under the dropped link"
 [ "$(since "$left" | grep -c '^browser: dropped')" = 1 ] || fail "dragged text that isn't a web link opened"
-[ "$(since "$left" | grep -c '^browser: dropped')" = 1 ] || fail "dragged text that isn't a web link opened"
 expect_lists "$e $c" "$t $d [0-9][0-9]*" "after dropping text"
 s=$(today | cut -d' ' -f3)
 expect "^browser: selected $s\$" "the dropped text's search didn't show"

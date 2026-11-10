@@ -758,8 +758,6 @@ searching '%E6%97%A5%E6%9C%AC%E8%AA%9E\.invalid' \
   "the committed text didn't start a search for it: $(grep '^browser: page ' "$log" | tail -1)"
 [ "$(since "$committed" | grep -c '^browser: command bar typed')" = 1 ] ||
   fail "return while composing went somewhere"
-[ "$(since "$committed" | grep -c '^browser: command bar typed')" = 1 ] ||
-  fail "return while composing went somewhere"
 
 # ⌘L from the page the search $searched started in. ⌘L goes to the page first, and a key the page
 # being replaced hasn't answered leaves with it: DuckDuckGo's page replaces it once DuckDuckGo

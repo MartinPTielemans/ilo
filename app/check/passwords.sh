@@ -178,8 +178,6 @@ send key return
 expect "^browser: offer $tab answered Accept check@example.test\$" "return didn't save"
 [ "$(since "$committed" | grep -c "^browser: offer $tab answered")" = 1 ] ||
   fail "return committing the composition answered"
-[ "$(since "$committed" | grep -c "^browser: offer $tab answered")" = 1 ] ||
-  fail "return committing the composition answered"
 expect '^browser: offer hidden$' "saving didn't hide the offer"
 expect "^browser: offer $tab gone\$" "saving didn't close Chrome's offer"
 

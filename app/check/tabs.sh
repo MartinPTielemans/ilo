@@ -512,10 +512,6 @@ panes_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   grep -o 'WebContentsViewCocoa [0-9]*' | cut -d' ' -f2)
 left_x=$(echo "$panes_x" | head -1)
 right_x=$(echo "$panes_x" | tail -1)
-# Lines logged since the driver's command $1.
-since() {
-  sed -n "/^browser: drive $1: /,\$p" "$log"
-}
 c_page=$(grep "^browser: page $c back" "$log" | tail -1)
 send age 7200
 aged=$step
