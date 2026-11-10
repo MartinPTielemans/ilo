@@ -19,8 +19,8 @@ jobs:
           "$chrome" --version
           mkdir -p out
           sites=(
-            "news|https://apnews.com/"
-            "docs|https://www.gnu.org/software/bash/manual/bash.html"
+            "news|https://www.npr.org/"
+            "docs|https://www.sqlite.org/lang_select.html"
             "shop|https://books.toscrape.com/"
             "forum|https://news.ycombinator.com/"
             "article|https://www.paulgraham.com/greatwork.html"
@@ -58,6 +58,9 @@ jobs:
               fi
               wait "$pid" || echo "$name $vname failed"
               rm -rf "$profile"
+              # Spaced out, as the first run's four quick loads of a site got a bot check or a
+              # 429 from some of them.
+              sleep 10
             done
           done
           ls -la out
