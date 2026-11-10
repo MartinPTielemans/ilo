@@ -2835,7 +2835,12 @@ impl Shell {
     }
 
     /// A Boost's menu in Library › Boosts.
-    fn boost_menu(&mut self, site: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn boost_menu(
+        &mut self,
+        site: SharedString,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(profile) = self.learning_profile() else {
             return;
         };
@@ -2850,6 +2855,7 @@ impl Shell {
         };
         let entries = vec![
             MenuEntry::new("Edit CSS…", true),
+            MenuEntry::new("Edit Script…", true),
             MenuEntry::new(if on { "Turn Off" } else { "Turn On" }, true),
             MenuEntry::new(show, true),
             MenuEntry::line(),
@@ -2868,9 +2874,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.edit_boost_file(profile, &site, cx),
-                        Some(1) => shell.set_boost_on(profile, &site, !on, cx),
-                        Some(2) => shell.show_boost_file(profile, &site, cx),
-                        Some(4) => shell.delete_boost(profile, &site, cx),
+                        Some(1) => shell.edit_boost_script_file(profile, &site, cx),
+                        Some(2) => shell.set_boost_on(profile, &site, !on, cx),
+                        Some(3) => shell.show_boost_file(profile, &site, cx),
+                        Some(5) => shell.delete_boost(profile, &site, cx),
                         _ => {}
                     })
                     .ok();

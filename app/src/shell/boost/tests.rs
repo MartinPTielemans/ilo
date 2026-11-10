@@ -22,6 +22,10 @@ impl Folder {
     fn boost(&self, site: &str) -> Option<String> {
         std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.css"))).ok()
     }
+
+    fn script(&self, site: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join("Boosts").join(format!("{site}.js"))).ok()
+    }
 }
 
 impl Drop for Folder {
@@ -80,7 +84,7 @@ fn card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<gpui::Bound
 }
 
 /// How far over the card's bottom the middle of its last line of buttons is, and of the line
-/// over that: Edit CSS… and Zap's, over Customize….
+/// over that: Edit CSS… and Zap's, over Edit Script… and Customize….
 const LAST: f32 = 26.;
 const OVER_LAST: f32 = 62.;
 
@@ -203,6 +207,78 @@ fn edit_css_opens_the_sites_file(cx: &mut TestAppContext) {
         .boost("example.com")
         .expect("Edit CSS… started no file");
     assert!(start.starts_with("/* example.com: "), "{start}");
+}
+
+/// Edit Script…, under Edit CSS…, starts the site's script with a line saying it runs only once
+/// turned on, and opens it in the user's editor. It makes no CSS (#2297).
+#[gpui::test]
+fn edit_script_opens_the_sites_script(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    press(&shell, 0.25, LAST, cx);
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    let start = folder
+        .script("example.com")
+        .expect("Edit Script… started no script");
+    assert!(start.starts_with("// example.com: "), "{start}");
+    assert!(start.contains("once you turn it on"), "{start}");
+    assert_eq!(folder.boost("example.com"), None, "Edit Script… made CSS");
+
+    // A second time it opens what the user wrote, unchanged.
+    let path = folder.0.join("Boosts").join("example.com.js");
+    std::fs::write(&path, "mine();\n").unwrap();
+    press(&shell, 0.25, LAST, cx);
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert_eq!(folder.script("example.com").as_deref(), Some("mine();\n"));
+}
+
+/// Library › Boosts' row menu has Edit Script… under Edit CSS…, and each entry after it still does
+/// its own thing.
+#[gpui::test]
+fn the_library_row_edits_the_script(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+        shell.boost_zapped(10, Some("#ad"), cx);
+        shell.stop_zap(cx);
+        shell.run(Command::ViewBoosts, "ui", cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    let menu = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.boost_menu("example.com".into(), point(px(40.), px(40.)), cx)
+        });
+    };
+    menu(&shell, cx);
+    let titles: Vec<String> = host
+        .menus
+        .borrow()
+        .last()
+        .unwrap()
+        .iter()
+        .map(|(title, _)| title.to_string())
+        .collect();
+    assert_eq!(&titles[..3], ["Edit CSS…", "Edit Script…", "Turn Off"]);
+    cx.update(|_, cx| host.choose("Edit Script…", cx));
+    assert_eq!(
+        host.take().last().map(String::as_str),
+        Some("edit example.com.js")
+    );
+    assert!(folder.script("example.com").is_some());
+
+    menu(&shell, cx);
+    cx.update(|_, cx| host.choose("Turn Off", cx));
+    cx.run_until_parked();
+    let on = crate::boosts::with(|boosts| boosts.get(1, "example.com")).map(|boost| boost.on);
+    assert_eq!(on, Some(false), "Turn Off moved and did something else");
 }
 
 /// Neither a private window nor an agent's Space makes a Boost.
@@ -364,7 +440,7 @@ impl crate::boost_editor::Host for Unseen {
     fn hide(&self) {}
 }
 
-/// Customize…, the card's last line, closes the card for the editor on the site; a change the
+/// Customize…, the right of the card's last line, closes the card for the editor on the site; a change the
 /// editor keeps goes in the site's file and to its pages, and its Zap brings the card back
 /// zapping.
 #[gpui::test]
@@ -373,7 +449,7 @@ fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
     cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
         .expect("no window for the editor");
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    press(&shell, 0.5, LAST, cx);
+    press(&shell, 0.75, LAST, cx);
     assert_eq!(card(&shell, cx), None, "Customize… left the card open");
     assert_eq!(
         cx.update(|_, cx| crate::boost_editor::open_for(cx))

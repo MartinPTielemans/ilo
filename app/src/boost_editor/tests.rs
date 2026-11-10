@@ -348,9 +348,10 @@ fn rename_keeps_what_is_typed_and_escape_leaves_the_name(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn edit_css_zap_and_delete_hand_over_to_the_window(cx: &mut TestAppContext) {
+fn edit_css_edit_script_zap_and_delete_hand_over_to_the_window(cx: &mut TestAppContext) {
     for (wanted, request) in [
         (Target::EditCss, Request::EditCss),
+        (Target::EditScript, Request::EditScript),
         (Target::Zap, Request::Zap),
     ] {
         let mut editor = Editor::new(Style::default(), cx);

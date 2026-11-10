@@ -9,8 +9,8 @@
 //! without "www.", as the core reads it. Agents get no path to any of it: what a Boost changes is
 //! the user's own view of their pages (principle 3, decision 8).
 //!
-//! This first slice is CSS and Zap. Scripts come in a slice of their own, as they run code in the
-//! user's pages.
+//! A site's script, `Boosts/<site>.js` (#2297), is the user's too: Edit Script… starts and opens
+//! it, and it runs only once the user turns it on in the browser.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -166,6 +166,10 @@ impl Kept {
         self.boosts().join(format!("{site}.css"))
     }
 
+    fn script_path(&self, site: &str) -> PathBuf {
+        self.boosts().join(format!("{site}.js"))
+    }
+
     fn read(&mut self) {
         self.sites = read_folder(&self.boosts());
         let off = std::fs::read_to_string(self.folder.join(OFF_FILE)).unwrap_or_default();
@@ -211,6 +215,10 @@ impl Kept {
 /// A new Boost's start: a line saying what its file is.
 fn first_line(site: &str) -> String {
     format!("/* {site}: your CSS for its pages, shown as you save. */\n\n")
+}
+
+fn first_script_line(site: &str) -> String {
+    format!("// {site}: your script for its pages, which runs once you turn it on in ilo.\n\n")
 }
 
 /// A line of OFF_FILE, if it names a site.
@@ -399,6 +407,22 @@ impl Boosts {
             }
         }
         Some(kept.path(site))
+    }
+
+    /// `site`'s script, `Boosts/<site>.js` (#2297), for the user's editor, started with a line
+    /// saying what it is if there's none. It runs only once the user turns it on in the browser.
+    pub fn script_file(&mut self, profile: u64, site: &str) -> Option<PathBuf> {
+        let kept = self.profiles.get_mut(&profile)?;
+        let path = kept.script_path(site);
+        if !path.exists() {
+            let written = std::fs::create_dir_all(kept.boosts())
+                .and_then(|_| std::fs::write(&path, first_script_line(site)));
+            if let Err(error) = written {
+                crate::log!("couldn't start the script for {site}: {error}");
+                return None;
+            }
+        }
+        Some(path)
     }
 
     /// What the core should show that it doesn't yet: each site's CSS, or none for a site turned
