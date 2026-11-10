@@ -56,6 +56,10 @@ if [ "${1:-}" = --steps ]; then
     ! tail -n "+$(($1 + 1))" "$LOG" | grep -qE 'Received signal|panicked' || fail "the app crashed $2"
   }
   click() { "$VKBD" --click "$1" "$2"; }
+  shot() {
+    sleep 0.3 # for sway to show the frame the app logged drawing
+    grim "$out/$mode-$1.png"
+  }
   key() { "$VKBD" "$1"; }
   compose() { key '^;'; key "$1"; }
   # Under X11 the seat's keyboard for the run is this one, as run.sh has no Wayland display to
@@ -64,12 +68,12 @@ if [ "${1:-}" = --steps ]; then
     "$VKBD" --hold 120 &
     hold=$!
     trap 'kill $hold 2>/dev/null || true' EXIT
-    sleep 0.5
+    sleep 0.5 # for the held keyboard to join the seat
   fi
 
   if [ "$mode" = no-keyboard ]; then
     at=$(mark); click 330 40
-    sleep 2
+    sleep 2 # the 2 s the app crashed in once the input method's keyboard came
     alive "$at" "when the input method's keyboard came with no keymap"
     # The keyboard that types goes after, leaving the input method's, with no keymap, the seat's
     # only one again, which crashed the app up to 10 s later. The keys may not reach the page, as
@@ -85,11 +89,11 @@ if [ "${1:-}" = --steps ]; then
   fi
 
   # The page's textarea.
-  click 330 40
-  sleep 0.5
+  at=$(mark); click 330 40
+  await "title [0-9]* clicked" "$at"
   at=$(mark); compose abc
   await "title [0-9]* composing abc$" "$at"
-  sleep 0.3; grim "$out/$mode-page-preedit.png"
+  shot page-preedit
   at=$(mark); key $'\n'
   await "title [0-9]* value abc$" "$at"
 
@@ -101,7 +105,7 @@ if [ "${1:-}" = --steps ]; then
   await "command bar shown" "$at"
   at=$(mark); compose xyz
   await 'command bar drew "xyz"' "$at"
-  sleep 0.3; grim "$out/$mode-bar-preedit.png"
+  shot bar-preedit
   at=$(mark); key $'\e'
   await 'command bar drew ""' "$at"
   key q
@@ -116,11 +120,11 @@ if [ "${1:-}" = --steps ]; then
   # A click in the page while the bar composes.
   at=$(mark); compose zz
   await 'command bar drew "qxyzwzz"' "$at"
-  at=$(mark); click 330 60
-  sleep 1
-  ! tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar drew ".*zzz' || fail "the bar committed its composition twice"
+  clicked=$(mark); click 330 60
+  await "title [0-9]* clicked" "$clicked"
   at=$(mark); compose fg
   await "title [0-9]* composing [a-z]*fg[a-z]*$" "$at"
+  ! tail -n "+$((clicked + 1))" "$LOG" | grep -q 'command bar drew ".*zzz' || fail "the bar committed its composition twice"
   ! tail -n "+$((at + 1))" "$LOG" | grep -q "title [0-9]* composing .*zz" || fail "the bar's composition went to the page"
   key $'\e'
 
@@ -140,11 +144,11 @@ if [ "${1:-}" = --steps ]; then
   key '^f'
   at=$(mark); compose pip
   await 'settings search composing "pip"' "$at"
-  sleep 0.3; grim "$out/$mode-settings-preedit.png"
+  shot settings-preedit
   ! tail -n "+$((at + 1))" "$LOG" | grep -q 'settings search "pip" finds' || fail "Settings searched for the composition"
   at=$(mark); key $'\n'
   await 'settings search "pip" finds Mini Player$' "$at"
-  sleep 0.3; grim "$out/$mode-settings-committed.png"
+  shot settings-committed
   at=$(mark); compose xyz
   await 'settings search composing "pipxyz"' "$at"
   at=$(mark); key $'\e'
@@ -232,6 +236,7 @@ t.addEventListener("compositionstart",()=>{c=1;u()});
 t.addEventListener("compositionupdate",()=>setTimeout(u));
 t.addEventListener("compositionend",()=>{c=0;setTimeout(u)});
 t.addEventListener("input",()=>setTimeout(u));
+t.addEventListener("pointerdown",()=>{document.title="clicked "+t.value});
 </script>'
 url="data:text/html,$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$page")"
 failed=

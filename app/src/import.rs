@@ -1053,7 +1053,6 @@ impl ImportView {
     /// Makes `tabs` favorites of `space`, as the user ticked them.
     pub fn add_favorites(&self, space: u64, tabs: &[Tab]) {
         let urls: Vec<&str> = tabs.iter().map(|tab| tab.url.as_str()).collect();
-        // check.sh reads this line.
         log!("browser: import favorites {}", urls.join(" "));
         for tab in tabs {
             self.host.add_favorite(space, tab);
@@ -1234,7 +1233,6 @@ impl ImportView {
         let then = Box::new(move |file: Option<PathBuf>, cx: &mut App| {
             view.update(cx, |view, cx| {
                 if let (Some(file), Step::Pick { passwords, .. }) = (file, &mut view.step) {
-                    // check.sh waits for this line.
                     log!("browser: import passwords file {}", file_name(&file));
                     *passwords = Some((file, true));
                     cx.notify();
@@ -1328,7 +1326,6 @@ impl ImportView {
         }
         self.toggled.retain(|(each, _)| each != url);
         self.toggled.push((url.into(), Instant::now()));
-        // check.sh reads this line.
         log!("browser: import unticked {}", self.unticked.join(" "));
         cx.notify();
     }

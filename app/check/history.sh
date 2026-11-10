@@ -93,10 +93,11 @@ else
   send pageswipe $page_point forward
   expect "^browser: swiped forward $tab\$" "a swipe forward over the page didn't reach the UI"
   expect_page example.org 1 0 "after a swipe forward"
+  swipe=$((step + 1))
   send pageswipe $sidebar_point back
-  none_since '^browser: swiped' || fail "a swipe over the sidebar went back"
 fi
 history_key r reload ui
+[ -z "${swipe:-}" ] || none_since '^browser: swiped' "$swipe" || fail "a swipe over the sidebar went back"
 expect "^browser: loaded $tab https://example.org/\$" "⌘R didn't load the page again"
 send key r cmd shift
 expect '^browser: command force-reload via ui$' "⇧⌘R didn't run force-reload"

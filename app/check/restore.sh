@@ -341,7 +341,7 @@ expect "^browser: title $c clicked\$" "a click in the page didn't keep the name 
 ../tools/window-screenshot.sh "$pid" "$out/rename-click-away.png" || fail "no window to capture"
 # Rename… in its menu, with the name taken out, gives the tab back its page's title.
 post rightclick $(row 0)
-menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
+menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
 expect "^browser: menu shown $menu\$" \
   "a right-click on the renamed tab's row didn't offer Rename…"
 choose_drawn Rename…
@@ -364,13 +364,14 @@ send type nihongo
 send key space
 [ "$marked" != none ] || fail "the picker's search didn't take the conversion"
 none_since "^browser: page $c icon " || fail "a composition became the tab's icon"
+committed=$((step + 1))
 send key return
 send ime off
 send key return
-none_since "^browser: page $c icon " || fail "↩ on a search that finds no emoji picked one"
 send key escape
 expect '^browser: icon picker dismissed$' "escape didn't close the tab's icon picker"
-none_since "^browser: page $c icon " || fail "escape changed the tab's icon"
+none_since "^browser: page $c icon " "$committed" ||
+  fail "↩ on a search that finds no emoji, or escape, changed the tab's icon"
 # Remove Icon gives it back its favicon.
 post rightclick $(row 0)
 expect "^browser: menu shown $menu\$" "a right-click on the tab's row didn't offer Remove Icon"
@@ -434,9 +435,11 @@ expect '^browser: recent downloads shown 1$' \
   "resting on the Library button didn't show the recent download"
 # notes.txt's row shows the system's icon for its type, as Finder's or the file manager's.
 expect '^browser: download [0-9]* preview icon 52x52$' "notes.txt's row didn't show its type's icon"
+onto=$((step + 1))
 send move 24 $((height - 45))
 send move 120 $((height - 78))
-none_since '^browser: recent downloads hidden$' ||
+expect '^browser: recent downloads under the pointer$' "the pointer on the recent downloads didn't reach the UI" "$onto"
+none_since '^browser: recent downloads hidden$' "$onto" ||
   fail "the recent downloads went as the pointer came onto them"
 ../tools/window-screenshot.sh "$pid" "$out/recent-downloads.png" || fail "no window to capture"
 send move $page_point

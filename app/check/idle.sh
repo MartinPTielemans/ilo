@@ -64,7 +64,7 @@ idle_trace() {
   # The CPU it takes idle, over the minute after, as the trace's recording takes CPU of its own.
   idle_from="$(cpu) $(date +%s)"
   [ ! -d /proc ] || windows || cpu_each > "$out/idle/$1-cpu-from"
-  sleep 60
+  sleep 60 # the idle minute measured
   kill -0 "$pid" 2> /dev/null || gone
   # Where it went, by process kind, the most first.
   idle_where=

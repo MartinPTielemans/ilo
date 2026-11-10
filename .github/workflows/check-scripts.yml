@@ -9,15 +9,26 @@
 # and a parse error in a sourced run ends the check (#1267). This job builds bash 3.2 from GNU's
 # source once, caches it, and parses each script as the Mac would. A parse misses the bash 4
 # features that fail only when they run, so a grep finds those.
+# tools/check-lints.py checks the runs and the app's log lines they read: a "check.sh reads this
+# line" marker over a line no run reads, a bare sleep that says no window it waits out, and a
+# none_since straight after the input it's about (#2196).
+# The workflow lints the quarantine lists too (app/check/quarantine.sh), each night as well as on each change,
+# as a line goes stale with no change: one over 14 days old, or whose issue closed, fails it, and so
+# does an issue of a run red on main twice running that no line names a day on (#2197).
 name: Check scripts
 
 on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
   push:
     branches: ['**']
-    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
+      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**']
   pull_request:
-    paths: [app/check.sh, 'app/check/*.sh', .github/workflows/check-scripts.yml]
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
+      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**']
+  # 04:53 UTC, before the Check workflows' nights read the lists.
+  schedule:
+    - cron: '53 4 * * *'
 
 permissions: {}
 
@@ -83,3 +94,44 @@ jobs:
             status=1
           fi
           exit $status
+
+  lints:
+    name: lints
+    # The lints change only with a change, unlike the quarantine lists, which go stale.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 -I tools/check-lints.py
+
+  quarantine:
+    name: quarantine
+    if: github.event_name != 'schedule' || github.repository == 'MartinPTielemans/ilo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            app/check.sh
+            app/check
+          sparse-checkout-cone-mode: false
+
+      - name: Lint the quarantine lists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh app/check/quarantine.sh lint
+          for os in mac windows linux; do
+            sh app/check/quarantine.sh list "$os"
+            echo
+          done >> "$GITHUB_STEP_SUMMARY"

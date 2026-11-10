@@ -17,7 +17,6 @@ pub(crate) fn launch_layout_path() -> String {
 /// Quits the browser, saying what asked, as each way the browser ends logs a line that names it:
 /// this, Chromium's shutdown (main_delegate.cc) and, on the Mac, a quit Apple Event (host.mm).
 pub(crate) fn quit_because(why: &str) {
-    // check.sh reads this line.
     log!("browser: quit for {why}");
     unsafe { bc::bc_quit() };
 }
@@ -37,6 +36,10 @@ pub(crate) unsafe extern "C" fn quit_going_ahead(_: *mut c_void, restarting: boo
         if restarting { ", restarting" } else { "" }
     );
     shell::quit_goes_ahead();
+    // Chrome closes the core's windows as this returns (OnAppExiting), and destroys their surfaces
+    // a task before the core says each has closed (window_closed): the overlays over them go now.
+    #[cfg(target_os = "linux")]
+    gpui_linux::embedder_windows_going();
     restarting && relaunch_into_update()
 }
 
@@ -120,7 +123,6 @@ pub(crate) fn save_launch_picture(cx: &mut App) {
     // window, as a new profile's first launch does.
     if !unsafe { bc::bc_restore_windows() } {
         forget_launch_pictures();
-        // check.sh reads this line.
         log!("browser: launch picture not taken");
         return;
     }

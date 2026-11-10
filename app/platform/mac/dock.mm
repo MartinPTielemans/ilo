@@ -123,7 +123,6 @@ void Decide(uint64_t asked, bool colored, uint32_t color) {
     // Nil gives the Dock back macOS's live icon, which follows the style. macOS's drawing set as
     // the icon, or the named application icon, would stay in the style it was drawn in.
     NSApp.applicationIconImage = image;
-    // check.sh reads this line.
     fprintf(stderr, "browser: dock dot %s in %.1f ms\n", name.UTF8String,
             (CACurrentMediaTime() - start) * 1000);
   });

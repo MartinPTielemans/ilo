@@ -1735,6 +1735,8 @@ pub struct Shell {
     /// The tab whose Boost card is open, the tab whose page Zap is on, and where the card was drawn
     /// last, which the log says when it changes (boost.rs).
     boost_card: Option<u64>,
+    /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
+    boost_pending: Option<u64>,
     zapping: Option<u64>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
@@ -2093,6 +2095,7 @@ impl Shell {
             portrait_swatches_drawn: Default::default(),
             translate_mark_drawn: Rc::default(),
             boost_card: None,
+            boost_pending: None,
             zapping: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
@@ -3231,6 +3234,9 @@ impl Shell {
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
+        if self.boost_pending.take() == Some(tab) {
+            self.open_boost(cx);
+        }
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
         }

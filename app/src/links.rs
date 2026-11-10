@@ -36,14 +36,18 @@ pub(crate) unsafe extern "C" fn open_links(
     else {
         return;
     };
-    let shown = open_links_in(window.id, &urls);
-    let ui_view = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .find(|w| w.id == shown)
-            .map_or(window.ui_view, |w| w.ui_view)
-    });
-    unsafe { platform::host_activate(ui_view) };
+    // Only a window a link opened in comes to the front here. Under Wayland the launch's
+    // activation token brings one window forward, so a Little ilo window, which comes forward
+    // itself, would be left with none if the window in front took it.
+    if let Some(shown) = open_links_in(window.id, &urls) {
+        let ui_view = WINDOWS.with_borrow(|windows| {
+            windows
+                .iter()
+                .find(|w| w.id == shown)
+                .map_or(window.ui_view, |w| w.ui_view)
+        });
+        unsafe { platform::host_activate(ui_view) };
+    }
     // AppKit hands over the links that launched the browser all at once, so the first window
     // needn't wait for it to finish.
     finished_launching();
@@ -62,7 +66,6 @@ pub(crate) unsafe extern "C" fn launched_again(_: *mut c_void) {
     else {
         return;
     };
-    // check.sh reads this line.
     log!("browser: launched again: window {} to the front", window.id);
     unsafe { platform::host_activate(window.ui_view) };
 }
@@ -157,11 +160,11 @@ pub fn clear_browsing_data(profile: u64) -> bool {
 
 /// Opens `urls` as new tabs in `front`, the regular window in front, in the Space it shows, or in
 /// the user's it showed last if that's an agent's, which none of the user's tabs go in, else where
-/// a link rule sends them. The last one opened shows, and the window it's in is returned. Those
-/// for Little ilo, by default all of them, each open in one of their own once this is over, as
-/// it can be a window's opening.
-pub(crate) fn open_links_in(front: bc::bc_id, urls: &[String]) -> bc::bc_id {
-    let mut window = front;
+/// a link rule sends them. The last one opened shows, and the window it's in is returned, none if
+/// none opened there. Those for Little ilo, by default all of them, each open in one of their own
+/// once this is over, as it can be a window's opening, which comes to the front itself.
+pub(crate) fn open_links_in(front: bc::bc_id, urls: &[String]) -> Option<bc::bc_id> {
+    let mut window = None;
     let mut little = Vec::new();
     for url in urls {
         let routed = link_rules_host::route(url);
@@ -170,12 +173,12 @@ pub(crate) fn open_links_in(front: bc::bc_id, urls: &[String]) -> bc::bc_id {
             continue;
         }
         let (shown, tab, space) = open_link_in(front, url, routed);
-        window = shown;
+        window = Some(shown);
         if space == 0 {
             continue;
         }
         // check.sh reads this line.
-        log!("browser: link from another app {url}: tab {tab} in space {space} of window {window}");
+        log!("browser: link from another app {url}: tab {tab} in space {space} of window {shown}");
     }
     if !little.is_empty() {
         update_app_later(move |cx| open_links_in_little(front, little, cx));

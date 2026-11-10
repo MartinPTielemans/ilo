@@ -88,7 +88,6 @@ mod desktop {
             let (desktop, mut clicks) = match Desktop::open(browser::flatpak::in_flatpak()).await {
                 Ok(opened) => opened,
                 Err(error) => {
-                    // check.sh reads this line.
                     log!("browser: needs you has no notifications: {error}");
                     return;
                 }

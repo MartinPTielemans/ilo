@@ -577,9 +577,9 @@ target="$((x + 140)) $((y + h / 2))"
 send press $(row 0)
 send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto $target
-none_since '^browser: detent$' || fail "a row dragged onto the page clicked the trackpad"
 expect "^browser: drop targets for $a\$" "a row dragged onto the page didn't bring the targets"
 expect '^browser: drop target shown left$' "the target shown isn't the left one, nearest the tab"
+none_since '^browser: detent$' || fail "a row dragged onto the page clicked the trackpad"
 expect "^browser: panes $a\$" "the page under the targets isn't $a's, which the tab would join"
 expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
