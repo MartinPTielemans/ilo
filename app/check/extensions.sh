@@ -84,12 +84,14 @@ cat > "$extensions/popup/manifest.json" << 'EOF'
 EOF
 echo '<body style="width:240px;height:120px;display:grid;place-items:center;font:16px system-ui">
 the popup<script src="popup.js"></script></body>' > "$extensions/popup/popup.html"
-# Its badge says "0" as it loads and "1" once its page has painted, as site.sh's painted() tells,
-# for close_popup to say which a missed escape came after (#2241).
+# Its action's title says "(loading)" as its page loads and "(painted)" once it has painted, as
+# site.sh's painted() tells, for close_popup to say which a missed escape came after (#2241).
 cat > "$extensions/popup/popup.js" << 'EOF2'
-chrome.action.setBadgeText({text: "0"});
+chrome.action.setBadgeText({text: "1"});
+chrome.action.setTitle({title: "Check Popup (loading)"});
 let done = false;
-const call = () => done || (done = true, chrome.action.setBadgeText({text: "1"}));
+const call = () =>
+  done || (done = true, chrome.action.setTitle({title: "Check Popup (painted)"}));
 new PerformanceObserver((entries, observer) => {
   observer.disconnect();
   call();
@@ -219,20 +221,21 @@ close_popup() {
   fi
   expect '^browser: extension popup none$' "$how didn't close the extension's popup"
 }
-# Whether Check Popup's page had said it painted by the escape just sent, by its badge since the
-# popup showed, which shows only while its action is pinned.
+# Whether Check Popup's page had said it painted by the escape just sent, by its action's title
+# since the popup showed, which the app logs while its action is pinned or the Site Controls show.
 painted_by_escape() {
   awk -v popup="$popup" -v escape="^browser: drive $step: " '
     $0 == "browser: extension popup " popup { said = "not yet" }
-    /^browser: extension actions / {
-      pinned = index($0, popup) > 0
-      if (said && $0 ~ "^browser: extension actions (.* )?" popup ":1( |$)") said = "painted"
+    /^browser: extension titles / {
+      listed = index($0, popup "=") > 0
+      if (said && index($0, popup "=Check Popup (loading)")) said = "not yet"
+      if (said && index($0, popup "=Check Popup (painted)")) said = "painted"
     }
     $0 ~ escape {
       if (!said) print "with no popup shown"
       else if (said == "painted") print "its page painted"
-      else if (pinned) print "its page not yet painted"
-      else print "its page'"'"'s paint unseen, as its action isn'"'"'t pinned"
+      else if (listed) print "its page not yet painted"
+      else print "its page'"'"'s paint unseen, as its action isn'"'"'t listed"
       exit
     }' "$log"
 }
