@@ -135,8 +135,10 @@ jobs:
           key: check-mac-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
           restore-keys: check-mac-
 
+      # The keychain run needs the prod build, on the Release engine the night publishes, as it uses
+      # the real Keychain: asked for alone, the job builds that.
       - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: ./setup.sh prebuilt && ./build.sh
+        run: ./setup.sh prebuilt && ./build.sh ${{ inputs.runs == 'keychain' && 'prod' || '' }}
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v4
