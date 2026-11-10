@@ -341,6 +341,8 @@ impl Shell {
             return;
         };
         log!("browser: boost edit script {site}");
+        let changes = boosts::with(|boosts| boosts.reload(profile));
+        self.browser.show_boosts(changes, cx);
         self.browser.edit_file(&path, cx);
         cx.notify();
     }

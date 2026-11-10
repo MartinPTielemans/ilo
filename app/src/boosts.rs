@@ -391,6 +391,12 @@ impl Boosts {
             return Vec::new();
         }
         kept.sites.remove(site);
+        // Its script goes with it.
+        if let Err(error) = std::fs::remove_file(kept.script_path(site))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            crate::log!("couldn't delete the Boost script for {site}: {error}");
+        }
         if kept.off.remove(site) {
             kept.save_off();
         }
@@ -411,7 +417,10 @@ impl Boosts {
 
     /// `site`'s script, `Boosts/<site>.js` (#2297), for the user's editor, started with a line
     /// saying what it is if there's none. It runs only once the user turns it on in the browser.
+    /// A script is part of its site's Boost, so a site without one gets its CSS started too: the
+    /// Library lists it, and Delete… takes both.
     pub fn script_file(&mut self, profile: u64, site: &str) -> Option<PathBuf> {
+        self.file(profile, site)?;
         let kept = self.profiles.get_mut(&profile)?;
         let path = kept.script_path(site);
         if !path.exists() {

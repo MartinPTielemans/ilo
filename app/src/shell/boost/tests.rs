@@ -210,7 +210,7 @@ fn edit_css_opens_the_sites_file(cx: &mut TestAppContext) {
 }
 
 /// Edit Script…, under Edit CSS…, starts the site's script with a line saying it runs only once
-/// turned on, and opens it in the user's editor. It makes no CSS (#2297).
+/// turned on, and opens it in the user's editor. A site without a Boost gets one with it (#2297).
 #[gpui::test]
 fn edit_script_opens_the_sites_script(cx: &mut TestAppContext) {
     let (shell, host, folder, cx) = window(cx);
@@ -225,7 +225,10 @@ fn edit_script_opens_the_sites_script(cx: &mut TestAppContext) {
         .expect("Edit Script… started no script");
     assert!(start.starts_with("// example.com: "), "{start}");
     assert!(start.contains("once you turn it on"), "{start}");
-    assert_eq!(folder.boost("example.com"), None, "Edit Script… made CSS");
+    assert!(
+        folder.boost("example.com").is_some(),
+        "Edit Script… started no Boost for the site"
+    );
 
     // A second time it opens what the user wrote, unchanged.
     let path = folder.0.join("Boosts").join("example.com.js");
