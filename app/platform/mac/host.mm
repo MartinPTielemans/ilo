@@ -442,7 +442,7 @@ struct Overlay {
 };
 
 Overlay g_overlays[] = {Overlay("command bar"), Overlay("icon picker"), Overlay("theme picker"),
-                        Overlay("folder preview")};
+                        Overlay("folder preview"), Overlay("boost editor")};
 
 // The Site Controls: an overlay for its blur and shadow alone, outside g_overlays, so the tooltip
 // shows over it.
@@ -1748,6 +1748,42 @@ static void ToActiveSpace(NSWindow* window) {
   });
 }
 
+// The observer that takes MoveToActiveSpace off a window once it shows, while it waits.
+static char g_shown_watch;
+
+// As ToActiveSpace, but for a window coming on screen from another desktop or from hidden, it keeps
+// MoveToActiveSpace until the window shows. The window server moves a window as it orders it in,
+// and one slower than the main queue's next turn, as a check VM's on macOS 26, ordered it in on the
+// desktop it was left on, where macOS then took the user (#2268).
+static void ToActiveSpaceOnceShown(NSWindow* window) {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (id waiting = objc_getAssociatedObject(window, &g_shown_watch)) {
+    [center removeObserver:waiting];
+    objc_setAssociatedObject(window, &g_shown_watch, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  }
+  if (window.visible && (window.occlusionState & NSWindowOcclusionStateVisible)) {
+    ToActiveSpace(window);
+    return;
+  }
+  window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+  __weak NSWindow* weak = window;
+  void (^occluded)(NSNotification*) = ^(NSNotification*) {
+    NSWindow* shown = weak;
+    if (!shown || !(shown.occlusionState & NSWindowOcclusionStateVisible)) {
+      return;
+    }
+    shown.collectionBehavior &= ~NSWindowCollectionBehaviorMoveToActiveSpace;
+    [NSNotificationCenter.defaultCenter
+        removeObserver:objc_getAssociatedObject(shown, &g_shown_watch)];
+    objc_setAssociatedObject(shown, &g_shown_watch, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  };
+  id watch = [center addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                                 object:window
+                                  queue:nil
+                             usingBlock:occluded];
+  objc_setAssociatedObject(window, &g_shown_watch, watch, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 // Brings Little ilo's |window| of |browser| to the desktop shown, each time it comes on screen:
 // over a full-screen browser window there, as Arc's comes over a full-screen Arc window, or else
 // to that desktop. A window joins another's full-screen desktop only as its auxiliary, as
@@ -1766,7 +1802,7 @@ static void ToShownDesktop(Browser* browser, NSWindow* window) {
       break;
     }
   }
-  ToActiveSpace(window);
+  ToActiveSpaceOnceShown(window);
 }
 
 // The window on screen right behind |window| at the normal level, one with something to see, and

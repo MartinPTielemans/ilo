@@ -328,6 +328,9 @@ extern gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* wi
                                                      bool shown,
                                                      const gfx::Rect& work_area);
 extern void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window);
+// The same file: the Mini Player |window| once Chrome has laid out its controls, as it shows and
+// each time it's sized, for the core to give it its look.
+extern void (*g_browser_core_mini_player_laid_out)(VideoOverlayWindowViews* window);
 
 // chrome/browser/prefs/browser_prefs.cc: registers the core's local state prefs, app-wide ones,
 // such as where the Mini Player was left, with Chrome's.

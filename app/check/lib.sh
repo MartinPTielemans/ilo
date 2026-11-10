@@ -121,6 +121,30 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# A prod build or a released package sends its daily count to ilo's hosted server 30 s in, which
+# counted each check's launch on a fresh profile as a new user (#2303). Each such launch starts on
+# the profile $1 with the count off, as Settings › Privacy leaves it, which every release since
+# 0.1.10 honours, so its log says "daily count not sent: off" and nothing leaves. count.sh alone
+# sends counts, to a server of its own.
+count_off() {
+  mkdir -p "$1"
+  : > "$1/no-daily-count"
+}
+# The logs of launches that named a count server of the run's own, as count.sh's do.
+own_count_logs=
+# Fails the check if a launch's log says a count was sent and it named no server of the run's own:
+# that count reached the hosted server. check.sh asks after each run.
+counted_nowhere() {
+  for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
+    case " $own_count_logs " in
+      *" $counted "*) ;;
+      *)
+        log=$counted
+        fail "$counted says a daily count was sent with no server of the run's own: the launch needs count_off"
+        ;;
+    esac
+  done
+}
 # Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
@@ -556,7 +580,9 @@ recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
   unrecorded && return 0
-  said=$(tail -1 "${recording%.mp4}-record.log")
+  # A stream that ended by itself says why when it does, before the failure it leads to (#2280).
+  said=$(grep '^the stream ended by itself' "${recording%.mp4}-record.log" | tail -1)
+  [ -n "$said" ] || said=$(tail -1 "${recording%.mp4}-record.log")
   case "$said" in
   *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
   esac
@@ -623,18 +649,24 @@ row() {
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+# cpu <not> leaves out the processes whose command line holds <not>.
 cpu() {
   if windows; then
+    local not=
+    [ -z "${1:-}" ] || not=" -and \$_.CommandLine -notlike '*$1*'"
     powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
-      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*'$not } |
       ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
       -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
   elif [ -d /proc ]; then
     for p in $(pgrep -f -- "$procs"); do
+      # Chromium writes its processes' command lines over with spaces, others keep their NULs.
+      [ -z "${1:-}" ] || ! tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e "$1" || continue
       sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
     done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
   else
-    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' |
+      awk -v not="${1:-}" 'not == "" || !index($0, not)' | awk '{
       n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
       END { printf "%.2f %d\n", t, n }'
   fi

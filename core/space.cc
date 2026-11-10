@@ -898,7 +898,11 @@ void Space::ForgetOpener(bc_id tab) {
 }
 
 void Space::PlaceRows() {
+  // A window's own Space isn't synced, so its tabs have none.
+  const std::vector<bc_id> no_today;
+  const std::vector<bc_id>& today = own() ? no_today : today_;
   std::set<bc_id> rows(pinned_.begin(), pinned_.end());
+  rows.insert(today.begin(), today.end());
   std::erase_if(nodes_, [&](const auto& node) { return !rows.contains(node.first); });
   // By the folder they're in, or 0.
   std::map<bc_id, std::vector<Node*>> siblings;
@@ -908,6 +912,13 @@ void Space::PlaceRows() {
   for (const auto& [folder, nodes] : siblings) {
     Order(nodes);
   }
+  // The Today tabs are siblings of their own, apart from the pinned tabs. A tab pinned or unpinned
+  // keeps its id, and gets a place among its new siblings unless its old one fits there.
+  std::vector<Node*> today_nodes;
+  for (bc_id row : today) {
+    today_nodes.push_back(&nodes_[row]);
+  }
+  Order(today_nodes);
 }
 
 // static
