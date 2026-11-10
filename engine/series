@@ -55,6 +55,7 @@ ours/chromium-sync-agent-tabs.patch
 ours/chromium-sync-ilo-types.patch
 ours/chromium-sync-no-incoming-password-sharing.patch
 ours/chromium-core-agent-no-autofill.patch
+ours/chromium-sync-no-priority-preferences.patch
 ours/chromium-core-mini-player.patch
 ours/chromium-core-activate-tab.patch
 ours/chromium-core-cast-dialog.patch
