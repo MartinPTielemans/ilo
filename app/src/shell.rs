@@ -15,7 +15,7 @@ use std::{
 
 use gpui::{
     AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
-    FocusHandle, Focusable, FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
+    FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
     WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
@@ -607,6 +607,13 @@ use crate::tokens::shell::WINDOWS_BUTTON_GLYPH;
 use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
+
+/// Whether New Note is on, as Settings › Features keeps it for the app: on until the user turns
+/// it off. A window opened reads it, and `Shell::set_new_note` tells the open ones.
+#[derive(Clone, Copy)]
+pub struct NewNoteOn(pub bool);
+
+impl Global for NewNoteOn {}
 
 #[derive(Clone, Default)]
 struct Tab {
@@ -1816,6 +1823,9 @@ pub struct Shell {
     /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
     /// offers or opens a Little ilo window.
     little_windows: bool,
+    /// Whether New Note is on, as Settings › Features has it (`NewNoteOn`): off, nothing offers
+    /// or runs New Note or New Note Split.
+    new_note: bool,
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
@@ -2161,6 +2171,7 @@ impl Shell {
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
             little_windows: true,
+            new_note: cx.try_global::<NewNoteOn>().is_none_or(|on| on.0),
             lone_header: false,
             forced_tone: None,
             window_active: true,

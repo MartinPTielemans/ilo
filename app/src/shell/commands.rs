@@ -1553,6 +1553,8 @@ impl Shell {
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
             // Off in Settings › Features, ⌥⌘N does nothing.
             Command::NewLittleWindow if !self.little_windows => return,
+            // And ⌃⇧N, or the keys the user gave either.
+            Command::NewNote | Command::NewNoteSplit if !self.new_note => return,
             Command::NewBlankWindow => return self.browser.new_blank_window(cx),
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
@@ -2154,6 +2156,17 @@ impl Shell {
         (tab != 0 && web && !self.private).then_some(page.developer_mode)
     }
 
+    /// Settings › Features' New Note switch: off, the + menu, the command bar and its keys offer
+    /// neither New Note nor New Note Split. The tabs it opened stay.
+    pub fn set_new_note(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.new_note == on {
+            return;
+        }
+        self.new_note = on;
+        self.update_menus(cx);
+        cx.notify();
+    }
+
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
         if self.one_space() && !private_runs(command) {
@@ -2241,6 +2254,8 @@ impl Shell {
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
             Command::NewLittleWindow => self.little_windows,
+            Command::NewNote => self.new_note,
+            Command::NewNoteSplit => self.new_note && self.selected != 0,
             Command::NewFolder
             | Command::PasteUrlAsTab
             | Command::SearchTabs
@@ -2263,7 +2278,6 @@ impl Shell {
             | Command::ManageExtensions
             | Command::AddExtension
             | Command::ViewHistory
-            | Command::NewNote
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData
             | Command::KeyboardShortcuts
@@ -3073,6 +3087,52 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// Off in Settings › Features, nothing offers or runs New Note or New Note Split: not the +
+    /// menu, the command bar or ⌃⇧N. On again, ⌃⇧N opens one.
+    #[gpui::test]
+    fn new_note_off_is_in_no_menu_bar_or_key(cx: &mut gpui::TestAppContext) {
+        use gpui::{point, px};
+
+        let (shell, host) = shell_with_today(cx, vec![10]);
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(10, cx);
+            shell.set_new_note(false, cx);
+            shell.plus_menu(point(px(100.), px(700.)), cx);
+        });
+        let titles: Vec<String> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|(title, _)| title.to_string())
+            .collect();
+        assert!(titles.contains(&"New Split View".to_string()), "{titles:?}");
+        assert!(!titles.contains(&"New Note".to_string()), "{titles:?}");
+        shell.read_with(cx, |shell, cx| {
+            assert!(!shell.offers(Command::NewNote));
+            assert!(!shell.offers(Command::NewNoteSplit));
+            assert_eq!(shell.bar_name("New Note", Command::NewNote, cx), None);
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::NewNote, "keys", cx);
+            shell.run(Command::NewNoteSplit, "command bar", cx);
+        });
+        assert!(
+            host.notes.borrow().is_empty(),
+            "New Note ran while it's off"
+        );
+        shell.update(cx, |shell, cx| {
+            shell.set_new_note(true, cx);
+            shell.run(Command::NewNote, "keys", cx);
+        });
+        assert_eq!(
+            host.notes.borrow().len(),
+            1,
+            "New Note didn't run once on again"
         );
     }
 
