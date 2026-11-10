@@ -308,8 +308,8 @@ fi
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
 # from the start. The page's w opens one whose server never answers, so it never commits. Its URL
-# shows as Chrome's does for a tab a page opened and hasn't touched, once Chromium has the entry
-# it's on its way to, which comes before or after the tab's first report that it's loading (#2215).
+# shows, as Chrome's does for a tab a page opened, until the tab's first, empty document is touched,
+# when Chrome hides it. That's at once in most runs and not for seconds in some (#2215).
 # A page already waiting as the appearance changes keeps its colour on the Mac until it draws, so
 # each colour gets a page opened after it.
 first=$(today)
