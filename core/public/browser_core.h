@@ -2284,6 +2284,13 @@ BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
+// Whether the ad blocker also hides cookie notices, with the cookie-notice lists uBlock Origin
+// comes with and leaves off (EasyList's and its own): on unless the user turned it off. It goes
+// with ad blocking, so it's off wherever that is, a site the user turned blocking off on too. A
+// change has uBlock Origin in each profile read its lists again, the first turn on fetching the
+// two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
+BC_EXPORT bool bc_cookie_notices_hidden(void);
+BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
@@ -2696,6 +2703,11 @@ BC_EXPORT void bc_tab_capture_end(bc_id tab);
 // change. Then tab_permission_asked. The user's: agents get none, as an answer can give a site the
 // camera or where the user is.
 BC_EXPORT void bc_tab_answer_permission(bc_id tab, int answer);
+// Whether the tab's page's question, as tab_permission_asked last put it, asks only to show
+// notifications, with no click or key of the user's in the page behind it, as Chromium's request
+// says. The app holds that one quietly, a bell in the URL field, rather than as a card. False with
+// no question, or where the request doesn't say.
+BC_EXPORT bool bc_tab_permission_quiet(bc_id tab);
 
 // Answers the dialog tab_dialog put, if it's still asked: |accept| for its accept button, else its
 // cancel, with the text of its first field in |text| and of its password field in |password|,
@@ -2813,6 +2825,35 @@ BC_EXPORT void bc_profile_set_boost(bc_id profile, const char* site, const char*
 // tab_boost_zapped says what was under it, and an outline follows the pointer over what a press
 // would take. A new page ends it, with tab_boost_zap_ended. The user's, as bc_profile_set_boost.
 BC_EXPORT void bc_tab_boost_zap(bc_id tab, bool on);
+
+// A Boost's script, Boosts/<site>.js (#2297). It runs in the site's pages, in a world of their own,
+// from their next load, and only while its bytes are the ones the user turned on in this profile on
+// this computer: any change to the file turns it off. These say what the core makes of the bytes.
+#define BC_BOOST_SCRIPT_ON 0
+#define BC_BOOST_SCRIPT_NEW 1
+#define BC_BOOST_SCRIPT_CHANGED 2
+#define BC_BOOST_SCRIPT_TOO_LARGE 3
+// The largest script that runs, which the app names: "Script over 256 KB, off".
+#define BC_BOOST_SCRIPT_MAX_BYTES 262144
+
+// Gives |site| in |profile| the script the app read from its file, |size| bytes, or takes it away
+// with null |script|. Returns its BC_BOOST_SCRIPT_ state: the site's pages run it from their next
+// load only while it's BC_BOOST_SCRIPT_ON. The user's, as bc_profile_set_boost.
+BC_EXPORT int bc_profile_set_boost_script(bc_id profile, const char* site, const char* script,
+                                          size_t size);
+// The BC_BOOST_SCRIPT_ state of |script| for |site|, without giving it to the site's pages. The
+// app's copy of the text turned on, for the turn-on dialog's diff, is that text only while this
+// says BC_BOOST_SCRIPT_ON.
+BC_EXPORT int bc_profile_boost_script_state(bc_id profile, const char* site, const char* script,
+                                            size_t size);
+// Turn On, in the browser's own turn-on dialog, which only the user's click on Turn On Script…
+// opens: records |script|, the |size| bytes the dialog showed, as the script turned on for |site|,
+// and gives it to the site's pages from their next load. False for one over
+// BC_BOOST_SCRIPT_MAX_BYTES. The user's alone: no agent, page, sync, link or import calls it.
+BC_EXPORT bool bc_profile_turn_on_boost_script(bc_id profile, const char* site, const char* script,
+                                               size_t size);
+// Turn Off and Delete…: forgets the script turned on for |site|, which is then new, and off.
+BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.

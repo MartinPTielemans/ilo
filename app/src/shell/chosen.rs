@@ -7,7 +7,7 @@
 
 use gpui::{Context, MouseDownEvent, SharedString};
 
-use super::{Edit, NEW_FOLDER, Shell, What, clean_link};
+use super::{Edit, NEW_FOLDER, Shell, What};
 
 impl Shell {
     /// The rows that can be chosen, in the sidebar's order: the shown Space's pinned tabs and
@@ -188,7 +188,7 @@ impl Shell {
     pub(super) fn copy_chosen(&mut self, cx: &mut Context<Self>) {
         let rows = self.chosen_in_order();
         let links: Vec<String> = (self.tabs_of(&rows).into_iter())
-            .map(|tab| clean_link(&self.url(tab)))
+            .map(|tab| self.copied_link(&self.url(tab)))
             .filter(|link| !link.is_empty())
             .collect();
         if !links.is_empty() {
