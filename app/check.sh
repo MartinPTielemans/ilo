@@ -286,8 +286,11 @@ for run in ${*:-$runs}; do
   rm -f "$profile_dir/Link rules"
   # And without the command bar's picks, which put a command picked first among equal matches
   # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
-  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
-  rm -f "$profile_dir/Command bar picks"
+  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953). Each profile keeps
+  # its own in its folder; the one file beside them is where they were before, which the app moves
+  # into each at launch. A check VM keeps the profile between checks, so missing them there put
+  # its earlier checks' picks first in pinned's "clear" (#2267).
+  rm -f "$profile_dir"/*/"Command bar picks" "$profile_dir/Command bar picks"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
