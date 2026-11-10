@@ -277,9 +277,11 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # But for the frames its hover card's picture draws. The tabs a switch hides are pictured once the
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
-# preview. That's one run of frames, 0.1 s at most, once the app asks for the tab's picture,
-# which may answer only after the tab is shown again, so a step that keeps it hidden past 0.4 s
-# sees one. Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
+# preview. That's one run of frames once the app asks for the tab's picture, which may answer
+# only after the tab is shown again, so a step that keeps it hidden past 0.4 s sees one. It's about
+# 0.1 s, and 0.13 s on a slow runner (#2239), so under 0.25 s passes: a page that went on running
+# would run through the whole stretch, the 0.4 s before the picture at least. Any other frame
+# while hidden fails. The hidden stretch starts at whichever comes first,
 # the core showing another tab or the page's "hidden", which can reach the log after the picture
 # (#1678), so a picture between the two counts and one from before them doesn't.
 ran_hidden() {
@@ -293,7 +295,8 @@ ran_hidden() {
     END { print was + 0, title }' "$log")
   case $seen in
   *" visible 0") ;;
-  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9]) ;;
+  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9] | "1 visible "*" in "1[0-9][0-9]) ;;
+  "1 visible "*" in "2[0-4][0-9]) ;;
   *) fail "$1: $seen" ;;
   esac
 }
