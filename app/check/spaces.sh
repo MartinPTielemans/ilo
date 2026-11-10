@@ -528,7 +528,8 @@ send dismiss
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
 # the window only the look of the Space it shows, the first. $1 is the appearance and $2 its
-# button's x in the picker's window, which holds the 13 wide arrow left of the card.
+# button's x in the picker's window, which holds the 13 wide arrow left of the card. With open as
+# $3 the picker stays open.
 appear() {
   send click $brush_x $card_y
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
@@ -540,6 +541,7 @@ appear() {
     ../tools/window-screenshot.sh "$pid" "$out/library-theme-picker.png" ||
       fail "no window to capture"
   fi
+  [ "${3:-}" != open ] || return 0
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the brush's theme picker"
   none_since '^browser: library hidden$' || fail "escape in the card's theme picker closed the Library"
@@ -560,7 +562,11 @@ rename_card() {
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
 appear light 191.3
-appear dark 231.7
+appear dark 231.7 open
+# Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
+# takes a click, as a press while it fades leaves the showing that goes, not the next (#2237).
+post key escape
+appear light 191.3
 rename_card library-rename.png
 appear automatic 150.9
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
