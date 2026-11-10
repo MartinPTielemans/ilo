@@ -86,6 +86,15 @@ async function load(p, url) {
   return Date.now() - t;
 }
 
+// A capture of the window, tried twice: Chromium under Xvfb sometimes can't take one, which loses
+// that picture and nothing else.
+async function shot(p, name) {
+  for (let i = 0; i < 2; i++) {
+    try { await p.page.screenshot({ path: join(out, name), timeout: 15000 }); return true; } catch (e) { log('capture', name, String(e.message).split('\n')[0]); await sleep(1000); }
+  }
+  return false;
+}
+
 async function metrics(cdp) {
   const { metrics } = await cdp.send('Performance.getMetrics');
   return Object.fromEntries(metrics.map((m) => [m.name, m.value]));
@@ -188,9 +197,9 @@ async function record() {
     for (const [k, v] of Object.entries(r.picks)) out[k] = { path: globalThis.__ILO_ARRANGE__.find(v.target, 'path'), fp: globalThis.__ILO_ARRANGE__.find(v.target, 'fp'),
       refPath: v.ref ? globalThis.__ILO_ARRANGE__.find(v.ref, 'path') : null, refFp: v.ref ? globalThis.__ILO_ARRANGE__.find(v.ref, 'fp') : null };
     return out; })()`);
-  await p.page.screenshot({ path: join(out, 'before.png') });
   mkdirSync(dirname(recordedFile), { recursive: true });
   writeFileSync(recordedFile, JSON.stringify(rec, null, 2));
+  await shot(p, 'before.png');
   log('recorded', Object.keys(rec.picks).join(' '), JSON.stringify(rec.today));
   await p.close();
 }
@@ -268,7 +277,7 @@ async function scenario(name, arrangement, rec, opts = {}) {
         runtimeCallbacks: s0 && Object.fromEntries(Object.keys(s1).map((k) => [k, s1[k] - s0[k]])),
       };
     }
-    if (opts.capture) await p.page.screenshot({ path: join(out, opts.capture) });
+    if (opts.capture) await shot(p, opts.capture);
     // What still works, each where it's drawn now: the page's field, its video, and a link, the
     // moved element's own when it has one, else one elsewhere on the page. The control runs the
     // same, with |opts.link| saying which link it compares with.
