@@ -723,6 +723,21 @@ pub(crate) fn finish_opening(
         // Auto-archive at launch can come before there's a toast to show its note in.
         show_archive_note(cx);
     }
+    // A mode's foot bar takes the main button's accent from the window it shows over.
+    let palette = |window: u64, cx: &App| {
+        let shell = WINDOWS.with_borrow(|windows| {
+            (windows.iter().find(|w| w.id == window)).map(|w| w.shell.clone())
+        });
+        Some(shell?.upgrade()?.read(cx).palette())
+    };
+    if let Some(foot_bar) = browser::foot_bar::open(
+        Rc::new(FootBarHost),
+        move |window, cx| palette(window, cx).unwrap_or_default(),
+        cx,
+    ) && let Ok(view) = foot_bar.update(cx, |_, window, _| ns_view(window))
+    {
+        unsafe { platform::host_add_foot_bar(view) };
+    }
     if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)
         && let Ok(view) = capture.update(cx, |_, window, _| ns_view(window))
     {
