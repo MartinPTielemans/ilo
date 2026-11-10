@@ -28,21 +28,22 @@
 
 serve
 perf_dir="$out/perf"
-# #2317, not for merge: user-mode stack traces for chrome.exe's heap allocations, ilo's and Chrome's
-# browser alike, which perf_dissect has UMDH read.
-perf_debuggers="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
-if [ -n "${MSYSTEM:-}" ]; then
-  if [ -x "$perf_debuggers/gflags.exe" ]; then
-    # Two calls: gflags takes a flag or the database's size, not both. The default database
-    # filled before 20 tabs.
-    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe +ust || echo "perf: gflags failed"
-    MSYS2_ARG_CONV_EXCL='*' "$perf_debuggers/gflags.exe" /i chrome.exe /tracedb 512 || echo "perf: gflags tracedb failed"
-  else
-    echo "perf: no Debugging Tools in $perf_debuggers: $(ls "/c/Program Files (x86)/Windows Kits/10" 2>&1 | tr '\n' ' ')"
-  fi
-fi
+# #2317, not for merge: ETW heap tracing of every chrome.exe started from here on, ilo's and
+# Chrome's browser alike, with VirtualAlloc's events, each with its stack, recorded by WPR from each
+# browser's launch to its 20 tabs and read by perf_heap. UMDH read no stacks: the browser process is
+# on the Segment Heap, which its stack database doesn't cover.
+perf_wpr=/c/Windows/System32/wpr.exe
+perf_wpt="/c/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit"
 rm -rf "$perf_dir"
 mkdir -p "$perf_dir"
+if [ -n "${MSYSTEM:-}" ]; then
+  {
+    MSYS2_ARG_CONV_EXCL='*' "$perf_wpr" -heaptracingconfig chrome.exe enable
+    MSYS2_ARG_CONV_EXCL='*' "$perf_wpr" -profiles
+    ls "$perf_wpt"
+  } > "$perf_dir/wpr-setup.log" 2>&1 ||
+    echo "perf: wpr setup failed: $(tail -3 "$perf_dir/wpr-setup.log")"
+fi
 profile_dir="$PWD/$perf_dir/profile"
 mkdir -p "$profile_dir"
 cat > "$out/site/perf.html" << 'HTML'
@@ -152,14 +153,38 @@ perf_dissect() {
   [ -z "${MSYSTEM:-}" ] || DISSECT_VMMAP=$(cygpath -w "$PWD/$out/vmmap/vmmap64.exe")
   DISSECT_VMMAP=${DISSECT_VMMAP:-} python3 -I check/dissect.py "$perf_dir/memory-$1.json" "$perf_dir" \
     "dissect-$1" || echo "perf: dissect $1 failed"
-  # #2317, not for merge: the browser process's NT heap by allocating stack, as UMDH reads it.
-  if [ -n "${MSYSTEM:-}" ] && [ -x "$perf_debuggers/umdh.exe" ]; then
-    umdh_pid=$(cut -d' ' -f1 "$perf_dir/dissect-$1-browser-pid.txt" 2> /dev/null)
-    [ -z "$umdh_pid" ] ||
-      _NT_SYMBOL_PATH="srv*$(cygpath -w "$PWD/$out/symbols")*https://msdl.microsoft.com/download/symbols" \
-        timeout 900 "$perf_debuggers/umdh.exe" -p:"$umdh_pid" -f:"$(cygpath -w "$PWD/$perf_dir/umdh-$1.txt")" \
-        > "$perf_dir/umdh-$1.log" 2>&1 || echo "perf: umdh $1 failed"
-  fi
+  perf_heap "$1"
+}
+# #2317, not for merge: starts recording heap and VirtualAlloc events with their stacks, to a file.
+perf_heap_start() {
+  [ -n "${MSYSTEM:-}" ] || return 0
+  MSYS2_ARG_CONV_EXCL='*' "$perf_wpr" -start Heap -start VirtualAllocation -filemode \
+    > "$perf_dir/wpr-start.log" 2>&1 ||
+    echo "perf: wpr start failed: $(cat "$perf_dir/wpr-start.log")"
+}
+# Stops the recording at $1's dissect and sums what the browser process holds by allocating stack.
+perf_heap() {
+  [ -n "${MSYSTEM:-}" ] || return 0
+  heap_pid=$(cut -d' ' -f1 "$perf_dir/dissect-$1-browser-pid.txt" 2> /dev/null)
+  heap_etl="$perf_dir/heap-$1.etl"
+  MSYS2_ARG_CONV_EXCL='*' timeout 600 "$perf_wpr" -stop "$(cygpath -w "$PWD/$heap_etl")" \
+    > "$perf_dir/wpr-stop-$1.log" 2>&1 || {
+    echo "perf: wpr stop $1 failed: $(cat "$perf_dir/wpr-stop-$1.log")"
+    return 0
+  }
+  ls -l "$heap_etl" >> "$perf_dir/wpr-stop-$1.log"
+  mkdir -p "$out/symbols"
+  symbols="$(cygpath -w "$PWD/$out/symbols")"
+  # ilo's own code, Browser.dll, has its PDB from this job's build; the OS's come from Microsoft.
+  _NT_SYMBOL_PATH="$(cygpath -w "$PWD/target/release");srv*$symbols*https://msdl.microsoft.com/download/symbols" \
+    _NT_SYMCACHE_PATH="$symbols-cache" MSYS2_ARG_CONV_EXCL='*' timeout 1200 "$perf_wpt/xperf.exe" \
+    -i "$(cygpath -w "$PWD/$heap_etl")" -o "$(cygpath -w "$PWD/$perf_dir/heap-$1-dump.txt")" -symbols \
+    -a dumper > "$perf_dir/xperf-$1.log" 2>&1 ||
+    echo "perf: xperf $1 failed: $(tail -3 "$perf_dir/xperf-$1.log")"
+  [ -z "$heap_pid" ] || [ ! -s "$perf_dir/heap-$1-dump.txt" ] ||
+    python3 -I check/heap_etw.py "$perf_dir/heap-$1-dump.txt" "$heap_pid" "$perf_dir/heap-$1.txt" ||
+    echo "perf: heap $1 didn't read"
+  gzip -f "$perf_dir/heap-$1-dump.txt" || true
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
@@ -247,6 +272,7 @@ perf_row launch-held "Launch, the page held for uBlock Origin" \
 
 log="$perf_dir/session.log"
 step=0
+perf_heap_start
 rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
 started=$(date +%s)
 BROWSER_DRIVE=1 BROWSER_URL="$page?p1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
@@ -435,6 +461,7 @@ else
   else
     sleep 15 # Chrome's first 15 s, which warm its caches for the runs measured
     chrome_quit
+    perf_heap_start
     chrome_launch c1 || fail "Chrome didn't stay open the second time: $(tail -3 "$perf_dir/chrome.log")"
     started=$(($(date +%s) - 5))
     perf_until $((started + 30))
