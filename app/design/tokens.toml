@@ -1209,6 +1209,12 @@ update-banner = 24.0
 update-banner-gap = 6.0
 update-banner-glyph = 14.0
 update-banner-open = 86.0
+# The safe-start card over the footer (#2345, ours), under the update banner, in its gaps: this
+# far in at its top and foot, its title's lines and its detail's this tall, all wrapped on the
+# rows' title column.
+safe-start-pad = 8.0
+safe-start-title-line = 18.0
+safe-start-detail-line = 14.0
 # The Clear divider's line, 0.15 (Arc).
 divider = 0.15
 # The edges under the favorites while the list is scrolled and at its foot while rows are hidden

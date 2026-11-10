@@ -50,6 +50,7 @@ pub(crate) unsafe extern "C" fn private_session_ended(_: *mut c_void, profile: b
 
 pub(crate) unsafe extern "C" fn stopping(_: *mut c_void) {
     log!("browser: stopping");
+    safe_start_host::stopping();
     // On Windows, a ready update installs once the app has gone.
     #[cfg(not(target_os = "linux"))]
     unsafe {
