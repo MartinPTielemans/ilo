@@ -7,6 +7,7 @@
 # names, logs every request that reached it, which is the answer to whether a request was sent.
 # Usage: python3 -I spike.py <chrome> <out directory>
 
+import fcntl
 import http.server
 import json
 import os
@@ -94,11 +95,15 @@ class DevTools:
         self.from_chrome, from_chrome_w = os.pipe()
 
         def fds():
-            os.dup2(to_chrome_r, 3)
-            os.dup2(from_chrome_w, 4)
+            # Above 9 first, so neither end lands on the other's number, then onto 3 and 4,
+            # which pass_fds keeps open past subprocess's closing of the rest.
+            read_end = fcntl.fcntl(to_chrome_r, fcntl.F_DUPFD, 10)
+            write_end = fcntl.fcntl(from_chrome_w, fcntl.F_DUPFD, 10)
+            os.dup2(read_end, 3)
+            os.dup2(write_end, 4)
 
         log = open(f"{out}/chrome.log", "w")
-        self.proc = subprocess.Popen(args, preexec_fn=fds, pass_fds=(to_chrome_r, from_chrome_w),
+        self.proc = subprocess.Popen(args, preexec_fn=fds, pass_fds=(3, 4),
                                      stdout=subprocess.DEVNULL, stderr=log)
         os.close(to_chrome_r)
         os.close(from_chrome_w)
