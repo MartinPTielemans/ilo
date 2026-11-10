@@ -105,12 +105,13 @@ if [ "${1:-}" = --steps ]; then
   await "title [0-9]* value abcde$" "$at"
   await "command bar shown" "$at"
   # The bar is a child window of the browser window's, and under X11 this leg runs in sway's
-  # Xwayland, whose window manager sends a child window's X focus back to the browser window
-  # (#1646). The bar lost it once, just as it opened over the composing page, and closed (#2365).
-  # So under X11 the leg checks only that the page kept what it composed. check.sh's keys run
+  # Xwayland, whose window manager sends a child window's X focus back to the browser window, as
+  # #1646 measured for the password offer. The bar lost it once, just as it opened over the
+  # composing page, and closed. So under X11 the leg checks only that the page kept what it
+  # composed, until #2365, which says what running the rest here would take. check.sh's keys run
   # composes in the bar under Xvfb's X11, through the driver's input method.
   if [ "$mode" = x11 ]; then
-    echo "skip (x11): composing in the command bar: sway's Xwayland sends child windows' X focus back (#1646)" |
+    echo "skip (x11): composing in the command bar: sway's Xwayland sends the bar's X focus back (#2365)" |
       tee "$out/$mode.skipped" >&2
     # Escape closes the bar if it's still open, and does nothing in the page if it isn't.
     key $'\e'
