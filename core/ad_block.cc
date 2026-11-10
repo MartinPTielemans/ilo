@@ -93,6 +93,17 @@ constexpr int kSchemes = URLPattern::SCHEME_HTTP | URLPattern::SCHEME_HTTPS;
 // only ChromeOS's kiosk apps are sent, so the listener does nothing else (app/fetch-ublock.sh).
 constexpr char kReadyEvent[] = "runtime.onRestartRequired";
 
+// Its cookie-notice lists, in or out as the user's setting says, through a name of our own among
+// its advanced settings, which it reads afresh and follows as it changes (app/fetch-ublock.sh).
+// Before the settings are read there's none, and it keeps the lists it had.
+constexpr char kCookieNotices[] = "iloCookieNotices";
+
+// Whether the settings have been read, so kCookieNotices says what the user chose.
+bool& CookieNoticesRead() {
+  static bool read = false;
+  return read;
+}
+
 // The longest a page waits for it, so one that never gets ready doesn't keep pages from loading.
 constexpr base::TimeDelta kLongestHold = base::Seconds(10);
 
@@ -104,9 +115,13 @@ policy::PolicyBundle Settings() {
     map.Set(name, policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
             policy::POLICY_SOURCE_ENTERPRISE_DEFAULT, std::move(value), nullptr);
   };
-  set("advancedSettings",
-      base::Value(base::ListValue().Append(
-          base::ListValue().Append("autoUpdatePeriod").Append(kUpdatePeriodHours))));
+  base::ListValue advanced;
+  advanced.Append(base::ListValue().Append("autoUpdatePeriod").Append(kUpdatePeriodHours));
+  if (CookieNoticesRead()) {
+    advanced.Append(base::ListValue().Append(kCookieNotices).Append(
+        UserSettings().cookie_notices_hidden ? "true" : "false"));
+  }
+  set("advancedSettings", base::Value(std::move(advanced)));
   const base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
   const std::string lists = command_line.HasSwitch(kListsSwitch)
                                 ? command_line.GetSwitchValueASCII(kListsSwitch)
@@ -129,7 +144,7 @@ policy::PolicyBundle Settings() {
   return bundle;
 }
 
-// Its settings for every profile, which never change while the browser runs.
+// Its settings for every profile, which change only as kCookieNotices does.
 class Policy : public policy::ConfigurationPolicyProvider {
  public:
   Policy() { UpdatePolicy(Settings()); }
@@ -444,6 +459,11 @@ void ApplyAdBlocking() {
       registrar->DisableExtension(kId, {extensions::disable_reason::DISABLE_USER_ACTION});
     }
   }
+}
+
+void ApplyCookieNotices() {
+  CookieNoticesRead() = true;
+  PolicyProvider()->RefreshPolicies(policy::PolicyFetchReason::kUnspecified);
 }
 
 std::optional<bool> AdBlockingOnSite(content::WebContents* contents) {

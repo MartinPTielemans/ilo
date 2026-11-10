@@ -59,6 +59,7 @@ constexpr Switch kSwitches[] = {
     {"restore_windows", &Settings::restore_windows},
     {"warn_moving_profiles", &Settings::warn_moving_profiles},
     {"ad_blocking", &Settings::ad_blocking},
+    {"cookie_notices_hidden", &Settings::cookie_notices_hidden},
     {"relay_calls", &Settings::relay_calls},
     {"link_previews", &Settings::link_previews},
     {"auto_picture_in_picture", &Settings::auto_picture_in_picture},
@@ -142,6 +143,9 @@ void Apply(const std::vector<Entity>& entities) {
   }
   if (changed("ad_blocking")) {
     ApplyAdBlocking();
+  }
+  if (changed("cookie_notices_hidden")) {
+    ApplyCookieNotices();
   }
   if (changed("relay_calls")) {
     ApplyWebRtc();

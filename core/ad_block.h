@@ -34,6 +34,11 @@ void AddAdBlockHold(content::NavigationThrottleRegistry& registry);
 // settings are read and whenever the user changes them.
 void ApplyAdBlocking();
 
+// Has it hide cookie notices or not, as UserSettings().cookie_notices_hidden says, once the
+// settings are read and whenever the user changes them: it reads its managed settings again and
+// adds or drops the lists, in each profile it runs in.
+void ApplyCookieNotices();
+
 // Whether it blocks on the site of |contents|'s page, or nullopt where that's not the user's to
 // change there: a page that isn't http(s), a private window, or with it off in the profile.
 std::optional<bool> AdBlockingOnSite(content::WebContents* contents);

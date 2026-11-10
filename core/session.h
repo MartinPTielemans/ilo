@@ -194,6 +194,8 @@ struct Settings {
   bool unload_idle_tabs = true;
   // Whether the browser blocks ads and trackers, in every profile.
   bool ad_blocking = true;
+  // Whether it also hides cookie notices, with uBlock Origin's own cookie-notice lists.
+  bool cookie_notices_hidden = true;
   // Whether the browser sends its crash reports (crash_reports.h).
   bool send_crash_reports = false;
   // Whether WebRTC goes only through TURN relays in every profile, proxy or not (webrtc.h).

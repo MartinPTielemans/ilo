@@ -1646,6 +1646,16 @@ void bc_set_ad_blocking(bool on) {
   browser_core::SessionChanged();
 }
 
+bool bc_cookie_notices_hidden(void) {
+  return browser_core::UserSettings().cookie_notices_hidden;
+}
+
+void bc_set_cookie_notices_hidden(bool on) {
+  browser_core::UserSettings().cookie_notices_hidden = on;
+  browser_core::ApplyCookieNotices();
+  browser_core::SessionChanged();
+}
+
 bool bc_relay_calls(void) {
   return browser_core::UserSettings().relay_calls;
 }

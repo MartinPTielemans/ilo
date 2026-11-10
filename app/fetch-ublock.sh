@@ -2,8 +2,8 @@
 # Downloads the uBlock Origin ublock.ini names, checked against its hash, into .deps/ublock, adds
 # our key to its manifest so its id doesn't depend on where the app is, takes out the timers that
 # wake an idle browser and the reload as it first starts, has it say when it's ready to block, for the
-# core to hold the first pages until then, keeps its cache uncompressed (below), and prints its
-# folder.
+# core to hold the first pages until then, keeps its cache uncompressed, has it follow the core's
+# setting for its cookie-notice lists (below), and prints its folder.
 # Nothing in the download runs here: it's unzipped into a folder of its own and only read.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -14,7 +14,7 @@ fail() {
 }
 
 # What starts each file this changes, as GPL 3 asks of a changed file.
-changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, it says when it's ready to block, and its cache isn't compressed."
+changed="// Changed by ilo's app/fetch-ublock.sh: its housekeeping doesn't wake an idle browser, it doesn't reload as it first starts, it says when it's ready to block, its cache isn't compressed, and its cookie-notice lists follow the browser's setting."
 
 # Puts $3, which may be several lines or none, in place of the line $2 of uBlock Origin's file $1,
 # and fails unless that line is there once, so a new release is read again before it ships.
@@ -41,7 +41,8 @@ dir=$PWD/.deps/ublock/$sha256
 if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifest.json" ||
   [ "$(head -n 1 "$dir/js/tab.js")" != "$changed" ] ||
   [ "$(head -n 1 "$dir/js/start.js")" != "$changed" ] ||
-  [ "$(head -n 1 "$dir/js/background.js")" != "$changed" ]; then
+  [ "$(head -n 1 "$dir/js/background.js")" != "$changed" ] ||
+  [ "$(head -n 1 "$dir/js/storage.js")" != "$changed" ]; then
   mkdir -p .deps/ublock
   rm -rf "$dir" "$dir.part" "$dir.zip"
   echo "fetch-ublock: downloading uBlock Origin $version" >&2
@@ -88,6 +89,53 @@ if [ ! -f "$dir/manifest.json" ] || ! grep -qF "\"key\": \"$key\"" "$dir/manifes
   # machines with little (#2069). Uncompressed it peaked at 555 MB. It reads a value cached
   # compressed as before.
   edit js/background.js '    cacheStorageCompression: true,' '    cacheStorageCompression: false,'
+  # Its own cookie-notice lists, EasyList's and its own that it ships off, in or out of the lists it
+  # uses as the core's iloCookieNotices among its advanced settings says (core/ad_block.cc, #2323):
+  # as it loads the lists it uses, and again as the user changes the setting. It reads the managed
+  # settings afresh, as its own copy is the last launch's. With none, as before the core has read
+  # the user's settings or under an admin's own policy, it keeps the lists it had.
+  IFS= read -r -d '' follow << 'JS' || true
+µb.iloCookieNoticeLists = [ 'fanboy-cookiemonster', 'ublock-cookies-easylist' ];
+µb.iloCookieNotices = async function(reload) {
+    if ( chrome.storage.managed instanceof Object === false ) { return; }
+    const advanced = await new Promise(resolve => {
+        chrome.storage.managed.get('advancedSettings', bin => {
+            void chrome.runtime.lastError;
+            resolve(bin instanceof Object ? bin.advancedSettings : undefined);
+        });
+    });
+    const pair = Array.isArray(advanced)
+        ? advanced.find(a => Array.isArray(a) && a[0] === 'iloCookieNotices')
+        : undefined;
+    if ( pair === undefined ) { return; }
+    const on = pair[1] === 'true';
+    const selected = new Set(this.selectedFilterLists);
+    const lists = this.iloCookieNoticeLists;
+    if ( lists.every(key => selected.has(key) === on) ) { return; }
+    for ( const key of lists ) {
+        if ( on ) { selected.add(key); } else { selected.delete(key); }
+    }
+    // Set as saveSelectedFilterLists would, but keeping the lists it drops in its cache, so they're
+    // there when the user turns them on again.
+    this.selectedFilterLists = Array.from(selected);
+    await Promise.all([
+        vAPI.storage.set({ selectedFilterLists: this.selectedFilterLists }),
+        this.selfieManager.destroy(),
+    ]);
+    ubolog('ilo: cookie-notice lists ' + (on ? 'on' : 'off'));
+    if ( reload ) { await this.loadFilterLists(); }
+};
+chrome.storage.onChanged.addListener((changes, area) => {
+    if ( area !== 'managed' || changes.advancedSettings === undefined ) { return; }
+    µb.isReadyPromise.then(( ) => µb.iloCookieNotices(true));
+});
+JS
+  edit js/storage.js 'µb.saveSelectedFilterLists = function(newKeys, append = false) {' \
+    "$follow"$'\n''µb.saveSelectedFilterLists = function(newKeys, append = false) {'
+  edit js/storage.js '        this.selectedFilterLists = bin.selectedFilterLists;' \
+    $'        this.selectedFilterLists = bin.selectedFilterLists;\n        return this.iloCookieNotices(false);'
+  edit js/storage.js '    this.saveSelectedFilterLists(this.autoSelectRegionalFilterLists(lists));' \
+    $'    this.saveSelectedFilterLists(this.autoSelectRegionalFilterLists(lists));\n    return this.iloCookieNotices(false);'
   mv "$dir.part/uBlock0.chromium" "$dir"
   rm -rf "$dir.part"
   # Earlier versions go.

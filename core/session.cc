@@ -594,6 +594,7 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("favorites_scope", ScopeName(saved.settings.favorites_scope))
                            .Set("unload_idle_tabs", saved.settings.unload_idle_tabs)
                            .Set("ad_blocking", saved.settings.ad_blocking)
+                           .Set("cookie_notices_hidden", saved.settings.cookie_notices_hidden)
                            .Set("send_crash_reports", saved.settings.send_crash_reports)
                            .Set("relay_calls", saved.settings.relay_calls)
                            .Set("link_previews", saved.settings.link_previews)
@@ -871,6 +872,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
     }
     saved.settings.unload_idle_tabs = settings->FindBool("unload_idle_tabs").value_or(true);
     saved.settings.ad_blocking = settings->FindBool("ad_blocking").value_or(true);
+    saved.settings.cookie_notices_hidden =
+        settings->FindBool("cookie_notices_hidden").value_or(true);
     saved.settings.send_crash_reports =
         settings->FindBool("send_crash_reports").value_or(false);
     saved.settings.relay_calls = settings->FindBool("relay_calls").value_or(false);
@@ -1243,6 +1246,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     }
     // The profile the browser started in loaded before the settings were read.
     ApplyAdBlocking();
+    ApplyCookieNotices();
     ApplyAutoPictureInPicture(/*changed=*/false);
     ApplyWebRtc();
     ApplyAppearance();

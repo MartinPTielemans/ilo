@@ -69,6 +69,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Mini Player" => &["picture in picture", "pip"],
         concat!("Little ", env!("APP_NAME")) => &["little arc", "small window"],
         "Block ads and trackers" => &["ad blocker", "content blocker"],
+        "Hide cookie notices" => &["cookie banners", "consent"],
         "Relay calls" => &["webrtc", "ip leak"],
         "Reopen your windows and tabs" => &["restore session"],
         "Page zoom" => &["text size", "font size"],

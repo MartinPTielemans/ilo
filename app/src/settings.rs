@@ -2389,7 +2389,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// Privacy: ad blocking, with cookie notices while it's on, and the sites it's off on,
+    /// whether sites may ask to send notifications, whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
     fn privacy(
@@ -2400,11 +2401,11 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         let look = &self.look;
-        let ad_blocking = unsafe { bc::bc_ad_blocking() };
+        let blocking = unsafe { bc::bc_ad_blocking() };
         let ad_blocking = self.toggle(
             "ad blocking",
             "Block ads and trackers",
-            ad_blocking,
+            blocking,
             set_ad_blocking,
             accent,
             cx,
@@ -2434,7 +2435,23 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
+        // Its lists are the ad blocker's, so it goes with it: off wherever blocking is (#2323).
+        let cookies = blocking.then(|| {
+            let hidden = unsafe { bc::bc_cookie_notices_hidden() };
+            let switch = self.toggle(
+                "cookie notices",
+                "Hide cookie notices",
+                hidden,
+                set_cookie_notices_hidden,
+                accent,
+                cx,
+            );
+            let line = "uBlock Origin's EasyList and uBlock filters Cookie Notices lists. Off on a \
+                        site where ad blocking is off.";
+            setting(look, "Hide cookie notices", Some(line.into()), vec![switch])
+        });
+        let blocking_rows = std::iter::once(ad_blocking).chain(cookies).collect();
+        let mut blocks = vec![Block::Rows(blocking_rows), Block::Rows(vec![prompts])];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -4622,6 +4639,10 @@ fn set_whats_new(shown: bool, _: &mut App) {
 
 fn set_ask_where_to_save(ask: bool, _: &mut App) {
     unsafe { bc::bc_set_ask_where_to_save(ask) };
+}
+
+fn set_cookie_notices_hidden(on: bool, _: &mut App) {
+    unsafe { bc::bc_set_cookie_notices_hidden(on) };
 }
 
 fn set_notification_prompts(on: bool, _: &mut App) {
