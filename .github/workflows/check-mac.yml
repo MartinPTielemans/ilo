@@ -24,8 +24,9 @@
 #   Dia was measured over (#1554).
 # Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
 # adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
-# keychain asked for alone, which builds the prod build it needs. perf measures, so it stays on the
-# owner's Mac (here ilo's memory came 48 to 103 % over Chrome's); widevine and tab-drag are Linux's.
+# keychain asked for alone, which builds the prod build it needs. perf and adblock-cost measure, so
+# they stay on the owner's Mac (here perf had ilo's memory 48 to 103 % over Chrome's); widevine and
+# tab-drag are Linux's.
 name: Check on macOS
 
 on:
@@ -74,7 +75,8 @@ jobs:
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
     name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}
     runs-on: macos-26
-    # The default runs take about 100 min here, after about 10 of setting up.
+    # The default runs take about 70 min here, after about 6 of setting up; "all" adds the named
+    # runs, adblock-cost's two passes over the sites among them.
     timeout-minutes: 240
     permissions:
       contents: read
