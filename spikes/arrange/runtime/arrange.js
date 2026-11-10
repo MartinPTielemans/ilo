@@ -327,6 +327,7 @@
   addEventListener('resize', () => { if (T) T.callbacks.resize++; layoutAll('resize'); });
 
   function start() {
+    if (T) T.started = performance.now();
     mo.observe(document, { childList: true, subtree: true });
     layoutAll('start');
   }

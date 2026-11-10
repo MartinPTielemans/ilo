@@ -43,6 +43,12 @@ const WATCH = `(() => {
     .observe(document, { attributes: true, childList: true, subtree: true, attributeFilter: undefined });
 })();`;
 
+// The page's frames from its first, in its own world, for a runtime that starts late: its own
+// log begins only when it does. Stops 3 s after load, as the runtime's does.
+const FRAMES = `(() => { const f = (window.__spikeFrames = []); let until = Infinity;
+  const tick = (ts) => { f.push(ts); if (ts < until) requestAnimationFrame(tick); }; requestAnimationFrame(tick);
+  addEventListener('load', () => { until = performance.now() + 3000; }); })();`;
+
 async function open(browser, arrangement) {
   const profile = mkdtempSync(join(tmpdir(), 'ilo-arrange-'));
   const ctx = await chromium.launchPersistentContext(profile, {
@@ -66,7 +72,21 @@ async function open(browser, arrangement) {
   });
   await cdp.send('Performance.enable');
   const prelude = `globalThis.__ILO_ARRANGEMENT__ = ${JSON.stringify(arrangement || { changes: [] })};\n`;
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: prelude + RUNTIME, worldName: WORLD, runImmediately: true });
+  if (arrangement && arrangement.at === 'commit') {
+    // As the core's Boosts run their script: once the navigation commits, a message from the
+    // browser process, which the renderer runs when it gets to it, not before the page's first
+    // script.
+    await page.addInitScript(FRAMES);
+    cdp.on('Page.frameNavigated', async ({ frame }) => {
+      if (frame.parentId || !/^https?:/.test(frame.url)) return;
+      try {
+        const { executionContextId } = await cdp.send('Page.createIsolatedWorld', { frameId: frame.id, worldName: WORLD });
+        await cdp.send('Runtime.evaluate', { expression: prelude + RUNTIME, contextId: executionContextId });
+      } catch (e) { errors.push('commit inject: ' + String(e.message).slice(0, 120)); }
+    });
+  } else {
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: prelude + RUNTIME, worldName: WORLD, runImmediately: true });
+  }
   await page.addInitScript(WATCH);
   const inWorld = async (expression) => {
     for (let i = 0; i < 50 && world == null; i++) await sleep(100);
@@ -170,17 +190,21 @@ function findExpr(_, d) {
 const copyExpr = (d) => `(() => { const A = globalThis.__ILO_ARRANGE__; const el = (${findExpr('A', JSON.stringify(d))}); return !!(el && A.isCopy && A.isCopy(el)); })()`;
 
 // Frames that showed the site's own layout between a change's element appearing and its placement.
-function flashes(stats) {
+function flashes(stats, pageFrames) {
   const out = {};
-  for (const [id, c] of Object.entries(stats.changes || {})) {
+  // A runtime that started late counts from the page's own frame log, and an element it found
+  // at its start may have been drawn in every frame before.
+  const frames = pageFrames || stats.frames;
+  for (const [id, c0] of Object.entries(stats.changes || {})) {
+    const c = pageFrames && c0.seen - stats.started < 50 ? { ...c0, seen: -Infinity } : c0;
     if (c.applied == null) { out[id] = { applied: false }; continue; }
     // Frames that began after the element was seen and before the one its placement landed in.
     const end = c.frame != null ? c.frame : c.applied;
     // A held element shows nothing of the site's own layout once it's hidden, only a gap.
     const shownTill = c.held != null ? (c.heldFrame != null ? c.heldFrame : c.held) : end;
-    const between = stats.frames.filter((f) => f > c.seen && f < shownTill).length;
-    const gap = c.held != null ? stats.frames.filter((f) => f >= shownTill && f < end).length : 0;
-    out[id] = { applied: true, framesBetween: between, framesHidden: gap, seenMs: Math.round(c.seen), appliedMs: Math.round(c.applied) };
+    const between = frames.filter((f) => f > c.seen && f < shownTill).length;
+    const gap = c.held != null ? frames.filter((f) => f >= shownTill && f < end).length : 0;
+    out[id] = { applied: true, framesBetween: between, framesHidden: gap, seenMs: Math.round(c0.seen), startedMs: Math.round(stats.started), appliedMs: Math.round(c.applied) };
   }
   return out;
 }
@@ -265,7 +289,7 @@ async function scenario(name, arrangement, rec, opts = {}) {
       r.state = await p.inWorld('globalThis.__ILO_ARRANGE__.state()');
       r.loadSelfMs = Math.round(s.loadSelfMs * 100) / 100;
       r.geometryReads = s.geometryReads;
-      r.flash = flashes(s);
+      r.flash = flashes(s, arrangement.at === 'commit' ? await p.page.evaluate(() => window.__spikeFrames) : null);
     }
     const w0 = await p.page.evaluate(() => ({ ...window.__spikeWatch }));
     // The page's own updates over 10 s, and whether the arrangement still holds after them.
@@ -354,6 +378,8 @@ async function measure() {
   // The same by fingerprint, which finds each element by what it says rather than where it sits.
   results.runs.push(await scenario('all/place-fp', { strategy: 'place', finder: 'fp', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   // Hiding an element until the one it goes beside arrives, for the frames that show it in place.
+  // Started at commit, as the core's Boosts start theirs, rather than before the page's first script.
+  results.runs.push(await scenario('all/place-commit', { strategy: 'place', at: 'commit', finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   results.runs.push(await scenario('all/place-hold', { strategy: 'place', hold: 1500, finder: 'path', test: true, changes: changesOf(rec, Object.keys(ways)) }, rec, { checks: false }));
   writeFileSync(join(out, 'measure.json'), JSON.stringify(results, null, 2));
   log('done', results.runs.length, 'runs');
