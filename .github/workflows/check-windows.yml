@@ -24,6 +24,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-windows-${{ github.ref }}
@@ -397,6 +402,7 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -424,7 +430,10 @@ jobs:
             ":"*" $run "*)
               start=$SECONDS
               status=0
-              timeout 20m ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              limit=20m
+              [ "$run" != perf ] || limit=40m
+              timeout "$limit" ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               # By the app's path, never by image name, which would reach any other Chrome. Before
               # the move, as Windows won't move a folder a process still has a file open in.
               pkill -9 -f "$(cygpath -m "$PWD/build/Browser")/" || true
