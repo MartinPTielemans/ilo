@@ -74,12 +74,21 @@
 @property(strong, nonatomic) NSHashTable<NSView*>* awaited;
 // How many switches have kept pages, so the limit on keeping them ends only the last one's.
 @property(nonatomic) NSUInteger holds;
+// The pages let go, transparent until they leave the window, and how many let-gos have been, so
+// they leave only after the last.
+@property(strong, nonatomic) NSHashTable<NSView*>* going;
+@property(nonatomic) NSUInteger lets;
 // What the panes are drawn at, about the centre of their frames (ScalePages); 0 is 1.
 @property(nonatomic) double pageScale;
 - (void)layOutPage;
 - (void)scalePages;
 - (void)letLeavingGo;
+- (void)sendGoingAway;
 @end
+
+// How long after the last let-go the pages let go leave the window. In 24 runs of the
+// switch-frames check on a check VM, none left a hole as they left 250 ms after (#2248).
+constexpr base::TimeDelta kGoneAfter = base::Milliseconds(250);
 
 @implementation BrowserCoreWindowView
 @synthesize uiView = _uiView;
@@ -90,6 +99,8 @@
 @synthesize leaving = _leaving;
 @synthesize awaited = _awaited;
 @synthesize holds = _holds;
+@synthesize going = _going;
+@synthesize lets = _lets;
 @synthesize pageScale = _pageScale;
 
 - (BOOL)isFlipped {
@@ -100,11 +111,14 @@
 // shows until those draw.
 - (NSView*)hitTest:(NSPoint)point {
   NSView* hit = [super hitTest:point];
-  if (!hit || self.leaving.count == 0) {
+  if (!hit || (self.leaving.count == 0 && self.going.count == 0)) {
     return hit;
   }
   BOOL leaving = NO;
   for (NSView* page in self.leaving) {
+    leaving = leaving || [hit isDescendantOf:page];
+  }
+  for (NSView* page in self.going) {
     leaving = leaving || [hit isDescendantOf:page];
   }
   if (!leaving) {
@@ -112,7 +126,7 @@
   }
   NSPoint local = [self convertPoint:point fromView:self.superview];
   for (NSView* subview in [self.subviews reverseObjectEnumerator]) {
-    if (![self.leaving containsObject:subview]) {
+    if (![self.leaving containsObject:subview] && ![self.going containsObject:subview]) {
       if (NSView* under = [subview hitTest:local]) {
         return under;
       }
@@ -121,13 +135,56 @@
   return self;
 }
 
+// The pages left turn transparent, and leave the window a while after the last let-go. Taking one
+// out of the window as the page shown first draws left the page area with neither for a frame in
+// about one switch in 16 on a slow Mac, and one turned transparent instead never did (#2248). A
+// page left is already hidden, so it draws nothing meanwhile.
 - (void)letLeavingGo {
+  if (!self.going) {
+    self.going = [NSHashTable weakObjectsHashTable];
+  }
   for (NSView* page in self.leaving.allObjects) {
     if (page.superview == self) {
-      [page removeFromSuperview];
+      page.alphaValue = 0;
+      [self.going addObject:page];
     }
   }
   [self.leaving removeAllObjects];
+  [self sendGoingAway];
+}
+
+- (void)sendGoingAway {
+  if (self.going.count == 0) {
+    return;
+  }
+  const NSUInteger lets = ++self.lets;
+  __weak BrowserCoreWindowView* weak_self = self;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, base::BindOnce(^{
+        BrowserCoreWindowView* holder = weak_self;
+        if (holder.lets != lets) {
+          return;
+        }
+        // Not while a switch keeps pages, whose own let-go comes next.
+        if (holder.leaving.count > 0) {
+          [holder sendGoingAway];
+          return;
+        }
+        for (NSView* page in holder.going.allObjects) {
+          if (page.superview == holder) {
+            [page removeFromSuperview];
+          }
+        }
+        [holder.going removeAllObjects];
+        // check.sh's runs read this: what's left is the pages shown.
+        NSUInteger pages = 0;
+        for (NSView* subview in holder.subviews) {
+          pages += subview != holder.uiView && subview != holder.ring;
+        }
+        fprintf(stderr, "browser: switch's pages let go left the window, %lu views in it\n",
+                static_cast<unsigned long>(pages));
+      }),
+      kGoneAfter);
 }
 
 // After AppKit's pass rather than by autoresizing, which would resize the page twice: resizing the
@@ -388,8 +445,17 @@ void ShowPages(views::Widget* widget,
   NSMutableSet<NSView*>* arrivals = [NSMutableSet set];
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
-    if (!hidden && pane.widget && page_view.superview != view) {
+    // A page let go and still in the window, transparent, shows only what it last drew too.
+    if (!hidden && pane.widget &&
+        (page_view.superview != view || [view.going containsObject:page_view])) {
       [arrivals addObject:page_view];
+    }
+  }
+  NSMutableSet<NSView*>* back = [NSMutableSet set];
+  for (NSView* page in view.going.allObjects) {
+    if ([staying containsObject:page]) {
+      [view.going removeObject:page];
+      [back addObject:page];
     }
   }
   const bool arriving = arrivals.count > 0;
@@ -397,7 +463,9 @@ void ShowPages(views::Widget* widget,
   // drawn, as do the ones an earlier switch left while its pages haven't.
   NSWindow* window = view.window;
   for (NSView* subview in [view.subviews copy]) {
-    if (subview == view.uiView || subview == view.ring || [staying containsObject:subview]) {
+    // The pages let go leave the window on their own, as one taken out sooner can leave a hole.
+    if (subview == view.uiView || subview == view.ring || [staying containsObject:subview] ||
+        [view.going containsObject:subview]) {
       continue;
     }
     const bool kept = [view.leaving containsObject:subview];
@@ -438,8 +506,10 @@ void ShowPages(views::Widget* widget,
     record.page = page_view;
     record.devtools = devtools_view;
     Unhide(page_view, hidden);
+    page_view.alphaValue = 1;
     if (devtools_view) {
       Unhide(devtools_view, hidden);
+      devtools_view.alphaValue = 1;
       RoundCorners(devtools_view, corner_radius, kAllCorners);
       record.pageInDevTools = pane.devtools->page_frame.ToCGRect();
       RoundCorners(page_view, corner_radius,
@@ -450,10 +520,11 @@ void ShowPages(views::Widget* widget,
     } else {
       RoundCorners(page_view, corner_radius, kAllCorners);
     }
-    if (page_view.superview != view) {
+    if (page_view.superview != view ||
+        ([back containsObject:page_view] && [arrivals containsObject:page_view])) {
       if (lowest_leaving) {
         [view addSubview:page_view positioned:NSWindowBelow relativeTo:lowest_leaving];
-      } else {
+      } else if (page_view.superview != view) {
         [view addSubview:page_view];
       }
     }
@@ -476,6 +547,7 @@ void ShowPages(views::Widget* widget,
     record.page = panel_view;
     record.insets = insets(side_panel->frame);
     Unhide(panel_view, hidden);
+    panel_view.alphaValue = 1;
     RoundCorners(panel_view, corner_radius,
                  panel_view.isFlipped ? kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner
                                       : kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner);
@@ -557,6 +629,8 @@ void ShowPageIn(views::Widget*,
     return;
   }
   Unhide(page_view, /*hidden=*/false);
+  // A page a window let go a moment ago is still transparent there.
+  page_view.alphaValue = 1;
   RoundCorners(page_view, corner_radius, kAllCorners);
   if (page_view.superview != holder) {
     [holder addSubview:page_view];

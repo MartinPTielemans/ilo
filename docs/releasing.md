@@ -42,6 +42,7 @@ From that squash until the release's branch is cut at its version commit, main t
    - **On main:** Linux and Windows build nightly, so dispatch both on it: `gh workflow run engine-linux.yml --ref main` and `gh workflow run engine-windows-cross.yml --ref main`, with main at that commit. Then wait for their releases `engine-linux-<commit>` and `engine-windows-<commit>`. The Mac engine must exist for the commit too.
    - **On a release branch:** dispatch the same two with `--ref release/0.<minor>`. The Mac's is built on the owner's MacBook from the branch's commit, with `engine/build.sh`, then `tools/mac-engine-publish.sh`. `tools/mac-nightly.sh` builds main only.
 3. **Check the commit: the gate is green outside the quarantine list.** Check on macOS, Windows and Linux must pass on the release's commit.
+   - **Switch-frames runs five times on the Mac,** and all five must pass, since a hole it catches came in about one run in two (#2248).
    - **The only reds allowed** are the runs, or steps of runs, in `app/check/quarantine.<os>`. They still run, but they don't fail a check, and each check's summary lists them under its runs.
    - **Any other red stops the release.** Fix it, or quarantine it under an open issue (`app/check/quarantine.sh` says how), before tagging. Never accept it at the gate.
    - **A quarantine line lasts 14 days.** Check scripts fails on a line older than that, or on one whose issue has closed.
