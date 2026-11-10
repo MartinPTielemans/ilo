@@ -122,6 +122,8 @@ pub(super) struct Recorder {
     /// Whether Show Space Header last kept a lone unnamed Space's name row, or Hide Space Header
     /// hid it.
     pub(super) lone_header: Cell<Option<bool>>,
+    /// Portrait Mode can put a page on the desktop's picture, as the Mac's host can.
+    pub(super) desktop_picture: Cell<bool>,
     /// The share services it lists for any page.
     pub(super) share_services: RefCell<Vec<SharedString>>,
     /// The system has a share sheet of its own.
@@ -165,6 +167,8 @@ pub(super) struct Recorder {
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
     /// Each profile's Library › Agents past tasks, as the file keeps them.
     pub(super) agent_history: RefCell<HashMap<u64, String>>,
+    /// The answers for good, by the key they're kept under, each its site and whether it may.
+    pub(super) agent_answers: RefCell<HashMap<String, Vec<(String, bool)>>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -525,6 +529,10 @@ impl Browser for Recorder {
         self.record(format!("media {tab} {action:?}"));
     }
 
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        self.record(format!("volume {tab} {volume:.2}"));
+    }
+
     fn cast(&self, tab: u64, _: &mut App) {
         self.record(format!("cast {tab}"));
     }
@@ -871,12 +879,23 @@ impl Browser for Recorder {
         Some("en".into())
     }
 
+    /// English, and Dutch, as a user who reads both.
+    fn reads_language(&self, language: &str) -> bool {
+        matches!(language, "en" | "nl")
+    }
+
     fn language_name(&self, language: &str) -> SharedString {
         match language {
             "es" => "Spanish".into(),
             "en" => "English".into(),
+            "nl" => "Dutch".into(),
             other => SharedString::from(other.to_owned()),
         }
+    }
+
+    fn keep_always_translated(&self, languages: &[SharedString], _: &mut App) {
+        let languages: Vec<&str> = languages.iter().map(AsRef::as_ref).collect();
+        self.record(format!("always translated {}", languages.join(",")))
     }
 
     fn translate(&self, tab: u64, from: &str, to: &str, _: &mut App) {
@@ -1027,6 +1046,31 @@ impl Browser for Recorder {
         self.profile_folders.borrow().get(&profile).cloned()
     }
 
+    fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
+        for change in changes {
+            self.record(format!(
+                "boost {} {}: {}",
+                change.profile,
+                change.site,
+                change.css.trim_end()
+            ));
+        }
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        self.record(format!("zap {tab} {on}"))
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("edit {name}"))
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.record(format!("show {name}"))
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         self.agent_history
             .borrow()
@@ -1039,6 +1083,20 @@ impl Browser for Recorder {
         self.agent_history
             .borrow_mut()
             .insert(profile, text.to_string());
+    }
+
+    fn agent_answers(&self, key: &str, _: &App) -> Vec<(String, bool)> {
+        self.agent_answers
+            .borrow()
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn revoke_agent_answer(&self, key: &str, site: &str, _: &mut App) {
+        if let Some(answers) = self.agent_answers.borrow_mut().get_mut(key) {
+            answers.retain(|(each, _)| each != site);
+        }
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {
@@ -1561,6 +1619,26 @@ impl Browser for Recorder {
         ));
     }
 
+    fn capture_portrait(
+        &self,
+        tab: u64,
+        frame: Bounds<Pixels>,
+        radius: f32,
+        background: crate::capture::portrait::Background,
+        _: &mut App,
+    ) {
+        let (x, y) = (f32::from(frame.origin.x), f32::from(frame.origin.y));
+        let (width, height) = (f32::from(frame.size.width), f32::from(frame.size.height));
+        let background = background.name();
+        self.record(format!(
+            "capture portrait {tab} at {x} {y} {width} {height} {radius} on {background}"
+        ));
+    }
+
+    fn desktop_picture_offered(&self) -> bool {
+        self.desktop_picture.get()
+    }
+
     fn page_picture(&self, tab: u64, request: u64, cx: &mut App) {
         self.record(format!("picture {tab}"));
         if let Some((shell, picture)) = self.pictures.borrow().clone() {
@@ -1698,6 +1776,11 @@ impl Browser for Recorder {
             "new window for {tab} {at}, held at {} {}",
             grab.x, grab.y
         ))
+    }
+
+    /// The window's top left at 100, 50 on the screen.
+    fn screen_point(&self, at: Point<f32>) -> Option<Point<f32>> {
+        Some(gpui::point(at.x + 100., at.y + 50.))
     }
 
     fn tab_window(&self, tab: u64) -> u64 {

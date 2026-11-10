@@ -424,7 +424,7 @@ none_since "^browser: selected" || fail "Undo after ⇧⌘T showed another tab"
 d=$(today | cut -d' ' -f3)
 t=$(today | cut -d' ' -f1)
 post rightclick $(row 2)
-expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Unmute, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below")\$" "a right-click on a Today row didn't show Arc's tab menu"
+expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Unmute, New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below")\$" "a right-click on a Today row didn't show Arc's tab menu"
 ../tools/window-screenshot.sh "$pid" "$out/tab-menu.png" || fail "no window to capture"
 send choose Duplicate
 expect '^browser: command duplicate-tab via tab menu$' "Duplicate didn't run"
@@ -447,9 +447,12 @@ expect "^browser: menu bar View: \(Appearance › [^,]*, \)*Hide Sidebar$maybe, 
 send menubar Tabs
 expect "^browser: menu bar Tabs: .*, Pin Tab$maybe, .*, Reveal Tab in Sidebar$maybe, Focus Sidebar, Clear Today" \
   "Tabs doesn't name ⌘D Pin Tab for a Today tab, or lacks Reveal Tab in Sidebar, Focus Sidebar or Clear Today"
+send menubar File
+expect "^browser: menu bar File: .*, Open Command Bar$maybe, New Profile (disabled), Close Window" \
+  "File has no New Profile after Open Command Bar, dimmed while the Space has tabs"
 send menubar Spaces
-expect "^browser: menu bar Spaces: New Space…$maybe, Rename Space$maybe, Change Profile › Default (checked)$maybe, Change Profile › New Profile (disabled), Next Space" \
-  "Spaces has no Change Profile after Rename Space, with the Space's profile checked"
+expect "^browser: menu bar Spaces: New Space…$maybe, Edit Theme…$maybe, Rename Space$maybe, Change Profile › Default (checked)$maybe, Change Profile › New Profile (disabled), Next Space" \
+  "Spaces has no Edit Theme… after New Space…, or Change Profile after Rename Space, with the Space's profile checked"
 send menubar Archive
 expect "^browser: menu bar Archive: .*, View Archive…$maybe, " "Archive has no View Archive…"
 send menubar Window
@@ -475,7 +478,7 @@ if [ "$(uname)" = Darwin ]; then
 fi
 # Archive Tabs Below shows the tab right-clicked first, so none below it loads on the way out.
 post rightclick $(row 1)
-expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below")\$" "a right-click on the top Today row didn't show Arc's tab menu"
+expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below")\$" "a right-click on the top Today row didn't show Arc's tab menu"
 send choose "$(cased 'Archive Tabs Below')"
 expect '^browser: command close-tabs-below via tab menu$' "Archive Tabs Below didn't run"
 expect_lists "$a" "$t" "after Archive Tabs Below"
@@ -574,9 +577,9 @@ expect '^browser: remove archived [0-9][0-9]*$' "Delete from Archive didn't run"
 expect "^browser: archive $((archived - 1)) tabs\$" "Delete from Archive didn't take the tab out"
 none_since '^browser: library hidden$' || fail "Delete from Archive closed the Library"
 # A right-click on the Archived Tabs section offers Clear Archive, as Arc's does, which asks as
-# the menu's does, and ⌘Z brings the tabs back. It's the fourth of five, with Agents (#1080) last,
-# 100 apart and centred 5 above the column's middle.
-archive_section="56 $((height / 2 + 95))"
+# the menu's does, and ⌘Z brings the tabs back. It's the fourth of six, with Agents (#1080) and
+# Boosts (#695) last, 100 apart and centred 5 above the column's middle.
+archive_section="56 $((height / 2 + 45))"
 post rightclick $archive_section
 expect "^browser: menu shown $(cased 'Clear Archive')\$" \
   "a right-click on the Archived Tabs section didn't offer Clear Archive"
@@ -901,15 +904,15 @@ send key a
 asks "http://localhost:$port" "the site reset in Site Controls didn't ask again"
 send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
 expect "^browser: title $r granted\$" "Allow didn't grant the page after the reset"
-# The footer's … menu is Arc's without Boost's items, and All Site Settings… opens Chrome's for the
-# site.
+# The footer's … menu is Arc's, with New Boost… and View Boosts… (#695), and All Site Settings… opens
+# Chrome's for the site.
 away
 send move $sidebar_point
 expect '^browser: sidebar tools shown$' "the URL field's buttons didn't fade in"
 send click $site_controls_point
 expect '^browser: site controls settled$' "the Site Controls didn't open for their … menu"
 send click 298 $(footer_y)
-more_menu=$(cased 'Clear Cache, Clear Cookies, Manage Extensions…, Add Extension…, All Site Settings…')
+more_menu=$(cased 'Clear Cache, Clear Cookies, New Boost…, View Boosts…, Manage Extensions…, Add Extension…, All Site Settings…')
 expect "^browser: menu shown $more_menu\$" "the … menu didn't list Arc's items"
 send choose "$(cased 'All Site Settings…')"
 expect "^browser: site controls run $(cased 'All Site Settings…')\$" "All Site Settings… didn't run"

@@ -937,6 +937,8 @@ LRESULT CALLBACK HolderProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
 void MenuForegroundChanged(HWND root, bool ours);
 // Has the link preview leave as another of the app's windows comes to the front (defined below).
 void LinkPreviewForegroundChanged(HWND front);
+// Ends a Little ilo window's giving way once another app's window is in front (defined below).
+void OtherAppInFront();
 
 // The watchers, which Windows tells of each window that comes to the front.
 void (*g_key_window_changed)(void*) = nullptr;
@@ -991,6 +993,8 @@ void CALLBACK ForegroundChanged(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWO
   MenuForegroundChanged(GetAncestor(hwnd, GA_ROOT), ours);
   if (ours) {
     LinkPreviewForegroundChanged(hwnd);
+  } else if (hwnd) {
+    OtherAppInFront();
   }
   g_active = ours;
   if (ours && g_key_window_changed) {
@@ -1025,6 +1029,12 @@ void AppActivating(bool active, DWORD thread) {
     if (g_resigning_active) {
       g_resigning_active();
     }
+  }
+  // The foreground event says so too, but an out-of-context WinEvent doesn't wake Chromium's
+  // message pump, so an idle browser hears it only at its next message, seconds on. This one,
+  // sent, wakes it.
+  if (!active && !OurThread(thread)) {
+    OtherAppInFront();
   }
 }
 
@@ -2344,6 +2354,30 @@ int TopEdge(HWND root) {
   return GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 }
 
+// Whether |at|, in |root|'s client area, is over a split view's handle, which the UI draws in the
+// window's margin over each of its pages, shell.split-controls' width (32) across and centred over
+// the page (design/tokens.toml: kept in step with it). The top edge leaves it to the UI, which
+// would otherwise have only the margin's last 2 points of it (#2114).
+bool OverSplitHandle(HWND root, POINT at) {
+  const double half = 16 * Scale(root);
+  int pages = 0;
+  bool over = false;
+  for (HWND child = GetWindow(root, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+    wchar_t name[18] = {};
+    if (!IsWindowVisible(child) || !GetClassNameW(child, name, std::size(name)) ||
+        wcsncmp(name, L"Chrome_WidgetWin_", 17) != 0) {
+      continue;
+    }
+    RECT page;
+    GetWindowRect(child, &page);
+    MapWindowPoints(HWND_DESKTOP, root, reinterpret_cast<POINT*>(&page), 2);
+    ++pages;
+    // A stacked split's lower pages are centred under the top one, whose handle is there too.
+    over |= at.y < page.top && std::abs(at.x - (page.left + page.right) / 2.0) <= half;
+  }
+  return pages > 1 && over;
+}
+
 // What the frame has at |at|, on the screen, over the UI: the top edge, which resizes, or the UI's
 // maximize button, which Windows shows Snap layouts over. 0 where it's the UI's own.
 int FrameHit(HWND root, POINT at) {
@@ -2355,7 +2389,7 @@ int FrameHit(HWND root, POINT at) {
   RECT client{};
   GetClientRect(root, &client);
   const int edge = TopEdge(root);
-  if (!IsZoomed(root) && at.y >= 0 && at.y < edge) {
+  if (!IsZoomed(root) && at.y >= 0 && at.y < edge && !OverSplitHandle(root, at)) {
     return at.x < 2 * edge                   ? HTTOPLEFT
            : at.x >= client.right - 2 * edge ? HTTOPRIGHT
                                              : HTTOP;
@@ -2432,27 +2466,43 @@ HWND WindowBehind(HWND root) {
 // back meanwhile and the window giving way.
 HHOOK g_giving_way = nullptr;
 HWND g_giving_way_root = nullptr;
+// Whether the other app's window has come in front since.
+bool g_gave_way = false;
 // Counts the give-ways, so a fallback's timer leaves a later one be.
 int g_give_ways = 0;
 
 // Handing the foreground on as a closing window hides activates the UI's holder, whose focus takes
 // the activation back for the closing window, and Windows activates the app's next window as that
 // one is destroyed, in front of the other app's (#2025). Chromium hides a closing window and
-// destroys it in a task of its own, which can come after a task posted as it hid, so none of ilo's
-// windows activates until the window is destroyed or shows again.
+// destroys it in a task of its own, which can come after a task posted as it hid. The other app
+// takes the foreground only once its thread reads its messages, which can be after the window is
+// destroyed, and an activation of ilo's meanwhile still wins it (#2136). So none of ilo's windows
+// activates, but for the user's own click, until both the window is destroyed and the other app's
+// window is in front, or the window shows again.
 LRESULT CALLBACK HoldActivation(int code, WPARAM wparam, LPARAM lparam) {
-  if (code == HCBT_ACTIVATE) {
+  if (code == HCBT_ACTIVATE && !reinterpret_cast<CBTACTIVATESTRUCT*>(lparam)->fMouse) {
     return 1;
   }
   return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
-// Lets ilo's windows activate again once the window that gave way is gone or back.
+// Lets ilo's windows activate again once the window is gone and the other app in front, or the
+// window is back.
 void StopGivingWay() {
   if (g_giving_way) {
     UnhookWindowsHookEx(std::exchange(g_giving_way, nullptr));
   }
   g_giving_way_root = nullptr;
+  g_gave_way = false;
+}
+
+// Once DestroyWindow, which activates the app's next window, is over.
+void StopGivingWayLater() {
+  Later([give_way = g_give_ways] {
+    if (give_way == g_give_ways) {
+      StopGivingWay();
+    }
+  });
 }
 
 // A Little ilo window going with the keyboard leaves another app's window right behind it in front
@@ -2473,22 +2523,41 @@ void LittleHiding(HWND root) {
     g_giving_way = SetWindowsHookExW(WH_CBT, HoldActivation, nullptr, GetCurrentThreadId());
   }
   g_giving_way_root = root;
-  // Until the window is destroyed (FrameProc), or at the latest 5 s on, so a window that's hidden
-  // and kept never leaves ilo unable to activate. On a loaded machine Chromium's task that destroys
-  // the window came more than a second after it hid, and the activation then went through (#2079).
+  g_gave_way = false;
+  // Until the window is destroyed (FrameProc) and the other app's is in front (OtherAppInFront), or
+  // at the latest 5 s on, so a window that's kept or an app that never reads its messages never
+  // leaves ilo unable to activate.
   After(5, [give_way = ++g_give_ways] {
     if (give_way == g_give_ways && g_giving_way) {
       StopGivingWay();
-      // A window that gave way and wasn't destroyed, which no close leaves, says so in the log.
+      // A window kept, which no close leaves, or an app that didn't take the foreground.
       fprintf(stderr, "browser: little window gave way for 5 s without going\n");
     }
   });
-  // The foreground's app may give the foreground away.
-  SetForegroundWindow(behind);
-  // check.sh reads this line, the title read without a message to that app, which could hang.
+  // check.sh reads these lines, the title read without a message to that app, which could hang.
   wchar_t title[128] = L"";
   InternalGetWindowText(behind, title, static_cast<int>(std::size(title)));
+  // The foreground's app may give the foreground away. Where Windows refuses, nothing waits for the
+  // other app, and the app's next window has the keyboard once the window is gone.
+  if (!SetForegroundWindow(behind)) {
+    g_gave_way = true;
+    fprintf(stderr, "browser: little window couldn't give way to %s\n", Utf8(title).c_str());
+    return;
+  }
   fprintf(stderr, "browser: little window gave way to %s\n", Utf8(title).c_str());
+}
+
+void OtherAppInFront() {
+  // An event from before the give-way can come during it, so it's the foreground now that counts.
+  DWORD process = 0;
+  HWND front = GetForegroundWindow();
+  if (g_giving_way && !g_gave_way && front && GetWindowThreadProcessId(front, &process) &&
+      process != GetCurrentProcessId()) {
+    g_gave_way = true;
+    if (!g_giving_way_root) {
+      StopGivingWayLater();
+    }
+  }
 }
 
 LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
@@ -2552,13 +2621,12 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       AppActivating(wparam, static_cast<DWORD>(lparam));
       break;
     case WM_NCDESTROY:
-      // Once DestroyWindow, which activates the app's next window, is over.
+      // The other app can come in front after this.
       if (hwnd == g_giving_way_root) {
-        Later([hwnd] {
-          if (hwnd == g_giving_way_root) {
-            StopGivingWay();
-          }
-        });
+        g_giving_way_root = nullptr;
+        if (g_gave_way) {
+          StopGivingWayLater();
+        }
       }
       WindowButtonsShown().erase(hwnd);
       FrameUi().erase(hwnd);
@@ -3503,11 +3571,20 @@ void host_add_drop_targets(void* view) {
 void host_show_drop_targets(void* ui_view) {
   double width, height;
   ContentSize(Root(ui_view), &width, &height);
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Show(g_drop_targets, ui_view, 0, 0, width, height, false);
+  // As the Mac's and Linux's say as it comes on screen, which split waits for.
+  if (!shown && g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd)) {
+    fprintf(stderr, "browser: drop targets shown\n");
+  }
 }
 
 void host_hide_drop_targets(void) {
+  const bool shown = g_drop_targets.hwnd && IsWindowVisible(g_drop_targets.hwnd);
   Hide(g_drop_targets);
+  if (shown) {
+    fprintf(stderr, "browser: drop targets hidden\n");
+  }
 }
 
 void host_add_dialog(void* dialog_view) {
@@ -3719,6 +3796,11 @@ void host_hide_capture(void) {
   fprintf(stderr, "browser: capture hidden\n");
 }
 
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size)) {
+  return false;
+}
+
 void host_copy_png(const uint8_t* png, size_t size) {
   static const UINT png_format = RegisterClipboardFormatW(L"PNG");
   if (!OpenClipboard(nullptr)) {
@@ -3901,6 +3983,8 @@ void host_show_toast(void* ui_view) {
   g_toast_over = ui_view;
   auto [left, top, width, height] = ToastPlace(ui_view);
   Show(g_toast, ui_view, left, top, width, height, false);
+  // It shows at once, without a fade, as the Mac's does.
+  LogShown(g_toast, "toast");
 }
 
 void host_hide_toast(void) {
@@ -5232,6 +5316,19 @@ bool host_drive_little_tray_click(void) {
   }
   SendMessageW(g_tray, kTrayMessage, 0, MAKELPARAM(NIN_SELECT, kTrayId));
   return true;
+}
+
+// Where Explorer draws the icon, in |icon|, and its notification area, in |area|, in the screen's
+// pixels, for drive.cc's statusitem place: false while it's off or Explorer has no taskbar. An
+// icon in the overflow is drawn in its flyout, outside the area.
+bool host_drive_little_tray_place(RECT* icon, RECT* area) {
+  NOTIFYICONIDENTIFIER id = {sizeof(id)};
+  id.hWnd = g_tray;
+  id.uID = kTrayId;
+  HWND taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
+  HWND notify = taskbar ? FindWindowExW(taskbar, nullptr, L"TrayNotifyWnd", nullptr) : nullptr;
+  return g_tray_clicked && g_tray && notify && SUCCEEDED(Shell_NotifyIconGetRect(&id, icon)) &&
+         GetWindowRect(notify, area);
 }
 
 }  // extern "C"

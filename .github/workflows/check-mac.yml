@@ -73,7 +73,7 @@ jobs:
         working-directory: app
     env:
       # The runs to start with, whose parts the trial found working. A run joins once it passes here.
-      MAC_RUNS: load keys tabs quit scripting favorites links preview import
+      MAC_RUNS: load keys tabs quit scripting favorites links preview import notifications
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
@@ -122,8 +122,11 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: rustup update stable --no-self-update
 
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.engine.outputs.found == 'true' }}
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -135,12 +138,54 @@ jobs:
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: ./setup.sh prebuilt && ./build.sh
 
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
+      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
+      # at the commit check-linux.yml builds, when the runs include one.
+      - id: server
+        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
+        uses: actions/checkout@v4
+        with:
+          repository: MartinPTielemans/ilo-server
+          ref: 882f2736e5a3b228543ae33b821aeeb52f80426d
+          path: app/.deps/ilo-server
+
+      # Main alone saves, as for the build cache above (#1969).
+      - id: server-cache
+        if: ${{ steps.server.outcome == 'success' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-mac-882f2736e5a3b228543ae33b821aeeb52f80426d
+
+      - if: ${{ steps.server.outcome == 'success' }}
+        working-directory: app/.deps/ilo-server
+        run: |
+          # The server's passkeys link OpenSSL, which Homebrew has on the runner's image.
+          brew list openssl@3 > /dev/null 2>&1 || brew install openssl@3
+          OPENSSL_DIR=$(brew --prefix openssl@3) cargo build --release --locked
+          echo "ILO_SERVER=$PWD/target/release/ilo-server" >> "$GITHUB_ENV"
+
+      - if: ${{ steps.server-cache.outcome == 'success' && steps.server-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: app/.deps/ilo-server/target
+          key: ilo-server-mac-882f2736e5a3b228543ae33b821aeeb52f80426d
+
       # macOS asks Screen Recording, Input Monitoring, the camera and the microphone of the process
       # responsible for the app, here the runner's agent that started the job, not of the app: once media's call and
       # tab share reached Chromium's capture, UserNotificationCenter's question took the app's
       # activation, and the run's clicks and keys went nowhere (#1554). The check VMs answered
-      # it once; a hosted runner is new each time, with SIP off, so the job grants them to the
-      # processes it runs under. Each grant is read back, and a missing one fails the job.
+      # it once; a hosted runner is new each time, with SIP off, so the job grants them, and
+      # Accessibility for the notifications run's banners, to the processes it runs under. Each grant is read back, and a missing one fails the job.
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
           now=$(date +%s)
@@ -164,6 +209,8 @@ jobs:
             /*)
               grant "$system" kTCCServiceScreenCapture "$path"
               grant "$system" kTCCServiceListenEvent "$path"
+              # notifications presses macOS's banners through the accessibility API (check/banner.mm).
+              grant "$system" kTCCServiceAccessibility "$path"
               grant "$user" kTCCServiceCamera "$path"
               grant "$user" kTCCServiceMicrophone "$path"
               paths="$paths
@@ -226,15 +273,23 @@ jobs:
               if [ "$status" = 0 ]; then
                 result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
               else
-                result="failed ($status): $(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/')"
-                failed=1
-                echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                said=$(grep -m1 '^FAIL' "$out/$run.log" | cut -c7- | tr '|' '/') || true
+                result="failed ($status): $said"
+                # A quarantined failure shows, but doesn't fail the check (#2197).
+                if issue=$(sh check/quarantine.sh match mac "$run" "" "$said"); then
+                  result="quarantined, $issue: $result"
+                  echo "::warning::The $run run failed, quarantined under $issue. Its log: $run.log in the artifact."
+                else
+                  failed=1
+                  echo "::error::The $run run failed. Its log: $run.log in the artifact."
+                fi
               fi
               ;;
             *) result="skipped: not in the runs the Mac runner passes yet" ;;
             esac
             echo "| $run | $result |" | tee -a "$GITHUB_STEP_SUMMARY"
           done
+          { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
       - if: ${{ always() && steps.engine.outputs.found == 'true' }}
@@ -257,9 +312,12 @@ jobs:
       checks: read
       issues: write
     steps:
+      # With app/check, whose quarantine keeps a quarantined run's issue open.
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            app/check
       - env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.check.result }}

@@ -75,6 +75,9 @@ impl Host for Recorder {
     fn set_developer_mode(&self, tab: u64, on: bool) {
         self.push(format!("developer mode {tab} {on}"));
     }
+    fn set_boost(&self, tab: u64, on: bool) {
+        self.push(format!("boost {tab} {on}"));
+    }
     fn run(&self, run: Run, tab: u64, _: &mut App) {
         let run = match run {
             Run::Command(command) => format!("{command:?}"),
@@ -161,6 +164,8 @@ fn site() -> Site {
         developer_mode: None,
         logins: vec![],
         devices: Vec::new(),
+        boostable: false,
+        boost: None,
     }
 }
 

@@ -17,6 +17,8 @@ unsafe extern "C" {
     #[cfg(target_os = "macos")]
     pub fn host_translation_target(out: *mut c_char, capacity: usize) -> bool;
     #[cfg(target_os = "macos")]
+    pub fn host_preferred_languages(out: *mut c_char, capacity: usize) -> bool;
+    #[cfg(target_os = "macos")]
     pub fn host_language_name(language: *const c_char, out: *mut c_char, capacity: usize) -> bool;
     // Translates the JSON array |texts| and answers on the main thread, with |context|.
     #[cfg(target_os = "macos")]
@@ -372,6 +374,10 @@ unsafe extern "C" {
     // GPUI's on Linux (platform/linux/system.rs).
     #[cfg(not(target_os = "linux"))]
     pub fn host_copy_png(png: *const u8, size: usize);
+    pub fn host_desktop_picture(
+        context: *mut c_void,
+        png: extern "C" fn(context: *mut c_void, data: *const u8, size: usize),
+    ) -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_save_png(ui_view: *mut c_void, png: *const u8, size: usize);
     pub fn host_share_png(

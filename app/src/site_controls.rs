@@ -88,6 +88,9 @@ const PASSWORDS: &str = "icons/key-round.svg";
 /// Ours: Developer Mode's row, as Arc's panel's isn't recorded, and its command's in the bar.
 const DEVELOPER_MODE: &str = "icons/square-code.svg";
 const DEVELOPER_MODE_NAME: &str = "Developer Mode";
+/// The site's Boost (#695), with the tile's glyph.
+const BOOST: &str = "icons/paintbrush.svg";
+const BOOST_NAME: &str = "Boost";
 const PASSWORDS_NAME: &str = "Passwords";
 use crate::tokens::site_controls::DISABLED_OPACITY;
 use crate::tokens::site_controls::DIVIDER;
@@ -210,6 +213,11 @@ pub struct Site {
     /// Whether the site's tabs show in Developer Mode, none where that isn't the user's to change:
     /// a page that isn't http(s), or a private window.
     pub developer_mode: Option<bool>,
+    /// The page can have a Boost (#695): an http(s) page in a regular window, outside an agent's
+    /// Space, with Settings' Boosts on. The Boost tile and the "…" menu's Boost items show then.
+    pub boostable: bool,
+    /// Whether the site's Boost is on, none where it has none.
+    pub boost: Option<bool>,
 }
 
 /// A turned-on extension, as its action is for the tab's page.
@@ -326,8 +334,8 @@ pub enum Run {
     ExtensionItem(SharedString, ExtensionItem),
 }
 
-/// An action tile. Arc's row is Share, Boost, Capture a portion and Capture the full page; the
-/// ones the browser doesn't have aren't here, and one is a line in TILES. Boost comes with Boosts.
+/// An action tile. Arc's row is Share, Boost, Capture a portion and Capture the full page, each a
+/// line in TILES.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Tile {
     /// For the logs.
@@ -346,8 +354,8 @@ pub enum TileRun {
     Command(Command),
 }
 
-/// Arc's order, without Boost. The captures' glyphs are Lucide's frame and page, *interim*: Arc's
-/// aren't recorded.
+/// Arc's order. The captures' glyphs are Lucide's frame and page and Boost's its paintbrush,
+/// *interim*: Arc's aren't recorded.
 pub const TILES: &[Tile] = &[
     Tile {
         name: "share",
@@ -355,6 +363,14 @@ pub const TILES: &[Tile] = &[
         glyph: "icons/share.svg",
         glyph_size: 19.5,
         run: TileRun::Share,
+    },
+    // New Boost or Edit Boost, as the site has one: either opens its card.
+    Tile {
+        name: "boost",
+        label: "Boost",
+        glyph: "icons/paintbrush.svg",
+        glyph_size: 19.5,
+        run: TileRun::Command(Command::NewBoost),
     },
     Tile {
         name: "capture",
@@ -477,6 +493,9 @@ pub trait Host {
     /// Turns Developer Mode on or off for the site, in the tab's profile. The user's view: agents
     /// get none.
     fn set_developer_mode(&self, tab: u64, on: bool);
+    /// Turns the site's Boost on or off there, in the tab's profile. The user's alone, as a Boost
+    /// is.
+    fn set_boost(&self, tab: u64, on: bool);
     fn run(&self, run: Run, tab: u64, cx: &mut App);
     /// Shows ilo's menu of `items` at `position` in the panel's window, and calls `chosen` once it
     /// closes, with the index of the one chosen, if any.
@@ -573,6 +592,7 @@ enum Stop {
     Engine,
     AdBlocking,
     DeveloperMode,
+    Boost,
     Passwords,
     /// By Chrome's ContentSettingsType.
     Permission(i32),
@@ -635,12 +655,13 @@ fn layout(site: &Site, extensions: usize, beak: bool) -> Layout {
     }
 }
 
-/// The Settings heading's rows: Safari's engine, ad blocking, Developer Mode, Passwords, the
-/// permissions, the devices, then Reset.
+/// The Settings heading's rows: Safari's engine, ad blocking, Developer Mode, the Boost,
+/// Passwords, the permissions, the devices, then Reset.
 fn rows(site: &Site) -> usize {
     let firsts = site.system_engine.is_some() as usize
         + site.ad_blocking.is_some() as usize
-        + site.developer_mode.is_some() as usize;
+        + site.developer_mode.is_some() as usize
+        + site.boost.is_some() as usize;
     let logins = passwords::state(&site.logins).is_some() as usize;
     firsts + logins + site.permissions.len() + site.devices.len() + site.reset.is_some() as usize
 }
@@ -947,15 +968,28 @@ fn lock_label(site: &Site) -> SharedString {
     }
 }
 
-/// The "…" menu: Arc's, without Boost's items.
-fn more_items() -> Vec<(MenuEntry, Option<Run>)> {
+/// The "…" menu: Arc's, its Boost items where the page can have one.
+fn more_items(site: &Site) -> Vec<(MenuEntry, Option<Run>)> {
     let item = |title: &'static str, run: Run| (MenuEntry::new(title, true), Some(run));
-    vec![
+    let mut items = vec![
         item("Clear Cache", Run::Command(Command::ClearCacheAndRefresh)),
         item(
             "Clear Cookies",
             Run::Command(Command::ClearCookiesAndRefresh),
         ),
+    ];
+    if site.boostable {
+        let boost = match site.boost {
+            Some(_) => item("Edit Boost…", Run::Command(Command::EditBoost)),
+            None => item("New Boost…", Run::Command(Command::NewBoost)),
+        };
+        items.extend([
+            (MenuEntry::line(), None),
+            boost,
+            item("View Boosts…", Run::Command(Command::ViewBoosts)),
+        ]);
+    }
+    items.extend([
         (MenuEntry::line(), None),
         item(
             "Manage Extensions…",
@@ -965,7 +999,8 @@ fn more_items() -> Vec<(MenuEntry, Option<Run>)> {
         item("Add Extension…", Run::Command(Command::ManageExtensions)),
         (MenuEntry::line(), None),
         item("All Site Settings…", Run::SiteSettings),
-    ]
+    ]);
+    items
 }
 
 /// What an assistive app reads of a control: a button called `name`, which says it opens a menu
@@ -1059,12 +1094,19 @@ impl SiteControls {
         self.host.run(run, tab, cx);
     }
 
-    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, cx: &mut Context<Self>) {
+    /// Runs `tile`. ⌥ on Capture Full Page captures in Portrait Mode on the background kept, as
+    /// Arc's ⌥-click on its Portrait Mode skips the panel.
+    fn run_tile(&mut self, tile: Tile, frame: Bounds<Pixels>, alt: bool, cx: &mut Context<Self>) {
         let Some(open) = self.open.as_ref() else {
             return;
         };
+        let boosted = open.site.as_ref().is_some_and(|site| site.boost.is_some());
         let run = match tile.run {
             TileRun::Share => Run::Share(open.in_window(frame)),
+            TileRun::Command(Command::NewBoost) if boosted => Run::Command(Command::EditBoost),
+            TileRun::Command(Command::CaptureFullPage) if alt => {
+                Run::Command(Command::CapturePortraitNow)
+            }
             TileRun::Command(command) => Run::Command(command),
         };
         self.run(tile.name, run, cx);
@@ -1150,7 +1192,11 @@ impl SiteControls {
 
     /// Shows the "…" menu at `position`, and runs the item chosen.
     fn more(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (items, runs): (Vec<MenuEntry>, Vec<Option<Run>>) = more_items().into_iter().unzip();
+        let Some(site) = self.open.as_ref().and_then(|open| open.site.as_ref()) else {
+            return;
+        };
+        let (items, runs): (Vec<MenuEntry>, Vec<Option<Run>>) =
+            more_items(site).into_iter().unzip();
         let titles: Vec<SharedString> = items.iter().map(|item| item.title.clone()).collect();
         let panel = cx.weak_entity();
         let chosen = Box::new(move |index: Option<usize>, cx: &mut App| {
@@ -1313,6 +1359,25 @@ impl SiteControls {
         }
     }
 
+    /// Turns the site's Boost the other way. The app keeps it, not the core, so the row shows it at
+    /// once.
+    fn toggle_boost(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(open) = self.open.as_mut().filter(|open| open.closing.is_none()) else {
+            return;
+        };
+        let Some(site) = open.site.as_mut().filter(|site| site.boost.is_some()) else {
+            return;
+        };
+        // check.sh reads this line.
+        log!(
+            "browser: site controls set boost {}",
+            if on { "on" } else { "off" }
+        );
+        site.boost = Some(on);
+        self.host.set_boost(open.tab, on);
+        cx.notify();
+    }
+
     fn reset(&mut self, cx: &mut Context<Self>) {
         if let Some(open) = self.open.as_ref().filter(|open| open.closing.is_none()) {
             log!("browser: site controls reset");
@@ -1357,10 +1422,7 @@ impl SiteControls {
             return Vec::new();
         };
         let at = layout(site, open.extensions.len(), open.beak.is_some());
-        let share = self.host.has_share_sheet();
-        let tiles = (TILES.iter())
-            .filter(|tile| share || tile.run != TileRun::Share)
-            .enumerate();
+        let tiles = self.tiles(site).into_iter().enumerate();
         let mut stops: Vec<(Stop, Bounds<Pixels>)> = tiles
             .map(|(index, tile)| {
                 let x = PADDING + index as f32 * (TILE_WIDTH + GAP);
@@ -1381,6 +1443,7 @@ impl SiteControls {
             site.system_engine.map(|_| Some(Stop::Engine)),
             site.ad_blocking.map(|_| Some(Stop::AdBlocking)),
             site.developer_mode.map(|_| Some(Stop::DeveloperMode)),
+            site.boost.map(|_| Some(Stop::Boost)),
             passwords::state(&site.logins).map(|_| Some(Stop::Passwords)),
         ];
         let permissions = (site.permissions.iter())
@@ -1495,7 +1558,7 @@ impl SiteControls {
         match stop {
             Stop::Tile(name) => {
                 if let Some(&tile) = TILES.iter().find(|tile| tile.name == name) {
-                    self.run_tile(tile, frame, cx);
+                    self.run_tile(tile, frame, false, cx);
                 }
             }
             Stop::Extension(id) => {
@@ -1510,6 +1573,7 @@ impl SiteControls {
             Stop::DeveloperMode => {
                 self.toggle_developer_mode(site.developer_mode != Some(true), cx)
             }
+            Stop::Boost => self.toggle_boost(site.boost != Some(true), cx),
             Stop::Passwords => self.choose_login(site.logins.clone(), under, cx),
             Stop::Permission(kind) => {
                 if let Some(permission) = site.permissions.iter().find(|each| each.kind == kind) {
@@ -1554,6 +1618,18 @@ impl SiteControls {
         })
     }
 
+    /// The tiles the panel shows for `site`, closed up from the left. Without a share sheet, as on
+    /// Linux, Share would do nothing, so it goes, and Boost goes where the page can have none,
+    /// leaving the row's right end empty, as it already is.
+    fn tiles(&self, site: &Site) -> Vec<Tile> {
+        let share = self.host.has_share_sheet();
+        (TILES.iter())
+            .filter(|tile| share || tile.run != TileRun::Share)
+            .filter(|tile| site.boostable || tile.run != TileRun::Command(Command::NewBoost))
+            .copied()
+            .collect()
+    }
+
     /// A tile `TILE_WIDTH` by `TILE_HEIGHT` at (`x`, `y`), named by its tooltip.
     fn tile_frame(x: f32, y: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(TILE_WIDTH), px(TILE_HEIGHT)))
@@ -1586,7 +1662,9 @@ impl SiteControls {
             .on_hover(cx.listener(move |panel, hovered: &bool, _, cx| {
                 panel.tooltip(tile.label.into(), frame, *hovered, cx)
             }))
-            .on_click(cx.listener(move |panel, _, _, cx| panel.run_tile(tile, frame, cx)))
+            .on_click(cx.listener(move |panel, event: &ClickEvent, _, cx| {
+                panel.run_tile(tile, frame, event.modifiers().alt, cx)
+            }))
             .child(
                 div()
                     .id("state")
@@ -2064,13 +2142,8 @@ impl Render for SiteControls {
         .top_0()
         .left_0()
         .size_full();
-        // Without a share sheet, as on Linux, Share would do nothing, so it goes and the rest
-        // close up from the left, leaving the row's right end empty, as it already is.
-        let share = self.host.has_share_sheet();
-        let tiles: Vec<_> = (TILES.iter())
-            .filter(|tile| share || tile.run != TileRun::Share)
-            .enumerate()
-            .map(|(index, &tile)| self.tile(index, tile, at.tiles, cx))
+        let tiles: Vec<_> = (self.tiles(&site).into_iter().enumerate())
+            .map(|(index, tile)| self.tile(index, tile, at.tiles, cx))
             .collect();
         let extensions = self.extensions(open, at.extensions, cx);
         let extensions_heading = self.heading(
@@ -2127,6 +2200,17 @@ impl Render for SiteControls {
                     cx.listener(move |panel, _, _, cx| panel.toggle_developer_mode(!on, cx)),
                 );
                 let row = row.children(self.ring(&Stop::DeveloperMode, None, cx));
+                rows.push(row.into_any_element());
+                y += ROW_PITCH;
+            }
+            if let Some(on) = site.boost {
+                let state = Some(if on { "On" } else { "Off for this site" }.into());
+                let (id, name) = ("site-boost".into(), BOOST_NAME.into());
+                let row = Self::row(&palette, id, y, BOOST, on, name, state);
+                let row = row.when(a11y, |row| switch_named(row, BOOST_NAME, on));
+                let row =
+                    row.on_click(cx.listener(move |panel, _, _, cx| panel.toggle_boost(!on, cx)));
+                let row = row.children(self.ring(&Stop::Boost, None, cx));
                 rows.push(row.into_any_element());
                 y += ROW_PITCH;
             }

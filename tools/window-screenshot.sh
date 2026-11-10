@@ -14,6 +14,8 @@
 # frame, where Windows' theme paints the caption under the UI, on screen too (#1262).
 # On Linux it captures the private session tools/headless.sh --run starts, or check.sh's Xvfb,
 # which hold nothing but the app, and refuses outside one rather than capture the owner's screen.
+# There POINTER=1 draws the display's pointer in, where the driver's warp put it, with the cursor
+# the window under it shows.
 # Usage: tools/window-screenshot.sh <pid> <output.png> [all|screen]
 set -e
 [ $# -eq 2 ] || [ $# -eq 3 ] && { [ "${3:-all}" = all ] || [ "$3" = screen ]; } ||
@@ -331,6 +333,14 @@ if [ "$(uname)" = Linux ]; then
         echo "${WIDTH}x$HEIGHT+$((X < 0 ? 0 : X))+$((Y < 0 ? 0 : Y))"
       done | tail -1
     )
+    if [ -n "${POINTER:-}" ]; then
+      # import leaves the pointer out, and x11grab draws it.
+      size=${area%%+*}
+      offset=${area#"$size"}
+      exec ffmpeg -loglevel error -y -f x11grab -draw_mouse 1 ${area:+-video_size "$size"} \
+        -i "$DISPLAY$(echo "$offset" | sed 's/^+\([0-9]*\)+\([0-9]*\)$/+\1,\2/')" \
+        -frames:v 1 -update 1 "$2"
+    fi
     [ -z "$area" ] || exec import -window root -crop "$area" +repage "$2"
     exec import -window root "$2"
   fi
@@ -347,8 +357,8 @@ if ours:
     rect = max(ours, key=lambda rect: rect["width"] * rect["height"])
     print("%(x)d,%(y)d %(width)dx%(height)d" % rect)
 ' "$1" 2> /dev/null) || area=
-  [ -z "$area" ] || exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim -g "$area" "$2"
-  exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim "$2"
+  [ -z "$area" ] || exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} -g "$area" "$2"
+  exec env WAYLAND_DISPLAY="$BROWSER_HEADLESS" grim ${POINTER:+-c} "$2"
 fi
 PID="$1" OUT="$2" ALL="${3:-}" swift - <<'SWIFT'
 import Foundation

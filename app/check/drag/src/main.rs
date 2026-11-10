@@ -1,6 +1,6 @@
 //! Another app's drag under Wayland, for check/drops.sh: a small window of its own, which the drag
 //! starts from, and a virtual pointer, which a headless sway seat has no other of.
-//! Usage: drag <width>x<height> <type> <data> [<type> <data>...]
+//! Usage: drag <width>x<height> [<type> <data>...|window]
 //! The size is the output's, in logical pixels, which the pointer moves on. The drag carries each
 //! type with its data, text/x-moz-url's in UTF-16 as browsers' drags carry a link. Each line on stdin is a step: `move <x> <y>` puts the pointer there, `press`
 //! presses its left button, which over the window starts the drag, and `release` lets it go. What
@@ -8,6 +8,12 @@
 //! comes into it, `drag: started`, `drag: target <type>` or `drag: target none` as the surface under
 //! the drag takes it or not, `drag: sent <type>`, and how it ends: `drag: finished` or
 //! `drag: cancelled`.
+//! Given only the size it's a pointer alone, with no window and no drag, which tools/parity.sh
+//! hovers with: `move` and `press` and `release` go where the pointer is.
+//! Given the size and `window`, it's the window without a drag, another app the user clicks in, for
+//! check/links.sh: a press in it prints `drag: pressed`, and the step `token` then asks the
+//! compositor for an activation token as that window, for that press, as an app hands one to the
+//! app a link it opens goes to, and prints `drag: token <token>`.
 
 use std::{
     io::{BufRead as _, Write as _},
@@ -25,7 +31,10 @@ use wayland_client::{
         wl_surface,
     },
 };
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::{
+    activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1},
+    shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base},
+};
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
     zwlr_virtual_pointer_manager_v1, zwlr_virtual_pointer_v1,
 };
@@ -42,6 +51,8 @@ struct State {
     shown: bool,
     pointer: Option<wl_pointer::WlPointer>,
     over: bool,
+    /// The last press in the window, which an activation token is asked for.
+    pressed: Option<u32>,
 }
 
 fn main() {
@@ -50,11 +61,13 @@ fn main() {
         let (width, height) = size.split_once('x')?;
         Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
     });
-    let (Some((width, height)), true) = (extent, args.len() >= 3 && args.len() % 2 == 1) else {
-        eprintln!("usage: drag <width>x<height> <type> <data> [<type> <data>...]");
+    let window = args.len() == 2 && args[1] == "window";
+    let (Some((width, height)), true) = (extent, window || args.len() % 2 == 1) else {
+        eprintln!("usage: drag <width>x<height> [<type> <data>...|window]");
         std::process::exit(2);
     };
     let data: Vec<(String, Vec<u8>)> = (args[1..].chunks(2))
+        .filter(|_| !window)
         .map(|pair| {
             let data = match pair[0].as_str() {
                 "text/x-moz-url" => pair[1].encode_utf16().flat_map(u16::to_le_bytes).collect(),
@@ -76,11 +89,15 @@ fn main() {
     let pointers: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1 =
         (globals.bind(&qh, 1..=2, ())).expect("no virtual pointers");
 
+    let activation: Option<xdg_activation_v1::XdgActivationV1> = globals.bind(&qh, 1..=1, ()).ok();
+
     let surface = compositor.create_surface(&qh, ());
-    let toplevel = wm.get_xdg_surface(&surface, &qh, ()).get_toplevel(&qh, ());
-    toplevel.set_app_id("ilo-drag".into());
-    toplevel.set_title("drag".into());
-    surface.commit();
+    if window || !data.is_empty() {
+        let toplevel = wm.get_xdg_surface(&surface, &qh, ()).get_toplevel(&qh, ());
+        toplevel.set_app_id("ilo-drag".into());
+        toplevel.set_title("drag".into());
+        surface.commit();
+    }
 
     // One opaque square, in a file that's gone once mapped.
     let path = std::env::temp_dir().join(format!("ilo-drag-{}", std::process::id()));
@@ -99,6 +116,7 @@ fn main() {
     let pool = shm.create_pool(file.as_fd(), pixels.len() as i32, &qh, ());
     let buffer = pool.create_buffer(0, SIZE, SIZE, SIZE * 4, wl_shm::Format::Argb8888, &qh, ());
 
+    let data_is_empty = data.is_empty();
     let source = manager.create_data_source(&qh, ());
     for (kind, _) in &data {
         source.offer(kind.clone());
@@ -110,9 +128,11 @@ fn main() {
         device: manager.get_data_device(&seat, &qh, ()),
         source,
         data,
-        shown: false,
+        // A pointer alone has no window to wait for.
+        shown: data_is_empty && !window,
         pointer: None,
         over: false,
+        pressed: None,
     };
     let pointer = pointers.create_virtual_pointer(Some(&seat), &qh, ());
 
@@ -157,6 +177,19 @@ fn main() {
                 }
                 ["press"] => pointer.button(time, BUTTON_LEFT, wl_pointer::ButtonState::Pressed),
                 ["release"] => pointer.button(time, BUTTON_LEFT, wl_pointer::ButtonState::Released),
+                ["token"] => {
+                    let Some(activation) = &activation else {
+                        eprintln!("drag: the compositor has no xdg_activation_v1");
+                        continue;
+                    };
+                    let token = activation.get_activation_token(&qh, ());
+                    if let Some(serial) = state.pressed {
+                        token.set_serial(serial, &seat);
+                    }
+                    token.set_surface(&state.surface);
+                    token.commit();
+                    continue;
+                }
                 ["quit"] => return,
                 _ => {
                     eprintln!("drag: no step {step}");
@@ -255,8 +288,13 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 state: WEnum::Value(wl_pointer::ButtonState::Pressed),
                 ..
             } if state.over => {
-                (state.device).start_drag(Some(&state.source), &state.surface, None, serial);
-                println!("drag: started");
+                state.pressed = Some(serial);
+                if state.data.is_empty() {
+                    println!("drag: pressed");
+                } else {
+                    (state.device).start_drag(Some(&state.source), &state.surface, None, serial);
+                    println!("drag: started");
+                }
             }
             _ => {}
         }
@@ -305,7 +343,24 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for State {
     ]);
 }
 
+impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        token: &xdg_activation_token_v1::XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_activation_token_v1::Event::Done { token: name } = event {
+            println!("drag: token {name}");
+            token.destroy();
+        }
+    }
+}
+
 delegate_noop!(State: wl_compositor::WlCompositor);
+delegate_noop!(State: xdg_activation_v1::XdgActivationV1);
 delegate_noop!(State: wl_shm_pool::WlShmPool);
 delegate_noop!(State: wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(State: zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1);

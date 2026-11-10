@@ -7,7 +7,7 @@ use std::{
 };
 
 use gpui::{
-    Action, App, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
+    Action, App, Bounds, Context, Global, Image, KeyBinding, MenuItem, Pixels, Point, SharedString,
     WeakEntity, actions, point,
 };
 
@@ -16,7 +16,7 @@ use crate::theme::Appearance;
 use crate::usage::{self, Usage};
 
 use super::{
-    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
     browser::WindowButton,
     clean_link,
     drag::dropped_urls,
@@ -125,6 +125,11 @@ pub enum Command {
     CapturePortion,
     /// Captures all of the selected tab's page, beyond its view, and copies it.
     CaptureFullPage,
+    /// Opens Portrait Mode's card for the page the URL field shows, or closes it (portrait.rs).
+    CapturePortrait,
+    /// Portrait Mode on the background kept, without the card, as ⌥ on Site Controls' Capture
+    /// Full Page runs it. Not in the command bar, which has the card.
+    CapturePortraitNow,
     FindNext,
     FindPrevious,
     /// Scrolls the page to its selection.
@@ -212,6 +217,12 @@ pub enum Command {
     ViewMedia,
     /// Opens the Library on its agents' past tasks, or closes it there.
     ViewAgents,
+    /// Opens the card for a Boost of the site of the page shown, which has none yet (#695).
+    NewBoost,
+    /// Opens the card of the Boost of the site of the page shown.
+    EditBoost,
+    /// Opens the Library on the profile's Boosts, or closes it there.
+    ViewBoosts,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -300,6 +311,12 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-,", Command::Settings, false),
     ("alt-cmd-down", Command::NextTab, true),
     ("alt-cmd-up", Command::PreviousTab, true),
+    // Arc's ⌘} and ⌘{, Chrome's too. GPUI names them by their character and a page by the key with
+    // shift, as ⌃⇧] below.
+    ("shift-cmd-]", Command::NextTab, true),
+    ("shift-cmd-}", Command::NextTab, true),
+    ("shift-cmd-[", Command::PreviousTab, true),
+    ("shift-cmd-{", Command::PreviousTab, true),
     ("ctrl-tab", Command::RecentTab, true),
     ("ctrl-shift-tab", Command::RecentTabBack, true),
     ("alt-cmd-right", Command::NextSpace, true),
@@ -617,6 +634,11 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::CaptureFullPage,
         &["screenshot"],
     ),
+    (
+        "Capture in Portrait Mode",
+        Command::CapturePortrait,
+        &["screenshot", "share"],
+    ),
     ("Save Page As", Command::SavePage, &[]),
     ("Print", Command::Print, &["pdf"]),
     ("View Source", Command::ViewSource, &[]),
@@ -690,6 +712,13 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         "View Agents…",
         Command::ViewAgents,
         &["agent history", "past tasks"],
+    ),
+    ("New Boost", Command::NewBoost, &["zap", "css", "style"]),
+    ("Edit Boost", Command::EditBoost, &["zap", "css", "style"]),
+    (
+        "View Boosts…",
+        Command::ViewBoosts,
+        &["zap", "css", "style"],
     ),
     ("View History", Command::ViewHistory, &[]),
     (
@@ -1177,6 +1206,8 @@ impl Command {
             Command::Cast => "cast",
             Command::CapturePortion => "capture",
             Command::CaptureFullPage => "capture-full-page",
+            Command::CapturePortrait => "capture-portrait",
+            Command::CapturePortraitNow => "capture-portrait-now",
             Command::FindNext => "find-next",
             Command::FindPrevious => "find-previous",
             Command::JumpToSelection => "jump-to-selection",
@@ -1224,6 +1255,9 @@ impl Command {
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
             Command::ViewAgents => "view-agents",
+            Command::NewBoost => "new-boost",
+            Command::EditBoost => "edit-boost",
+            Command::ViewBoosts => "view-boosts",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1349,6 +1383,7 @@ pub fn bind_keys(cx: &mut App) {
     agent_bar::bind(cx);
     drm_note::bind(cx);
     translate::bind(cx);
+    boost::bind(cx);
     sidebar_keys::bind(cx);
 }
 
@@ -1721,6 +1756,8 @@ impl Shell {
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
             Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
+            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -1769,6 +1806,8 @@ impl Shell {
             Command::Cast => return self.cast(cx),
             Command::CapturePortion => return self.capture(false, cx),
             Command::CaptureFullPage => return self.capture(true, cx),
+            Command::CapturePortrait => return self.capture_in_portrait_mode(cx),
+            Command::CapturePortraitNow => return self.capture_portrait_now(cx),
             Command::FindNext => return self.browser.find_next(self.selected, true, cx),
             Command::FindPrevious => return self.browser.find_next(self.selected, false, cx),
             Command::JumpToSelection => return self.browser.jump_to_selection(self.selected, cx),
@@ -2081,21 +2120,30 @@ impl Shell {
         press: Option<Point<Pixels>>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.selected == 0 {
-            return false;
-        }
-        let (frame, radius) = self.page_frame(self.viewport);
-        let panes = self.panes(self.selected);
-        let index = panes.iter().position(|&pane| pane == tab);
-        let Some(index) = index.or((tab == self.selected).then_some(0)) else {
+        let Some((pane, radius)) = self.pane_frame(tab) else {
             return false;
         };
-        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let pane = pane_frames(frame, panes.len(), stacked, &shares)[index];
         let (look, library) = (self.menu_look(), !self.private);
         self.browser
             .capture(tab, pane, radius, full_page, press, library, look, cx);
         true
+    }
+
+    /// Where `tab`'s page is in the window, a pane of the tab shown, and its corners' radius; none
+    /// if it isn't shown here.
+    pub(super) fn pane_frame(&self, tab: u64) -> Option<(Bounds<Pixels>, f32)> {
+        if self.selected == 0 {
+            return None;
+        }
+        let (frame, radius) = self.page_frame(self.viewport);
+        let panes = self.panes(self.selected);
+        let index = panes.iter().position(|&pane| pane == tab);
+        let index = index.or((tab == self.selected).then_some(0))?;
+        let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
+        Some((
+            pane_frames(frame, panes.len(), stacked, &shares)[index],
+            radius,
+        ))
     }
 
     /// Whether `tab`'s page is in Developer Mode, or None where the user can't change it: a page
@@ -2176,6 +2224,9 @@ impl Shell {
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
             Command::TurnOffBatterySaver => self.battery_saver.is_some(),
             Command::TranslatePage | Command::UseOriginal => self.offers_translation(command),
+            Command::NewBoost | Command::EditBoost | Command::ViewBoosts => {
+                self.offers_boost(command)
+            }
             Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
             // As the menus' New Profile: only an empty Space changes profile.
             Command::ChangeProfile(None) => {
@@ -2425,6 +2476,10 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::ViewArchive
             | Command::ClearArchive
             | Command::ViewAgents
+            // It keeps nothing, so it makes no Boost, though it shows its profile's.
+            | Command::NewBoost
+            | Command::EditBoost
+            | Command::ViewBoosts
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData

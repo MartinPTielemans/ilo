@@ -149,6 +149,17 @@ pub(crate) fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id
     open_window(Some(from), private.map(Own::Private), cx)
 }
 
+thread_local! {
+    /// Whether the window opened last came on screen with its first frame drawn.
+    static DRAWN_BEFORE_SHOWN: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// When the window opened last came on screen with its first frame drawn, so that frame was on
+/// screen as it was shown, if it did.
+pub(crate) fn drawn_before_shown() -> Option<Instant> {
+    DRAWN_BEFORE_SHOWN.get()
+}
+
 /// Opens a browser window and the shell inside it under the page, and returns it. The first opens
 /// the overlays every window shares and the Spaces as the user left them. Another, from `from`,
 /// starts with its shell's state and shows its Space with no page, as ⌘N's window does. With
@@ -390,12 +401,25 @@ pub(crate) fn open_window_as(
     if let Some(Own::Little { .. }) = own {
         unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
     }
+    // A later window comes on screen drawn, as the overlays do: AppKit reports a new window
+    // visible, which GPUI on the Mac draws only once it has, about 100 ms after it's ordered in,
+    // which the window would spend blank (#2141). The first stays under the launch picture until
+    // its own first frame, so it doesn't wait for this one. Through the window alone, as drawing
+    // renders the shell, which the WindowHandle's update would hold.
+    #[cfg(target_os = "macos")]
+    let drawn = !first
+        && cx
+            .update_window(window.into(), |_, window, cx| window.draw_and_present(cx))
+            .is_ok();
+    #[cfg(not(target_os = "macos"))]
+    let drawn = false;
     match (&from, saved) {
         (Some(from), Some(_)) => unsafe {
             platform::host_show_window_behind(ui_view, from.ui_view)
         },
         _ => unsafe { platform::host_show_window(ui_view) },
     }
+    DRAWN_BEFORE_SHOWN.set(drawn.then(Instant::now));
     log_frame(id, ui_view);
     if !first {
         finish_opening(id, ui_view, window, true, saved.is_none(), own, cx);

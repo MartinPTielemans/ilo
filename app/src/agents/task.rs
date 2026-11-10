@@ -1553,29 +1553,36 @@ impl Agents {
         }
     }
 
-    /// At launch: the Spaces a run before left of its tasks, as a crash would, go. An outside
-    /// agent's, which a crash leaves too, and before #1080 the user saw as a Space of theirs, gives
-    /// its tabs to the user's Space in its profile first, as a session's Open would.
+    /// At launch: the Spaces a run before left of its tasks and outside agents, as a crash does,
+    /// and before #1080 a quit of an outside agent's, which the user saw as a Space of theirs, each
+    /// give their tabs to the top of the user's Space in its profile, as Open or Keep would, then
+    /// go. A crash showed no receipt, so the user chose neither Keep nor Dismiss, and of the two
+    /// only Keep can be undone: the tabs close to the archive as any do (#1080).
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
-        for space in self.browser.task_spaces() {
-            log!("browser: deleting space {space} of a task before");
-            self.browser.delete_space(space, cx);
-        }
-        for client in Client::ALL {
+        let left = (self
+            .browser
+            .task_spaces()
+            .into_iter()
+            .map(|space| (space, None)))
+        .chain(Client::ALL.into_iter().filter_map(|client| {
             let space = self.browser.agent_space(client.id());
-            if space == 0 {
-                continue;
-            }
+            (space != 0).then_some((space, Some(client)))
+        }))
+        .collect::<Vec<_>>();
+        for (space, client) in left {
             let home = self.browser.user_space(space);
             // Each goes to the top, so the last goes first.
             for tab in self.browser.space_tab_ids(space, cx).into_iter().rev() {
                 self.browser.move_tab(tab, home, cx);
             }
-            // check.sh reads this line.
-            log!(
-                "browser: deleting space {space} of agent {} before",
-                client.id()
-            );
+            // check.sh reads these lines.
+            match client {
+                Some(client) => log!(
+                    "browser: deleting space {space} of agent {} before",
+                    client.id()
+                ),
+                None => log!("browser: deleting space {space} of a task before"),
+            }
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
@@ -1855,6 +1862,30 @@ impl Agents {
                 .filter(|page| !page.url.is_empty())
                 .map(|page| (page.title.to_string(), page.url.to_string()))
                 .collect();
+            // Its activity log: the entries of its agent, a session's client's or the task's own,
+            // from when it started to when it ended, a run's steps each its own.
+            let (logged_as, answers) = match (&task.session, task.cli) {
+                (Some(session), _) => (session.agent.clone(), session.agent.clone()),
+                (None, Some(cli)) => (task.agent.clone(), super::task_answers(cli)),
+                (None, None) => (task.agent.clone(), task.agent.clone()),
+            };
+            let (from, to) = (task.started, task.ended.unwrap_or_else(SystemTime::now));
+            let entries = (self.log.iter())
+                .filter(|entry| entry.agent == logged_as && entry.at >= from && entry.at <= to)
+                .flat_map(|entry| match entry.steps.is_empty() {
+                    true => vec![entry],
+                    false => entry.steps.iter().collect(),
+                });
+            let mut steps: Vec<crate::agent_history::Step> = entries
+                .map(|entry| crate::agent_history::Step {
+                    at: seconds(entry.at),
+                    action: entry.action.to_string(),
+                    site: entry.site.to_string(),
+                    refused: entry.refused.to_string(),
+                })
+                .collect();
+            let over = steps.len().saturating_sub(crate::agent_history::STEPS);
+            steps.drain(..over);
             let past = crate::agent_history::Past {
                 id: format!("{}-{}", task.agent, seconds(task.started)),
                 title: task.title.to_string(),
@@ -1870,6 +1901,8 @@ impl Agents {
                     .session
                     .as_ref()
                     .map_or(task.sent, |session| session.messages),
+                steps,
+                answers,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
             let home = if task.home != 0 {

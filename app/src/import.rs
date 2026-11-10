@@ -14,6 +14,8 @@
 //! the other browser's files, and it adds through the core's calls a user's actions make, so a
 //! second run adds nothing the first did (plan.rs).
 
+// Linux's alone, so in the platform layer; it only reads files, so the tests run it everywhere.
+#[path = "../platform/linux/app_icons.rs"]
 pub mod app_icons;
 pub mod arc;
 mod arrival;
@@ -96,8 +98,9 @@ pub trait Host {
     /// Opens a tab at `tab`'s URL at the top of `space`'s Today tabs, in its profile. Its page
     /// loads once it's first shown.
     fn add_today(&self, space: u64, tab: &Tab);
-    /// Puts `rules` after the user's link rules.
-    fn add_link_rules(&self, rules: &[crate::link_rules::Rule]);
+    /// Puts `rules` after the user's link rules, and sends everything else to `otherwise`, as
+    /// `link_rules::Rules` holds it, if some.
+    fn add_link_rules(&self, rules: &[crate::link_rules::Rule], otherwise: Option<u64>);
     /// Whether `profile` has loaded, so its history can take pages.
     fn profile_loaded(&self, profile: u64) -> bool;
     /// Adds `pages` to `profile`'s history but for those it has, and returns whether it will. If
@@ -200,7 +203,7 @@ impl Host for Detached {
     fn add_split(&self, _: u64, _: u64, _: &Split) {}
     fn add_favorite(&self, _: u64, _: &Tab) {}
     fn add_today(&self, _: u64, _: &Tab) {}
-    fn add_link_rules(&self, _: &[crate::link_rules::Rule]) {}
+    fn add_link_rules(&self, _: &[crate::link_rules::Rule], _: Option<u64>) {}
     fn profile_loaded(&self, _: u64) -> bool {
         true
     }
@@ -361,18 +364,26 @@ impl Job {
                 host.add_today(id, tab);
             }
         }
+        let id = |space: SpaceRef| match space {
+            SpaceRef::Existing(id) => id,
+            SpaceRef::Planned(at) => self.spaces[at].0,
+            SpaceRef::Little => crate::link_rules::LITTLE,
+            SpaceRef::Front => crate::link_rules::FRONT,
+        };
         let rules: Vec<crate::link_rules::Rule> = (self.plan.link_rules.iter())
             .map(|rule| crate::link_rules::Rule {
                 condition: rule.condition,
                 text: rule.text.clone(),
-                space: match rule.space {
-                    SpaceRef::Existing(id) => id,
-                    SpaceRef::Planned(at) => self.spaces[at].0,
-                },
+                space: id(rule.space),
             })
             .collect();
-        if !rules.is_empty() {
-            host.add_link_rules(&rules);
+        // Everything else's Space in front is 0, not a rule's.
+        let otherwise = (self.plan.link_otherwise).map(|space| match space {
+            SpaceRef::Front => 0,
+            space => id(space),
+        });
+        if !rules.is_empty() || otherwise.is_some() {
+            host.add_link_rules(&rules, otherwise);
         }
         let existing = host.existing(cx);
         for (profile, tab) in &self.plan.favorites {
@@ -2082,6 +2093,10 @@ impl ImportView {
         let open = self
             .control("import-full-disk-access", "Open System Settings")
             .on_click(cx.listener(|view, _, _, _| view.host.open_full_disk_access()));
+        let open = div().relative().child(open).child(drawn(
+            "import-full-disk-access".into(),
+            self.drawn_at.clone(),
+        ));
         let back = self
             .control("import-back", "Back")
             .on_click(cx.listener(|view, _, _, cx| view.back(cx)));

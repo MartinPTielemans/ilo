@@ -25,7 +25,10 @@ jobs:
 
       - run: rustup update stable --no-self-update
 
-      - uses: actions/cache@v4
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -39,3 +42,16 @@ jobs:
       # main.rs and the Mac's driver, which the tests don't compile. Checked, as linking needs the
       # engine's framework.
       - run: cargo check --release --bin Browser
+      # What follows decides nothing, so this tree has passed.
+      - uses: ./.github/actions/tree-proof
+        with:
+          job: ci-app_mac
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}

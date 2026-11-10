@@ -502,11 +502,14 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo Separate 
 expect '^browser: splits $' "⇧⌘Z didn't end the split again"
 expect "^browser: panes $b\$" "⇧⌘Z didn't show the separated page alone"
 # ⌥↩ in the command bar opens its URL in a pane beside the page shown, and ⌘W closes the focused
-# pane, leaving the card to the page beside it.
+# pane, leaving the card to the page beside it. The command bar binds ⌥↩ as Alt+↩ on Windows, which
+# the driver presses as winalt: its alt is the Mac's ⌥, Ctrl+Alt there.
+beside=alt
+! windows || beside=winalt
 send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type example.net
-send key return alt
+send key return $beside
 expect "^browser: splits $b+[0-9][0-9]*\$" \
   "⌥↩ didn't open example.net beside the page: \"$(splits)\""
 d=$(splits | cut -d+ -f2)
@@ -582,7 +585,9 @@ expect '^browser: drop targets shown$' "the targets' window didn't show"
 expect '^browser: drop target left$' "the left target isn't under the tab"
 # Under the tab the pages draw at Arc's 0.92 of their size about the card's centre, so 12 in from
 # the card's left edge, low down, the window's colour shows, as above the card, where the page was.
-expect '^browser: page scale 0.92$' "the pages didn't draw smaller under the tab"
+# Under Reduce Motion, which the Windows runner has, they keep their size.
+still=$(last 'reduce motion')
+[ "$still" = on ] || expect '^browser: page scale 0.92$' "the pages didn't draw smaller under the tab"
 ../tools/window-screenshot.sh "$pid" "$out/split-targets.png" || fail "no window to capture"
 content=$(grep '^browser: layout content' "$log" | tail -1 |
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
@@ -606,13 +611,14 @@ alike() {
 # which has no compositor: the capture is the targets' window alone, black where it's clear.
 if [ "$(uname)" = Linux ] && [ "${BROWSER_HEADLESS:-xvfb}" = xvfb ]; then
   echo "skip: the pages drawn smaller, in pixels: under Xvfb the capture is the targets' window alone"
-elif ! windows; then
+elif ! windows && [ "$still" != on ]; then
   { alike "$edge" "$fill" && ! alike "$page" "$fill"; } ||
     fail "the page didn't draw smaller under the tab: $edge at its edge, $fill above it, $page in it"
 fi
 send dragto 100 300
 expect '^browser: drop targets gone$' "the targets stayed with the tab back over the sidebar"
-expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
+[ "$still" = on ] ||
+  expect '^browser: page scale 1$' "the pages didn't draw at their size again with the targets gone"
 expect '^browser: drop targets hidden$' "the targets' window stayed"
 expect "^browser: panes $c\$" "the tab pressed didn't show again with the targets gone"
 send dragto $target
@@ -627,6 +633,29 @@ bar_command separate-split "Separate All Tabs" "separate all"
 expect '^browser: splits $' "Separate All Tabs didn't end the split: \"$(splits)\""
 expect "^browser: panes $c\$" "Separate All Tabs didn't show the focused page alone"
 expect "^browser: today.* $c $a\( \|\$\)" "Separate All Tabs lost the pages' order: $(today)"
+# Let go over the page off the target, the tab opens in a window of its own, as big as this one and
+# centred on the pointer, where its picture of a window was (Dia), and ⌘Z sends it back.
+send press $(row 0)
+send dragto 110 $(row 0 | cut -d' ' -f2)
+send dragto $((x + w / 2)) $((y + h / 2))
+expect '^browser: drop targets shown$' "the targets didn't come for the tab over the page's middle"
+send release $((x + w / 2)) $((y + h / 2))
+expect '^browser: tab [0-9]* let go off the targets$' "the tab let go off the targets didn't leave"
+off=$(grep '^browser: tab [0-9]* let go off the targets$' "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: window [0-9]* took $off from window [0-9]*\$" "no window took the tab let go off the targets"
+off_window=$(grep "^browser: window [0-9]* took $off from window " "$log" | tail -1 | cut -d' ' -f3)
+expect "^browser: window $off_window shows $off\$" "the window opened for the tab didn't show it"
+expect '^browser: drop targets hidden$' "the targets' window stayed after the tab left"
+../tools/window-screenshot.sh "$pid" "$out/split-off-target.png" all || fail "no window to capture"
+# The driver counts windows in the order they opened, closed ones too.
+send window $(grep -c '^browser: \(private \)\{0,1\}window opened ' "$log")
+# ⌘Z in a page's text field is the page's, so the UI takes the keyboard first, at the sidebar's
+# empty foot.
+send click 100 600
+send key z cmd
+expect "^browser: window closed $off_window\$" "⌘Z didn't close the window the tab let go off the targets opened"
+expect "^browser: window [0-9]* shows $off\$" "⌘Z didn't send the tab back"
+send window 1
 # A page alone has targets at the card's top and bottom too, as Arc stacks a split, and let go on
 # the top one the tab joins the page above it.
 top="$((x + w / 2)) $((y + 80))"

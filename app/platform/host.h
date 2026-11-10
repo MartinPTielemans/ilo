@@ -498,6 +498,12 @@ void host_hide_capture(void);
 // in a driven run.
 void host_copy_png(const uint8_t* png, size_t size);
 
+// Calls |png| with the main display's desktop picture as a PNG, at most the display's size in
+// pixels, before it returns, for Portrait Mode (#673), and says whether it did: false where the
+// system gives none, as off the Mac for now.
+bool host_desktop_picture(void* context,
+                          void (*png)(void* context, const uint8_t* data, size_t size));
+
 // Asks where to save the PNG |png|, |size| bytes long, in a save panel on |ui_view|'s window, named
 // for when it was taken, and saves it there. It returns at once, before the panel shows, since the
 // UI calls it from an event its panel can't wait in.

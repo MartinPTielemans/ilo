@@ -496,6 +496,8 @@ struct Asking {
     question: Question,
     site: String,
     act: Act,
+    /// Refuses the action once ASK_WAIT passes with no answer; an answer drops it.
+    _timer: Task<()>,
 }
 
 /// An entry of the activity log: what an agent did, or was refused, where and when.
@@ -695,6 +697,8 @@ struct Held {
     /// The handoff's or ask_for_tab's call, which waits for the tab to come back, while its
     /// agent's session lasts.
     reply: Option<mpsc::Sender<ToolResult>>,
+    /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
+    timer: Option<Task<()>>,
 }
 
 /// The app's agents, once main.rs has made them.
@@ -1107,6 +1111,7 @@ impl Agents {
                 question,
                 back: None,
                 reply: None,
+                timer: None,
             };
             self.held.insert(tab, held);
         }
@@ -1352,6 +1357,7 @@ impl Agents {
                     question,
                     back: None,
                     reply: Some(reply),
+                    timer: Some(self.handoff_timer(tab, question, cx)),
                 };
                 self.held.insert(tab, held);
                 self.asked(cx);
@@ -1902,6 +1908,7 @@ impl Agents {
             question,
             back: None,
             reply: None,
+            timer: None,
         };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
@@ -2287,12 +2294,59 @@ impl Agents {
             question.id,
             act.what
         );
+        let id = question.id;
         self.asking.push(Asking {
             question,
             site,
             act,
+            _timer: cx.spawn(async move |agents, cx| {
+                cx.background_executor().timer(ASK_WAIT).await;
+                _ = agents.update(cx, |agents, cx| agents.unanswered(id, cx));
+            }),
         });
         self.asked(cx);
+    }
+
+    /// The question `id` waited ASK_WAIT with no answer: the action is refused this once, as the
+    /// × refuses it, so the agent isn't left waiting on a user who went away.
+    fn unanswered(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(at) = (self.asking.iter()).position(|asking| asking.question.id == id) else {
+            return;
+        };
+        let Asking { site, act, .. } = self.asking.remove(at);
+        // check.sh reads this line.
+        log!("browser: agent {} asked {id} with no answer", act.agent);
+        self.refuse(act, &site, NO_ANSWER, cx);
+        self.asked(cx);
+    }
+
+    /// Answers the handoff `question` of `tab` once HANDOFF_WAIT passes with the tab still the
+    /// user's. The tab stays theirs, and Hand Back still gives it back.
+    fn handoff_timer(&self, tab: u64, question: u64, cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |agents, cx| {
+            cx.background_executor().timer(HANDOFF_WAIT).await;
+            _ = agents.update(cx, |agents, cx| {
+                let Some(held) = (agents.held.get_mut(&tab))
+                    .filter(|held| held.question == question && held.back.is_none())
+                else {
+                    return;
+                };
+                let Some(reply) = held.reply.take() else {
+                    return;
+                };
+                held.timer = None;
+                let agent = held.agent.clone();
+                // check.sh reads this line.
+                log!("browser: agent {agent} handoff {tab} with no hand back");
+                _ = reply.send(ToolResult::error(format!(
+                    "The user hasn't handed tab {tab} back in 15 minutes. It stays theirs; \
+                     ask them where you started the task before you go on there."
+                )));
+                let site = site(&agents.browser.tab(tab, cx).url);
+                agents.note(&agent, "not handed back", &site, "");
+                agents.asked(cx);
+            });
+        })
     }
 
     /// The user's answer to the question `id`.
@@ -2467,6 +2521,11 @@ impl Agents {
         cx.notify();
         let answer = match why {
             SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
+            NO_ANSWER => format!(
+                "The user didn't answer in 5 minutes, so you can't {} now. Ask them where you \
+                 started the task before you try again.",
+                act.what
+            ),
             SAID_NEVER => {
                 format!(
                     "The user said never on {site}: you can't {}. Don't try again.",
@@ -2573,10 +2632,18 @@ impl Agents {
     }
 
     /// The core put `tab`, which `opener`'s page opened, beside it: if an agent is acting there, in
-    /// its Space, behind, and its action's answer names it (#1470).
-    pub fn tab_opened(&mut self, tab: u64, opener: u64) {
+    /// its Space, behind, and its action's answer names it (#1470). In an agent's Space it's quiet,
+    /// as the agent's own tabs are, until the user wants to hear it (#1080).
+    pub fn tab_opened(&mut self, tab: u64, opener: u64, cx: &App) {
         if let Some(acting) = self.acting.values_mut().find(|acting| acting.tab == opener) {
             acting.opened_tabs.push(tab);
+        }
+        let tasks = &self.tasks.tasks;
+        if tasks
+            .iter()
+            .any(|task| self.browser.space_tab_ids(task.space, cx).contains(&tab))
+        {
+            self.browser.set_muted(tab, true);
         }
     }
 
@@ -3288,6 +3355,12 @@ fn finish(sending: Sending, error: bool) {
 
 /// What the log says of an action the user refused, now or for good on its site.
 const SAID_NO: &str = "You said no.";
+/// What the log says of an action that asked and had no answer in ASK_WAIT.
+const NO_ANSWER: &str = "No answer in 5 minutes.";
+/// The spec's: how long an action asking first waits for the user's answer.
+const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
+/// The spec's: how long a handoff's call waits for the user to hand the tab back.
+const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
 /// Why discarding a page the agent didn't open asks the user first.
 const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
 const SAID_NEVER: &str = "You said never on this site.";

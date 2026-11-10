@@ -67,6 +67,8 @@ std::optional<gfx::Point> g_pressed;
 // The Mini Player Chrome made last, as it makes one for each video floated.
 base::WeakPtr<views::Widget> g_made;
 
+int g_shows = 0;
+
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
 // that let it go asked whether it had (MiniPlayerHasKeyboard).
 class KeyboardWatch : public views::WidgetObserver {
@@ -287,6 +289,7 @@ gfx::Rect Placed(VideoOverlayWindowViews* window,
   }
   // A new one isn't the last one's settle.
   Settling().Stop();
+  ++g_shows;
   const std::optional<gfx::Rect> left = LastLeft();
   // A kept place's screen, or the nearest, if the screens changed since.
   const gfx::Rect on =
@@ -453,6 +456,10 @@ void SetUpMiniPlayer() {
 
 bool MiniPlayerHasKeyboard() {
   return g_made && g_made->IsVisible() && g_made->IsActive();
+}
+
+int MiniPlayerShows() {
+  return g_shows;
 }
 
 void CameBackTo(Window& window) {

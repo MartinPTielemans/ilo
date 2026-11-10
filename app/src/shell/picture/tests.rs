@@ -329,3 +329,127 @@ fn a_page_that_is_live_here_is_never_captured(cx: &mut TestAppContext) {
     assert!(!pictured(&shell, cx));
     assert!(picture_at(&shell, cx).is_none());
 }
+
+/// The page as the core reports it: at `url`, loading or not.
+fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64, url: &str, loading: bool) {
+    shell.update(cx, |shell, cx| {
+        let page = crate::shell::Page {
+            url: url.to_owned().into(),
+            loading,
+            ..shell.page(tab)
+        };
+        shell.set_page(tab, page, cx)
+    });
+}
+
+/// The picture is taken again when its page finishes a load or goes to another URL with none under
+/// way, as a same-page one does, and not while a load is under way or for anything else the core
+/// reports. A change while a picture is out takes one more once it comes (#359).
+#[gpui::test]
+fn the_picture_follows_the_page_s_loads(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", false);
+    picture_arrives(&shell, cx, 10);
+    host.take();
+
+    // A navigation: nothing while it loads, a picture once it's done.
+    report(&shell, cx, 10, "https://b.test/", true);
+    assert!(asked(&host).is_empty());
+    report(&shell, cx, 10, "https://b.test/", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer(&shell, cx);
+    assert!(asked(&host).is_empty());
+
+    // A same-page navigation, with no load.
+    report(&shell, cx, 10, "https://b.test/#more", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    // Another while that picture is out waits for it, then takes one more, once.
+    report(&shell, cx, 10, "https://b.test/#end", false);
+    report(&shell, cx, 10, "https://b.test/#top", false);
+    assert!(asked(&host).is_empty());
+    answer(&shell, cx);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer(&shell, cx);
+    assert!(asked(&host).is_empty());
+
+    // Another tab's load, or a report that changes neither, takes none.
+    report(&shell, cx, 20, "https://c.test/", true);
+    report(&shell, cx, 20, "https://c.test/", false);
+    report(&shell, cx, 10, "https://b.test/#top", false);
+    assert!(asked(&host).is_empty());
+}
+
+/// A window whose page is live here takes no picture when the page loads.
+#[gpui::test]
+fn a_live_page_s_load_takes_no_picture(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", true);
+    report(&shell, cx, 10, "https://a.test/", false);
+    assert!(asked(&host).is_empty());
+    assert!(!pictured(&shell, cx));
+}
+
+/// The core answers the request out with no picture.
+fn answer_empty(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    let request = shell.read_with(cx, |shell, _| shell.picture.as_ref().unwrap().request);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, None, cx));
+    cx.run_until_parked();
+}
+
+/// A page that just loaded may have drawn no frame for the core to picture. An empty answer to a
+/// change's picture asks again 100, 300 and 900 ms after each, then no more; a picture that comes
+/// ends it, and nothing is asked again for an empty answer to any other picture (#359).
+#[gpui::test]
+fn an_empty_picture_after_a_load_is_asked_again_three_times(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", false);
+    picture_arrives(&shell, cx, 10);
+    host.take();
+
+    report(&shell, cx, 10, "https://b.test/", true);
+    report(&shell, cx, 10, "https://b.test/", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    for wait in [100, 300, 900] {
+        answer_empty(&shell, cx);
+        after(Duration::from_millis(wait - 1), &shell, cx);
+        assert!(asked(&host).is_empty(), "asked again before {wait} ms");
+        after(Duration::from_millis(1), &shell, cx);
+        assert_eq!(asked(&host), ["picture 10"], "not asked again at {wait} ms");
+    }
+    answer_empty(&shell, cx);
+    after(Duration::from_secs(60), &shell, cx);
+    assert!(asked(&host).is_empty());
+    // The old picture stays meanwhile.
+    assert!(image(&shell, cx).is_some());
+
+    // A picture that comes ends the asking.
+    report(&shell, cx, 10, "https://c.test/", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer_empty(&shell, cx);
+    after(Duration::from_millis(100), &shell, cx);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer(&shell, cx);
+    after(Duration::from_secs(60), &shell, cx);
+    assert!(asked(&host).is_empty());
+
+    // The window coming to the front asks once, and an empty answer to that asks no more.
+    shell.update(cx, |shell, cx| shell.became_key(cx));
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer_empty(&shell, cx);
+    after(Duration::from_secs(60), &shell, cx);
+    assert!(asked(&host).is_empty());
+}
+
+/// A wait for another ask ends with the picture: the page coming back asks nothing after.
+#[gpui::test]
+fn the_asking_again_goes_with_the_picture(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", false);
+    picture_arrives(&shell, cx, 10);
+    report(&shell, cx, 10, "https://b.test/", false);
+    host.take();
+    answer_empty(&shell, cx);
+    shell.update(cx, |shell, cx| shell.page_elsewhere(0, cx));
+    after(Duration::from_secs(60), &shell, cx);
+    assert!(asked(&host).is_empty());
+}

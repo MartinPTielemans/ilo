@@ -17,6 +17,26 @@ fn past(id: &str, ended: u64) -> Past {
         )],
         orders: 1,
         messages: 0,
+        steps: vec![
+            step(ended - 50, "open_tab", "taberna.example", ""),
+            step(ended - 40, "click", "taberna.example", ""),
+            step(
+                ended - 30,
+                "navigate",
+                "",
+                "Pages outside http(s) are the user's.",
+            ),
+        ],
+        answers: "claude-code".into(),
+    }
+}
+
+fn step(at: u64, action: &str, site: &str, refused: &str) -> Step {
+    Step {
+        at,
+        action: action.into(),
+        site: site.into(),
+        refused: refused.into(),
     }
 }
 
@@ -27,6 +47,30 @@ fn an_entry_reads_back_as_it_was_kept() {
     let entries = vec![past("task-2", 2_000_000), past("task-1", 1_000_000)];
     let text = write(&entries) + "not json\n";
     assert_eq!(read(&text), entries);
+}
+
+/// An entry kept before its steps and answers were has neither, and reads all the same.
+#[test]
+fn an_entry_from_before_steps_were_kept_reads_without_them() {
+    let line = r#"{"id":"task-1","title":"Book","agent":"Claude Code","started":1,"ended":61,"pages":[],"orders":0,"messages":0}"#;
+    let read = read(line);
+    assert_eq!(read.len(), 1);
+    assert!(read[0].steps.is_empty() && read[0].answers.is_empty());
+}
+
+/// Its page says how long it ran, and the sites it went to, from its log, then its pages, each
+/// once.
+#[test]
+fn its_page_says_how_long_it_ran_and_where() {
+    let mut past = past("task-1", 1_000_000);
+    assert_eq!(past.length(), "1 min");
+    past.started = past.ended - 30;
+    assert_eq!(past.length(), "Under a minute");
+    past.started = past.ended - 3900;
+    assert_eq!(past.length(), "1 h 5 min");
+    past.pages
+        .push(("Menu".into(), "https://www.menu.example/today".into()));
+    assert_eq!(past.sites(), ["taberna.example", "menu.example"]);
 }
 
 /// Kept, a task goes first; a later turn of the same task takes its place, and one that ended

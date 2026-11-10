@@ -241,7 +241,7 @@ extern "C" fn new_tab(
     // At the application: as a link from another app, which Settings › Links sends where its
     // rules say, by default to Little ilo, which opens once this is over.
     if window == 0 {
-        let shown = open_links_in(front().0, &[url]);
+        let shown = open_links_in(front().0, &[url]).unwrap_or(front().0);
         return unsafe { bc::bc_window_selected(shown) };
     }
     if space != 0
