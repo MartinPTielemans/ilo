@@ -15,7 +15,6 @@
 #   quarantine.sh match <os> <run> <session> <FAIL line>   prints the issue of the line that covers
 #                                                          that failure, or fails when none does
 #   quarantine.sh list <os>    the lines as a Markdown table, for a Check run's summary
-#   quarantine.sh notes        every line as a draft of a release's Known gaps, by its issue's title
 #   quarantine.sh lint         fails on a line that's malformed, names no run, is more than 14 days
 #                              old or whose issue isn't open, and on an issue main-check.sh opened
 #                              for a run red twice running that no line names a day later
@@ -37,14 +36,6 @@ squeeze() {
 # Seconds since 1970 of the day $1, YYYY-MM-DD, with GNU date or the Mac's.
 day() {
   date -u -d "$1" +%s 2> /dev/null || date -u -j -f %Y-%m-%d "$1" +%s 2> /dev/null
-}
-
-os_name() {
-  case $1 in
-  mac) echo macOS ;;
-  windows) echo Windows ;;
-  linux) echo Linux ;;
-  esac
 }
 
 case ${1:-} in
@@ -86,15 +77,6 @@ list)
   lines "$2" | while read -r name issue added step; do
     step=$(squeeze "$step" | tr '|' '/')
     echo "| $name | ${step:-any} | [$issue](https://github.com/$repo/issues/${issue#\#}) | $added |"
-  done
-  ;;
-notes)
-  for os in mac windows linux; do
-    lines "$os" | while read -r name issue added step; do
-      title=$(gh issue view "${issue#\#}" --repo "$repo" --json title -q .title 2> /dev/null) ||
-        title="the $name run fails at times"
-      echo "- $(os_name "$os"): $title ($issue)."
-    done
   done
   ;;
 lint)
@@ -173,7 +155,7 @@ lint)
   exit "$status"
   ;;
 *)
-  echo "usage: quarantine.sh match <os> <run> <session> <FAIL line> | list <os> | notes | lint" >&2
+  echo "usage: quarantine.sh match <os> <run> <session> <FAIL line> | list <os> | lint" >&2
   exit 2
   ;;
 esac
