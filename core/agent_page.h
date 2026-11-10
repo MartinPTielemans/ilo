@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -19,12 +20,15 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
+#include "browser_core/withheld_fields.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "url/gurl.h"
+
+class SkBitmap;
 
 namespace content {
 class DevToolsAgentHost;
@@ -79,6 +83,8 @@ class AgentPage : public content::WebContentsObserver,
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
+  // Withheld fields' boxes, by element.
+  using Boxes = std::map<int64_t, gfx::RectF>;
   // A frame whose tree a snapshot reads, through the session at |slot|, below the frame at
   // |parent| in the snapshot's list.
   struct Frame {
@@ -98,6 +104,16 @@ class AgentPage : public content::WebContentsObserver,
   // reading the tree after choosing one.
   enum class Choosing { kNo, kOptions, kOpened, kChosen };
   class WheelWatch;
+  // A picture's withholding as it goes: the frames whose fields it reads, the fields holding
+  // something, and the boxes of those withheld.
+  struct Withholding {
+    Withholding();
+    ~Withholding();
+    std::vector<Frame> frames;
+    std::vector<std::pair<int64_t, FieldFacts>> fields;
+    Boxes boxes;
+    base::OnceCallback<void(std::optional<Boxes>)> then;
+  };
 
   explicit AgentPage(content::WebContents* contents);
 
@@ -162,7 +178,29 @@ class AgentPage : public content::WebContentsObserver,
   void Scrolled(bool down);
   void ScrollTo();
   void History(bool forward);
+  // The page's picture, with each field whose contents an agent doesn't see (Withheld) painted
+  // over, in every frame.
   void Screenshot();
+  // Copies the page's surface once the fields' boxes before it are read, if they could be, then
+  // paints over each field from its box before to its box after (Paint).
+  void Picture(uint64_t request, std::optional<Boxes> before);
+  void Paint(uint64_t request, Boxes before, SkBitmap bitmap, std::optional<Boxes> after);
+  // The boxes of the fields whose contents an agent doesn't see, by element, in the main frame's
+  // viewport's CSS pixels, or none if a frame's fields couldn't be read: each frame's filled
+  // fields (ReadFields), then each one's attributes and markup (NextField), and a withheld one's
+  // box (Withhold).
+  void WithheldBoxes(base::OnceCallback<void(std::optional<Boxes>)> then);
+  void ReadFields(std::unique_ptr<Withholding> withholding, size_t next);
+  void NextField(std::unique_ptr<Withholding> withholding, size_t next);
+  void Withhold(std::unique_ptr<Withholding> withholding,
+                size_t next,
+                const base::DictValue* described);
+  // Moves |box|, in the session at |slot|, into the main frame's viewport as Offset does, but cut
+  // to each frame it's seen through, and scrolling nothing.
+  void Lift(int slot, gfx::RectF box, Then then);
+  // Keeps what the agent's typing or choosing left in |element|, from the tree read after it
+  // settled, so a field shows it only while it still holds exactly that.
+  void KeepTyped(const base::ListValue& nodes, int64_t element);
 
   // The tree, as bc_agent_page answers it: the main frame's, with each frame agents may see under
   // the element it's in.
@@ -246,6 +284,9 @@ class AgentPage : public content::WebContentsObserver,
   std::vector<Target> targets_;
   // The frames the snapshot running reads.
   std::vector<Frame> frames_;
+  // What the agent's typing or choosing left in each element it typed in or chose in, as the field
+  // read once the page settled, until the page's document changes.
+  std::map<int64_t, std::u16string> typed_;
   // Whether the job hears of the page's requests, and waits for them to end.
   bool listening_ = false;
   bool settling_ = false;

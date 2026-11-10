@@ -38,6 +38,10 @@
 # restarted.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
 # nothing scrolled.
+# Its picture of a page paints over each field whose contents its outline withholds: one filled by
+# the page's script, as the user's or a password manager's fill is, one it typed into that changed
+# since, a password field made a text field and a card's field, in another site's frame and half
+# out of view too, while its own unchanged typing and the page's own values show.
 # Through all it does before the user first looks at its card, the user's Space, tab and focused
 # field stay as the user left them, and the user's next keys go into that field (decision 8).
 
@@ -1034,6 +1038,120 @@ CARD
   [ "$changed" = "error: The user said no: you can't make a change on localhost. Don't try again." ] ||
     fail "the denied change answered: $changed"
   [ "$(grep -c "$posted" "$out/site.log")" = 1 ] || fail "the denied change reached the site"
+
+  # The agent's picture of a page withholds what its outline does of a field: a field holding what
+  # the agent typed and is unchanged shows it, as does the page's own value, by the markup or in a
+  # read-only field; any other field with something in it is painted over, so a field filled by the
+  # page's script, as the user's typing or a password manager's fill would be, one the agent typed
+  # into that changed since, a password field the page made a text field and a card's field, in a
+  # frame of another site and half out of view too. Each field's text is red blocks: a field shown
+  # has red in the picture, and one withheld has none.
+  printf '%s' '<!doctype html><style>
+body { margin: 0; background: #fff }
+input, textarea { position: absolute; box-sizing: border-box; width: 40%; height: 40%; margin: 0;
+  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 30vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
+</style>
+<input aria-label="Frame default" value="██████" style="left: 5%; top: 10%">
+<input aria-label="Frame filled" style="left: 55%; top: 10%">
+<script src="painted.js"></script>
+<script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
+painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
+  printf '%s' "<!doctype html><title>loading</title><style>
+body { margin: 0; background: #fff }
+input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
+  padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
+  -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
+iframe { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
+button { position: absolute; left: 70vw; top: 50vh }
+</style>
+<input aria-label=Typed style='left: 2vw; top: 2vh'>
+<input aria-label=Changed style='left: 26vw; top: 2vh'>
+<input aria-label=Filled style='left: 50vw; top: 2vh'>
+<input aria-label=Default value='██████' style='left: 74vw; top: 2vh'>
+<input aria-label=Fixed readonly style='left: 2vw; top: 20vh'>
+<input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
+<input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
+<textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
+<iframe src=http://127.0.0.1:$port/withheld-inner.html></iframe>
+<button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
+<input aria-label=Below style='left: 2vw; top: 94vh'>
+<script src=painted.js></script>
+<script>
+const field = label => document.querySelector('[aria-label=\"' + label + '\"]');
+for (const label of ['Filled', 'Fixed', 'Below']) field(label).value = '██████';
+field('Shown password').type = 'text';
+let ready = 0;
+const shown = () => ++ready == 2 && (document.title = 'fields');
+painted(shown);
+addEventListener('message', event => event.data == 'painted' && shown());
+</script>" > "$out/site/withheld.html"
+  outline=$(call open_tab "{\"url\":\"localhost:$port/withheld.html\"}")
+  fields_tab=$(printf '%s\n' "$outline" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  await_log "^browser: title $fields_tab fields\$" "the page with fields didn't paint"
+  for label in Typed Changed; do
+    ref=$(ref_of textbox "$label")
+    typed=$(call type "{\"tab\":$fields_tab,\"ref\":\"$ref\",\"text\":\"██████\"}")
+    case "$typed" in "error: "*) fail "typing into $label answered: $typed" ;; esac
+  done
+  clicked=$(call click "{\"tab\":$fields_tab,\"ref\":\"$(ref_of button Change)\"}")
+  case "$clicked" in
+    "Clicked button “Change”."*) ;;
+    *) fail "clicking Change answered: $clicked" ;;
+  esac
+  mcp "$(request screenshot "{\"tab\":$fields_tab}")" | python3 -I -c '
+import base64, json, sys
+content = json.load(sys.stdin)["result"]["content"][0]
+if content["type"] != "image":
+    sys.exit(content.get("text", "no picture"))
+open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-fields.jpg" ||
+    fail "the screenshot of the page with fields answered no picture"
+  # The share of red pixels between ($1, $2) and ($3, $4), as hundredths of the picture's width
+  # and height, in %; pixel leaves the picture as a BMP.
+  pixel "$out/agent-fields.jpg" 0 0 > /dev/null
+  reds() {
+    python3 -I - "$out/pixel.bmp" "$@" << 'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+x0, y0, x1, y1 = (float(each) / 100 for each in sys.argv[2:6])
+stride = (bits * width + 31) // 32 * 4
+red = total = 0
+for y in range(int(y0 * abs(height)), int(y1 * abs(height))):
+    row = y if height < 0 else abs(height) - 1 - y
+    for x in range(int(x0 * width), int(x1 * width)):
+        b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+        red += r > 160 and g < 100 and b < 100
+        total += 1
+print(red * 100 // max(total, 1))
+PY
+  }
+  # A field's inside, $1 between ($2, $3) and ($4, $5), clear of its border: $6, shown with red,
+  # or withheld with none.
+  see_field() {
+    share=$(reds "$2" "$3" "$4" "$5")
+    echo "$1: $share% red" >> "$out/mcp-pictured.txt"
+    if [ "$6" = shown ]; then
+      [ "$share" -ge 10 ] ||
+        fail "the agent's picture didn't show $1, which it may see: $share% red"
+    else
+      [ "$share" -eq 0 ] || fail "the agent's picture showed $1, which it may not: $share% red"
+    fi
+  }
+  : > "$out/mcp-pictured.txt"
+  see_field Typed 3 4 21 12 shown
+  see_field Changed 27 4 45 12 withheld
+  see_field Filled 51 4 69 12 withheld
+  see_field Default 75 4 93 12 shown
+  see_field Fixed 3 22 21 30 shown
+  see_field "Shown password" 27 22 45 30 withheld
+  see_field Card 51 22 69 30 withheld
+  see_field Note 75 22 93 30 shown
+  see_field "Frame default" 6 44 28 54 shown
+  see_field "Frame filled" 36 44 58 54 withheld
+  see_field Below 3 95 21 99 withheld
+  call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab '{"url":"example.com"}')
