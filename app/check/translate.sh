@@ -8,6 +8,9 @@
 # card's Always Translate Spanish translates it and, after a reload, translates it as it comes, until
 # Settings › Features' Remove takes Spanish off. A page in Dutch, a language the user reads
 # (BROWSER_TRANSLATE_READS), offers none, as Arc offers none for a preferred language.
+# On a Mac with macOS 26, a second launch without the stand-in has Apple's Translation translate the
+# Spanish page to English: its title becomes neither the page's own nor the stand-in's. With no
+# Spanish model on the Mac, that step is skipped, saying what to add in System Settings.
 
 serve
 # "t" puts the page's words in its title, as the log says the title, so the run reads them.
@@ -144,11 +147,57 @@ esac
 send dismiss
 exec 3>&-
 quit
+
+apple="hosted Macs before macOS 26, and Linux and Windows, have no Apple Translation"
+macos=0
+[ "$(uname)" != Darwin ] || macos=$(sw_vers -productVersion | cut -d. -f1)
+if [ "$macos" -ge 26 ]; then
+  log="$out/translate-apple.log"
+  step=0
+  rm -f "$saved" "$launch_frame"
+  BROWSER_DRIVE=1 BROWSER_URL="${site}translate.html" "$browser" < "$out/drive" > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_load
+  await '^browser: title [0-9]* Hola mundo$' || fail "the Spanish page didn't draw again"
+  tab=$(grep '^browser: title [0-9]* Hola mundo$' "$log" | tail -1 | cut -d' ' -f3)
+  await "^browser: language $tab es\$" || fail "Chrome didn't find the page's language again"
+  send click $page_point
+  bar_command translate-page "Translate Page" "translate page"
+  expect "^browser: translating $tab from es to en\$" "Translate Page didn't ask Apple's Translation"
+  expect "^browser: translation $tab [a-z]*\$" "Apple's Translation didn't answer"
+  answer=$(grep "^browser: translation $tab " "$log" | tail -1 | cut -d' ' -f4)
+  title="Hola mundo"
+  if [ "$answer" = translated ]; then
+    for _ in $(seq 50); do
+      title=$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f4-)
+      [ "$title" = "Hola mundo" ] || break
+      sleep 0.1
+    done
+    ../tools/window-screenshot.sh "$pid" "$out/translate-apple.png" || fail "no window to capture"
+  fi
+  exec 3>&-
+  quit
+  case "$answer:$title" in
+  missing:*)
+    apple="this Mac has no Spanish to English model. Add Spanish (and English) in System Settings ›"
+    apple="$apple General › Language & Region › Translation Languages…, then run translate again"
+    echo "skip: translate's Apple Translation step: $apple"
+    ;;
+  translated:"Hola mundo" | translated:"[en]"*)
+    fail "Apple's Translation answered translated, and the page's title stayed \"$title\""
+    ;;
+  translated:*) apple="Apple's Translation made \"Hola mundo\" \"$title\" ($out/translate-apple.png)" ;;
+  *) fail "Apple's Translation answered $answer for Spanish to English" ;;
+  esac
+else
+  echo "skip: translate's Apple Translation step: $apple"
+fi
 echo "ok: a page declaring Spanish got the URL field's mark, whose press opened the card; Translate" \
   "Page showed the stand-in's words in the page and its title, leaving code, translate=\"no\" and" \
   "an editable region; Use Original put the page's own back. The page's menu had Translate to" \
   "English after Cast…, then Use Original, each doing so. The card's Always Translate Spanish" \
   "translated the page and the reloaded page as it came, until Settings › Features' Remove took" \
-  "Spanish off. A page in Dutch, which the user reads, offered none." \
+  "Spanish off. A page in Dutch, which the user reads, offered none. Apple's Translation: $apple." \
   "Windows: $out/translate-offer.png, $out/translated.png, $out/translate-menu.png," \
   "$out/translate-always.png, $out/translate-settings.png"
