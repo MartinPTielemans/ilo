@@ -105,6 +105,88 @@ for (const kind of ['settle', 'trade']) {
   check(shown.applied && before === after && !errors.length, `preview ${kind} over a placed page: ${shown.applied ? 'applied' : shown.why}, put back ${before === after ? 'clean' : 'NOT clean'} ${errors.join(' ')}`);
   await ctx.close();
 }
+// A trade where one element can't fit the other's place is refused with the reason, and the
+// page is as it was.
+{
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('hide')] });
+  const snap = () => page.evaluate(() => [...document.querySelectorAll('body *')].map((e) => { const r = e.getBoundingClientRect(); return [e.getAttribute('style'), e.hasAttribute('popover'), r.left, r.top, r.width, r.height].join('|'); }).join('\n'));
+  await page.evaluate(() => { const box = document.createElement('div'); box.id = 'fitbox';
+    box.innerHTML = '<div id="slim">x</div><div id="broad"><b>a&nbsp;long&nbsp;line&nbsp;that&nbsp;cannot&nbsp;wrap&nbsp;at&nbsp;sixty&nbsp;pixels</b></div>';
+    document.querySelector('main').prepend(box); const st = document.createElement('style'); st.textContent = '#slim { width: 60px; }'; document.head.append(st); });
+  await page.waitForTimeout(100);
+  const before = await snap();
+  const r = await page.evaluate(() => globalThis.__ILO_ARRANGE__.preview({ id: 'fit', kind: 'trade', target: { path: '#slim' }, ref: { path: '#broad' } }));
+  const during = await snap();
+  check(!r.applied && r.why === "These two don't fit each other's places" && !errors.length, `a trade that doesn't fit is refused: ${r.applied ? 'applied' : r.why}, the test ${r.fitMs != null ? r.fitMs.toFixed(2) + ' ms' : 'not run'}`);
+  check(before === during, `  the page is as it was: ${before === during ? 'yes' : 'no'}`);
+  await page.evaluate(() => globalThis.__ILO_ARRANGE__.unpreview('fit'));
+  await ctx.close();
+}
+// The top layer, when the page closes the element: shown again once (a re-inserted element is
+// closed by the browser), and given up for the plain settle the second time, which the bar shows
+// as covered.
+{
+  const { ctx, page, errors } = await withArrangement({ strategy: 'place', top: true, finder: 'path', test: true, changes: [change('settle')] });
+  const path = rec.picks.settle.target.path;
+  const look = () => page.evaluate((path) => { const el = document.querySelector(path); return { open: el.matches(':popover-open'), attr: el.getAttribute('popover'), s: globalThis.__ILO_ARRANGE__.state()[0] }; }, path);
+  await page.evaluate((path) => { const el = document.querySelector(path); el.parentNode.insertBefore(el, el.nextSibling); }, path);
+  await page.waitForTimeout(150);
+  let r = await look();
+  check(r.open && r.s.reshown && !r.s.covered && r.s.applied, `re-inserted by the page, shown again: open ${r.open}, reshown ${r.s.reshown}, covered ${r.s.covered}`);
+  await page.evaluate((path) => document.querySelector(path).hidePopover(), path);
+  await page.waitForTimeout(150);
+  r = await look();
+  check(!r.open && r.attr == null && r.s.covered && r.s.applied && !errors.length, `closed again by the page, back to the plain settle: open ${r.open}, popover ${r.attr}, covered ${r.s.covered}, ${r.s.applied ? 'applied' : r.s.why}`);
+  check(Math.abs(r.s.rect.x - r.s.intended.x) < 2 && Math.abs(r.s.rect.y - r.s.intended.y) < 2, `  drawn where meant: ${JSON.stringify(r.s.rect)} vs ${JSON.stringify(r.s.intended)}`);
+  await page.evaluate(() => globalThis.__ILO_ARRANGE__.reset());
+  const left = await page.evaluate(() => [...document.querySelectorAll('[style], [popover]')].map((e) => e.localName));
+  check(left.length === 0, `  reset leaves no style or popover: ${left.join(' ')}`);
+  await ctx.close();
+}
+// The picker refuses an element the page doesn't show.
+{
+  const { ctx, page } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('hide')] });
+  await page.evaluate(() => { const d = document.createElement('details'); d.innerHTML = '<summary>More</summary><div id="inside">Hidden text</div>'; document.querySelector('main').append(d); });
+  const r = await page.evaluate((t) => ({ inside: globalThis.__ILO_ARRANGE__.canPick({ path: '#inside' }), card: globalThis.__ILO_ARRANGE__.canPick(t) }), rec.picks.settle.target);
+  check(!r.inside.ok && r.card.ok, `the picker refuses an element inside a closed <details>: ${JSON.stringify(r)}`);
+  await ctx.close();
+}
+// A preview sharing an element with a placed change, put back and kept. Put back leaves the page
+// as it was; kept leaves what placing the kept arrangement from scratch gives.
+{
+  const st = rec.picks.settle;
+  const other = rec.picks.trade.target.path !== st.target.path ? rec.picks.trade.target : rec.picks.trade.ref;
+  const cases = {
+    carry: { id: 'carry', kind: 'settle', target: st.target, ref: st.ref, where: st.where === 'before' ? 'after' : 'before' },
+    beside: { id: 'beside', kind: 'settle', target: other, ref: st.target, where: 'after' },
+  };
+  for (const [name, c] of Object.entries(cases)) {
+    for (const then of ['put back', 'kept']) {
+      const { ctx, page, errors } = await withArrangement({ strategy: 'place', finder: 'path', test: true, changes: [change('settle')] });
+      const snap = () => page.evaluate(() => [...document.querySelectorAll('body *')].map((e) => { const r = e.getBoundingClientRect(); return [e.localName, e.getAttribute('style'), r.left, r.top, r.width, r.height].join('|'); }).join('\n'));
+      const placed = await snap();
+      const shown = await page.evaluate((c) => globalThis.__ILO_ARRANGE__.preview(c), c);
+      const waits = name === 'carry' ? shown.waiting.join() === 'settle' : shown.waiting.length === 0;
+      if (then === 'put back') {
+        await page.evaluate((id) => globalThis.__ILO_ARRANGE__.unpreview(id), c.id);
+        const after = await snap();
+        check(shown.applied && waits && placed === after && !errors.length, `${name}, put back: ${shown.applied ? 'applied' : shown.why}, waiting ${JSON.stringify(shown.waiting)}, put back ${placed === after ? 'clean' : 'NOT clean'} ${errors.join(' ')}`);
+      } else {
+        const kept = await page.evaluate((id) => globalThis.__ILO_ARRANGE__.keep(id), c.id);
+        const k = await snap();
+        await page.evaluate(() => { globalThis.__ILO_ARRANGE__.reset(); });
+        const left = await page.evaluate(() => [...document.querySelectorAll('[style], [popover]')].map((e) => e.localName));
+        await page.evaluate(() => { globalThis.__ILO_ARRANGE__.reapply(); });
+        const k2 = await snap();
+        const ids = await page.evaluate(() => globalThis.__ILO_ARRANGE__.state().map((s) => s.id).join());
+        const want = name === 'carry' ? 'carry' : 'settle,beside';
+        check(shown.applied && waits && kept && ids === want && k === k2 && left.length === 0 && !errors.length,
+          `${name}, kept: ${shown.applied ? 'applied' : shown.why}, dropped ${JSON.stringify(kept && kept.dropped)}, now ${ids}, same as placed afresh ${k === k2}, reset leaves ${left.length ? left.join(' ') : 'nothing'} ${errors.join(' ')}`);
+      }
+      await ctx.close();
+    }
+  }
+}
 await browser.close();
 server.close();
 console.log(failed ? `${failed} failed` : 'all ok');
