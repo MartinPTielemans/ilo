@@ -104,7 +104,7 @@ impl Case {
 }
 
 /// What the editor sets for a site. The default changes nothing, and writes no block.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     /// The page's ground, whose text takes black or white by it.
     pub ground: Option<Dot>,
@@ -116,6 +116,10 @@ pub struct Style {
     /// The page's text size, in percent.
     pub size: u16,
     pub case: Option<Case>,
+    /// The user has dragged a dot of this Boost, so the field's hint has gone for good.
+    pub dragged: bool,
+    /// What the user named the Boost, which shows in place of its site.
+    pub name: Option<String>,
 }
 
 impl Default for Style {
@@ -127,6 +131,8 @@ impl Default for Style {
             face: None,
             size: 100,
             case: None,
+            dragged: false,
+            name: None,
         }
     }
 }
@@ -214,7 +220,7 @@ impl Style {
             links: Some(links),
             face,
             case,
-            ..*self
+            ..self.clone()
         }
     }
 
@@ -229,6 +235,9 @@ impl Style {
             self.face.map(|face| format!("face {}", face.name())),
             (self.size != 100).then(|| format!("size {}", self.size)),
             self.case.map(|case| format!("case {}", case.name())),
+            self.dragged.then(|| "dragged".to_owned()),
+            // Last, as it may hold spaces.
+            self.name.as_deref().map(|name| format!("name {name}")),
         ]
         .into_iter()
         .flatten()
@@ -249,6 +258,11 @@ impl Style {
         }) else {
             return style;
         };
+        let (state, name) = match state.split_once("name ") {
+            Some((state, name)) if state.is_empty() || state.ends_with("; ") => (state, Some(name)),
+            _ => (state, None),
+        };
+        style.name = name.and_then(|name| named(name));
         for item in state.split("; ") {
             let words: Vec<&str> = item.split(' ').collect();
             let dot = || {
@@ -268,6 +282,7 @@ impl Style {
                     style.size = size.map_or(100, |size: u16| size.clamp(SMALLEST, LARGEST));
                 }
                 "case" => style.case = words.get(1).and_then(|name| Case::named(name)),
+                "dragged" => style.dragged = true,
                 _ => {}
             }
         }
@@ -295,6 +310,14 @@ impl Style {
             None => format!("{before}{}", after.strip_prefix('\n').unwrap_or(after)),
         }
     }
+}
+
+/// `name` as a Boost's name: on one line, without what would end the comment that keeps it,
+/// trimmed, and none if that leaves nothing.
+pub fn named(name: &str) -> Option<String> {
+    let name = name.replace("*/", "").replace(['\n', '\r'], " ");
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// The block in `css`, from its first line to its last, and where it is.

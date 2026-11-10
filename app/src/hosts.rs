@@ -12,8 +12,10 @@ pub(crate) const THEME_PICKER: c_int = 2;
 
 pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
+pub(crate) const BOOST_EDITOR: c_int = 4;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 4;
+pub(crate) const SITE_CONTROLS: c_int = 5;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.

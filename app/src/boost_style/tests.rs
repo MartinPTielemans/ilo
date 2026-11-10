@@ -23,6 +23,8 @@ fn a_block_reads_back_as_its_edits() {
         face: Some(Face::Serif),
         size: 120,
         case: Some(Case::Upper),
+        dragged: true,
+        name: Some("Reading; mode".into()),
     };
     let file = style.into_file(SITE);
     assert_eq!(Style::of(&file), style);
@@ -95,4 +97,17 @@ fn shuffle_keeps_the_size_and_offers_only_faces_here() {
     }
     looks.dedup();
     assert!(looks.len() > 30, "Shuffle hardly changes");
+}
+
+/// A name keeps to one line and can't end the comment that holds it.
+#[test]
+fn a_name_stays_in_its_comment() {
+    assert_eq!(named("  News */ body {  "), Some("News  body {".into()));
+    assert_eq!(named("a\nb"), Some("a b".into()));
+    assert_eq!(named(" */ "), None);
+    let style = Style {
+        name: named("Quiet */ news"),
+        ..Style::default()
+    };
+    assert_eq!(Style::of(&style.into_file(SITE)), style);
 }
