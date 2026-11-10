@@ -11,14 +11,15 @@
 # it go. 90 s after A's copy the clipboard holds the words no longer. B and C sign out without
 # asking, as the account has other devices, and the server forgets them. On Linux under Xvfb and
 # Wayland and on Windows, where each device's window takes the foreground from the others' as the
-# run drives it (#2114). The Mac's clipboard and two copies of the app at once there are unrun.
+# run drives it (#2114), and on the Mac, where the copy in front hands the next its activation
+# (#589).
 
 if [ -z "${ILO_SERVER:-}" ]; then
   echo "skip: sync-devices. It needs ILO_SERVER, an ilo-server built from its repo, to sign in to."
   return 0
 fi
-if ! windows && { [ "$(uname)" != Linux ] || sway_xwayland; }; then
-  echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland and on Windows so far, where the run reaches the clipboard and each copy's windows."
+if sway_xwayland; then
+  echo "skip: sync-devices. It runs on Linux under Xvfb and Wayland, on Windows and on the Mac so far, where the run reaches the clipboard and each copy's windows."
   return 0
 fi
 rm -f "$saved" "$launch_frame" "$profile_dir/Account"
@@ -47,9 +48,10 @@ new_space() {
   send type "$1"
   send key return
 }
-# The format that marks what clipboard managers are to skip (#641).
+# The format that marks what clipboard managers are to skip (#641): on the Mac, nspasteboard.org's.
 hint=x-kde-passwordManagerHint
 ! windows || hint=ExcludeClipboardContentFromMonitorProcessing
+[ "$(uname)" != Darwin ] || hint=org.nspasteboard.ConcealedType
 others=
 
 # A's list ends with none once B removes the login A saves, so A starts with none: the check's
@@ -138,8 +140,12 @@ await_spaces 3 "C, recovered, doesn't have the account's three Spaces"
 # 2.5 s, the 2 s aimed for with room for a busy runner: its page and title, without loading it,
 # which B's core says as it puts the tab in its Space.
 serve
+# The Mac's date has no %N, but its perl has Time::HiRes.
 now_ms() {
-  echo $(($(date +%s%N) / 1000000))
+  case $(date +%N) in
+  *N) perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000' ;;
+  *) echo $(($(date +%s%N) / 1000000)) ;;
+  esac
 }
 # Waits up to 5 s for B to have more lines matching $1 than the $2 it had, then for them to have
 # come within 2.5 s of $3, A's change, failing with $4 if either doesn't. took is how long it took.
@@ -367,10 +373,10 @@ await "^browser: passwords [0-9]*: $login\$" ||
   fail "B didn't get the login A saved: $(grep '^browser: passwords ' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/sync-devices-b-password.png" || fail "no window to capture"
 post clickkey $(drawn "remove login 0")
-# Settings asks in Windows' task dialog, and on Linux, which has none, in its dialog, as passwords'
-# does.
-asks=dialog
-! windows || asks=alert
+# Settings asks in an alert, the Mac's or Windows' task dialog, and on Linux, which has none, in its
+# dialog, as passwords' does.
+asks=alert
+[ "$(uname)" != Linux ] || asks=dialog
 expect "^browser: $asks shown Remove the password for “check@example.test” on 127.0.0.1:$port?\$" \
   "Remove on B didn't ask first"
 if [ "$asks" = dialog ]; then
