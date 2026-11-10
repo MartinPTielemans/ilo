@@ -40,11 +40,19 @@ takes a command a line on its standard input:
 For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
                   changes, where perf's page stamps its paint and each time it's shown
-  open URL        opens URL in a new tab in front, as a link from another app does, and logs
-                  "cdp: opened TARGET"
-  activate TARGET shows the tab, through its window's tab strip, as a click on it or ⌘1–⌘8 do
+  open URL        logs "cdp: opening at MS", the Unix ms, then opens URL in a new tab in front,
+                  as a link from another app does, and logs "cdp: opened TARGET"
+  activate TARGET logs "cdp: activating TARGET at MS", then shows the tab, through its window's tab
+                  strip, as a click on it or ⌘1–⌘8 do: stamped here, the shell's clock and the
+                  pipe aren't in the time
   histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
                   browser has none by that name, such as Chrome's startup times
+For perf's traced switches, in ilo and Chrome:
+  trace start CATEGORIES
+                  starts tracing the comma-separated CATEGORIES, keeping the trace's last part
+                  once its buffer is full, then logs "cdp: tracing"
+  trace end FILE  ends it and writes it to FILE as JSON, then logs "cdp: traced FILE", with
+                  " lossy" after if the browser dropped some of it
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -57,6 +65,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 page = sys.argv[3] if len(sys.argv) > 3 else ""
 if sys.argv[1] == "--socket":
@@ -273,6 +282,34 @@ if page:
 sessions = {}
 
 
+def trace_end(path):
+    """Ends the trace and writes it to PATH, " lossy" if the browser dropped some of it."""
+    with answered:
+        before = len(events)
+    call("Tracing.end")
+
+    def complete():
+        for event in events[before:]:
+            if event is None:
+                raise SystemExit("cdp: the browser closed the pipe")
+            if event["method"] == "Tracing.tracingComplete":
+                return event["params"]
+        return None
+
+    with answered:
+        answered.wait_for(complete)
+        done = complete()
+    with open(path, "wb") as trace:
+        while True:
+            chunk = call("IO.read", {"handle": done["stream"], "size": 1 << 20})
+            data = chunk.get("data", "")
+            trace.write(base64.b64decode(data) if chunk.get("base64Encoded") else data.encode())
+            if chunk.get("eof"):
+                break
+    call("IO.close", {"handle": done["stream"]})
+    return " lossy" if done.get("dataLossOccurred") else ""
+
+
 def attributes(node):
     values = node.get("attributes", [])
     return dict(zip(values[::2], values[1::2]))
@@ -396,9 +433,19 @@ for line in sys.stdin:
             for info in now.values():
                 log_title(info)
     elif words[:1] == ["open"] and len(words) == 2:
+        log("opening at %d" % (time.time() * 1000))
         log("opened " + call("Target.createTarget", {"url": words[1]})["targetId"])
     elif words[:1] == ["activate"] and len(words) == 2:
+        log("activating %s at %d" % (words[1], time.time() * 1000))
         call("Target.activateTarget", {"targetId": words[1]})
+    elif words[:2] == ["trace", "start"] and len(words) == 3:
+        # Bounded to what's traced, the buffer holds it all, where a whole session's overflows.
+        call("Tracing.start", {"traceConfig": {"recordMode": "recordContinuously",
+                                               "includedCategories": words[2].split(",")},
+                               "transferMode": "ReturnAsStream", "streamFormat": "json"})
+        log("tracing")
+    elif words[:2] == ["trace", "end"] and len(words) == 3:
+        log("traced %s%s" % (words[2], trace_end(words[2])))
     elif words[:1] == ["histogram"] and len(words) == 2:
         try:
             histogram = call("Browser.getHistogram", {"name": words[1]})["histogram"]

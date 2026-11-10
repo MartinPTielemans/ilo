@@ -23,8 +23,10 @@
 #   screen, then the same session, its tabs opened and shown by DevTools, and the run says how far
 #   ilo is from it on each row. Of those, memory at 10 and 20 tabs can fail the run.
 # - With CHECK_TRACE_CATEGORIES (check/lib.sh), each browser's 16 switches again at 20 tabs, in a
-#   launch of their own traced with those, as in #2377: perf/trace-ilo.json and trace-chrome.json,
-#   and the Unix ms of each switch's key in traced-switch-keys and chrome-traced-switch-keys.
+#   launch of their own, traced with those through DevTools from the first switch to the last, as in
+#   #2377: perf/trace-ilo.json and trace-chrome.json, failing unless each has all 16 spans, and the
+#   Unix ms of each switch's key in traced-switch-keys and chrome-traced-switch-keys. Then ilo's
+#   switches to 4 tabs without their page, unseen 2 hours, in trace-ilo-discarded.json.
 #
 # Idle is measured in 10 s windows, six to the minute, and memory is summed over every process of
 # the browser, as check/usage.py says for each OS. On Linux and the Mac the shell's clock is a
@@ -347,9 +349,80 @@ fi
 exec 3>&-
 quit
 
-# With CHECK_TRACE_CATEGORIES, the 16 switches again at 20 tabs, in a launch of their own, traced
-# with those categories, as Chrome's are after: tracing costs memory and time, so the session's rows
-# stay untraced. Each browser writes its trace as it quits, perf/trace-ilo.json here.
+# With CHECK_TRACE_CATEGORIES, each browser's 16 switches again at 20 tabs, in a launch of their own,
+# as tracing slows what it times and the session's rows stay untraced. DevTools traces from just
+# before the first switch to just after the last, so the buffer holds them all, where a whole
+# session's would overflow, and the run fails unless the trace has each switch's span: the trace is
+# what this leg is for. The browser logs where DevTools says, $2: ilo's client its own log, Chrome's
+# Chrome's. Traces into perf/$1, failing unless it has $3 switches' spans, or with $3 empty, saying
+# how many; the command after does what's traced.
+perf_trace() {
+  perf_trace_file=$1 perf_trace_log=$2 perf_trace_spans=$3
+  shift 3
+  since=$(wc -l < "$perf_trace_log")
+  echo "trace start $trace_categories" >&5
+  perf_cdp_await "$perf_trace_log" "$since" '^cdp: tracing$' "DevTools didn't start tracing"
+  "$@"
+  since=$(wc -l < "$perf_trace_log")
+  echo "trace end $perf_dir/$perf_trace_file" >&5
+  perf_cdp_await "$perf_trace_log" "$since" "^cdp: traced $perf_dir/$perf_trace_file" \
+    "DevTools didn't write $perf_trace_file"
+  ! tail -n +$((since + 1)) "$perf_trace_log" | grep -q "^cdp: traced .* lossy$" ||
+    echo "perf: $perf_trace_file: the browser dropped some of the trace"
+  # grep -c counts none with a status of 1.
+  traced=$(python3 -I check/tab_switches.py "$perf_dir/$perf_trace_file" | grep -vc incomplete || true)
+  if [ -z "$perf_trace_spans" ]; then
+    echo "perf: $perf_trace_file has $traced switches' spans to tabs with their page"
+  elif [ "$traced" != "$perf_trace_spans" ]; then
+    fail "$perf_trace_file has $traced of its $perf_trace_spans switches' spans ($trace_categories)"
+  fi
+}
+# Waits up to 60 s for a line matching $3 in the DevTools log $1 after its line $2, failing with $4.
+perf_cdp_await() {
+  for _ in $(seq 600); do
+    tail -n +$(($2 + 1)) "$1" | grep -q "$3" && return 0
+    kill -0 "$pid" 2> /dev/null || fail "the browser exited, waiting for: $4"
+    sleep 0.1
+  done
+  fail "$4: $(tail -3 "$1")"
+}
+# Waits up to 10 s for a line matching $1 in the log since this step, without failing the run.
+perf_saw() {
+  for _ in $(seq 100); do
+    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# ilo's alone, as DevTools can't take a page from Chrome's tab: unseen 2 hours, each tab but the one
+# shown lets go of its page at the next switch, then 4 switches to tabs without it, from the key to
+# the page painted again, in perf/traced-discarded. #2377 asks for it, but it's a row beside the
+# switches, so a step that doesn't come says so rather than failing the run.
+perf_discarded() {
+  : > "$perf_dir/traced-discarded"
+  send age 7200
+  send key 2 cmd
+  perf_saw 'browser: idle tabs checked$' ||
+    { echo "perf: unseen 2 hours, ⌘2 didn't check for idle tabs, so no discarded switches"; return 0; }
+  for k in 3 4 5 6; do
+    perf_stamp
+    pressed=$stamp
+    send key "$k" cmd
+    if ! perf_saw "^browser: selected [0-9]* in "; then
+      echo "perf: ⌘$k didn't switch to a tab without its page"
+      return 0
+    fi
+    tab=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
+    # The core's line, after Chromium's prefix.
+    if ! perf_saw "browser: tab $tab has its page" || ! perf_saw "^browser: title $tab t$((21 - k)) fcp "; then
+      echo "perf: tab $tab, by ⌘$k, didn't get its page back and paint it"
+      return 0
+    fi
+    echo $(($(perf_painted "t$((21 - k))" "$step") - pressed)) >> "$perf_dir/traced-discarded"
+  done
+}
+# Rows $1, the traced switches to the page shown, and $1-span, Chrome's span for each in the trace $3,
+# labelled $2.
 perf_traced_rows() {
   perf_row "$1" "$2, traced, to page shown" "$(perf_stats '%.0f' < "$perf_dir/$1") ms" "untraced's"
   perf_row "$1-span" "$2, traced, Chrome's span, tab strip to frame shown" \
@@ -358,14 +431,11 @@ perf_traced_rows() {
 }
 if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
   log="$perf_dir/traced.log"
+  cdp_log="$perf_dir/traced-cdp.log"
   step=0
   rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
-  # shellcheck disable=SC2086 # the record mode, or nothing
-  BROWSER_DRIVE=1 BROWSER_URL="$page?t1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" \
-    --enable-tracing="$trace_categories" $trace_mode --enable-tracing-format=json \
-    --trace-startup-file="$PWD/$perf_dir/trace-ilo.json" < "$out/drive" > "$log" 2>&1 &
-  pid=$!
-  exec 3> "$out/drive"
+  scratch=$(mktemp -d)
+  start_with_cdp "$page?t1" "$profile_dir" ""
   await "^browser: title [0-9]* t1 fcp " || fail "the traced launch's first page didn't paint"
   send click $page_point
   [ "$active" = 1 ] || fail "Browser wasn't the active app for the traced switches"
@@ -374,12 +444,18 @@ if [ -n "${CHECK_TRACE_CATEGORIES:-}" ] && [ "$active" = 1 ]; then
     perf_open "t$n" traced-newtab
   done
   perf_until $((loaded + 15))
-  perf_switches traced-switch
-  exec 3>&-
-  # As tabs' does, Chrome writes the trace once every process has started tracing or 10 s passed.
-  quit 60
-  [ -s "$perf_dir/trace-ilo.json" ] || fail "the traced launch wrote no trace"
+  perf_trace trace-ilo.json "$cdp_log" 16 perf_switches traced-switch
   perf_traced_rows traced-switch "Tab switch" "$perf_dir/trace-ilo.json"
+  perf_trace trace-ilo-discarded.json "$cdp_log" "" perf_discarded
+  [ ! -s "$perf_dir/traced-discarded" ] || perf_row traced-discarded \
+    "Tab switch to a tab without its page, traced, key to page painted" \
+    "$(perf_stats '%.0f' < "$perf_dir/traced-discarded") ms" "none of its own"
+  exec 3>&- 5>&-
+  quit
+  kill "$helper" 2> /dev/null || true
+  helper=
+  rm -rf "$scratch"
+  scratch=
 fi
 
 # Google Chrome, where the runner has it, as GitHub's images do, measured on this machine as ilo was,
@@ -461,31 +537,33 @@ chrome_histogram() {
   done
 }
 # Opens page $1 in a new tab in front, as a link from another app does, and keeps the ms from just
-# before to its first paint in the file $2, as the app's are kept from ↩ in ⌘T's bar.
+# before, as cdp.py stamps it, to its first paint in the file $2, as the app's are kept from ↩ in
+# ⌘T's bar.
 chrome_open() {
   since=$(wc -l < "$log")
-  perf_stamp
-  typed=$stamp
   echo "open $page?$1" >&5
   chrome_await "^cdp: title [^ ]* $1 fcp " "Chrome's $1 didn't paint in its new tab" "$since"
+  typed=$(tail -n +$((since + 1)) "$log" | sed -n 's/^cdp: opening at \([0-9]*\)$/\1/p' | head -1)
   echo $(($(chrome_stamp "$1" fcp "$since") - typed)) >> "$perf_dir/$2"
   loaded=$(date +%s)
 }
-# The app's 16 switches by ⌘1–⌘8, of pages $1<n>: here the first eight tabs, as Chrome's ⌘1–⌘8
-# are, shown through the tab strip, keeping the ms from just before to the page shown in the file
-# $2 and each Unix ms before in $2-keys. The tab opened last shows, so each goes to another tab.
+# The app's 16 switches by ⌘1–⌘8 at 20 tabs, to the same pages, $1<n>: ⌘2–⌘8 its tabs opened before
+# the last, 19 to 13, and ⌘1 the last, 20, which shows first, twice. Chrome's are through the tab
+# strip, keeping the ms from just before, as cdp.py stamps it, to the page shown in the file $2, and
+# each Unix ms before in $2-keys.
 chrome_switches() {
   : > "$perf_dir/$2"
   : > "$perf_dir/$2-keys"
   for k in 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1; do
-    tab=$(sed -n "s/^cdp: title \([^ ]*\) $1$k fcp .*/\1/p" "$log" | head -1)
+    n=$((21 - k))
+    [ "$k" != 1 ] || n=20
+    tab=$(sed -n "s/^cdp: title \([^ ]*\) $1$n fcp .*/\1/p" "$log" | head -1)
     since=$(wc -l < "$log")
-    perf_stamp
-    pressed=$stamp
     echo "activate $tab" >&5
+    chrome_await "^cdp: title $tab $1$n shown " "Chrome's $1$n didn't say it was shown" "$since"
+    pressed=$(tail -n +$((since + 1)) "$log" | sed -n "s/^cdp: activating $tab at \([0-9]*\)$/\1/p" | head -1)
     echo "$pressed" >> "$perf_dir/$2-keys"
-    chrome_await "^cdp: title $tab $1$k shown " "Chrome's $1$k didn't say it was shown" "$since"
-    echo $(($(chrome_stamp "$1$k" shown "$since") - pressed)) >> "$perf_dir/$2"
+    echo $(($(chrome_stamp "$1$n" shown "$since") - pressed)) >> "$perf_dir/$2"
   done
 }
 # Quits Chrome as quit_app does the app, then ends what's left of it after $1 s, or 20.
@@ -586,7 +664,7 @@ else
     perf_memory chrome-20
     perf_row chrome-memory-20 "Chrome here, memory, 20 tabs" \
       "${memory% *} MiB, ${memory#* } processes ($kinds)" "ilo's, the gate"
-    perf_row chrome-newtab "Chrome here, new tab, opened to page painted" \
+    perf_row chrome-newtab "Chrome here, new tab, cdp.py's stamp to page painted" \
       "$(perf_stats '%.0f' < "$perf_dir/chrome-newtab") ms" "ilo's, the gate"
     perf_idle chrome-idle-20
     perf_row chrome-idle-cpu-20 "Chrome here, idle CPU, 20 tabs" "$cpu" "ilo's, the gate"
@@ -596,15 +674,12 @@ else
     perf_row chrome-settled-cpu-20 "Chrome here, idle CPU, 20 tabs, settled" "$cpu" "ilo's"
     perf_row chrome-settled-wakeups-20 "Chrome here, idle wakeups, 20 tabs, settled" "$wakeups /s" "ilo's"
     chrome_switches c chrome-switch
-    perf_row chrome-switch "Chrome here, tab switch, to page shown" \
+    perf_row chrome-switch "Chrome here, tab switch, cdp.py's stamp to page shown" \
       "$(perf_stats '%.0f' < "$perf_dir/chrome-switch") ms" "ilo's, the gate"
     chrome_quit
-    # ilo's traced switches, in Chrome, its trace perf/trace-chrome.json.
+    # The traced switches, in a launch of Chrome's own, as ilo's, its trace perf/trace-chrome.json.
     if [ -n "${CHECK_TRACE_CATEGORIES:-}" ]; then
-      # shellcheck disable=SC2086 # the record mode, or nothing
-      chrome_launch t1 --enable-tracing="$trace_categories" $trace_mode --enable-tracing-format=json \
-        --trace-startup-file="$PWD/$perf_dir/trace-chrome.json" ||
-        fail "Chrome didn't stay open, traced: $(tail -3 "$perf_dir/chrome.log")"
+      chrome_launch t1 || fail "Chrome didn't stay open for its traced switches: $(tail -3 "$perf_dir/chrome.log")"
       chrome_await "^cdp: title [^ ]* t1 fcp " "Chrome's traced launch didn't paint its page"
       : > "$perf_dir/chrome-traced-newtab"
       for n in $(seq 2 20); do
@@ -612,10 +687,9 @@ else
         perf_until $((typed / 1000 + 2))
       done
       perf_until $((loaded + 15))
-      chrome_switches t chrome-traced-switch
-      chrome_quit 60
-      [ -s "$perf_dir/trace-chrome.json" ] || fail "Chrome's traced launch wrote no trace"
+      perf_trace trace-chrome.json "$log" 16 chrome_switches t chrome-traced-switch
       perf_traced_rows chrome-traced-switch "Chrome here, tab switch" "$perf_dir/trace-chrome.json"
+      chrome_quit
     fi
     # ilo against Chrome on this machine, for each of the gate's rows. Memory at 10 and 20 tabs moves
     # under 5 % from run to run, so ilo more than 10 % over Chrome's fails the run. At 1 tab, 30 s
@@ -638,8 +712,11 @@ def median(name):
 for label, ilo, chrome, unit, fails in [
     ("launch, link to page painted", median("link"), median("chrome-link"), "ms", False),
     ("launch, window on screen", median("on-screen"), median("chrome-on-screen"), "ms", False),
-    ("new tab to page painted", median("newtab"), median("chrome-newtab"), "ms", False),
-    ("tab switch to page shown", median("switch"), median("chrome-switch"), "ms", False),
+    # ilo's from the shell's clock, whose process start is in it, Chrome's from cdp.py's.
+    ("new tab to page painted, ilo's with its clock's start", median("newtab"),
+     median("chrome-newtab"), "ms", False),
+    ("tab switch to page shown, ilo's with its clock's start", median("switch"),
+     median("chrome-switch"), "ms", False),
     ("idle CPU, 1 tab, settled", idle("settled-1", 0), idle("chrome-settled-1", 0), "%", False),
     ("idle CPU, 20 tabs, settled", idle("settled-20", 0), idle("chrome-settled-20", 0), "%", False),
     ("idle wakeups, 1 tab, settled", idle("settled-1", 1), idle("chrome-settled-1", 1), "/s", False),
