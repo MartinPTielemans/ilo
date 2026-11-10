@@ -294,6 +294,11 @@ void HoldLeaving(BrowserCoreWindowView* view,
   const base::TimeTicks since = base::TimeTicks::Now();
   // check.sh's switch-frames run reads these lines.
   fprintf(stderr, "browser: switch keeps the page it left\n");
+  // #2248's timeline, on the wall clock switch-frames' marks and pictures use.
+  fprintf(stderr, "browser: switch hold %lu at %.4f, %lu leaving, %lu arriving\n",
+          static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch(),
+          static_cast<unsigned long>(view.leaving.count),
+          static_cast<unsigned long>(arrivals.count));
   __weak BrowserCoreWindowView* weak_view = view;
   for (const Pane& pane : panes) {
     NSView* page_view = pane.page.GetNativeNSView();
@@ -304,10 +309,16 @@ void HoldLeaving(BrowserCoreWindowView* view,
     __weak NSView* weak_page = page_view;
     content::CallWhenFrameShown(pane.widget, base::BindOnce(^{
       BrowserCoreWindowView* shown_in = weak_view;
+      fprintf(stderr, "browser: switch hold %lu frame shown at %.4f, %lu awaited, %lu leaving\n",
+              static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch(),
+              static_cast<unsigned long>(shown_in.awaited.count),
+              static_cast<unsigned long>(shown_in.leaving.count));
       if (NSView* drawn = weak_page) {
         [shown_in.awaited removeObject:drawn];
       }
       if (shown_in.awaited.count == 0 && shown_in.leaving.count > 0) {
+        fprintf(stderr, "browser: switch hold %lu let go at %.4f by frame\n",
+                static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch());
         fprintf(stderr, "browser: switch let the page it left go after %.1f ms\n",
                 (base::TimeTicks::Now() - since).InMillisecondsF());
         [shown_in letLeavingGo];
@@ -317,7 +328,13 @@ void HoldLeaving(BrowserCoreWindowView* view,
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, base::BindOnce(^{
         BrowserCoreWindowView* shown_in = weak_view;
+        fprintf(stderr, "browser: switch hold %lu limit at %.4f, latest hold %lu, %lu leaving\n",
+                static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch(),
+                static_cast<unsigned long>(shown_in.holds),
+                static_cast<unsigned long>(shown_in.leaving.count));
         if (shown_in.holds == hold && shown_in.leaving.count > 0) {
+          fprintf(stderr, "browser: switch hold %lu let go at %.4f by limit\n",
+                  static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch());
           fprintf(stderr, "browser: switch let the page it left go at the limit\n");
           [shown_in.awaited removeAllObjects];
           [shown_in letLeavingGo];
@@ -402,6 +419,11 @@ void ShowPages(views::Widget* widget,
     }
     const bool kept = [view.leaving containsObject:subview];
     if (!arriving && !(kept && view.awaited.count > 0)) {
+      if (kept) {
+        fprintf(stderr, "browser: switch hold %lu let go at %.4f by a show with no arrival\n",
+                static_cast<unsigned long>(view.holds),
+                base::Time::Now().InSecondsFSinceUnixEpoch());
+      }
       [view.leaving removeObject:subview];
       [subview removeFromSuperview];
       continue;
@@ -542,6 +564,10 @@ void HidePages(views::Widget* widget) {
     pane.devtools.hidden = YES;
   }
   view.sidePanel.page.hidden = YES;
+  if (view.leaving.count > 0) {
+    fprintf(stderr, "browser: switch hold %lu let go at %.4f by hiding\n",
+            static_cast<unsigned long>(view.holds), base::Time::Now().InSecondsFSinceUnixEpoch());
+  }
   [view.awaited removeAllObjects];
   [view letLeavingGo];
 }

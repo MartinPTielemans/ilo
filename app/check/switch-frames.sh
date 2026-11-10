@@ -115,8 +115,8 @@ quit
 # goes with the last switch begun by when it came back: one taken across a switch's start, as a
 # blank there would be, is that switch's, and says how far each side of its start it reached.
 status=0
-python3 -I - "$marks" "$frames" > "$out/switch-frames-summary.txt" << 'PY' || status=$?
-import statistics, sys
+python3 -I - "$marks" "$frames" "$log" > "$out/switch-frames-summary.txt" << 'PY' || status=$?
+import re, statistics, sys
 
 marks = []
 for line in open(sys.argv[1], encoding="utf-8"):
@@ -155,6 +155,22 @@ for index, (at, what) in enumerate(switches):
         problems.append("%s: no page in %d picture%s, between %+.0f and %+.0f ms from its start" % (
             what, len(flats), "" if len(flats) == 1 else "s", (flats[0][0] - at) * 1000,
             (flats[-1][1] - at) * 1000))
+# #2248's timeline: per switch, the core's hold, each arriving page's frame shown, the limit and
+# what let the left page go, beside every picture, all from the switch's mark.
+events = []
+for line in open(sys.argv[3], encoding="utf-8", errors="replace"):
+    m = re.match(r"browser: switch hold (\d+)(.*?) at (\d+\.\d+)(.*)$", line.rstrip("\n"))
+    if m:
+        events.append((float(m.group(3)), "hold %s%s%s" % (m.group(1), m.group(2), m.group(4))))
+for index, (at, what) in enumerate(switches):
+    until = switches[index + 1][0] if index + 1 < len(switches) else stop
+    print("timeline %s" % what)
+    rows = [(t, "  core %+7.1f %s" % ((t - at) * 1000, e)) for t, e in events if at <= t < until]
+    rows += [(f[0], "  pict %+7.1f..%+.1f %s %s" % ((f[0] - at) * 1000, (f[1] - at) * 1000,
+              "FLAT" if f[2] else "page", f[3])) for f in frames if at <= f[1] < until and
+             f[0] - at < 0.4]
+    for _, row in sorted(rows):
+        print(row)
 for problem in problems:
     print("problem: " + problem)
 sys.exit(1 if problems else 0)
