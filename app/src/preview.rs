@@ -2916,7 +2916,7 @@ impl link_preview::Host for PreviewPeek {
 
     fn close(&self, _: u64) {}
 
-    fn keep(&self, _: u64, _: u64) {}
+    fn keep(&self, _: u64, _: u64, _: Option<u64>) {}
 
     fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
 
