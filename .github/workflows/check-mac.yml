@@ -17,12 +17,13 @@
 # runs a release still needs from the owner's MacBook's check VM, each here with its reason (#2205):
 # - switch-frames: a Space or tab switch here showed the empty page area in one picture, in 3 of 4
 #   runs, where the VM showed a page in every one.
-# Of the runs check.sh does only when named, the runner passes store, adblock-live, adblock-parity,
-# adblock-native, passwords-live, updates, nightly, update-checks, shots, and keychain asked for
-# alone, which builds the prod build it needs. perf measures, so it stays on the owner's Mac (here
-# ilo's memory came 48 to 103 % over Chrome's); widevine and tab-drag are Linux's; and
-# sync-extensions needs the Mac's clipboard and two copies of the app at once, which its Mac half
-# doesn't have yet.
+# And one part of a run that passes here, which skips it, saying so:
+# - window's sidebar against Dia's composite: the runner's AppKit material is darker than the one
+#   Dia was measured over (#1554).
+# Of the runs check.sh does only when named, the runner passes store, sync-extensions, adblock-live,
+# adblock-parity, adblock-native, passwords-live, updates, nightly, update-checks, shots, and
+# keychain asked for alone, which builds the prod build it needs. perf measures, so it stays on the
+# owner's Mac (here ilo's memory came 48 to 103 % over Chrome's); widevine and tab-drag are Linux's.
 name: Check on macOS
 
 on:
@@ -178,9 +179,9 @@ jobs:
 
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
-      # at the commit check-linux.yml builds, when the runs include one.
+      # at the commit check-linux.yml builds, when the runs include one, as the default ones do.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (inputs.runs == '' || inputs.runs == 'all' || contains(format(' {0} ', inputs.runs), ' sync-account ') || contains(format(' {0} ', inputs.runs), ' sync-devices ') || contains(format(' {0} ', inputs.runs), ' sync-extensions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -360,7 +361,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: check-mac
-          path: ${{ runner.temp }}/check
+          # Without the copies of the app keychain signs, 2.2 GB of them (#2205).
+          path: |
+            ${{ runner.temp }}/check
+            !${{ runner.temp }}/check/**/*.app
           if-no-files-found: ignore
 
   # The default runs' verdict on main, the night's or a train's, keeps the workflow's issue: a
