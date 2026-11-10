@@ -317,6 +317,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Close this Split Pane", Keys::Of(Command::CloseSplitPane)),
             ("Next Pane", Keys::Of(Command::NextPane)),
             ("Previous Pane", Keys::Of(Command::PreviousPane)),
+            ("Go to Pane 1", Keys::Of(Command::FocusPane(0))),
+            ("Go to Pane 2", Keys::Of(Command::FocusPane(1))),
+            ("Go to Pane 3", Keys::Of(Command::FocusPane(2))),
+            ("Go to Pane 4", Keys::Of(Command::FocusPane(3))),
             (
                 "Separate Page from Split View",
                 Keys::Of(Command::SeparatePane),

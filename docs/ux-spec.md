@@ -180,7 +180,7 @@ Arc's note at the window's top right, saying what was just done where the result
 | Select tab 1–8 / last | ⌘1–⌘8 / ⌘9, pinned tabs first, counting those in an open folder (ax) | ⌘1–⌘8 / ⌘9 in sidebar order | Dia's |
 | Tab used last, then further back | ⌃Tab (rec) | ⌃Tab / ⌃⇧Tab (switcher) | ⌃Tab / ⌃⇧Tab, no switcher (owner, 2026-10-29) |
 | Search tabs | none: Arc has no Search Tabs (menus, bar, Settings › Shortcuts) | ⇧⌘A | ⇧⌘A, with Search Tabs |
-| Split: add pane / close pane / focus next / previous | ⌃+ / ⌃⇧- (menus) / none; its ⌃⇧] / ⌃⇧[ switch to the next or previous split view, and ⌃⇧1–⌃⇧4 to one (Settings › Shortcuts) | ⌃⇧= / — / ⌃⇧] / ⌃⇧[ | Arc's; focus Dia's, *interim* |
+| Split: add pane / close pane / focus next / previous | ⌃+ / ⌃⇧- (menus) / none; its ⌃⇧] / ⌃⇧[ switch to the next or previous split view, and ⌃⇧1–⌃⇧4 to one (Settings › Shortcuts) | ⌃⇧= / — / ⌃⇧] / ⌃⇧[, and ⌃⇧1–⌃⇧4 to the page at that place | Arc's; focus Dia's, *interim* |
 | New note / in a split | ⌃⇧N / none (Settings › Shortcuts) | — | Arc's (Profiles › New Note) |
 | Find / next / previous | ⌘F / ⌘G / ⇧⌘G (menus) | ⌘F / ⌘G / ⇧⌘G | ⌘F / ⌘G / ⇧⌘G |
 | Use selection for find / jump to selection / find and replace | — / ⌘J / ⌥⌘F (menus) | — (⌘E is Chat) / ⌘J / ⌥⌘F | ⌘J; ⌘E and ⌥⌘F come with their features (⌘E writes the system's find pasteboard) |
