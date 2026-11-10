@@ -556,7 +556,9 @@ recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
   unrecorded && return 0
-  said=$(tail -1 "${recording%.mp4}-record.log")
+  # A stream that ended by itself says why when it does, before the failure it leads to (#2280).
+  said=$(grep '^the stream ended by itself' "${recording%.mp4}-record.log" | tail -1)
+  [ -n "$said" ] || said=$(tail -1 "${recording%.mp4}-record.log")
   case "$said" in
   *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
   esac
