@@ -71,8 +71,12 @@ pub(crate) fn link_tab_left(tab: u64) {
 /// loaded another page by then.
 pub(crate) fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
     let before = LINK_TABS.with_borrow_mut(|tabs| {
-        tabs.get_mut(&tab)
-            .map(|link| (link.window, std::mem::replace(&mut link.loaded, url.to_string())))
+        tabs.get_mut(&tab).map(|link| {
+            (
+                link.window,
+                std::mem::replace(&mut link.loaded, url.to_string()),
+            )
+        })
     });
     let Some((window, before)) = before else {
         return;
@@ -126,7 +130,9 @@ fn host(url: &str) -> Option<&str> {
         .strip_prefix("http://")
         .or_else(|| url.strip_prefix("https://"))?;
     let authority = rest.split(['/', '?', '#']).next()?;
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = match authority.strip_prefix('[') {
         Some(v6) => &authority[..v6.find(']')? + 2],
         None => authority.split(':').next()?,
