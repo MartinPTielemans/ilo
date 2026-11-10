@@ -341,7 +341,7 @@ expect "^browser: title $c clicked\$" "a click in the page didn't keep the name 
 ../tools/window-screenshot.sh "$pid" "$out/rename-click-away.png" || fail "no window to capture"
 # Rename… in its menu, with the name taken out, gives the tab back its page's title.
 post rightclick $(row 0)
-menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
+menu=$(cased "Copy Link$share, Change Icon…, Remove Icon, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › reading list, Move to › New Space…, Archive Tab, Archive Tabs Below")
 expect "^browser: menu shown $menu\$" \
   "a right-click on the renamed tab's row didn't offer Rename…"
 choose_drawn Rename…
