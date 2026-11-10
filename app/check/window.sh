@@ -1114,12 +1114,12 @@ rest_cpu() {
   from=$(cpu)
   sleep 4 # the window measured
   set -- $from $(cpu)
+  probe_procs > "$out/rest-after.txt"
   # Probe: the command line of each process that took CPU.
   awk 'NR == FNR { t[$1] = $2; next } ($2 - t[$1]) > 0.05 && $1 !~ /\// { print $1 }' \
     "$out/rest-before.txt" "$out/rest-after.txt" | while read -r p; do
     echo "probe: $p is $(tr '\0' ' ' < "/proc/$p/cmdline" | cut -c1-400), parent $(awk '{ print $4 }' "/proc/$p/stat")"
   done
-  probe_procs > "$out/rest-after.txt"
   # Probe: each process's CPU in the 4 s, over 0.05 s.
   awk 'NR == FNR { t[$1] = $2; next } ($2 - t[$1]) > 0.05 { printf "probe: rest cpu %.2f s pid %s %s\n", $2 - t[$1], $1, $3 }' \
     "$out/rest-before.txt" "$out/rest-after.txt"
