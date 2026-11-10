@@ -426,20 +426,21 @@ perf_traced_ilo() {
     title=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title [0-9]* \(t19 shown [0-9]* [0-9]*\)$/\1/p" | tail -1) &&
     echo "check $step ${title% *} $pressed ${title##* }" | sed 's/ shown / /' >> "$perf_dir/traced-switch-rows"
   for k in 3 4 5 6; do
-    page=t$((21 - k))
+    # Not $page, the perf page's address, which Chrome's launches after take.
+    unloaded=t$((21 - k))
     perf_stamp
     pressed=$stamp
     send key "$k" cmd
-    perf_saw "^browser: selected [0-9]* in " || { echo "perf: ⌘$k didn't switch to $page"; return 0; }
+    perf_saw "^browser: selected [0-9]* in " || { echo "perf: ⌘$k didn't switch to $unloaded"; return 0; }
     tab=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: selected \([0-9]*\) in .*/\1/p' | head -1)
     # The core's line, after Chromium's prefix. A page loaded as it's shown stamps shown 0.
-    if ! perf_saw "browser: tab $tab has its page" || ! perf_saw "^browser: title $tab $page shown 0 "; then
-      echo "perf: tab $tab, $page by ⌘$k, didn't get its page back and say it was shown"
+    if ! perf_saw "browser: tab $tab has its page" || ! perf_saw "^browser: title $tab $unloaded shown 0 "; then
+      echo "perf: tab $tab, $unloaded by ⌘$k, didn't get its page back and say it was shown"
       return 0
     fi
-    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title $tab $page shown 0 //p" | tail -1)
+    shown=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n "s/^browser: title $tab $unloaded shown 0 //p" | tail -1)
     echo $((shown - pressed)) >> "$perf_dir/traced-unloaded"
-    echo "unloaded $step $page 0 $pressed $shown" >> "$perf_dir/traced-switch-rows"
+    echo "unloaded $step $unloaded 0 $pressed $shown" >> "$perf_dir/traced-switch-rows"
   done
 }
 # Rows $1, the traced switches to the page shown, and $1-span, the spans of browser $3's switches to

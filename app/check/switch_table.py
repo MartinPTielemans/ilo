@@ -47,6 +47,8 @@ for event in events:
             spans.append((begin, state, (event["ts"] - begin) / 1000))
 spans.sort()
 
+# A step's own line, not its "drive N done" after.
+step_line = re.compile(r"^browser: drive \d+: ")
 log = open(log_path, encoding="utf-8", errors="replace").read().splitlines() if log_path else []
 
 
@@ -56,7 +58,7 @@ def after(step, pattern):
         return "-"
     inside = False
     for line in log:
-        if line.startswith("browser: drive "):
+        if step_line.match(line):
             if inside:
                 break
             inside = line.startswith("browser: drive %s: " % step)
@@ -77,7 +79,7 @@ def hold(step):
         return "-"
     held = None
     for i in range(start + 1, len(log)):
-        if log[i].startswith("browser: drive "):
+        if step_line.match(log[i]):
             break
         if log[i] == "browser: switch keeps the page it left":
             held = i
