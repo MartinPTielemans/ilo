@@ -307,9 +307,11 @@ fi
 
 # A page shows black until its first frame while websites are told the appearance is dark, and
 # white while it's light, as Arc's does, with View › Appearance on each in turn; its tab is loading
-# from the start. The page's w opens one whose server never answers, so it never commits, and its
-# URL, which a page asked for, stays hidden until it does. A page already waiting as the appearance
-# changes keeps its colour on the Mac until it draws, so each colour gets a page opened after it.
+# from the start. The page's w opens one whose server never answers, so it never commits. Its URL
+# shows, as Chrome's does for a tab a page opened, until the tab's first, empty document is touched,
+# when Chrome hides it. That's at once in most runs and not for seconds in some (#2215).
+# A page already waiting as the appearance changes keeps its colour on the Mac until it draws, so
+# each colour gets a page opened after it.
 first=$(today)
 # Whether the colour "r g b" is black, or white with $2 light, as near as the capture keeps them.
 unpainted() {
@@ -329,7 +331,7 @@ for scheme in light dark; do
   send key w
   expect "^browser: tab [0-9]* opened by $first in the foreground\$" "the page didn't open a tab"
   tab=$(grep '^browser: tab [0-9]* opened by' "$log" | tail -1 | cut -d' ' -f3)
-  expect "^browser: page $tab back 0 forward 0 loading 1 \$" \
+  expect "^browser: page $tab back 0 forward 0 loading 1 \(${site}wait\)*\$" \
     "a tab opened to a page that hasn't come doesn't say it's loading"
   for _ in $(seq 20); do
     ../tools/window-screenshot.sh "$pid" "$out/before-paint-$scheme.png" ||
@@ -351,10 +353,19 @@ expect '^browser: appearance automatic$' \
 send click $page_point
 
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
-# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches.
-scroll="10 300"
-[ "$(uname)" = Linux ] && scroll="1 25"
-send scroll $page_point $scroll
+# turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches, five at a time.
+# Chromium hands a page one wheel event at a time and merges those that queue meanwhile, capping a
+# merged one at the page's height (LimitScrollDeltaToScrollerSize), as Chrome does. In a slow
+# session the 25 at once came as one notch and 24 merged, and the page stopped at its height, 779
+# points (#2256). Five, 600 points, stay under it.
+if [ "$(uname)" = Linux ]; then
+  for to in 600 1200 1800 2400 3000; do
+    send scroll $page_point 1 5
+    await "^browser: title [0-9]* frames .* scrolled $to\$" || break
+  done
+else
+  send scroll $page_point 10 300
+fi
 expect '^browser: title [0-9]* frames' "scrolling didn't move the page"
 # The page says its count after each pause of 300 ms, so the last is the whole scroll's.
 await '^browser: title [0-9]* frames .* scrolled 3000$' || true
