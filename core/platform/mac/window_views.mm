@@ -14,6 +14,8 @@
 #include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
+#include "content/public/browser/render_process_host.h"
+#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
 #include "ui/gfx/geometry/rect.h"
@@ -307,7 +309,10 @@ void HoldLeaving(BrowserCoreWindowView* view,
     }
     [view.awaited addObject:page_view];
     __weak NSView* weak_page = page_view;
-    content::CallWhenFrameShown(pane.widget, base::BindOnce(^{
+    content::RenderWidgetHost* host = pane.widget ? pane.widget->GetRenderWidgetHost() : nullptr;
+    const int process = host ? host->GetProcess()->GetDeprecatedID() : 0;
+    const int routing = host ? host->GetRoutingID() : 0;
+    base::OnceClosure shown = base::BindOnce(^{
       BrowserCoreWindowView* shown_in = weak_view;
       fprintf(stderr, "browser: switch hold %lu frame shown at %.4f, %lu awaited, %lu leaving\n",
               static_cast<unsigned long>(hold), base::Time::Now().InSecondsFSinceUnixEpoch(),
@@ -323,7 +328,21 @@ void HoldLeaving(BrowserCoreWindowView* view,
                 (base::TimeTicks::Now() - since).InMillisecondsF());
         [shown_in letLeavingGo];
       }
-    }));
+    });
+    // #2248's candidate: a frame's presentation can be answered before the browser's layer shows
+    // it, so the left page goes at the arriving page's next frame instead.
+    content::CallWhenFrameShown(
+        pane.widget, base::BindOnce(
+                         [](int process, int routing, unsigned long hold, base::OnceClosure then) {
+                           fprintf(stderr, "browser: switch hold %lu first frame at %.4f\n", hold,
+                                   base::Time::Now().InSecondsFSinceUnixEpoch());
+                           content::RenderWidgetHost* again =
+                               content::RenderWidgetHost::FromID(process, routing);
+                           if (again && again->GetView()) {
+                             content::CallWhenFrameShown(again->GetView(), std::move(then));
+                           }
+                         },
+                         process, routing, static_cast<unsigned long>(hold), std::move(shown)));
   }
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE, base::BindOnce(^{
