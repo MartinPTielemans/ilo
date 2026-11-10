@@ -2703,6 +2703,11 @@ BC_EXPORT void bc_tab_capture_end(bc_id tab);
 // change. Then tab_permission_asked. The user's: agents get none, as an answer can give a site the
 // camera or where the user is.
 BC_EXPORT void bc_tab_answer_permission(bc_id tab, int answer);
+// Whether the tab's page's question, as tab_permission_asked last put it, asks only to show
+// notifications, with no click or key of the user's in the page behind it, as Chromium's request
+// says. The app holds that one quietly, a bell in the URL field, rather than as a card. False with
+// no question, or where the request doesn't say.
+BC_EXPORT bool bc_tab_permission_quiet(bc_id tab);
 
 // Answers the dialog tab_dialog put, if it's still asked: |accept| for its accept button, else its
 // cancel, with the text of its first field in |text| and of its password field in |password|,
