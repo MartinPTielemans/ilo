@@ -235,6 +235,20 @@ source_set("window_frames") {
   ]
 }
 
+# Which fields' contents an agent sees, and the hatch over those it doesn't in its pictures, apart
+# so browser_core_unittests tests the rule alone.
+source_set("withheld_fields") {
+  sources = [
+    "withheld_fields.cc",
+    "withheld_fields.h",
+  ]
+  deps = [
+    "//base",
+    "//skia",
+    "//ui/gfx/geometry",
+  ]
+}
+
 source_set("browser_core") {
   configs += [ ":app_calls" ]
   sources = [
@@ -404,6 +418,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":typing_keys",
     ":window_frames",
+    ":withheld_fields",
     "//base",
     "//base:i18n",
     "//chrome/app:command_ids",
@@ -695,6 +710,7 @@ test("browser_core_unittests") {
     "sync_updates_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
+    "withheld_fields_unittest.cc",
   ]
   deps = [
     ":archive_rule",
@@ -711,6 +727,7 @@ test("browser_core_unittests") {
     ":sync_spaces_newer",
     ":typing_keys",
     ":window_frames",
+    ":withheld_fields",
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
@@ -723,8 +740,10 @@ test("browser_core_unittests") {
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/variations:test_support",
+    "//skia",
     "//testing/gmock",
     "//testing/gtest",
+    "//ui/gfx/geometry",
     "//url",
   ]
   if (use_xkbcommon) {
