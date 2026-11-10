@@ -474,6 +474,13 @@ quit
 # What A's sync carries, as the core names its data types once sync is active.
 types=$(grep -h 'browser: sync types ' "$a_log" | tail -1 | sed 's/.*browser: sync types //')
 [ -n "$types" ] || fail "A's sync never said what it carries"
+# Passwords sync, as the login above showed, but not another user's invitation to share one. No
+# device asks the server for those, so a server's can't add a login (engine/patches/ours/
+# chromium-sync-no-incoming-password-sharing.patch).
+case ", $types," in *", Passwords,"*) ;; *) fail "A's sync carries no passwords: $types" ;; esac
+case $types in
+*"Incoming Password Sharing Invitations"*) fail "A's sync takes another user's passwords: $types" ;;
+esac
 # The runs after start signed out.
 rm -f "$profile_dir/Account"
 kill "$ilo_server" 2>/dev/null || true
@@ -484,5 +491,6 @@ echo "ok: A added B, C recovered with the copied words, which the clipboard let 
   "sent $busy_items, and the account's devices made $busy_commits commits of $busy_kept items, none throttled;" \
   "A's Little ilo tab reached B, whose command bar listed and opened it, and its agent's never did," \
   "a login A saved reached B, whose removal reached A," \
-  "and B and C signed out, on a local ilo-server as $email. A synced: $types." \
+  "and B and C signed out, on a local ilo-server as $email. A synced, with no other user's" \
+  "invitations: $types." \
   "Logs: $out/sync-devices-*.log"
