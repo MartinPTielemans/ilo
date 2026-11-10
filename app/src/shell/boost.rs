@@ -341,7 +341,6 @@ impl Shell {
         let Some(path) = boosts::with(|boosts| boosts.script_file(profile, site)) else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: boost edit script {site}");
         self.browser.edit_file(&path, cx);
         cx.notify();
