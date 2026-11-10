@@ -352,11 +352,11 @@ send click $page_point
 
 # Probe (#2256): every core busy through the scroll, as the owner reproduced it.
 busy=""
-for _ in $(seq "$(nproc)"); do
-  nice -n 19 sh -c 'while :; do :; done' &
+for _ in $(seq $(($(nproc) * 2))); do
+  sh -c 'while :; do :; done' &
   busy="$busy $!"
 done
-echo "probe: $(nproc) busy loops through the scroll"
+echo "probe: $(($(nproc) * 2)) busy loops at normal priority through the scroll"
 # 300 trackpad events of 10 points, 8 ms apart. X11's events carry no distance, so the Linux driver
 # turns the wheel, which Chromium scrolls 120 points a notch there: 25 notches.
 scroll="10 300"
