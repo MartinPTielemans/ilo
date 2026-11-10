@@ -604,6 +604,7 @@ source_set("browser_core") {
     ":pinned_url",
     ":arrangement",
     ":ax_text",
+    ":boost_script",
     ":drm_request",
     ":history_removal",
     ":idle_check",

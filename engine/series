@@ -80,6 +80,7 @@ ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
 ours/chromium-session-cookies-window-close.patch
 ours/chromium-core-bluetooth-pair.patch
+ours/chromium-core-boost-script-world.patch
 ours/chromium-customize-chrome-private.patch
 ours/chromium-omnibox-match-last-visit.patch
 ours/chromium-agent-extension-nodes.patch

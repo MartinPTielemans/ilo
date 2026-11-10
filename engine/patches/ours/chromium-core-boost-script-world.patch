@@ -1,0 +1,17 @@
+A world of its own for a Boost's script (//browser_core/boosts.cc): the user's JavaScript for a
+site shares the page's DOM but not its globals, nor Chrome's internal world, which holds the
+Boost's CSS and Zap, nor an extension's, whose ids start at ISOLATED_WORLD_ID_EXTENSIONS.
+
+--- a/chrome/common/chrome_isolated_world_ids.h
++++ b/chrome/common/chrome_isolated_world_ids.h
+@@ -19,6 +19,10 @@
+   // Isolated world ID for internal Chrome features.
+   ISOLATED_WORLD_ID_CHROME_INTERNAL,
+ 
++  // browser_core: a Boost's script, the user's own JavaScript for a site, in a world of its own:
++  // not Chrome's internal one, which holds the Boost's CSS and Zap, nor an extension's.
++  ISOLATED_WORLD_ID_BOOST_SCRIPT,
++
+ #if BUILDFLAG(IS_MAC)
+   // Isolated world ID for AppleScript.
+   ISOLATED_WORLD_ID_APPLESCRIPT,

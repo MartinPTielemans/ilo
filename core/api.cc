@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -2339,6 +2340,53 @@ void bc_tab_set_developer_mode(bc_id id, bool on) {
 
 void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
   browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
+}
+
+namespace {
+
+int ScriptState(browser_core::boost_script::State state) {
+  switch (state) {
+    case browser_core::boost_script::State::kOn:
+      return BC_BOOST_SCRIPT_ON;
+    case browser_core::boost_script::State::kNew:
+      return BC_BOOST_SCRIPT_NEW;
+    case browser_core::boost_script::State::kChanged:
+      return BC_BOOST_SCRIPT_CHANGED;
+    case browser_core::boost_script::State::kTooLarge:
+      return BC_BOOST_SCRIPT_TOO_LARGE;
+  }
+  NOTREACHED();
+}
+
+std::string_view Bytes(const char* script, size_t size) {
+  return script ? std::string_view(script, size) : std::string_view();
+}
+
+}  // namespace
+
+int bc_profile_set_boost_script(bc_id profile, const char* site, const char* script, size_t size) {
+  return ScriptState(browser_core::Boosts::SetScript(
+      profile, site ? site : "",
+      script ? std::optional<std::string_view>(Bytes(script, size)) : std::nullopt));
+}
+
+int bc_profile_boost_script_state(bc_id profile,
+                                  const char* site,
+                                  const char* script,
+                                  size_t size) {
+  return ScriptState(
+      browser_core::Boosts::ScriptState(profile, site ? site : "", Bytes(script, size)));
+}
+
+bool bc_profile_turn_on_boost_script(bc_id profile,
+                                     const char* site,
+                                     const char* script,
+                                     size_t size) {
+  return browser_core::Boosts::TurnOnScript(profile, site ? site : "", Bytes(script, size));
+}
+
+void bc_profile_forget_boost_script(bc_id profile, const char* site) {
+  browser_core::Boosts::ForgetScript(profile, site ? site : "");
 }
 
 void bc_tab_boost_zap(bc_id id, bool on) {
