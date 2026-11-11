@@ -23,6 +23,8 @@ jobs:
           go-version: '1.26'
           cache: false
 
+      # Proof only (#2425): Azure's mirror can't be reached, as on 11-11.
+      - run: echo "0.0.0.0 azure.archive.ubuntu.com" | sudo tee -a /etc/hosts
       - uses: ./.github/actions/apt-install
         with:
           packages: gperf clang-format ninja-build
