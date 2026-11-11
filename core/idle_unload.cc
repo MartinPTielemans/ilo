@@ -1,13 +1,16 @@
 #include "browser_core/idle_unload.h"
 
+#include <optional>
+#include <utility>
 #include <vector>
 
-#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/memory/memory_pressure_level.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/no_destructor.h"
 #include "base/task/task_traits.h"
+#include "browser_core/idle_check.h"
 #include "browser_core/session.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -37,7 +40,6 @@ using DiscardReason = DiscardEligibilityPolicy::DiscardReason;
 // The owner's call: long enough that the tabs the user works between keep their pages.
 constexpr base::TimeDelta kUnloadAfter = base::Hours(2);
 
-bool g_check_posted = false;
 // Whether check.sh aged the tabs, and waits for each check's line.
 bool g_aged = false;
 
@@ -98,36 +100,45 @@ bool MayUnload(const Tab& tab, DiscardReason reason) {
   return reasons.empty();
 }
 
-// The tabs idle when a check began that it's still to look at.
-std::vector<bc_id>& Unchecked() {
-  static base::NoDestructor<std::vector<bc_id>> unchecked;
-  return *unchecked;
-}
-
-// One tab a task, so the frames and keys of the switch that asked run between them: a page's
-// teardown is 5-6 ms of the main thread, and a user back after hours has every tab idle at once,
-// which in one task held a switch 164 ms (#2387). Best effort, so each waits for the work queued
-// before it, such as a switch's frames.
-void UnloadNextIdle() {
-  std::vector<bc_id>& unchecked = Unchecked();
-  if (!unchecked.empty() && UserSettings().unload_idle_tabs &&
-      !browser_shutdown::IsTryingToQuit()) {
-    Tab* tab = Tab::Get(unchecked.back());
-    unchecked.pop_back();
-    // Unless it has been seen since.
-    if (tab && base::Time::Now() - tab->last_seen() >= kUnloadAfter &&
-        MayUnload(*tab, DiscardReason::PROACTIVE)) {
+// The core as a check sees it.
+class CoreHost : public IdleCheck::Host {
+ public:
+  // Best effort, so each task waits for the work queued before it, such as a switch's frames.
+  void Post(base::OnceClosure task) override {
+    content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+        ->PostTask(FROM_HERE, std::move(task));
+  }
+  bool On() override {
+    return UserSettings().unload_idle_tabs && !browser_shutdown::IsTryingToQuit();
+  }
+  std::vector<uint64_t> Tabs() override {
+    std::vector<uint64_t> tabs;
+    for (const Tab* tab : Tab::All()) {
+      tabs.push_back(tab->id());
+    }
+    return tabs;
+  }
+  std::optional<base::Time> LastSeen(uint64_t id) override {
+    const Tab* tab = Tab::Get(id);
+    return tab ? std::make_optional(tab->last_seen()) : std::nullopt;
+  }
+  void Unload(uint64_t id) override {
+    Tab* tab = Tab::Get(id);
+    if (tab && MayUnload(*tab, DiscardReason::PROACTIVE)) {
       tab->Unload();
     }
-    content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
-        ->PostTask(FROM_HERE, base::BindOnce(&UnloadNextIdle));
-    return;
   }
-  unchecked.clear();
-  g_check_posted = false;
-  if (g_aged) {
-    LOG(ERROR) << "browser: idle tabs checked";
+  void Checked() override {
+    if (g_aged) {
+      LOG(ERROR) << "browser: idle tabs checked";
+    }
   }
+};
+
+IdleCheck& Check() {
+  static base::NoDestructor<CoreHost> host;
+  static base::NoDestructor<IdleCheck> check(*host, kUnloadAfter);
+  return *check;
 }
 
 // Unloads the tab unseen longest, whatever its age, each time the system says memory is short:
@@ -165,18 +176,7 @@ class PressureListener : public base::MemoryPressureListener {
 void UnloadIdleTabsSoon() {
   // Made with the first tab shown, which is soon enough to hear of memory running short.
   static base::NoDestructor<PressureListener> listener;
-  if (g_check_posted) {
-    return;
-  }
-  g_check_posted = true;
-  const base::Time now = base::Time::Now();
-  for (const Tab* tab : Tab::All()) {
-    if (now - tab->last_seen() >= kUnloadAfter) {
-      Unchecked().push_back(tab->id());
-    }
-  }
-  content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
-      ->PostTask(FROM_HERE, base::BindOnce(&UnloadNextIdle));
+  Check().Ask();
 }
 
 void AgeTabsForTesting(base::TimeDelta by) {

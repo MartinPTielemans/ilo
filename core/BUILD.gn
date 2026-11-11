@@ -167,6 +167,15 @@ source_set("archive_rule") {
   deps = [ "//base" ]
 }
 
+# How a check for idle tabs runs, apart so browser_core_unittests tests its order alone.
+source_set("idle_check") {
+  sources = [
+    "idle_check.cc",
+    "idle_check.h",
+  ]
+  deps = [ "//base" ]
+}
+
 # Where a video's Mini Player first shows, apart so browser_core_unittests tests the rule alone.
 source_set("mini_player_place") {
   sources = [
@@ -382,6 +391,7 @@ source_set("browser_core") {
   deps = [
     ":archive_rule",
     ":drm_request",
+    ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
@@ -668,6 +678,7 @@ test("browser_core_unittests") {
   sources = [
     "archive_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "idle_check_unittest.cc",
     "mini_player_place_unittest.cc",
     "other_tabs_unittest.cc",
     "search_default_unittest.cc",
@@ -688,6 +699,7 @@ test("browser_core_unittests") {
   deps = [
     ":archive_rule",
     ":agent_download_hold",
+    ":idle_check",
     ":mini_player_place",
     ":other_tabs",
     ":search_default",
