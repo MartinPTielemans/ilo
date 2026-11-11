@@ -1429,11 +1429,13 @@ CARD
   # while the user holds the tab, on this run's own port, fills in neither as the page loads nor
   # from a dropdown once the agent has the tab back. Take Over fills it at once, without a reload,
   # and the dropdown offers it. ⌘↩ on the page watched takes it over and hands it back.
+  # Its count has a name of its own: the run's $before, which the run reads after, holds the login
+  # page's loads.
   take_over() {
     taken="^browser: agent mcp-client taken over in $opened_tab\$"
-    before=$(grep -c "$taken" "$log" || true)
+    takeovers=$(grep -c "$taken" "$log" || true)
     send key return cmd
-    await_more "$taken" "$before" || fail "$1: ⌘↩ didn't take the tab"
+    await_more "$taken" "$takeovers" || fail "$1: ⌘↩ didn't take the tab"
   }
   # How many child windows the browser window has, Chrome's autofill dropdown among them.
   children() {
