@@ -15,6 +15,59 @@ pub const SMALLEST: u16 = 90;
 pub const LARGEST: u16 = 150;
 pub const SIZE_STEP: u16 = 10;
 
+/// Advanced's sliders' step, in percent.
+pub const ADJUST_STEP: u16 = 5;
+
+/// What Advanced's sliders set, each in percent, 100 changing nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adjust {
+    Contrast,
+    Brightness,
+    Saturation,
+}
+
+impl Adjust {
+    pub const ALL: [Adjust; 3] = [Adjust::Contrast, Adjust::Brightness, Adjust::Saturation];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Adjust::Contrast => "Contrast",
+            Adjust::Brightness => "Brightness",
+            Adjust::Saturation => "Saturation",
+        }
+    }
+
+    /// Its name in the block's state, and its CSS filter's.
+    fn name(self) -> &'static str {
+        match self {
+            Adjust::Contrast => "contrast",
+            Adjust::Brightness => "brightness",
+            Adjust::Saturation => "saturate",
+        }
+    }
+
+    /// Its least and most, 100 in the middle: past half or double, a page stops reading.
+    pub fn range(self) -> (u16, u16) {
+        match self {
+            Adjust::Saturation => (0, 200),
+            _ => (50, 150),
+        }
+    }
+
+    pub fn of(self, style: &Style) -> u16 {
+        style.adjust[self as usize]
+    }
+
+    /// `style` with this at `value`, held in its range on its step.
+    pub fn set(self, style: &mut Style, value: i32) {
+        let (least, most) = self.range();
+        let step = i32::from(ADJUST_STEP);
+        let value =
+            ((value + step / 2).div_euclid(step) * step).clamp(i32::from(least), i32::from(most));
+        style.adjust[self as usize] = value as u16;
+    }
+}
+
 /// A dot's place in the field, as the theme picker's: across and up from the middle, in a disc of
 /// radius 1, whose angle is the hue and whose distance the lightness.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +170,10 @@ pub struct Style {
     /// The page's text size, in percent.
     pub size: u16,
     pub case: Option<Case>,
+    /// Advanced's contrast, brightness and saturation, in percent, by `Adjust`.
+    pub adjust: [u16; 3],
+    /// Advanced is open in the editor for this Boost, as the user left it.
+    pub advanced: bool,
     /// The user has dragged a dot of this Boost, so the field's hint has gone for good.
     pub dragged: bool,
     /// What the user named the Boost, which shows in place of its site.
@@ -132,6 +189,8 @@ impl Default for Style {
             face: None,
             size: 100,
             case: None,
+            adjust: [100; 3],
+            advanced: false,
             dragged: false,
             name: None,
         }
@@ -167,9 +226,20 @@ impl Style {
         if let Some(links) = self.links {
             out += &format!("a, a * {{ color: {} !important; }}\n", hex(links.color()));
         }
+        // Advanced's after the inversion, so they work on the page as it's seen, its images too.
+        let filter: Vec<String> = (self.invert)
+            .then(|| "invert(1) hue-rotate(180deg)".to_owned())
+            .into_iter()
+            .chain(Adjust::ALL.into_iter().filter_map(|adjust| {
+                let value = adjust.of(self);
+                (value != 100).then(|| format!("{}({value}%)", adjust.name()))
+            }))
+            .collect();
+        if !filter.is_empty() {
+            out += &format!("html {{ filter: {} !important; }}\n", filter.join(" "));
+        }
         // Images and video turned back, so they show as they are on the dark page.
         if self.invert {
-            out += "html { filter: invert(1) hue-rotate(180deg) !important; }\n";
             out += "img, video, picture, canvas, svg image { filter: invert(1) hue-rotate(180deg) \
                     !important; }\n";
         }
@@ -181,7 +251,7 @@ impl Style {
 
     /// Shuffle's style, from `seed`: two dots anywhere in the field, the links' kept off its
     /// darkest and lightest so they read, and a face and case of those offered, the site's own
-    /// among them. The page size stays the user's.
+    /// among them. The page size, Advanced's and its being open stay the user's.
     pub fn shuffled(&self, seed: u64) -> Style {
         // SplitMix64's mix first, so near seeds start far apart.
         let mut state = seed.wrapping_add(0x9e3779b97f4a7c15);
@@ -236,11 +306,18 @@ impl Style {
             self.face.map(|face| format!("face {}", face.name())),
             (self.size != 100).then(|| format!("size {}", self.size)),
             self.case.map(|case| format!("case {}", case.name())),
+        ]
+        .into_iter()
+        .chain(Adjust::ALL.into_iter().map(|adjust| {
+            let value = adjust.of(self);
+            (value != 100).then(|| format!("{} {value}", adjust.name()))
+        }))
+        .chain([
+            self.advanced.then(|| "advanced".to_owned()),
             self.dragged.then(|| "dragged".to_owned()),
             // Last, as it may hold spaces.
             self.name.as_deref().map(|name| format!("name {name}")),
-        ]
-        .into_iter()
+        ])
         .flatten()
         .collect::<Vec<_>>()
         .join("; ")
@@ -283,8 +360,15 @@ impl Style {
                     style.size = size.map_or(100, |size: u16| size.clamp(SMALLEST, LARGEST));
                 }
                 "case" => style.case = words.get(1).and_then(|name| Case::named(name)),
+                "advanced" => style.advanced = true,
                 "dragged" => style.dragged = true,
-                _ => {}
+                name => {
+                    let adjust = Adjust::ALL.into_iter().find(|each| each.name() == name);
+                    let value = words.get(1).and_then(|value| value.parse::<i32>().ok());
+                    if let (Some(adjust), Some(value)) = (adjust, value) {
+                        adjust.set(&mut style, value);
+                    }
+                }
             }
         }
         style

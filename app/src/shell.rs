@@ -133,6 +133,9 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod space_order;
+mod split_fold;
+#[cfg(test)]
+mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
@@ -446,7 +449,6 @@ const TITLE_END_INSET: f32 = FAVICON_X - PLATE_INSET;
 use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
-use crate::tokens::shell::LOADING_ROW_MIN;
 use crate::tokens::shell::LOADING_SIZE;
 use crate::tokens::shell::STATUS_AGENT;
 use crate::tokens::shell::STATUS_DOT;
@@ -1408,6 +1410,8 @@ pub struct Shell {
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
     pinned_turn: Option<Instant>,
+    /// Each split view's row in the Space shown, by its first tab, as it folds to a pane.
+    split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
     /// last drawn.
@@ -1969,6 +1973,7 @@ impl Shell {
             name_menu: false,
             pinned_seen: None,
             pinned_turn: None,
+            split_folds: HashMap::new(),
             keyed: None,
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
@@ -4373,6 +4378,7 @@ impl Render for Shell {
         }
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_empty(window, cx);
         self.step_crash_cards(window);
         self.step_little(window, cx);
@@ -4820,14 +4826,17 @@ impl Shell {
             }
             let panes = space.panes(tab);
             if panes.len() > 1 {
-                let width = self.segment_width(depth, panes.len());
-                let segments = panes.iter().map(|&pane| {
+                let weights = self.rest_weights(&panes, selected);
+                let segments = panes.iter().zip(weights).map(|(&pane, weight)| {
+                    let speaker = self.still_speaker(&self.palette, pane);
+                    let fold = (weight, 0.);
                     self.segment(
                         &self.palette,
                         pane,
-                        width,
+                        fold,
                         pane == tab,
                         pane == selected,
+                        speaker,
                         cx,
                     )
                 });
@@ -5068,6 +5077,7 @@ impl Shell {
         self.step_scroll_edge(window, cx);
         self.step_tools(window);
         self.step_pinned_turn(window);
+        self.step_split_folds(window, cx);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
