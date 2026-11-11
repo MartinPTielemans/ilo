@@ -70,7 +70,8 @@ log="$out/tabs.log"
 trace="$PWD/$out/trace.json"
 step=0
 rm -f "$saved" "$launch_frame"
-BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing=latency \
+# shellcheck disable=SC2086 # the record mode, or nothing
+BROWSER_DRIVE=1 BROWSER_URL="$page" "$browser" --enable-tracing="$trace_categories" $trace_mode \
   --enable-tracing-format=json --trace-startup-file="$trace" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
@@ -1517,34 +1518,20 @@ app_ms=$(sed -n 's/^browser: selected [0-9]* in \([0-9.]*\) ms$/\1/p' "$log" | s
 # Chrome writes Perfetto's proto, its default.
 head -c 1 "$trace" | grep -q '[[{]' ||
   fail "the trace isn't JSON, so Chrome didn't get --enable-tracing-format=json"
-spans=$(python3 -I - "$trace" << 'PY'
-import json, sys
-# Chrome's tab switch spans, begin and end events paired by id, in microseconds. A switch to a tab
-# whose page hasn't loaded yet, as when a new tab shows, times the page load; Chrome reports those
-# apart from switches, and so does this. Chrome times none between the tabs of a split view, as to
-# the one Add Split View opens beside the tab shown, whose page is on screen already, and the core
-# has it do the same for ours. A switch cut off before its frame showed, as by the next switch
-# while ⌃ is held, never finished, so Chrome's histograms leave it out; it's only counted.
-events = json.load(open(sys.argv[1], encoding="utf-8"))
-events = events["traceEvents"] if isinstance(events, dict) else events
-begins = {}
-for event in events:
-    if event.get("name") != "TabSwitching::Latency":
-        continue
-    if event.get("ph") == "b":
-        measurement = event.get("args", {}).get("tab_switch_measurement", {})
-        begins[event.get("id")] = (event["ts"], "NOT_LOADED" in measurement.get("tab_state", ""),
-                                   measurement.get("result") == "RESULT_INCOMPLETE")
-    elif event.get("ph") == "e" and event.get("id") in begins:
-        begin, not_loaded, incomplete = begins.pop(event.get("id"))
-        if not not_loaded:
-            print("incomplete" if incomplete else (event["ts"] - begin) / 1000)
-PY
-)
+spans=$(python3 -I check/tab_switches.py "$trace")
 chrome_ms=$(echo "$spans" | grep -v incomplete | summary)
-[ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+# With more than latency, a trace whose buffer ran out may keep none, and the product's not at fault.
+if [ "$trace_categories" = latency ]; then
+  [ -n "$chrome_ms" ] || fail "the trace has no finished tab switches"
+elif [ -z "$(echo "$spans" | grep -v incomplete | grep .)" ]; then
+  chrome_ms=none
+fi
 # grep -c finds none in a run where no switch was cut off, and exits 1 then.
 chrome_ms="$chrome_ms, $(echo "$spans" | grep -c incomplete || true) incomplete, not counted"
+# With more than latency, the trace keeps the run's last part, where its buffer runs out, so the
+# switches before are left out of it.
+[ "$trace_categories" = latency ] || chrome_ms="$chrome_ms; with $trace_categories, $(echo "$spans" |
+  grep -c . || true) of the $(grep -c '^browser: selected [0-9]* in ' "$log" || true) switches have a span"
 # A tab that let go of its page, unseen 2 hours, gets its page back once shown with its
 # sessionStorage, where a site keeps its sign-in, as Chrome's discarded tabs keep theirs (#1934).
 # Its cookies are its profile's, so only the storage could go.

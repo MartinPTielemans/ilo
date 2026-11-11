@@ -6,6 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
 
 use super::*;
+use crate::tokens::theme_picker::ARROW;
 
 #[derive(Default)]
 struct Recorder {
@@ -47,7 +48,9 @@ impl Editor {
         cx.update(|cx| {
             let palette = Palette::default();
             let site = "news.example".to_string();
-            show(2, site, None, style, true, at, 800., palette, requested, cx)
+            show(
+                2, site, None, style, true, at, false, 800., palette, requested, cx,
+            )
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         // The host makes its window the key one as it shows it.
@@ -348,9 +351,10 @@ fn rename_keeps_what_is_typed_and_escape_leaves_the_name(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn edit_css_zap_and_delete_hand_over_to_the_window(cx: &mut TestAppContext) {
+fn edit_css_edit_script_zap_and_delete_hand_over_to_the_window(cx: &mut TestAppContext) {
     for (wanted, request) in [
         (Target::EditCss, Request::EditCss),
+        (Target::EditScript, Request::EditScript),
         (Target::Zap, Request::Zap),
     ] {
         let mut editor = Editor::new(Style::default(), cx);

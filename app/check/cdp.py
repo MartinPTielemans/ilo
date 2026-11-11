@@ -37,6 +37,27 @@ takes a command a line on its standard input:
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
                   logs "cdp: recording requests"
+For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
+  titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
+                  changes, where perf's page stamps its paint and each time it's shown. DevTools
+                  says a title only as its page navigates, so it asks each 50 ms: the stamp is the
+                  page's own, so the asking isn't in the time
+  titles off      stops asking, as idle and power are measured, then logs "cdp: titles off"
+  open URL        logs "cdp: opening at MS", the Unix ms, then opens URL in a new tab in front,
+                  as a link from another app does, and logs "cdp: opened TARGET"
+  activate TARGET logs "cdp: activating TARGET at MS", then shows the tab, through its window's tab
+                  strip, as a click on it or ⌘1–⌘8 do: stamped here, the shell's clock and the
+                  pipe aren't in the time
+  window          logs "cdp: window LEFT TOP WIDTH HEIGHT STATE", a page's window's bounds on the
+                  screens, from the main display's top left, once there's a page
+  histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
+                  browser has none by that name, such as Chrome's startup times
+For perf's traced switches, in ilo and Chrome:
+  trace start CATEGORIES
+                  starts tracing the comma-separated CATEGORIES, keeping the trace's last part
+                  once its buffer is full, then logs "cdp: tracing"
+  trace end FILE  ends it and writes it to FILE as JSON, then logs "cdp: traced FILE", with
+                  " lossy" after if the browser dropped some of it
 The domains are for the checks alone. Agents never get DevTools: it runs any script in any page.
 
 Usage: cdp.py IN OUT [PAGE] | cdp.py --socket URL [PAGE]
@@ -49,6 +70,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 page = sys.argv[3] if len(sys.argv) > 3 else ""
 if sys.argv[1] == "--socket":
@@ -120,6 +142,12 @@ else:
                 yield raw
 
 lock = threading.Lock()
+# Whether page titles are logged as they change, once titles asks.
+titles = False
+# The title logged last for each page, by its target.
+logged = {}
+# One message at a time on the pipe or the socket, from the main thread, the reader and the poller.
+sending = threading.Lock()
 replies = {}
 answered = threading.Condition(lock)
 events = []
@@ -134,6 +162,13 @@ def log(line):
     print("cdp: " + line, flush=True)
 
 
+def log_title(info):
+    """Logs a page's title if it isn't the one logged last for it; under the lock."""
+    if info["type"] == "page" and logged.get(info["targetId"]) != info["title"]:
+        logged[info["targetId"]] = info["title"]
+        log("title %s %s" % (info["targetId"], info["title"]))
+
+
 def call(method, params=None, session=None):
     global sent
     with lock:
@@ -142,7 +177,8 @@ def call(method, params=None, session=None):
     message = {"id": number, "method": method, "params": params or {}}
     if session:
         message["sessionId"] = session
-    send(json.dumps(message).encode())
+    with sending:
+        send(json.dumps(message).encode())
     with answered:
         answered.wait_for(lambda: number in replies)
         reply = replies.pop(number)
@@ -157,8 +193,9 @@ def post(method, params, session):
     with lock:
         sent += 1
         number = sent
-    send(json.dumps({"id": number, "method": method, "params": params,
-                     "sessionId": session}).encode())
+    with sending:
+        send(json.dumps({"id": number, "method": method, "params": params,
+                         "sessionId": session}).encode())
 
 
 def record(message):
@@ -204,6 +241,9 @@ def read():
                     # With its private key and count, for the authenticators after.
                     credential = message["params"]["credential"]
                     passkeys[credential["credentialId"]] = credential
+                if titles and message["method"] in ("Target.targetCreated",
+                                                    "Target.targetInfoChanged"):
+                    log_title(message["params"]["targetInfo"])
                 if message["method"] == "WebAuthn.credentialAdded":
                     log("credential added")
                 elif message["method"] == "WebAuthn.credentialAsserted":
@@ -248,11 +288,53 @@ def attach(wanted):
     log("attached")
 
 
+def poll_titles():
+    """Logs each page's title as it changes, while titles is on."""
+    while True:
+        if titles:
+            infos = call("Target.getTargets")["targetInfos"]
+            with answered:
+                if titles:
+                    for info in infos:
+                        log_title(info)
+        time.sleep(0.05)
+
+
 attached = session = authenticator = None
 if page:
     attach(lambda url: url.endswith(page))
 # Sessions on the other pages shows looked in, by their targets.
 sessions = {}
+# The thread that asks for the titles, once titles starts it.
+poller = None
+
+
+def trace_end(path):
+    """Ends the trace and writes it to PATH, " lossy" if the browser dropped some of it."""
+    with answered:
+        before = len(events)
+    call("Tracing.end")
+
+    def complete():
+        for event in events[before:]:
+            if event is None:
+                raise SystemExit("cdp: the browser closed the pipe")
+            if event["method"] == "Tracing.tracingComplete":
+                return event["params"]
+        return None
+
+    with answered:
+        answered.wait_for(complete)
+        done = complete()
+    with open(path, "wb") as trace:
+        while True:
+            chunk = call("IO.read", {"handle": done["stream"], "size": 1 << 20})
+            data = chunk.get("data", "")
+            trace.write(base64.b64decode(data) if chunk.get("base64Encoded") else data.encode())
+            if chunk.get("eof"):
+                break
+    call("IO.close", {"handle": done["stream"]})
+    return " lossy" if done.get("dataLossOccurred") else ""
 
 
 def attributes(node):
@@ -366,3 +448,52 @@ for line in sys.stdin:
         log("recording requests")
     elif words[:1] == ["shows"] and len(words) == 3:
         log("shows " + shows(words[1], words[2]))
+    elif words == ["titles"]:
+        with answered:
+            titles = True
+            if not poller:
+                # The pages' titles now, the last each event said, before the reader and the
+                # poller log those after.
+                now = {}
+                for event in events:
+                    if event and event["method"] in ("Target.targetCreated",
+                                                     "Target.targetInfoChanged"):
+                        info = event["params"]["targetInfo"]
+                        now[info["targetId"]] = info
+                for info in now.values():
+                    log_title(info)
+                poller = threading.Thread(target=poll_titles, daemon=True)
+                poller.start()
+    elif words == ["titles", "off"]:
+        with answered:
+            titles = False
+        log("titles off")
+    elif words[:1] == ["open"] and len(words) == 2:
+        log("opening at %d" % (time.time() * 1000))
+        log("opened " + call("Target.createTarget", {"url": words[1]})["targetId"])
+    elif words[:1] == ["activate"] and len(words) == 2:
+        log("activating %s at %d" % (words[1], time.time() * 1000))
+        call("Target.activateTarget", {"targetId": words[1]})
+    elif words[:2] == ["trace", "start"] and len(words) == 3:
+        # Bounded to what's traced, the buffer holds it all, where a whole session's overflows.
+        call("Tracing.start", {"traceConfig": {"recordMode": "recordContinuously",
+                                               "traceBufferSizeInKb": 512 * 1024,
+                                               "includedCategories": words[2].split(",")},
+                               "transferMode": "ReturnAsStream", "streamFormat": "json"})
+        log("tracing")
+    elif words[:2] == ["trace", "end"] and len(words) == 3:
+        log("traced %s%s" % (words[2], trace_end(words[2])))
+    elif words == ["window"]:
+        with answered:
+            answered.wait_for(lambda: page_target(lambda url: True))
+            target = page_target(lambda url: True)
+        window = call("Browser.getWindowForTarget", {"targetId": target})["bounds"]
+        log("window %d %d %d %d %s" % (window["left"], window["top"], window["width"],
+                                       window["height"], window["windowState"]))
+    elif words[:1] == ["histogram"] and len(words) == 2:
+        try:
+            histogram = call("Browser.getHistogram", {"name": words[1]})["histogram"]
+            log("histogram %s %d %d" % (words[1], histogram["sum"], histogram["count"]))
+        except SystemExit:
+            # DevTools answers an error for a histogram nothing has recorded yet.
+            log("histogram %s none" % words[1])
