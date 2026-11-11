@@ -98,17 +98,33 @@ bool MayUnload(const Tab& tab, DiscardReason reason) {
   return reasons.empty();
 }
 
-void UnloadIdle() {
-  g_check_posted = false;
-  if (UserSettings().unload_idle_tabs && !browser_shutdown::IsTryingToQuit()) {
-    const base::Time now = base::Time::Now();
-    // A copy, as unloading changes no tab but its page.
-    for (Tab* tab : Tab::All()) {
-      if (now - tab->last_seen() >= kUnloadAfter && MayUnload(*tab, DiscardReason::PROACTIVE)) {
-        tab->Unload();
-      }
+// The tabs idle when a check began that it's still to look at.
+std::vector<bc_id>& Unchecked() {
+  static base::NoDestructor<std::vector<bc_id>> unchecked;
+  return *unchecked;
+}
+
+// One tab a task, so the frames and keys of the switch that asked run between them: a page's
+// teardown is 5-6 ms of the main thread, and a user back after hours has every tab idle at once,
+// which in one task held a switch 164 ms (#2387). Best effort, so each waits for the work queued
+// before it, such as a switch's frames.
+void UnloadNextIdle() {
+  std::vector<bc_id>& unchecked = Unchecked();
+  if (!unchecked.empty() && UserSettings().unload_idle_tabs &&
+      !browser_shutdown::IsTryingToQuit()) {
+    Tab* tab = Tab::Get(unchecked.back());
+    unchecked.pop_back();
+    // Unless it has been seen since.
+    if (tab && base::Time::Now() - tab->last_seen() >= kUnloadAfter &&
+        MayUnload(*tab, DiscardReason::PROACTIVE)) {
+      tab->Unload();
     }
+    content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+        ->PostTask(FROM_HERE, base::BindOnce(&UnloadNextIdle));
+    return;
   }
+  unchecked.clear();
+  g_check_posted = false;
   if (g_aged) {
     LOG(ERROR) << "browser: idle tabs checked";
   }
@@ -153,9 +169,14 @@ void UnloadIdleTabsSoon() {
     return;
   }
   g_check_posted = true;
-  // Best effort, so it waits for the frames of the switch that asked.
+  const base::Time now = base::Time::Now();
+  for (const Tab* tab : Tab::All()) {
+    if (now - tab->last_seen() >= kUnloadAfter) {
+      Unchecked().push_back(tab->id());
+    }
+  }
   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
-      ->PostTask(FROM_HERE, base::BindOnce(&UnloadIdle));
+      ->PostTask(FROM_HERE, base::BindOnce(&UnloadNextIdle));
 }
 
 void AgeTabsForTesting(base::TimeDelta by) {
