@@ -1337,7 +1337,11 @@ pub fn bar_hidden() {
 fn build_index(cx: &mut App) {
     let started = Instant::now();
     let accent = rgb(NO_THEME_ACCENT);
-    let entries = view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0);
+    // Its rows are built only to be read, so in an arena freed as it ends: the fallback one GPUI
+    // gives elements built outside a draw is never cleared, and each build added to it (#2138).
+    let entries = gpui::with_scratch_element_arena(|| {
+        view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0)
+    });
     // check.sh reads this line.
     log!(
         "browser: settings index {} rows in {:.1} ms",
