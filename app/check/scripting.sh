@@ -84,7 +84,10 @@ EOF
   [ "$(/usr/libexec/PlistBuddy -c 'Print :OSAScriptingDefinition' "$plist" 2>/dev/null)" = ilo.sdef ] ||
     fail "the app's Info.plist doesn't declare ilo's dictionary"
   [ ! -e "$app/Contents/Resources/scripting.sdef" ] || fail "the app has Chromium's scripting.sdef"
-  sdef "$app" > "$out/scripting.sdef" 2>&1 || fail "sdef couldn't read the app's dictionary"
+  # The dictionary is the file Info.plist names, which includes no other: it's what sdef prints,
+  # and sdef needs Xcode, which a check VM's guest lacks (#2396). The scripts below show macOS
+  # reads it.
+  cp "$app/Contents/Resources/ilo.sdef" "$out/scripting.sdef" || fail "the app has no ilo.sdef"
   for term in execute save print 'view source' 'copy selection' 'bookmark'; do
     grep -q "name=\"$term\"" "$out/scripting.sdef" && fail "the app's dictionary has $term"
   done
