@@ -472,6 +472,15 @@ in_sight() {
   if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
   send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
   at=$(drawn_after "$1" "^browser: drive $step: ") || return 1
+  # GPUI on Windows takes the driver's wheel messages for lines, about two thirds of the points
+  # asked, which can leave the row under the edge: scroll the rest. Where the card can't scroll
+  # further, nothing draws again and at stays where it was.
+  y=${at#* }
+  [ "$y" -ge "$top" ] && [ "$y" -le "$bottom" ] && return 0
+  if [ "$y" -gt "$bottom" ]; then by=$((y - bottom + 32)); else by=$((y - top - 32)); fi
+  send scrollkey "${at% *}" $(((top + bottom) / 2)) "$by" 1
+  rest=$(drawn_after "$1" "^browser: drive $step: ") && at=$rest
+  return 0
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh
 # checks it). Escape closes it, leaving the window with no page that the steps after expect. With
