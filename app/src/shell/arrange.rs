@@ -143,6 +143,10 @@ impl Shell {
             return;
         }
         self.mini_bar_shown = shown.clone();
+        if let Some(shown) = &shown {
+            // check.sh reads this line.
+            log!("browser: mini bar shown over {}", shown.tab);
+        }
         let shell = cx.entity().downgrade();
         let on_press: OnPress = Rc::new(move |tab, press, cx| {
             let _ = shell.update(cx, |shell, cx| shell.press_mini_bar(tab, press, cx));
