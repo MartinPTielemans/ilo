@@ -523,10 +523,13 @@ chrome_launch() {
     --use-mock-keychain --password-store=basic --remote-debugging-port=0 "$@" "$chrome_url" \
     < /dev/null >> "$perf_dir/chrome.log" 2>&1 &
   pid=$!
-  # Its port, then the browser's path, once DevTools listens.
-  for _ in $(seq 150); do
-    [ "$(wc -l < "$chrome_dir/DevToolsActivePort" 2> /dev/null || echo 0)" -ge 2 ] && break
+  # Its port, then the browser's path, once DevTools listens, which a runner's first launch of it,
+  # from a cold disk, took 15.5 s to (#2385).
+  tries=0
+  until [ "$(wc -l < "$chrome_dir/DevToolsActivePort" 2> /dev/null || echo 0)" -ge 2 ]; do
     kill -0 "$pid" 2> /dev/null || return 1
+    tries=$((tries + 1))
+    [ "$tries" -le 600 ] || fail "Chrome's DevTools didn't listen within 60 s of its launch"
     sleep 0.1
   done
   chrome_socket="ws://127.0.0.1:$(tr -d '\r' < "$chrome_dir/DevToolsActivePort" | sed -n 1p)$(
