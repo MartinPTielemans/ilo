@@ -513,7 +513,10 @@ expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today ro
 none_since '^browser: dragged' "$let_go" || fail "a tile's drag escape put back dropped it"
 send click $(tiled_row 1) alt
 expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
-send drag $(tiled_row 0) 180 112
+# The ⌥-click focused the right pane, which has the row's width, so the drag presses the left one's
+# favicon, folded at the row's start (#2340), and the split shows focused there.
+send drag 24 $(tiled_row 0 | cut -d' ' -f2) 180 112
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a press on the split's left segment didn't focus it"
 expect "^browser: dragged $x to favorites 1\$" "the split's row dragged onto the tiles didn't go there"
 expect "^browser: favorites $a $x\$" "the split isn't one favorite: the favorites are \"$(favorites)\""
 expect "^browser: favorite splits $x+$y\$" "the split dragged onto the tiles isn't a favorite split"
