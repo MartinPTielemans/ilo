@@ -199,6 +199,15 @@ struct Run {
     first_shown_ms: Option<f64>,
 }
 
+impl Run {
+    /// The most the page moved in any 60 Hz frame, in Spaces.
+    fn largest_step(&self) -> f32 {
+        let frame = (1000. / 60. / STEP_MS) as usize;
+        let places = self.slides.iter().zip(self.slides.iter().skip(frame));
+        places.map(|(then, now)| (now - then).abs()).fold(0., f32::max)
+    }
+}
+
 /// The fingers' and momentum's events, each `(ms, what)` as `send` gives it to the shell, which
 /// shows a Space as soon as it asks to, as the core does, with the page's place each step.
 fn run(
@@ -301,9 +310,12 @@ fn deliveries() -> [Delivery; 4] {
 }
 
 /// Each gesture, in each way a browser may hand it on, shows the Spaces in the demo that it does
-/// in the app, starting no sooner than the fingers lift there and soon after.
+/// in the app, starting no sooner than the fingers lift there and soon after, and never moves the
+/// pages further in a frame than the app does, give or take STEP_SLACK. A lift found late can't
+/// catch up with the app's settle without that jump, which the eye takes for a snap.
 #[gpui::test]
 fn the_demo_swipes_as_the_app_does(cx: &mut TestAppContext) {
+    const STEP_SLACK: f32 = 0.05;
     for (name, events) in gestures() {
         let end = events.last().map_or(0., |event| event.at_ms) + 400.;
         let app = in_app(cx, &events, end);
@@ -313,6 +325,8 @@ fn the_demo_swipes_as_the_app_does(cx: &mut TestAppContext) {
             assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
             let lag = demo.first_shown_ms.zip(app.first_shown_ms).map(|(demo, app)| demo - app);
             assert!(lag.is_some_and(|lag| (0. ..300.).contains(&lag)), "{way}: {lag:?} ms after the app");
+            let (step, app_step) = (demo.largest_step(), app.largest_step());
+            assert!(step <= app_step + STEP_SLACK, "{way}: {step} of a Space in a frame, the app {app_step}");
         }
     }
 }
