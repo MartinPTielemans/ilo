@@ -510,7 +510,7 @@ jobs:
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
           status=0
-          timeout 10m check/ime.sh > "$out/ime.log" 2>&1 || status=$?
+          timeout 25m check/ime.sh > "$out/ime.log" 2>&1 || status=$?
           [ ! -d build/check/ime ] || mv build/check/ime "$out/ime"
           pkill -9 -f "$PWD/build/Browser/" || true
           result=passed

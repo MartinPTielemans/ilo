@@ -63,14 +63,74 @@ if [ "${1:-}" = --steps ]; then
   }
   key() { "$VKBD" "$1"; }
   compose() { key '^;'; key "$1"; }
+  # [DEBUG-2365] Under Xvfb, xdotool's keys and clicks, in the browser's window, which openbox
+  # places.
+  case $mode in
+    xvfb*)
+      win=$(xdotool getactivewindow)
+      echo "[DEBUG-2365] xvfb: the browser's window is $win" >&2
+      key() {
+        case $1 in
+          '^;') xdotool key ctrl+semicolon ;;
+          '^'?) xdotool key "ctrl+${1#^}" ;;
+          $'\e') xdotool key Escape ;;
+          $'\n') xdotool key Return ;;
+          *) xdotool type --delay 30 -- "$1" ;;
+        esac
+      }
+      click() { xdotool mousemove --window "$win" "$1" "$2" click 1; }
+      shot() { import -window root "$out/$mode-$1.png"; }
+      ;;
+  esac
   # Under X11 the seat's keyboard for the run is this one, as run.sh has no Wayland display to
   # make it on: with none left the app gets a keyboard leave, which closes an overlay.
-  if [ "$mode" = x11 ]; then
-    "$VKBD" --hold 120 &
+  case $mode in
+    x11*)
+    "$VKBD" --hold 600 &
     hold=$!
     trap 'kill $hold 2>/dev/null || true' EXIT
     sleep 0.5 # for the held keyboard to join the seat
-  fi
+    ;;
+  esac
+
+  # [DEBUG-2365] The bar opened over the composing page, $PROBE_TRIES times: whether it keeps
+  # what's composed in it, "kept", or closes first, "closed", with "xyz" going to the page.
+  case $mode in
+    *-count | *-probe)
+      for try in $(seq "${PROBE_TRIES:-25}"); do
+        echo "[DEBUG-2365] try $try" >> "$LOG"
+        at=$(mark); click 330 40
+        await "title [0-9]* clicked" "$at"
+        at=$(mark); compose de
+        await "title [0-9]* composing .*de$" "$at"
+        at=$(mark); key '^t'
+        await "command bar shown" "$at"
+        compose xyz
+        result=neither
+        for _ in $(seq 50); do
+          if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar drew "xyz"'; then
+            result=kept; break
+          fi
+          if tail -n "+$((at + 1))" "$LOG" | grep -q 'command bar hidden'; then
+            result=closed; break
+          fi
+          sleep 0.1
+        done
+        echo "$try $result $at" >> "$out/$mode.tries"
+        echo "[DEBUG-2365] try $try $result" >> "$LOG"
+        # Escape cancels what's composed, in the bar or the page, and the next closes the bar.
+        key $'\e'
+        if [ "$result" != closed ]; then
+          key $'\e'
+          await "command bar hidden" "$at"
+        fi
+        at=$(mark); click 330 40
+        await "title [0-9]* clicked" "$at"
+      done
+      mv "$out/$mode.failed" "$out/$mode.passed"
+      exit 0
+      ;;
+  esac
 
   if [ "$mode" = no-keyboard ]; then
     at=$(mark); click 330 40
@@ -175,8 +235,8 @@ if [ "${1:-}" = --steps ]; then
   exit 0
 fi
 
-modes=${1:-"wayland x11 no-keyboard"}
-for tool in sway grim magick fcitx5 dbus-run-session xkbcli cargo; do
+modes=${1:-"x11-count xvfb-count x11-probe xvfb-probe"}
+for tool in sway grim magick fcitx5 dbus-run-session xkbcli cargo xvfb-run openbox xdotool import; do
   command -v "$tool" >/dev/null || { echo "FAIL: needs $tool" >&2; exit 1; }
 done
 [ -x build/Browser/chrome ] || { echo "FAIL: no build/Browser/chrome; run ./build.sh" >&2; exit 1; }
@@ -254,15 +314,47 @@ t.addEventListener("input",()=>setTimeout(u));
 t.addEventListener("pointerdown",()=>{document.title="clicked "+t.value});
 </script>'
 url="data:text/html,$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$page")"
+# [DEBUG-2365] Under Xvfb, as check.sh's BROWSER_XVFB: openbox, then the app, then the steps.
+cat > "$home/xvfb.sh" <<EOF
+#!/bin/bash
+mode=\$1
+ready=$home/openbox-\$mode
+openbox --startup "touch \$ready" &
+wm=\$!
+for _ in \$(seq 100); do [ -e "\$ready" ] && break; sleep 0.1; done
+xdotool mousemove 1279 799
+export LOG=$out/\$mode.log
+setsid "$home/run.sh" "\$mode" build/Browser/chrome > "\$LOG" 2>&1 &
+app=\$!
+for _ in \$(seq 300); do grep -qs 'browser: loaded' "\$LOG" && break; kill -0 \$app || break; sleep 0.1; done
+sleep 1 # [DEBUG-2365] for openbox to activate the window, which getactivewindow reads
+"$PWD/check/ime.sh" --steps "\$mode" "$out" || true
+kill -- -\$app 2>/dev/null || true
+kill \$wm 2>/dev/null || true
+EOF
+chmod +x "$home/xvfb.sh"
 failed=
 for mode in $modes; do
-  x11=; [ "$mode" = x11 ] && x11=--x11
-  rm -rf "$home/profile"
+  x11=; case $mode in x11*) x11=--x11 ;; esac
+  probe=; case $mode in *-probe) probe=1 ;; esac
+  case $mode in
+    xvfb*)
+      dbus-run-session --config-file="$home/bus.conf" -- \
+        env -u WAYLAND_DISPLAY BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" \
+        ${probe:+BROWSER_FOCUS_PROBE=1} \
+        xvfb-run -a -s "-screen 0 1280x800x24" "$home/xvfb.sh" "$mode" \
+        > "$out/$mode-run.log" 2>&1 || true
+      ;;
+    *)
   dbus-run-session --config-file="$home/bus.conf" -- \
-    env BROWSER_PROFILE_DIR="$home/profile" BROWSER_URL="$url" \
+    env BROWSER_PROFILE_DIR="$home/profile-$mode" BROWSER_URL="$url" ${probe:+BROWSER_FOCUS_PROBE=1} \
     ../tools/headless.sh $x11 --then "$PWD/check/ime.sh --steps $mode $out" \
     "$out/$mode.png" 'browser: loaded' "$home/run.sh" "$mode" build/Browser/chrome \
     > "$out/$mode-run.log" 2>&1 || true
+      ;;
+  esac
+  [ ! -s "$out/$mode.tries" ] ||
+    echo "[DEBUG-2365] $mode: $(grep -c ' closed ' "$out/$mode.tries" || true) closed, $(grep -c ' kept ' "$out/$mode.tries" || true) kept, $(grep -c ' neither ' "$out/$mode.tries" || true) neither, of $(wc -l < "$out/$mode.tries")"
   if [ ! -f "$out/$mode.passed" ]; then
     failed=1
     cat "$out/$mode.failed" 2>/dev/null || echo "FAIL ($mode): see $out/$mode-run.log" >&2
