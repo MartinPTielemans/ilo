@@ -488,8 +488,16 @@ jobs:
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
           status=0
-          timeout 10m check/drops.sh > "$out/drops.log" 2>&1 || status=$?
-          [ ! -d build/check/drops ] || mv build/check/drops "$out/drops"
+          # Proof only: three times, each with every core kept busy, as a slow runner is.
+          for n in 1 2 3; do
+            loads=
+            for _ in $(seq $((2 * $(nproc)))); do yes > /dev/null & loads="$loads $!"; done
+            timeout 10m check/drops.sh > "$out/drops-$n.log" 2>&1 || status=$?
+            kill $loads
+            [ ! -d build/check/drops ] || mv build/check/drops "$out/drops-$n"
+            pkill -9 -f "$PWD/build/Browser/" || true
+          done
+          cat "$out"/drops-*.log > "$out/drops.log"
           pkill -9 -f "$PWD/build/Browser/" || true
           result=passed
           if [ "$status" != 0 ]; then
