@@ -502,6 +502,25 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+bool Tab::At(const GURL& url) const {
+  if (!url.is_valid()) {
+    return false;
+  }
+  if (Url() == url) {
+    return true;
+  }
+  if (content::WebContents* contents = web_contents()) {
+    // A page in the system's engine, or one waiting to load, is only at its own URL.
+    if (system_page_ || waiting_) {
+      return false;
+    }
+    content::NavigationEntry* entry = contents->GetController().GetLastCommittedEntry();
+    return entry && !entry->IsInitialEntry() && entry->GetOriginalRequestURL() == url;
+  }
+  return unloaded_ && !unloaded_->history.empty() &&
+         unloaded_->history[unloaded_->current].original_request_url() == url;
+}
+
 std::string Tab::SessionStorageId() const {
   if (content::WebContents* contents = web_contents()) {
     return contents->GetController().GetDefaultSessionStorageNamespace()->id();
@@ -1145,7 +1164,7 @@ void Tab::ReportState() {
         .can_go_forward = current + 1 < count,
         .loading = false,
         .unloaded = true,
-        .away_from_pinned_url = pinned_url.is_valid() && Url() != pinned_url,
+        .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
         .audible = false,
         .muted = muted(),
         .icon = icon_.c_str(),
@@ -1188,7 +1207,7 @@ void Tab::ReportState() {
       .can_go_forward = CanGoForward(),
       .loading = page ? page->loading() : contents->ShouldShowLoadingUI(),
       .unloaded = !page && (history.NeedsReload() || waiting_),
-      .away_from_pinned_url = pinned_url.is_valid() && PageUrl(contents) != pinned_url,
+      .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),
       .audible = page ? page->audible() : audible && audible->WasRecentlyAudible(),
       .muted = page ? page->muted() : contents->IsAudioMuted(),
       .volume = volume_,
