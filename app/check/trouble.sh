@@ -155,6 +155,40 @@ send key return
 expect '^browser: command bar go https://nothing.invalid/$' "the bar didn't go to the address typed with its scheme"
 expect "^browser: page $tab trouble network -105\$" "a host that doesn't resolve wasn't a network error"
 await '^browser: title [0-9]* nothing.invalid$' || fail "the error page didn't take the host for its title"
+# PROBE #2416, not for merging: the error page came in a view of its own with the keyboard in the
+# page and no click since. Which of ⌘L, ⌘T and ⌘W reach the browser?
+heard() {
+  for _ in $(seq 30); do
+    logged "$1" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+sleep 1
+send title
+send key l cmd
+if heard '^browser: command bar shown$'; then
+  echo "probe #2416: ⌘L on the error page with no click opened the command bar"
+  send key escape
+else
+  echo "probe #2416: ⌘L on the error page with no click was lost"
+  send title
+  send key t cmd
+  if heard '^browser: command new-tab via'; then
+    echo "probe #2416: ⌘T was heard after the lost ⌘L"
+    send key escape
+  else
+    echo "probe #2416: ⌘T was lost too"
+    send title
+    send key w cmd
+    if heard '^browser: command close-tab via'; then
+      fail "probe #2416: ⌘W was heard after the lost ⌘L and ⌘T, closing the error page's tab"
+    fi
+    echo "probe #2416: ⌘W was lost too"
+  fi
+  send click 300 120
+fi
+grep -n '^browser: drive\|^browser: key window\|^browser: command\|key for tab' "$log" | tail -24 | sed 's/^/probe #2416: /'
 ../tools/window-screenshot.sh "$pid" "$out/network-error.png" || fail "no window to capture"
 # In Light its words are dark, in the palette's ink, on the pane, which is light then (#1567).
 # inked <capture>: how many pixels darker than 100 in each channel lie in the middle of the
