@@ -3667,8 +3667,10 @@ fn preview_update(update: &str, cx: &mut App) {
 /// for its first Today tab, else its first pinned one. `host` hears `layOut(x, y, width, height,
 /// radius)` for the page's frame, `show(url)` for the tab shown ("" for none), `space(index)` for
 /// the Space shown, `cover(covered)` while something draws over the frame, and `ready()` once the
-/// first frame is up. The demo takes the keyboard only once it's clicked or its command bar opens,
-/// and gives it back when the bar closes; `openBar()` opens the bar.
+/// first frame is up. `host.scheme`, "dark" or "light", keeps the demo in that appearance; without
+/// it the demo follows the visitor's, as the app follows the system's. The demo takes the keyboard
+/// only once it's clicked or its command bar opens, and gives it back when the bar closes;
+/// `openBar()` opens the bar.
 #[cfg(target_family = "wasm")]
 mod web {
     use std::{
@@ -3679,6 +3681,7 @@ mod web {
 
     use browser::command_bar::{self, CommandBar, Suggestion};
     use browser::log;
+    use browser::palette::Tone;
     use browser::shell::{self, Command, Folders, Page, Shell, SpaceEntry};
     use gpui::{
         AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Entity, Focusable, Image,
@@ -3794,6 +3797,11 @@ mod web {
     /// Starts the demo in `canvas`, with the Spaces in `spaces`, telling `host` what it does.
     #[wasm_bindgen]
     pub fn start(canvas: web_sys::HtmlCanvasElement, spaces: JsValue, host: JsValue) {
+        let tone = match get(&host, "scheme").as_string().as_deref() {
+            Some("dark") => Some(Tone::Dark),
+            Some("light") => Some(Tone::Light),
+            _ => None,
+        };
         HOST.with_borrow_mut(|site| *site = host);
         let favorites = tabs(&spaces, "favorites");
         let spaces: Vec<SiteSpace> = list(&spaces, "spaces")
@@ -3826,7 +3834,9 @@ mod web {
                     let mut space_ids = Vec::new();
                     let mut pages = Vec::new();
                     let shell = cx.new(|cx| {
-                        let shell = shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
+                        let mut shell =
+                            shell_of(&favorites, &spaces, &mut icons, &mut space_ids, cx);
+                        shell.force_tone(tone);
                         pages = favorites
                             .iter()
                             .chain(
