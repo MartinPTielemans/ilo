@@ -16,6 +16,8 @@
 # ⌘ or Ctrl with a scroll sizes, and a double-click puts back in its tab, shown. The next
 # shows where it was left, after a relaunch too, and coming back to its tab's window from another
 # window, or from another app with a menu open, puts it back in the tab.
+# A page asks to share the screen only from a click or a key: asked with neither, its promise is
+# refused, and nothing is shared (decision 12).
 # Chromium's fake camera and microphone stand in for real ones, and the share takes the tab titled
 # Shared without its picker; the question for the camera is answered with Allow, as the user would,
 # since the fake question Chromium can put in its place never tells the browser what's captured.
@@ -56,7 +58,8 @@ answer_macos() {
     fail "ilo wasn't the active app after macOS asked $2: $asked; $(cat "$out/alert.txt")"
 }
 
-# "c" calls with the camera and microphone, "s" shares the tab titled Shared, "e" ends both, "o"
+# "c" calls with the camera and microphone, "s" shares the tab titled Shared, "u" asks to share it
+# once the key's activation has lapsed, as a page asking unasked would, "e" ends both, "o"
 # opens that tab, the same page with ?Shared, whose title is what follows the ?, "p" one titled
 # Other, and "m" plays ten seconds of silence over and over, as music titled Quiet with a previous
 # and a next track: long enough for Chrome to give it controls, and no sound. Asked to float in Picture in
@@ -74,6 +77,12 @@ onkeydown = async e => {
     } else if (e.key == "s") {
       streams.push(await navigator.mediaDevices.getDisplayMedia({video: true}));
       document.title = "sharing";
+    } else if (e.key == "u") {
+      while (navigator.userActivation.isActive) {
+        await new Promise(next => setTimeout(next, 100));
+      }
+      streams.push(await navigator.mediaDevices.getDisplayMedia({video: true}));
+      document.title = "shared unasked";
     } else if (e.key == "e") {
       streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
       streams = [];
@@ -199,6 +208,10 @@ expect "^browser: page $a camera 1 microphone 1 sharing 0 shared 0\$" \
 # Now and then a hosted Mac asks as the call starts (#968), before the share's key.
 answer_macos 20 "as the call started"
 
+send click $page_point
+send key u
+expect "^browser: title $a refused InvalidStateError\$" \
+  "a share asked for with no click or key wasn't refused"
 send click $page_point
 send key s
 expect "^browser: title $a sharing\$" "the call didn't share the tab titled Shared"
