@@ -2892,6 +2892,14 @@ BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 // label's text; the place the carried element left, dashed in |ink|; colours as 0xRRGGBB, |line|
 // and |radius| in CSS pixels, up to 16. The label names the element's kind by the app's word for
 // its ARIA role or tag in |kinds|, |count| of them, else |other|, then its own words.
+//
+// How it moves, which the app fills from tokens.toml ([shell.boost.motion] and the sidebar's
+// springs), each the default given when it's outside its range, a zeroed struct's 0 included:
+// |rest|, the seconds a carry holds still before the page shows the drop made (0.05 to 1, 0.3);
+// |room_omega|, per second, the critically damped spring the page's other elements make room with
+// as the drop is shown (5 to 100, 25, as the Favorites make room); and |land_response|, seconds,
+// and |land_damping|, a ratio, the spring a dropped element lands in its place with (0.05 to 1,
+// 0.13, and 0.2 to 0.99, 0.9, as the sidebar's rows move). With reduced motion it lands at once.
 typedef struct bc_arrange_kind {
   const char* kind;
   const char* word;
@@ -2905,6 +2913,10 @@ typedef struct bc_arrange_look {
   const bc_arrange_kind* kinds;
   size_t count;
   const char* other;
+  double rest;
+  double room_omega;
+  double land_response;
+  double land_damping;
 } bc_arrange_look;
 
 // Turns Arrange on or off on the tab's page, with |look| for the marks, which may be null to turn
