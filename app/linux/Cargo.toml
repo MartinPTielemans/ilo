@@ -53,3 +53,7 @@ serde_json = "1"
 # (patches/accesskit-atspi-expanded.patch).
 [patch.crates-io]
 accesskit_atspi_common = { path = "../.deps/accesskit_atspi_common" }
+
+# #2138, not for merge: heap_sites' stacks with their files and lines.
+[profile.release]
+debug = "line-tables-only"
