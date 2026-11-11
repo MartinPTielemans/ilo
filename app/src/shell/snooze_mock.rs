@@ -1,9 +1,9 @@
 //! Mock only (#2350, not for merge): snoozing a Today tab, with PREVIEW_SNOOZE set. Its times are
 //! read from a fixed clock, Tuesday 14:25, so the captures say the same whenever they're taken.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{cell::RefCell, collections::HashMap, sync::Mutex};
 
-use gpui::{IntoElement, div, prelude::*, px};
+use gpui::{AnyElement, Context, Entity, IntoElement, div, prelude::*, px};
 
 use super::{
     LOADING_SIZE, STATUS_DOT, Shell,
@@ -25,6 +25,16 @@ static UNREAD: Mutex<Option<u64>> = Mutex::new(None);
 /// Whether the preview mocks snoozing.
 pub fn on() -> bool {
     std::env::var_os("PREVIEW_SNOOZE").is_some()
+}
+
+/// Which of the mocks shows: PREVIEW_SNOOZE=toast, back or pick, or any other value for the menus,
+/// the bar and History.
+pub fn mode() -> String {
+    std::env::var("PREVIEW_SNOOZE").unwrap_or_default()
+}
+
+thread_local! {
+    static TOAST: RefCell<Option<Entity<crate::toast::Toast>>> = const { RefCell::new(None) };
 }
 
 /// Marks archived tab `id` snoozed until `until`, such as "Wed 08:00".
@@ -68,6 +78,36 @@ pub(super) fn times_under(parent: usize) -> Vec<(MenuEntry, &'static str, MenuAc
 }
 
 impl Shell {
+    /// With PREVIEW_SNOOZE=toast, the toast snoozing the tab shown says, at rest over the window's
+    /// top right, where its window goes, with Undo as a closed tab's has it.
+    pub(super) fn snooze_toast(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if mode() != "toast" {
+            return None;
+        }
+        let toast = TOAST.with(|toast| toast.borrow().clone());
+        let toast = match toast {
+            Some(toast) => toast,
+            None => {
+                // The mock's window keeps its look, so the toast's is read once.
+                let (fill, palette) = (self.window_fill(), self.palette());
+                let look = move |_: &gpui::App| (fill, palette.clone());
+                let toast = crate::toast::mock_undo("Snoozed until tomorrow 08:00", look, cx);
+                TOAST.with(|slot| *slot.borrow_mut() = Some(toast.clone()));
+                toast
+            }
+        };
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w_full()
+                .h(px(crate::toast::WINDOW_HEIGHT))
+                .child(toast)
+                .into_any_element(),
+        )
+    }
+
     /// A tab back from a snooze and not yet shown: a steady dot in the Space's accent where the
     /// loading dot goes, which goes once the tab is shown.
     pub(super) fn unread_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {

@@ -2761,7 +2761,10 @@ impl Shell {
                             shell.browser.open_at(&[url.to_string()], false, 0, 0, cx);
                             shell.set_library(false, cx);
                         }
-                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(1) => {
+                            let link = shell.copied_link(&url);
+                            shell.copy(&link, "Copied URL", cx)
+                        }
                         Some(3) => {
                             if let Some(visited) = &mut shell.visited {
                                 visited.retain(|page| page.url != url);

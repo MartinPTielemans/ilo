@@ -365,6 +365,49 @@ pub fn show_undo(text: &str, undo: Rc<dyn Fn(&mut App)>, time: Duration, cx: &mu
     show_with_buttons(text, vec![undo], time, cx);
 }
 
+/// Mock only (#2350, not for merge): `text` with an Undo button, at rest, in a view the preview
+/// lays over its own window's top right, where the toast's window would be.
+pub fn mock_undo(
+    text: &str,
+    look: impl Fn(&App) -> (Hsla, Palette) + 'static,
+    cx: &mut App,
+) -> gpui::Entity<Toast> {
+    struct Nowhere;
+    impl Host for Nowhere {
+        fn show(&self) {}
+        fn hide(&self) {}
+        fn take_clicks(&self, _: bool) {}
+        fn plate(&self, _: Bounds<Pixels>) {}
+    }
+    let undo = Button {
+        label: Label::Keyed("Undo".into(), crate::shell::keystroke_label("cmd-z").into()),
+        name: UNDO_BUTTON,
+        run: Rc::new(|_, _| {}),
+    };
+    cx.new(|_| Toast {
+        host: Rc::new(Nowhere),
+        look: Box::new(look),
+        shown: Some(Shown {
+            text: text.to_string().into(),
+            key: None,
+            buttons: vec![undo],
+            hovered: false,
+            expired: false,
+            shown: Instant::now().checked_sub(Duration::from_secs(10)),
+            bumped: None,
+            leaving: None,
+            settled: true,
+            full_screen: false,
+            held: None,
+            resting: false,
+            _timer: Task::ready(()),
+        }),
+        takes_clicks: false,
+        plate: Rc::default(),
+        resting: None,
+    })
+}
+
 /// Whether a toast with `text` shows and isn't leaving, so a question asked again isn't shown
 /// twice.
 pub fn showing(text: &str, cx: &App) -> bool {

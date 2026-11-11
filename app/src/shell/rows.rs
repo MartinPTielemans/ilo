@@ -1449,7 +1449,9 @@ impl Shell {
                 })
                 .child(title)
                 .children(button)
-                .when(!hovered, |label| label.children(self.status_dot(tab))),
+                .when(!hovered, |label| label.children(self.status_dot(tab)))
+                // Mock only (#2350).
+                .when(!hovered, |label| label.children(self.unread_dot(tab))),
         };
         let renaming = renaming.is_some();
         let icon = match back {

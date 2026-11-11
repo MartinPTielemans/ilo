@@ -4588,6 +4588,8 @@ impl Render for Shell {
             .child(self.scroll_listener(true, cx))
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
+            // Mock only (#2350).
+            .children(self.snooze_toast(cx))
     }
 }
 

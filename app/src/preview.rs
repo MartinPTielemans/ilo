@@ -2716,7 +2716,21 @@ fn main() {
                         parents: [(2, folder)].into(),
                         ..Default::default()
                     };
-                    let today = (3..=TABS.len() as u64).collect();
+                    // Mock only (#2350): with PREVIEW_SNOOZE=toast Zed's tab has just been snoozed,
+                    // so it has left Today; with =back it has come back, first, not loaded, unread.
+                    let today = match shell::snooze_mock::mode().as_str() {
+                        "toast" => (4..=TABS.len() as u64).collect(),
+                        _ => (3..=TABS.len() as u64).collect(),
+                    };
+                    if shell::snooze_mock::mode() == "back" {
+                        let page = Page {
+                            url: TABS[2].1.into(),
+                            unloaded: true,
+                            ..Default::default()
+                        };
+                        shell.set_page(3, page, cx);
+                        shell::snooze_mock::back(3);
+                    }
                     let split = Split {
                         tabs: vec![TABS.len() as u64 - 1, TABS.len() as u64],
                         ..Split::default()
@@ -2957,6 +2971,31 @@ fn main() {
                 let top = y as f32 + command_bar::centered_top(height as f32);
                 let at = point(px(left as f32), px(top));
                 preview_bar(&mode, at, cx);
+            }
+            // Mock only (#2350): PREVIEW_SNOOZE=pick asks for the day and time in the dialog New
+            // Profile asks for a name in, its field holding Tomorrow Morning's, all selected.
+            if shell::snooze_mock::mode() == "pick" {
+                if !DIALOG_OPEN.replace(true) {
+                    dialog::open_at(Rc::new(PreviewDialog), bounds, true, cx);
+                }
+                let question = dialog::Question {
+                    icon: None,
+                    message: "Snooze Until".into(),
+                    detail: "A day and a time, such as “Friday 17:30” or “24 Nov 09:00”.".into(),
+                    list: Vec::new(),
+                    action: "Snooze".into(),
+                    cancel: "Cancel".into(),
+                    tone: dialog::Tone::Accent,
+                    also: None,
+                    fields: vec![dialog::Field {
+                        placeholder: "Day and time".into(),
+                        text: "Wed 11 Nov 08:00".into(),
+                        secure: false,
+                    }],
+                    check: None,
+                    on_return: dialog::Return::Action,
+                };
+                dialog::pose(None, question, Box::new(|_, _| {}), cx);
             }
             if account.as_deref() == Some("approve") {
                 if !DIALOG_OPEN.replace(true) {
