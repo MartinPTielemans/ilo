@@ -36,6 +36,8 @@ struct Event {
     at_ms: f64,
     /// Points across, positive with the fingers going right.
     dx: f32,
+    /// Points along, as the fingers drift up or down.
+    dy: f32,
     kind: Kind,
 }
 
@@ -55,6 +57,7 @@ fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
     let mut events = vec![Event {
         at_ms: 0.,
         dx: 0.,
+        dy: 0.,
         kind: Kind::Down,
     }];
     let mut at = 0.;
@@ -66,12 +69,14 @@ fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
         events.push(Event {
             at_ms: at,
             dx: dx as f32,
+            dy: 0.,
             kind: Kind::Fingers,
         });
     }
     events.push(Event {
         at_ms: lift_ms,
         dx: 0.,
+        dy: 0.,
         kind: Kind::Lift,
     });
     let lifted = speed(lift_ms);
@@ -85,12 +90,14 @@ fn gesture(lift_ms: f64, seed: u64, speed: impl Fn(f64) -> f64) -> Vec<Event> {
         events.push(Event {
             at_ms: lift_ms + t,
             dx: dx as f32,
+            dy: 0.,
             kind: Kind::Momentum,
         });
     }
     events.push(Event {
         at_ms: lift_ms + t,
         dx: 0.,
+        dy: 0.,
         kind: Kind::MomentumEnd,
     });
     events
@@ -162,35 +169,66 @@ impl Delivery {
     }
 
     /// The wheel events the page gets: the ms it gets each at, the ms its stamp says, the last
-    /// summed into it's, and its delta.
-    fn wheels(self, events: &[Event]) -> Vec<(f64, f64, f32)> {
-        let moving = events.iter().filter(|event| event.dx != 0.);
+    /// summed into it's, and its deltas across and along.
+    fn wheels(self, events: &[Event]) -> Vec<Wheel> {
+        let moving = events
+            .iter()
+            .filter(|event| event.dx != 0. || event.dy != 0.);
         match self {
             Delivery::Direct => moving
-                .map(|event| (event.at_ms, event.at_ms, event.dx))
+                .map(|event| (event.at_ms, event.at_ms, event.dx, event.dy))
                 .collect(),
             Delivery::Whole => moving
-                .map(|event| (event.at_ms, event.at_ms, event.dx.round()))
-                .filter(|&(_, _, dx)| dx != 0.)
+                .map(|event| (event.at_ms, event.at_ms, event.dx.round(), event.dy.round()))
+                .filter(|&(_, _, dx, dy)| dx != 0. || dy != 0.)
                 .collect(),
             Delivery::Frames(hz) => {
                 let frame = 1000. / hz;
-                let mut wheels: Vec<(f64, f64, f32)> = Vec::new();
+                let mut wheels: Vec<Wheel> = Vec::new();
                 for event in moving {
                     // Frames a third of one out of step with the trackpad's events.
                     let at = ((event.at_ms - frame / 3.) / frame).ceil() * frame + frame / 3.;
                     match wheels.last_mut() {
-                        Some((last, stamp, dx)) if *last == at => {
+                        Some((last, stamp, dx, dy)) if *last == at => {
                             *stamp = event.at_ms;
                             *dx += event.dx;
+                            *dy += event.dy;
                         }
-                        _ => wheels.push((at, event.at_ms, event.dx)),
+                        _ => wheels.push((at, event.at_ms, event.dx, event.dy)),
                     }
                 }
                 wheels
             }
         }
     }
+}
+
+/// A wheel event the page gets: the ms it comes, the ms its stamp says, and its deltas across and
+/// along.
+type Wheel = (f64, f64, f32, f32);
+
+/// `events` with the fingers drifting along as they go across, by `slope` of their way across and
+/// up to `wobble` of it either way an event, from `seed`, as a hand's arc on a trackpad never goes
+/// straight. AppKit starts a scroll only once the fingers have gone a few points, so the first
+/// event after they land goes the way they do, and the momentum the way they went as they lifted.
+fn drifting(events: Vec<Event>, slope: f32, wobble: f32, seed: u64) -> Vec<Event> {
+    let mut before = Kind::Lift;
+    let mut lifted = slope;
+    let drifted = events.into_iter().enumerate().map(|(n, event)| {
+        let dy = match (event.kind, before) {
+            (Kind::Fingers, Kind::Down) => event.dx.abs() * slope,
+            (Kind::Fingers, _) => {
+                let along = slope + wobble * (2. * draw(seed, n as u64) as f32 - 1.);
+                lifted = along;
+                event.dx.abs() * along
+            }
+            (Kind::Momentum, _) => event.dx.abs() * lifted,
+            _ => 0.,
+        };
+        before = event.kind;
+        Event { dy, ..event }
+    });
+    drifted.collect()
 }
 
 /// Five Spaces, showing the third, as the core leaves them.
@@ -315,11 +353,11 @@ fn run(cx: &mut TestAppContext, end_ms: f64, mut events: Vec<(f64, Send)>) -> Ru
     }
 }
 
-/// An event over the sidebar, `dx` across as GPUI has it.
-fn scroll(touch_phase: TouchPhase, dx: f32) -> ScrollEvent {
+/// An event over the sidebar, `dx` across and `dy` along as GPUI has them.
+fn scroll(touch_phase: TouchPhase, dx: f32, dy: f32) -> ScrollEvent {
     ScrollEvent {
         position: point(px(110.), px(500.)),
-        delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
+        delta: ScrollDelta::Pixels(point(px(dx), px(dy))),
         touch_phase,
         ..Default::default()
     }
@@ -344,7 +382,7 @@ fn in_app(cx: &mut TestAppContext, events: &[Event], end_ms: f64) -> Run {
                     == Some(event.at_ms);
             let phase = if first { TouchPhase::Started } else { phase };
             let send: Send = Box::new(move |shell, now, window, cx| {
-                shell.scroll_at(&scroll(phase, event.dx), now, window, cx);
+                shell.scroll_at(&scroll(phase, event.dx, event.dy), now, window, cx);
             });
             (event.at_ms, send)
         })
@@ -357,14 +395,15 @@ fn in_demo(cx: &mut TestAppContext, events: &[Event], delivery: Delivery, end_ms
     in_demo_wheels(cx, delivery.wheels(events), end_ms)
 }
 
-/// The site's demo given `wheels`, each `(ms it comes, ms its stamp says, dx)`.
-fn in_demo_wheels(cx: &mut TestAppContext, wheels: Vec<(f64, f64, f32)>, end_ms: f64) -> Run {
+/// The site's demo given `wheels`.
+fn in_demo_wheels(cx: &mut TestAppContext, wheels: Vec<Wheel>, end_ms: f64) -> Run {
     let sends = wheels
         .into_iter()
-        .map(|(at_ms, stamp_ms, dx)| {
+        .map(|(at_ms, stamp_ms, dx, dy)| {
             let stamped = Duration::from_secs_f64((at_ms - stamp_ms) / 1000.);
             let send: Send = Box::new(move |shell, now, window, cx| {
-                shell.web_scroll(&scroll(TouchPhase::Moved, dx), now - stamped, window, cx);
+                let event = scroll(TouchPhase::Moved, dx, dy);
+                shell.web_scroll(&event, now - stamped, window, cx);
             });
             (at_ms, send)
         })
@@ -388,29 +427,86 @@ fn deliveries() -> [Delivery; 4] {
 /// catch up with the app's settle without that jump, which the eye takes for a snap.
 #[gpui::test]
 fn the_demo_swipes_as_the_app_does(cx: &mut TestAppContext) {
-    const STEP_SLACK: f32 = 0.05;
     for (name, events) in gestures() {
-        let end = events.last().map_or(0., |event| event.at_ms) + 400.;
-        let app = in_app(cx, &events, end);
-        for delivery in deliveries() {
-            let demo = in_demo(cx, &events, delivery, end);
-            let way = format!("{name}, {}", delivery.name());
-            assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
-            let lag = demo
-                .first_shown_ms
-                .zip(app.first_shown_ms)
-                .map(|(demo, app)| demo - app);
-            assert!(
-                lag.is_some_and(|lag| (0. ..300.).contains(&lag)),
-                "{way}: {lag:?} ms after the app"
-            );
-            let (step, app_step) = (demo.largest_step(), app.largest_step());
-            assert!(
-                step <= app_step + STEP_SLACK,
-                "{way}: {step} of a Space in a frame, the app {app_step}"
-            );
+        swipes_as_the_app_does(cx, name, &events);
+    }
+}
+
+/// The same with the fingers drifting along by 0.4 of their way across, ±0.4 an event, as a
+/// hand's arc does (22° on average): the demo tells their swipe across from one event a browser
+/// rounded or summed, or from their drift, no worse than the app tells it from AppKit's.
+#[gpui::test]
+fn the_demo_swipes_as_the_app_does_while_the_fingers_drift(cx: &mut TestAppContext) {
+    for (name, events) in gestures() {
+        for seed in 0..4 {
+            let events = drifting(events.clone(), 0.4, 0.4, seed);
+            swipes_as_the_app_does(cx, &format!("{name} drifting, seed {seed}"), &events);
         }
     }
+}
+
+fn swipes_as_the_app_does(cx: &mut TestAppContext, name: &str, events: &[Event]) {
+    const STEP_SLACK: f32 = 0.05;
+    let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+    let app = in_app(cx, events, end);
+    for delivery in deliveries() {
+        let demo = in_demo(cx, events, delivery, end);
+        let way = format!("{name}, {}", delivery.name());
+        assert_eq!(demo.shown, app.shown, "{way}: the Spaces shown");
+        let lag = demo
+            .first_shown_ms
+            .zip(app.first_shown_ms)
+            .map(|(demo, app)| demo - app);
+        assert!(
+            lag.is_some_and(|lag| (0. ..300.).contains(&lag)),
+            "{way}: {lag:?} ms after the app"
+        );
+        let (step, app_step) = (demo.largest_step(), app.largest_step());
+        assert!(
+            step <= app_step + STEP_SLACK,
+            "{way}: {step} of a Space in a frame, the app {app_step}"
+        );
+    }
+}
+
+/// For each gesture with its fingers drifting along by each slope and wobble, in each way a
+/// browser hands it on, whether the demo shows other Spaces than the app.
+#[gpui::test]
+#[ignore]
+fn swipe_drift_stats(cx: &mut TestAppContext) {
+    let mut wrong = 0;
+    for (slope, wobble) in [
+        (0.2, 0.3),
+        (0.2, 0.6),
+        (0.4, 0.4),
+        (0.4, 0.8),
+        (0.7, 0.3),
+        (0.7, 0.6),
+    ] {
+        for (name, events) in gestures() {
+            for seed in 0..4 {
+                let events = drifting(events.clone(), slope, wobble, seed);
+                let end = events.last().map_or(0., |event| event.at_ms) + 400.;
+                let app = in_app(cx, &events, end);
+                for delivery in deliveries() {
+                    let demo = in_demo(cx, &events, delivery, end);
+                    if demo.shown != app.shown {
+                        wrong += 1;
+                        eprintln!(
+                            "slope {slope} wobble {wobble}, {name}, seed {seed}, {}: {:?} vs the app's {:?}",
+                            delivery.name(),
+                            demo.shown,
+                            app.shown
+                        );
+                    }
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{wrong} of {} runs show other Spaces than the app",
+        6 * 4 * 4 * 4
+    );
 }
 
 /// Writes, for each gesture, the fingers' way and the page's place in the app and in the demo
@@ -566,15 +662,8 @@ fn live_swipe(dx: f32, decay: f32) -> Vec<f32> {
 /// late, or with chance `busy` up to 25 ms, and a seventh of those up to 25 + 200 × `busy` ms, as
 /// timing `seed` draws it from `n0` on. Each is stamped when sent, or with `coalesce`, summed while
 /// a frame held them.
-fn timed(
-    deltas: &[f32],
-    start: f64,
-    seed: u64,
-    n0: u64,
-    busy: f64,
-    coalesce: bool,
-) -> Vec<(f64, f64, f32)> {
-    let mut wheels: Vec<(f64, f64, f32)> = Vec::new();
+fn timed(deltas: &[f32], start: f64, seed: u64, n0: u64, busy: f64, coalesce: bool) -> Vec<Wheel> {
+    let mut wheels: Vec<Wheel> = Vec::new();
     let mut at = start;
     for (i, &dx) in deltas.iter().enumerate() {
         let n = n0 + i as u64 * 3;
@@ -595,13 +684,13 @@ fn timed(
                     last.2 += dx;
                     last.1 = meant;
                 }
-                _ => wheels.push((at, meant, dx)),
+                _ => wheels.push((at, meant, dx, 0.)),
             }
         } else {
             if i > 0 {
                 at += 16. + late;
             }
-            wheels.push((at, at, dx));
+            wheels.push((at, at, dx, 0.));
         }
     }
     wheels

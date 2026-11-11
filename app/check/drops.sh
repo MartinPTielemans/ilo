@@ -45,9 +45,17 @@ if [ "${1:-}" = --steps ]; then
   done
   await '^browser: UI shown ' 0
   step() { echo "$*" >&3; }
-  # The browser window's place on the output, and its size.
-  read -r wx wy ww wh < <(swaymsg -t get_tree | jq -r \
-    '[.. | select(.app_id? != null and .app_id != "ilo-drag")][0].rect | "\(.x) \(.y) \(.width) \(.height)"')
+  # The browser window's place on the output, and its size, once sway lists it: a slow launch on
+  # the 157 gate had none in sway's tree at UI shown, and went on with no place to drag to (#2435).
+  window=
+  for _ in $(seq 100); do
+    window=$(swaymsg -t get_tree | jq -r '[.. | select(.app_id? != null and .app_id != "ilo-drag")][0]
+      | .rect // empty | "\(.x) \(.y) \(.width) \(.height)"') || window=
+    [ -z "$window" ] || break
+    sleep 0.1
+  done
+  [ -n "$window" ] || fail "sway listed no browser window in 10 s after UI shown"
+  read -r wx wy ww wh <<< "$window"
   px=0 py=0
   # Moves the pointer to ($1, $2) in the browser window in steps, as a hand does.
   to() {
