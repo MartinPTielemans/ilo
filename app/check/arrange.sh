@@ -3,15 +3,15 @@
 # middle the two trade, where it doesn't fit nothing changes, and with ⌘ it floats, which the mini
 # bar's pin turns between staying on screen and scrolling with the page. The mini bar's Hide is
 # Zap's rule and ⌘Z takes it back, its Put back takes a change back, and ⌘Z with the page focused
-# takes back the last change. Each change is saved in the site's .arrange.json as it happens. An
-# agent's call on the page while the user arranges it is refused, in the activity log, and nothing
-# of the page reaches it. Reloaded,
-# the page shows the arrangement, and the run measures whether its first frame already did, in
-# arrange-first-frame.txt, and says which in its summary rather than failing: a flash there is what
-# would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo, the
-# file stays off, and Site Controls' Turn On keeps it. A private window shows the profile's
+# takes back the last change. Each change is saved in the site's .arrange.json as it happens.
+# Reloaded, the page shows the arrangement, and the run measures whether its first frame already
+# did, in arrange-first-frame.txt, and says which in its summary rather than failing: a flash there
+# is what would bring a renderer hook at document start (#2347's slice 2 plan). Edited outside ilo,
+# the file stays off, and Site Controls' Turn On keeps it. A private window shows the profile's
 # arrangement but offers no Boost to arrange. The foot bar's Reset takes the site's arrangement
-# away, and the page is its own again.
+# away, and the page is its own again. No agent step: no tab an agent may act on can be arranged
+# (the core refuses the mode in an agent's Space, and giving a tab to an agent ends it), and an
+# agent's call on the user's page is refused as not its own, as the mcp run checks.
 # It needs the engine with Arrange's core (slice 2): on one without it, it says it skips. It reads
 # the core's own lines, which carry Chromium's prefix, the app's on #2414, and the foot bar's,
 # which the foot bar's slice logs as the Boost card does its place:
@@ -76,12 +76,6 @@ rm -rf "$boosts" "$profile_dir/Default/Boosts off" "$profile_dir/no-boosts"
 mkdir -p "$boosts"
 # Arrange is offered only where the site has a Boost: one with no rule of its own.
 printf '%s\n' '/* The arrange run'"'"'s Boost. */' > "$css"
-# The agent the run connects, as the mcp run does, with a token of its own.
-agents_file="$(dirname "$saved")/Agents"
-token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
-printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
-chmod 600 "$agents_file"
-trap 'cleanup; rm -f "$agents_file"' EXIT
 
 log="$out/arrange.log"
 step=0
@@ -212,63 +206,6 @@ shows "$own" "a click in the mode reached the page"
 [ "$(said | sed 's/.* at \([0-9-]*,[0-9-]*\) first .*/\1/')" = "${landed% *},${landed#* }" ] ||
   fail "the page took the mode's click: $(said)"
 ../tools/window-screenshot.sh "$pid" "$out/arrange-picked.png" || fail "no window to capture"
-
-# An agent's call on the page while the user arranges it is refused, with why, in the activity
-# log, as the page is the user's: the core checks that before its rule for a page being arranged,
-# which only an agent's own tab could reach, and the mode is never offered there. The client is
-# the bridge on two pipes, as in the mcp run.
-case "$(uname -s)" in
-  MINGW* | MSYS*) on='^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ;;
-  *) on='^browser: agents server on /.*/Agents\.sock$' ;;
-esac
-await "$on" || fail "the saved switch didn't start the agents server"
-socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
-if windows; then bridge="$app/mcp-bridge.exe"; else bridge="$(dirname "$browser")/mcp-bridge"; fi
-rm -f "$out/arrange-mcp-in" "$out/arrange-mcp-out"
-mkfifo "$out/arrange-mcp-in" "$out/arrange-mcp-out"
-if windows; then
-  BROWSER_AGENT_TOKEN=$token windows_bridge "$bridge" "$socket" "$out/arrange-mcp-in" \
-    "$out/arrange-mcp-out" 2>> "$out/arrange-mcp-bridge.log" &
-else
-  BROWSER_AGENT_TOKEN=$token "$bridge" "$socket" < "$out/arrange-mcp-in" > "$out/arrange-mcp-out" \
-    2>> "$out/arrange-mcp-bridge.log" &
-fi
-exec 4> "$out/arrange-mcp-in" 5< "$out/arrange-mcp-out"
-# The bridge's next line, within 30 s, as the mcp run reads it.
-next_answer() {
-  perl -e 'alarm 30; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5
-}
-# Sends the request $1 and prints its answer.
-ask() {
-  printf '%s\n' "$1" >&4
-  next_answer || fail "the browser didn't answer $1"
-}
-# Calls the tool $1 with the arguments $2 as request $3 and prints its answer: its text, after
-# "error: " if it's an error.
-call() {
-  ask "{\"jsonrpc\":\"2.0\",\"id\":$3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |
-    python3 -I -c '
-import json, sys
-result = json.load(sys.stdin)["result"]
-print(("error: " if result["isError"] else "") + result["content"][0]["text"])'
-}
-ask '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
-  > "$out/arrange-mcp-initialize.json"
-printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
-not_its='The tab isn.t in the agent.s own Space\.'
-for tool in read_page press_key; do
-  case $tool in
-    read_page) refused=$(call read_page "{\"tab\":$tab}" 1) ;;
-    press_key) refused=$(call press_key "{\"tab\":$tab,\"key\":\"Tab\"}" 2) ;;
-  esac
-  echo "$refused" | grep -q "^error: $not_its\$" ||
-    fail "$tool on the page being arranged answered: $refused"
-  await "^browser: agent activity mcp-client $tab $tool refused: $not_its\$" ||
-    fail "the refused $tool didn't reach the activity log"
-done
-grep -q "^browser: tab text $tab " "$log" && fail "the core read the page being arranged"
-grep -q "browser: tab $tab arrange off\$" "$log" && fail "the agent's calls ended the mode"
-exec 4>&- 5<&-
 
 # Carry and settle: the first carried to the edge under the second settles there, the page making
 # room, and the change is saved.
@@ -468,14 +405,11 @@ expect "^browser: arrange $tab off\$" "escape didn't end the mode"
 
 exec 3>&-
 quit
-rm -f "$agents_file"
-trap cleanup EXIT
 echo "ok: from the Boost card's Arrange, a click picked a thing with the page taking none, and a" \
   "carry settled it at an edge, traded it on a thing's middle, was refused where it didn't fit," \
   "and with ⌘ floated it, whose pin turned it to scroll with the page and back. ⌘Z took the float" \
   "back, Put back the settle, and Hide was Zap's rule, which ⌘Z took back. Each change was saved" \
-  "in $host.arrange.json. An agent's read_page and press_key on the page the user arranged were" \
-  "refused as not its own, in the activity log. Reloaded, the page placed the arrangement, and $first_frame." \
+  "in $host.arrange.json. Reloaded, the page placed the arrangement, and $first_frame." \
   "Edited outside ilo it stayed off, and Site Controls' Turn On kept it. A private window's page" \
   "was arranged, with no Boost offered, and the foot bar's Reset gave the page its own layout." \
   "Windows: $out/arrange-on.png, $out/arrange-picked.png, $out/arrange-settled.png," \
