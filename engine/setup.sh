@@ -88,7 +88,7 @@ if [ -e "$live/chrome/VERSION" ] && [ "$(tree_version "$live")" != "$version" ];
 else
   update=
 fi
-# A tree patched from other rebased copies of the platform's patches (tree.sh) has them in it.
+# A tree prepared from other rebased copies of the platform's files (tree.sh) has them in it.
 if [ -e "$stamps/patches.done" ] &&
   [ "$(cat "$stamps/platform" 2>/dev/null || echo "$ucm_tag")" != "$(platform_stamp ungoogled-chromium-macos "$ucm_tag")" ]; then
   fail "the tree has other patches of ungoogled-chromium-macos's than engine/patches/ungoogled-chromium-macos. Start over with: rm -rf $src $stamps"
