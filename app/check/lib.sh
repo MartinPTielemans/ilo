@@ -387,6 +387,14 @@ post() {
   step=$((step + 1))
   echo "$*" >&3
 }
+# click_placed <send|post> <part>: a click on the Site Controls' <part>, such as "shield",
+# "switch Developer Mode" or "line Location", where they last logged it. They log each part's place
+# whenever it changes while open, so a check needn't know the panel's geometry.
+click_placed() {
+  at=$(grep "^browser: site controls $2 at " "$log" | tail -1 | sed "s/^browser: site controls $2 at //")
+  [ -n "$at" ] || fail "the Site Controls didn't draw $2"
+  "$1" click $at
+}
 # A Today tab's Share as its menu logs it, with the comma before it: this Mac's share services, or
 # with none its one Share… for the share sheet, dimmed for a page with no link, or nothing on Linux,
 # which has neither. A check reads past them and never chooses one.

@@ -1,0 +1,71 @@
+Gives each frame the browser's own ad blocker's agent (//browser_core/ad_block_page_agent.h),
+which hides what the page's filters hide and runs their scriptlets as each document starts, from
+what the browser sends it before the document commits (#2111). The scriptlets run where
+extensions' document_start scripts do, since Blink forbids script while it announces the
+document's element. It watches a document's classes and ids, for the generic rules that hide by
+them, in an isolated world of its own, which Chrome's list of them gains. It does nothing until the
+browser sends it something, which it does only with --ad-block-engine=native.
+
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -128,6 +128,7 @@
+   deps = [
+     ":process_state",
+     "//browser_core:error_page",
++    "//browser_core:ad_block_page_agent",
+     "//base/allocator:buildflags",
+     "//build:chromeos_buildflags",
+     "//chrome:resources",
+--- a/chrome/renderer/DEPS
++++ b/chrome/renderer/DEPS
+@@ -1,5 +1,6 @@
+ include_rules = [
+   "+ash/webui/file_manager/url_constants.h",
++  "+browser_core/ad_block_page_agent.h",
+   "+chrome/grit",
+   "+chrome/services/speech/buildflags/buildflags.h",
+   "+components/actor/public",
+--- a/chrome/common/chrome_isolated_world_ids.h
++++ b/chrome/common/chrome_isolated_world_ids.h
+@@ -19,6 +19,10 @@
+   // Isolated world ID for internal Chrome features.
+   ISOLATED_WORLD_ID_CHROME_INTERNAL,
+ 
++  // browser_core: the browser's own ad blocker, which watches a page's classes
++  // and ids there (//browser_core/ad_block_page_agent.h).
++  ISOLATED_WORLD_ID_AD_BLOCK,
++
+ #if BUILDFLAG(IS_MAC)
+   // Isolated world ID for AppleScript.
+   ISOLATED_WORLD_ID_APPLESCRIPT,
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/renderer/chrome_content_renderer_client.h"
++#include "browser_core/ad_block_page_agent.h"  // nogncheck
+ 
+ #include <functional>
+ #include <memory>
+@@ -655,6 +656,10 @@
+       new ChromeRenderFrameObserver(render_frame, web_cache_impl_.get());
+   service_manager::BinderRegistry* registry = render_frame_observer->registry();
+ 
++  // browser_core: the browser's own ad blocker's agent
++  // (//browser_core/ad_block_page_agent.h).
++  browser_core::CreateAdBlockPageAgent(render_frame, ISOLATED_WORLD_ID_AD_BLOCK);
++
+   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
+ 
+   auto content_settings_delegate =
+@@ -1487,6 +1492,9 @@
+ 
+ void ChromeContentRendererClient::RunScriptsAtDocumentStart(
+     content::RenderFrame* render_frame) {
++  // browser_core: the browser's own ad blocker's scriptlets, before the page's
++  // first script (//browser_core/ad_block_page_agent.h).
++  browser_core::RunAdBlockScriptsAtDocumentStart(render_frame);
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   extensions::ExtensionsRendererClient::Get()->RunScriptsAtDocumentStart(
+       render_frame);

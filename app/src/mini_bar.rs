@@ -251,6 +251,10 @@ pub fn open_at(
 /// Shows the bar for `shown` over the browser window `window`, or moves it there, or hides it for
 /// none. Its user calls it again as the selection or what it shows changes.
 pub fn show(window: u64, shown: Option<(Shown, OnPress)>, cx: &mut App) {
+    // Its window is made the first time it shows (#2138).
+    if shown.is_some() {
+        crate::lazy_window::ready::<MiniBar>(cx);
+    }
     let Some(handle) = cx.try_global::<MiniBarWindow>().map(|bar| bar.0) else {
         return;
     };

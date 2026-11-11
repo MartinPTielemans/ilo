@@ -387,6 +387,7 @@ pub fn hover(window: u64, tip: Tip, anchor: Anchor, cx: &mut App) {
 
 /// As `hover`, with what the tooltip names in the window it's `over`, which may be an overlay's.
 pub fn hover_over(over: Over, tip: Tip, anchor: Anchor, cx: &mut App) {
+    crate::lazy_window::ready::<Tooltip>(cx);
     let Some(tooltip) = cx.try_global::<TooltipWindow>().map(|tooltip| tooltip.0) else {
         return;
     };

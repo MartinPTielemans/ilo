@@ -18,7 +18,7 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
     Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
-    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
+    WindowTextSystem, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -122,7 +122,9 @@ mod picture;
 mod recent_downloads;
 #[cfg(test)]
 mod recorder;
+mod return_mark;
 mod rows;
+mod safe_start;
 mod scripting;
 mod scroller;
 pub use scroller::{ScrollBarsShown, follow_scroll_bars};
@@ -1772,6 +1774,12 @@ pub struct Shell {
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
+    /// The safe-start card's words as last wrapped, while this launch is a safe start, and where it
+    /// and its button and link are drawn (safe_start.rs).
+    safe_start: Option<safe_start::Shape>,
+    safe_start_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_button_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    safe_start_manage_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
     drm_notes: HashMap<u64, SharedString>,
@@ -2155,6 +2163,10 @@ impl Shell {
             update_drawn: Rc::default(),
             update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
+            safe_start: None,
+            safe_start_drawn: Rc::default(),
+            safe_start_button_drawn: Rc::default(),
+            safe_start_manage_drawn: Rc::default(),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
             page_languages: HashMap::new(),
@@ -4211,6 +4223,7 @@ impl Render for Shell {
             self.set_sidebar_right(right, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
+        self.shape_safe_start(cx);
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
         // check.sh reads this line. It comes as the rows are drawn, so a click it sends next goes
@@ -4689,7 +4702,7 @@ impl Shell {
                     .child(self.space_pages(cx))
                     // Over the pages, which they scroll with when they're tall.
                     .children(self.tiles(cx).map(|tiles| self.with_page(tiles)))
-                    .children(self.beside_pages())
+                    .children(self.beside_pages(cx))
                     .child(rest.h(px(self.under_tiles() - URL_FIELD_TOP)))
                     .children(self.dragged_tile(cx))
                     .children(self.turning_drag())
@@ -4706,6 +4719,7 @@ impl Shell {
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
                     .children(self.update_banner(cx))
+                    .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
                     .children(self.drm_note_card(cx))
             }
@@ -4735,9 +4749,9 @@ impl Shell {
                 // Beside the form, the page's URL field and favorites are the shown Space's, over
                 // it (beside_form). Elsewhere it's drawn whole, with its own (beside_pages), over
                 // its place here, which keeps its menu.
-                Some(other) if form.is_some() => {
-                    self.still_page(other, self.tiles_room()).into_any_element()
-                }
+                Some(other) if form.is_some() => self
+                    .still_page(other, self.tiles_room(), cx)
+                    .into_any_element(),
                 Some(_) => div().into_any_element(),
                 None => continue,
             };
@@ -4818,7 +4832,7 @@ impl Shell {
 
     /// Another Space's page as it shows once shown, while it slides in or out: its name, and its
     /// rows with the tab it would show selected, `room` under its top. It takes no input.
-    fn still_page(&self, space: &Space, room: f32) -> impl IntoElement + use<> {
+    fn still_page(&self, space: &Space, room: f32, cx: &App) -> impl IntoElement + use<> {
         let selected = self.browser.space_tab(space.id);
         let row = |tab: u64| {
             let depth = space.listed_depth(tab);
@@ -4832,7 +4846,14 @@ impl Shell {
             if panes.len() > 1 {
                 let width = self.segment_width(depth, panes.len());
                 let segments = panes.iter().map(|&pane| {
-                    self.segment(&self.palette, pane, width, pane == tab, pane == selected)
+                    self.segment(
+                        &self.palette,
+                        pane,
+                        width,
+                        pane == tab,
+                        pane == selected,
+                        cx,
+                    )
                 });
                 let developer = panes.contains(&selected) && self.page(selected).developer_mode;
                 return row.child(
@@ -4848,7 +4869,14 @@ impl Shell {
             let page = self.page(tab);
             let icon = div()
                 .when(page.unloaded, |icon| icon.opacity(SLEEPING_FAVICON))
-                .child(self.tab_icon(tab));
+                .child(self.with_return_mark(
+                    &self.palette,
+                    tab,
+                    FAVICON_SIZE,
+                    self.tab_bitmap_in(&self.palette, tab),
+                    || self.tab_icon(tab),
+                    cx,
+                ));
             let bright = tab == selected || page.developer_mode;
             let developer = tab == selected && page.developer_mode;
             row.child(
@@ -5588,14 +5616,20 @@ fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The bitmap `favicon` draws for `favicon`: a one-colour favicon the sidebar's tint would hide
+/// is drawn in the ink.
+fn favicon_source(palette: &Palette, favicon: Option<Arc<Image>>) -> Option<return_mark::Source> {
+    let favicon = favicon?;
+    Some(match tile_theme::ink_copy(&favicon, palette.tone) {
+        Some(copy) => return_mark::Source::Decoded(copy),
+        None => return_mark::Source::Encoded(favicon),
+    })
+}
+
 /// A tab's favicon, or a globe for a page without one.
 fn favicon(palette: &Palette, favicon: Option<Arc<Image>>) -> AnyElement {
-    match favicon {
-        // A one-colour favicon the sidebar's tint would hide is drawn in the ink.
-        Some(favicon) => match tile_theme::ink_copy(&favicon, palette.tone) {
-            Some(copy) => img(copy).size(px(FAVICON_DRAWN)).into_any_element(),
-            None => img(favicon).size(px(FAVICON_DRAWN)).into_any_element(),
-        },
+    match favicon_source(palette, favicon) {
+        Some(source) => source.img().size(px(FAVICON_DRAWN)).into_any_element(),
         None => svg()
             .path("icons/globe.svg")
             .size(px(FAVICON_DRAWN))

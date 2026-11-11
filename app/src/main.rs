@@ -121,6 +121,7 @@ mod reveal;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/reveal_window.rs"]
 mod reveal_window;
+mod safe_start_host;
 mod settings;
 #[cfg(target_os = "linux")]
 #[path = "../platform/linux/settings_window.rs"]
@@ -560,6 +561,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         }
         needs_you_host::start(cx);
         daily_count_host::start(cx);
+        safe_start_host::start(cx);
         open_window(None, None, cx);
         // Launched by New Incognito Window while ilo wasn't running, the private window opens
         // over the first.
@@ -679,6 +681,7 @@ unsafe extern "C" fn agent_request_done(
 }
 
 unsafe extern "C" fn launching(_: *mut c_void) {
+    safe_start_host::launching();
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
@@ -920,8 +923,13 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     if !sync_server.is_empty() && !given.iter().any(|arg| arg.starts_with("--sync-url=")) {
         args.push(format!("--sync-url={sync_server}"));
     }
+    // Whether this launch holds the extensions, which the app decides from its own mark and says
+    // at every launch, so a restart that gives the browser its switches again decides afresh.
+    args.push(safe_start_host::prepare());
     let given = given.into_iter().filter(|arg| {
-        !cfg!(feature = "prod") || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST))
+        !arg.starts_with(browser::safe_start::SWITCH)
+            && (!cfg!(feature = "prod")
+                || !(arg.starts_with(TEST_HOST) || arg.starts_with(CRASH_TEST)))
     });
     // On Windows and Linux Chromium has started already, with what it was given.
     let chromium_started = cfg!(any(target_os = "windows", target_os = "linux"));
