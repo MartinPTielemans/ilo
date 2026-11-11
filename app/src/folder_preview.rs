@@ -246,6 +246,9 @@ fn update(
 /// once while another shows; the pointer leaving that row, which ends it after LEAVE unless it's
 /// onto the preview or something was typed in it; or its end.
 pub fn ask(ask: Ask, cx: &mut App) {
+    if matches!(ask, Ask::Rest(_)) {
+        crate::lazy_window::ready::<FolderPreview>(cx);
+    }
     update(cx, |preview, window, cx| match ask {
         Ask::Rest(rest) => preview.rest(rest, window, cx),
         Ask::Left(folder) => preview.left(folder, cx),
