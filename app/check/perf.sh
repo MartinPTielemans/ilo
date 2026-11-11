@@ -190,11 +190,18 @@ perf_launch() {
   perf_stamp
   launched=$stamp
   if [ -n "$1" ]; then
-    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
+    # shellcheck disable=SC2086 # proof only (#2384): the traced launches' flags, a word each
+    BROWSER_URL="$1" BROWSER_PROFILE_DIR="$profile_dir" "$browser" $perf_launch_args < /dev/null > "$log" 2>&1 &
   else
     BROWSER_PROFILE_DIR="$profile_dir" "$browser" < /dev/null > "$log" 2>&1 &
   fi
   pid=$!
+  # Proof only (#2384): the process's start since boot and the two clocks, to put the app's times
+  # (from its start, CLOCK_BOOTTIME) on the trace's (CLOCK_MONOTONIC).
+  if [ -n "${perf_launch_args:-}" ]; then
+    cat "/proc/$pid/stat" > "$perf_dir/launch-$3.stat" 2> /dev/null || true
+    python3 -I -c 'import time, os; print(os.sysconf("SC_CLK_TCK"), time.clock_gettime(time.CLOCK_BOOTTIME), time.clock_gettime(time.CLOCK_MONOTONIC))' > "$perf_dir/launch-$3.clocks"
+  fi
   # A tab put back has its last title, an earlier launch's paint, until its page loads.
   fcp=0
   for _ in $(seq 300); do
@@ -247,6 +254,19 @@ perf_row launch-restore "Launch, restored page painted" \
   "$(perf_stats '%.0f' < "$perf_dir/restore") ms" "Ardia 360 ms, Helium 355 ms, Chrome 438 ms"
 perf_row launch-held "Launch, the page held for uBlock Origin" \
   "$(perf_stats '%.0f' < "$perf_dir/held") ms" "none: it's part of the two above"
+# Proof only (#2384): three more link launches, traced from Chromium's start, not counted. The
+# trace is written as the browser quits, after its page painted.
+launch_categories=startup,toplevel,disabled-by-default-toplevel.flow,browser,content,navigation,loading,ui,views,gpu,viz,cc,benchmark,base,mojom
+for n in 1 2 3; do
+  rm -f "$profile_dir/Spaces.json" "$profile_dir/launch-frame"
+  perf_launch_args="--enable-tracing=$launch_categories --enable-tracing-format=json --trace-startup-file=$PWD/$perf_dir/trace-launch-$n.json"
+  perf_launch "$page?trace$n" "trace$n" "trace$n"
+  perf_launch_args=
+  [ -s "$perf_dir/trace-launch-$n.json" ] || fail "launch trace $n wasn't written"
+  echo "perf: traced launch $n: window on screen at $browser_on_screen ms, page painted $painted ms"
+done
+echo "ok: proof only (#2384): 10 launches timed and 3 traced, in $perf_dir/trace-launch-*.json; the rest of perf skipped"
+exit 0
 
 log="$perf_dir/session.log"
 step=0
