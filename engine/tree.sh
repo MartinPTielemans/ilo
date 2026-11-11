@@ -66,17 +66,62 @@ LOGOS
   rm -f "$png"
 }
 
+# A platform repository that hasn't tagged a Chromium major within a few days of Stable builds on
+# ungoogled-chromium's tag with its last platform patches, and goes back to its own tag when one
+# appears. Its patches that need it are rebased by ilo, in engine/patches/<repository>/ laid out as
+# in the repository, each saying in its header what changed from the platform's and why; a copy
+# with no hunks is a patch left out. The directory goes when the platform tags the major; until
+# then, copies for a platform whose pin is on [chromium]'s version again are left alone.
+rebased_platform() {
+  local tag
+  tag=$(git config -f "$engine/pins.ini" "$1.tag") || return 1
+  [ -d "$engine/patches/$1" ] && [ "${tag%%-*}" != "$(git config -f "$engine/pins.ini" chromium.version)" ]
+}
+
+# Puts a platform repository's clone on the pinned ungoogled-chromium tag, with ilo's rebased
+# copies over its patches and those left out off its series, if ilo rebased it. Safe to run again
+# on the same clone. Takes the clone's path and the repository's name.
+rebase_platform() {
+  local dir=$1 name=$2 copies=$engine/patches/$2 uc_tag file
+  rebased_platform "$name" || return 0
+  uc_tag=$(git config -f "$engine/pins.ini" ungoogled-chromium.tag)
+  git -C "$dir/ungoogled-chromium" fetch -q --depth 1 origin "refs/tags/$uc_tag:refs/tags/$uc_tag"
+  git -C "$dir/ungoogled-chromium" -c advice.detachedHead=false checkout -q "refs/tags/$uc_tag"
+  for file in $(cd "$copies" && find patches -name '*.patch' -type f | sort); do
+    if [ ! -f "$dir/$file" ]; then
+      echo "$name has no $file for ilo's rebased copy to replace" >&2
+      return 1
+    fi
+    if grep -q '^--- ' "$copies/$file"; then
+      cp "$copies/$file" "$dir/$file"
+    else
+      grep -vxF "${file#patches/}" "$dir/patches/series" >"$dir/patches/series.new" || true
+      mv "$dir/patches/series.new" "$dir/patches/series"
+    fi
+  done
+}
+
+# What a tree prepared from a platform's tag is made from: the tag, and for a platform ilo rebased,
+# the ungoogled-chromium tag and the rebased copies too, so a change to either prepares it again.
+# Takes the repository's name and its tag.
+platform_stamp() {
+  local sum
+  rebased_platform "$1" || { echo "$2" && return; }
+  sum=$(cd "$engine/patches/$1" && find . -type f | sort | xargs cat | cksum | cut -d' ' -f1)
+  echo "$2 on ungoogled-chromium $(git config -f "$engine/pins.ini" ungoogled-chromium.tag), rebased $sum"
+}
+
 # Checks that a platform repository's ungoogled-chromium submodule builds the pinned tag, or a
 # later commit after it (ungoogled-chromium-macos 156.0.8078.47 builds one that fixes the tag's
-# patches), for the pinned Chromium version. A platform whose tag names another version lags the
-# Mac's point release, and is checked against its tag alone. Takes the submodule's path and
-# "<repository> <tag>".
+# patches), for the pinned Chromium version. A platform whose tag names another version, and that
+# ilo didn't rebase, is behind or ahead of the pins while they straddle a release, and is checked
+# against its tag alone. Takes the submodule's path and "<repository> <tag>".
 check_ungoogled() {
   local uc=$1 platform_tag=$2 version uc_tag pinned tag_version
   version=$(git config -f "$engine/pins.ini" chromium.version)
   tag_version=${platform_tag##* }
   tag_version=${tag_version%%-*}
-  if [ "$tag_version" != "$version" ]; then
+  if [ "$tag_version" != "$version" ] && ! rebased_platform "${platform_tag%% *}"; then
     if [ "$(cat "$uc/chromium_version.txt")" != "$tag_version" ]; then
       echo "$platform_tag builds Chromium $(cat "$uc/chromium_version.txt"), not $tag_version" >&2
       exit 1

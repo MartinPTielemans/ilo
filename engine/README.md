@@ -15,6 +15,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 | `patches/ardia/` | Patches taken from Ardia, same convention |
 | `patches/ours/` | Our own patches |
 | `patches/mac/` | Our patches for the Mac's tree alone, in `series`' `mac/` section, which every other platform's tree leaves out |
+| `patches/ungoogled-chromium-*/` | A lagging platform's patches, rebased by ilo onto ungoogled-chromium's tag, laid out as in its repository (Rules, below) |
 | `args.gn` | Our GN args, after ungoogled-chromium's `flags.gn` and ungoogled-chromium-macos's `flags.macos.gn` |
 | `args.dev.gn` | The dev build's args, after `args.gn` |
 | `tree.sh` | What `setup.sh` and `linux/prepare.sh` both do to a prepared tree: remove Chromium's agent instructions, link the core and apply `series` |
@@ -31,7 +32,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 `setup.sh` does this, using ungoogled-chromium-macos's tooling at the pinned tag, which is how its releases are built:
 
 1. Download Chromium's source tarball at the pinned version, checked against its published hashes.
-2. Apply ungoogled-chromium's pruning, its patches and ungoogled-chromium-macos's, and domain substitution.
+2. Apply ungoogled-chromium's pruning, its patches and ungoogled-chromium-macos's (with ilo's rebased copies while it lags), and domain substitution.
 3. Download the toolchain ungoogled-chromium-macos names (LLVM, Rust, Node), in place of Google's.
 4. Download Chrome's optimization profile for Apple silicon, which the source tarball lacks, and build `gn` and `bindgen`, each only if it's missing.
 5. Link the repository's `core/` into the tree as `//browser_core`, so the next build has every edit to it. Apply `series` in order, with no fuzz. A patch already in the tree is skipped, and one that neither applies nor is in the tree stops the run as drift.
@@ -65,7 +66,7 @@ The engine itself is built by `.github/workflows/engine-linux.yml`, on a self-ho
 
 Chromium's security point releases (same major, such as 156.0.8078.47 → .60) update the engine without asking the owner. A new major waits for the owner's go.
 
-- **Detect.** `.github/workflows/engine-point-release.yml` runs `point-release.sh` daily on GitHub's runners. For each platform section in `pins.ini`, it finds the newest tag on the pinned major. The bump follows the Mac, which never waits on another platform: `[chromium]` moves to the Mac's newest point release, and each section on the same version that has a tag for it moves too. A section whose tag lags stays on the Chromium its tag names, which `check_ungoogled` in `tree.sh` checks alone, and follows in its own PR once its tag is out. It extracts only the files the patches touch from Chromium's source tarball and dry-runs ungoogled-chromium's patches, the platform's, domain substitution and `series`. It then opens one PR bumping `pins.ini`, with "applies cleanly" or the conflicting patches, and the patch lag: the days since Chrome's stable release of that version. A new major gets an issue asking the owner, once.
+- **Detect.** `.github/workflows/engine-point-release.yml` runs `point-release.sh` daily on GitHub's runners. For each platform section in `pins.ini`, it finds the newest tag on the pinned major. The bump follows the Mac, which never waits on another platform: `[chromium]` moves to the Mac's newest point release, and each section on the same version that has a tag for it moves too. A section whose tag lags stays on the Chromium its tag names, which `check_ungoogled` in `tree.sh` checks alone, and follows in its own PR once its tag is out. A section ilo rebased (Rules, below) follows ungoogled-chromium's tags instead, and when its own tag for the version is out, the PR moves it there and says to remove the rebased copies. It extracts only the files the patches touch from Chromium's source tarball and dry-runs ungoogled-chromium's patches, the platform's, domain substitution and `series`. It then opens one PR bumping `pins.ini`, with "applies cleanly" or the conflicting patches, and the patch lag: the days since Chrome's stable release of that version. A new major gets an issue asking the owner, once.
 - **Update in place.** `setup.sh update` (and `setup.sh update dev`) prepares the new version in `.deps/next`, series and all, then copies it over `.deps/src` with `rsync --checksum --delete`, leaving `out/` alone. Unchanged files keep their dates, so ninja rebuilds only what changed. The scratch tree needs about 25 GB while it runs. Afterwards, `setup.sh` for the other build regenerates its build files.
 - **Merge.** The integrator builds Dev and Release incrementally, runs the full check, merges, and tags `good/…`. The PR comes from `GITHUB_TOKEN`, so no workflow runs on it. A conflict goes to a lane, as for a major.
 
@@ -167,5 +168,6 @@ so a build whose profile is elsewhere, as a dev build's is, does none of that.
 - Domain substitution rewrites Google's hosts in the source before the series is applied, so a patch that needs a real host writes it in full, and nothing rewrites it.
 - One concern per patch, named `chromium-<area>-<what>.patch`.
 - Each release, diff Helium's and Ardia's series against ours for anything worth taking.
+- A platform whose repository hasn't tagged a Chromium major within a few days of Stable builds on ungoogled-chromium's tag with its last platform patches, and goes back to the platform's tag when one appears. Its tag in `pins.ini` stays its last; ilo's rebased copies of the patches that need it are in `patches/<repository>/`, laid out as in the repository, each header saying what changed from the platform's and why, and a copy with no hunks is a patch left out (`rebase_platform` in `tree.sh`). The directory goes in the PR that takes the platform's tag.
 - A new Chromium major, or a change to the GN args, means a full build. A point release taken with `setup.sh update` rebuilds only what it changes.
 - An Xcode update doesn't: `chromium-xcode-build-define.patch` drops the `CR_XCODE_BUILD` define, which upstream compiles every object with only so that one does.

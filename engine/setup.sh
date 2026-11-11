@@ -1,12 +1,13 @@
 #!/bin/bash
 # Prepares the engine's tree in .deps/src: Chromium at the version pins.ini names, with
-# ungoogled-chromium's and ungoogled-chromium-macos's pruning, patches and domain substitution,
-# their toolchain, then our series, then `gn gen`. The first run downloads about 3 GB and takes
-# about 25 GB. Each stage that changes the tree runs once; running this again applies new
-# patches from the series and regenerates the build files. `setup.sh dev` also prepares the dev
-# build in out/Dev, which adds args.dev.gn. After a bump in pins.ini, `setup.sh update [dev]`
-# updates the tree in place: it prepares the new version in .deps/next and copies over only the
-# files that differ, so the next build compiles only what they change.
+# ungoogled-chromium's and ungoogled-chromium-macos's pruning, patches and domain substitution
+# (ilo's rebase of the platform's patches while it lags, tree.sh), their toolchain, then our
+# series, then `gn gen`. The first run downloads about 3 GB and takes about 25 GB. Each stage
+# that changes the tree runs once; running this again applies new patches from the series and
+# regenerates the build files. `setup.sh dev` also prepares the dev build in out/Dev, which adds
+# args.dev.gn. After a bump in pins.ini, `setup.sh update [dev]` updates the tree in place: it
+# prepares the new version in .deps/next and copies over only the files that differ, so the next
+# build compiles only what they change.
 set -euo pipefail
 cd "$(dirname "$0")"
 engine=$PWD
@@ -66,7 +67,9 @@ fetch_ungoogled() {
   rm -rf "$ucm"
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$ucm_tag" --recurse-submodules \
     --shallow-submodules https://github.com/ungoogled-software/ungoogled-chromium-macos.git "$ucm"
+  rebase_platform "$ucm" ungoogled-chromium-macos || exit 1
   check_ungoogled "$uc" "ungoogled-chromium-macos $ucm_tag"
+  platform_stamp ungoogled-chromium-macos "$ucm_tag" >"$stamps/platform"
   # Their scripts work in build/ beside themselves.
   mkdir -p "$ucm/build" "$src"
   ln -s "$src" "$ucm/build/src"
@@ -84,6 +87,11 @@ if [ -e "$live/chrome/VERSION" ] && [ "$(tree_version "$live")" != "$version" ];
   mkdir -p "$stamps"
 else
   update=
+fi
+# A tree patched from other rebased copies of the platform's patches (tree.sh) has them in it.
+if [ -e "$stamps/patches.done" ] &&
+  [ "$(cat "$stamps/platform" 2>/dev/null || echo "$ucm_tag")" != "$(platform_stamp ungoogled-chromium-macos "$ucm_tag")" ]; then
+  fail "the tree has other patches of ungoogled-chromium-macos's than engine/patches/ungoogled-chromium-macos. Start over with: rm -rf $src $stamps"
 fi
 
 stage ungoogled fetch_ungoogled
@@ -157,6 +165,7 @@ if [ -n "$update" ]; then
       target=${target#"$ucm/build/src/"}
       ln -sfn "$live/${target#"$src/"}" "$link"
     done
+  mv "$stamps/platform" "$deps/stamps/platform"
   rm -rf "$stamps" "$live_ucm"
   mv "$ucm" "$live_ucm"
   ln -sfn "$live" "$live_ucm/build/src"
