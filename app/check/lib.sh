@@ -902,7 +902,10 @@ served() {
     grep -q "$1" "$out/site.log" && return 0
     sleep 0.1
   done
-  fail "$2"
+  # With $3, the failure quotes the first requests the site logged that match it.
+  sent=
+  [ -z "${3:-}" ] || sent=": $(grep -- "$3" "$out/site.log" | head -2 | tr '\n' ' ')"
+  fail "$2$sent"
 }
 # The colour at ($2, $3), as fractions of the width and height, in the capture $1: "r g b".
 pixel() {
