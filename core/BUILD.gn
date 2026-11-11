@@ -718,7 +718,6 @@ test("browser_core_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
-    "//components/bookmarks/test",
     "//components/history/core/browser",
     "//components/history/core/test",
     "//components/omnibox/browser",

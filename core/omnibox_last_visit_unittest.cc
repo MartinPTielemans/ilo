@@ -11,7 +11,6 @@
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
-#include "components/bookmarks/test/test_bookmark_client.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/test/history_service_test_util.h"
@@ -40,7 +39,8 @@ class OmniboxLastVisitTest : public testing::Test, public AutocompleteProviderLi
     client_ = std::make_unique<FakeAutocompleteProviderClient>();
     client_->set_history_service(history::CreateHistoryService(dir_.GetPath(), true));
     ASSERT_NE(client_->GetHistoryService(), nullptr);
-    client_->set_bookmark_model(bookmarks::TestBookmarkClient::CreateModel());
+    // No bookmark model, which the providers do without: an empty one titles its folders from
+    // the ResourceBundle, which this suite doesn't load, so it would crash the test as it starts.
     // As Chromium's own HistoryURLProvider tests add their pages.
     client_->GetHistoryService()->AddPageWithDetails(GURL(kVisited), u"Visited page",
                                                      /*visit_count=*/3, /*typed_count=*/1,
@@ -102,7 +102,7 @@ TEST_F(OmniboxLastVisitTest, HistoryUrlMatchHasItsLastVisit) {
 
 TEST_F(OmniboxLastVisitTest, HistoryQuickMatchHasItsLastVisit) {
   client_->set_in_memory_url_index(std::make_unique<InMemoryURLIndex>(
-      client_->GetBookmarkModel(), client_->GetHistoryService(), nullptr, dir_.GetPath(),
+      /*bookmark_model=*/nullptr, client_->GetHistoryService(), nullptr, dir_.GetPath(),
       SchemeSet()));
   client_->GetInMemoryURLIndex()->Init();
   history::BlockUntilHistoryProcessesPendingRequests(client_->GetHistoryService());
