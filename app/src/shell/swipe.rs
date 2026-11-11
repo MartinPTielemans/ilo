@@ -17,6 +17,10 @@ use super::{
     wheel_gestures::{GAP, LONG},
 };
 
+/// Points the fingers go on the web before which way they went says whether they swipe across
+/// or scroll along.
+const DECIDE: f32 = 4.;
+
 impl Shell {
     /// The Spaces' pages the sidebar draws, and where from its left edge: the shown Space's, and
     /// while a swipe or a settle moves one, it and the page beside it.
@@ -366,12 +370,16 @@ impl Shell {
         let ScrollDelta::Pixels(delta) = event.delta else {
             return self.scroll_at(event, at, window, cx);
         };
-        let larger = if delta.x.abs() >= delta.y.abs() {
-            delta.x
-        } else {
-            delta.y
+        // The way the swipe goes once that's known, so a hand's drift along a swipe across never
+        // reads as the fingers turning; until then, the way of the larger delta.
+        let across = self.swipe.as_ref().and_then(|swipe| swipe.across);
+        let way = match across {
+            Some(true) => delta.x,
+            Some(false) => delta.y,
+            None if delta.x.abs() >= delta.y.abs() => delta.x,
+            None => delta.y,
         };
-        let cut = self.web_wheel.event(f32::from(larger), at);
+        let cut = self.web_wheel.event(f32::from(way), at);
         let phase = |touch_phase, delta| ScrollEvent {
             touch_phase,
             delta,
@@ -379,12 +387,30 @@ impl Shell {
         };
         let still = ScrollDelta::Pixels(Point::default());
         if cut.lifted {
+            self.web_undecided = None;
             self.scroll_at(&phase(TouchPhase::Ended, still), at, window, cx);
         }
         if cut.landed {
+            self.web_undecided = Some(Point::default());
             self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
         }
-        let took = self.scroll_at(&phase(TouchPhase::Moved, event.delta), at, window, cx);
+        // The fingers' first DECIDE points go on as one move, so the way they went, not one
+        // event a browser rounded or summed, tells across from along, as AppKit starts a scroll
+        // only once they've gone a few points.
+        let moved = match self.web_undecided.take() {
+            Some(way) => {
+                let way = way + delta;
+                if way.x.abs().max(way.y.abs()) < px(DECIDE) {
+                    self.web_undecided = Some(way);
+                    None
+                } else {
+                    Some(ScrollDelta::Pixels(way))
+                }
+            }
+            None => Some(event.delta),
+        };
+        let took = moved
+            .is_none_or(|delta| self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx));
         let lift = phase(TouchPhase::Ended, still);
         self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
             // Slowed fingers lift after GAP, and others after LONG.
