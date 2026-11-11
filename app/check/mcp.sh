@@ -42,7 +42,8 @@
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
 # restarted.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
-# nothing scrolled.
+# nothing scrolled. A table's rows and a menu's items have refs it clicks by, and an answer says what
+# changed in an element, as a button now enabled.
 # Through all it does before the user first looks at its card, the user's Space, tab and focused
 # field stay as the user left them, and the user's next keys go into that field (decision 8).
 
@@ -893,6 +894,46 @@ painted(() => document.title = "choose");
     fail "choosing an option the select hasn't answered: $missed"
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
+  # A console's list page: its table's rows and its side menu's items, which a person clicks, have
+  # refs, and a click on a row opens it. Ticking the box enables Continue, and the click's answer
+  # says what changed in each, not only that each did (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<ul aria-label=Menu><li onclick="document.title = this.textContent">Instances<li
+ onclick="document.title = this.textContent">Volumes</ul>
+<table aria-label=Instances><tr><th>Name<th>State</tr></table>
+<p><label><input type=checkbox id=agree> I agree</label> <button id=next disabled>Continue</button>
+<script>
+const table = document.querySelector("table");
+for (let i = 1; i <= 8; i++) {
+  const row = table.insertRow();
+  row.insertCell().textContent = "web-" + i;
+  row.insertCell().textContent = i % 2 ? "Running" : "Stopped";
+  row.onclick = () => document.title = "opened web-" + i;
+}
+agree.onchange = () => next.disabled = !agree.checked;
+painted(() => document.title = "console");
+</script>' > "$out/site/console.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/console.html\"}")
+  console_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$console_tab" ] || fail "opening the console page answered: $opened"
+  await_log "^browser: title $console_tab console\$" "the console page didn't paint"
+  outline=$(call snapshot "{\"tab\":$console_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-console.txt"
+  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row "web-3[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  volumes=$(ref_of listitem Volumes)
+  agree=$(ref_of checkbox "I agree")
+  [ -n "$row" ] && [ -n "$volumes" ] && [ -n "$agree" ] ||
+    fail "the console page's row, menu item and box had the refs '$row', '$volumes' and '$agree': $out/mcp-console.txt"
+  call click "{\"tab\":$console_tab,\"ref\":\"$row\"}" > /dev/null
+  await_log "^browser: title $console_tab opened web-3\$" "a click on a row by its ref didn't open it"
+  call click "{\"tab\":$console_tab,\"ref\":\"$volumes\"}" > /dev/null
+  await_log "^browser: title $console_tab Volumes\$" "a click on a menu item by its ref didn't reach it"
+  ticked=$(call click "{\"tab\":$console_tab,\"ref\":\"$agree\"}")
+  case "$ticked" in
+    *"Changed:"*'button "Continue" [e'*']: now enabled'*) ;;
+    *) fail "ticking the box answered without saying Continue is now enabled: $ticked" ;;
+  esac
 
   # It scrolls in what it names by ref, a panel and another site's frame, as a wheel there does,
   # and once one is at its end the answer says nothing scrolled. The page around them is too short
