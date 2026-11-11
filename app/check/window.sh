@@ -124,7 +124,7 @@ motion=
 if [ "$(uname)" = Darwin ] || windows; then
   motion=full
 fi
-BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
+BROWSER_DIAG_RENDERS=1 BROWSER_DIAG_LOOP="$out/diag-loop" BROWSER_DRIVE=1 BROWSER_MOTION=$motion BROWSER_URL="$url" "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await_load
@@ -1154,7 +1154,9 @@ rest_cpu() {
   sleep 1 # the hover's fade out, before the window measured
   local from
   from=$(drawing_cpu)
+  was=$(cpu --extension-process) lines=$(wc -l < "$log")
   sleep 4 # the window measured
+  echo "diag take: drawing $from $(drawing_cpu), as before $was $(cpu --extension-process), log lines $lines $(wc -l < "$log")" >> "$out/window-cpu.txt"
   set -- $from $(drawing_cpu)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
 }
@@ -1168,6 +1170,14 @@ hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
 rest_cpu
 out_cpu=$rest
+# #2400's proof branch: six more takes with the sidebar out, and one with its window drawing on.
+for take in 1 2 3 4 5 6 loop; do
+  [ "$take" != loop ] || : > "$out/diag-loop"
+  hover_out "the sidebar out again"
+  rest_cpu
+  echo "window: diag take $take out ${rest} s" | tee -a "$out/window-cpu.txt"
+done
+rm -f "$out/diag-loop"
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
 awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"

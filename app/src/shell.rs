@@ -4174,8 +4174,34 @@ impl Focusable for Shell {
     }
 }
 
+/// Diagnosis for #2400, on its proof branch only: a line a render, which window drew and what
+/// asks for the next frame.
+fn diag_render(shell: &Shell, which: &str, window: &Window, cx: &App) {
+    static ON: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    let Some(start) =
+        *ON.get_or_init(|| std::env::var_os("BROWSER_DIAG_RENDERS").map(|_| Instant::now()))
+    else {
+        return;
+    };
+    log!(
+        "browser: diag render {which} {} motion {} reveal {} slides {} tiles {} tools {} hovered {} a11y {} focus {:?} active {} hidden {}",
+        start.elapsed().as_millis(),
+        shell.sidebar_motion.is_some() as u8,
+        shell.reveal_motion.is_some() as u8,
+        shell.slides.len(),
+        shell.tile_slides.len(),
+        shell.tools_fade.is_some() as u8,
+        shell.sidebar_hovered as u8,
+        shell.a11y as u8,
+        window.focused(cx).map(|focus| shell.reveal_focus == focus),
+        window.is_window_active() as u8,
+        shell.sidebar_hidden as u8,
+    );
+}
+
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        diag_render(self, "shell", window, cx);
         self.a11y = window.is_a11y_active();
         self.watch_appearance(window, cx);
         self.lone_header = cx
@@ -4992,6 +5018,13 @@ impl Shell {
 
     /// What the reveal's window shows: the sidebar in a panel, as far out as it is.
     pub fn render_reveal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        diag_render(self, "reveal", window, cx);
+        // #2400's proof branch: a window that keeps drawing, while the file named exists.
+        if std::env::var_os("BROWSER_DIAG_LOOP")
+            .is_some_and(|file| std::path::Path::new(&file).exists())
+        {
+            window.request_animation_frame();
+        }
         self.a11y = window.is_a11y_active();
         if self.reveal_motion.is_some() {
             if self.reveal_step().is_some() {
