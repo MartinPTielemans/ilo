@@ -121,7 +121,7 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
     if keyboard && !had {
         overlays::lend_keyboard(window, view, true);
         // check.sh reads this line.
-        eprintln!("browser: {} takes the keyboard", name(kind));
+        browser::log!("browser: {} takes the keyboard", name(kind));
     }
     with_panel(
         |p| p.view == view,
@@ -149,8 +149,8 @@ fn show(kind: Kind, ui_view: *mut c_void, keyboard: bool) {
         bounds.size.height,
     ];
     let [x, y, width, height] = at.map(f32::from);
-    eprintln!("browser: {} at {x} {y} {width} {height}", name(kind));
-    eprintln!("browser: {} shown", name(kind));
+    browser::log!("browser: {} at {x} {y} {width} {height}", name(kind));
+    browser::log!("browser: {} shown", name(kind));
     if kind == Kind::FindBar {
         place(ui_view);
     }
@@ -172,7 +172,7 @@ fn hide(kind: Kind, ui_view: *mut c_void) {
         }
     });
     // check.sh reads this line.
-    eprintln!("browser: {} hidden", name(kind));
+    browser::log!("browser: {} hidden", name(kind));
     if kind == Kind::FindBar {
         place(ui_view);
     }
@@ -222,7 +222,7 @@ fn left(view: *mut c_void) {
     overlays::lend_keyboard(window, view, false);
     if let Some(kind) = kind {
         // check.sh reads this line.
-        eprintln!("browser: {} gives the keyboard back", name(kind));
+        browser::log!("browser: {} gives the keyboard back", name(kind));
     }
 }
 
