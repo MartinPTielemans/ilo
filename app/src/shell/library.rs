@@ -25,7 +25,7 @@ use super::{
     SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
     UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
-    clean_link, dashed_square,
+    dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
@@ -1322,7 +1322,12 @@ impl Shell {
 
     /// The menu a right-click on an archived tab's row shows: reopen it, copy its URL, or take it
     /// out of the archive.
-    fn archived_menu(&mut self, id: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn archived_menu(
+        &mut self,
+        id: u64,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(url) = self
             .archive
             .iter()
@@ -1347,7 +1352,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.restore_archived(id, cx),
-                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(1) => {
+                            let link = shell.copied_link(&url);
+                            shell.copy(&link, "Copied URL", cx)
+                        }
                         Some(3) => {
                             // check.sh waits for this line.
                             log!("browser: remove archived {id}");
@@ -1528,7 +1536,7 @@ impl Shell {
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
             // column when fingers take it past its end.
-            .children(buttons.then(|| self.window_buttons(cx)));
+            .children(buttons.then(|| self.window_buttons(None, cx)));
         let edge = div()
             .absolute()
             .left(px(COLUMN_WIDTH))

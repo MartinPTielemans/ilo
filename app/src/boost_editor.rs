@@ -59,8 +59,8 @@ use crate::tokens::boost_editor::{
 use crate::tokens::settings::{SWITCH_HEIGHT, SWITCH_WIDTH};
 use crate::tokens::shell::{MEDIA_SLIDER_KNOB, MEDIA_SLIDER_TRACK};
 use crate::tokens::theme_picker::{
-    ARROW, CARD_WIDTH, DOT_ALPHA, DOT_PITCH, FIELD, FIELD_FILL, FIELD_INSET, FIELD_RADIUS,
-    FIELD_RIM, HANDLE, HANDLE_RING, MAIN_HANDLE, MAIN_RING,
+    CARD_WIDTH, DOT_ALPHA, DOT_PITCH, FIELD, FIELD_FILL, FIELD_INSET, FIELD_RADIUS, FIELD_RIM,
+    HANDLE, HANDLE_RING, MAIN_HANDLE, MAIN_RING,
 };
 use crate::tokens::{menu, radius::CONTROL, text};
 
@@ -147,6 +147,8 @@ struct Editing {
     /// The styles before each kept change, for ⌘Z.
     undo: Vec<Style>,
     arrow_y: Option<f32>,
+    /// Whether it opened to the left, its arrow on its right.
+    left: bool,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
     /// What's being dragged, and the style before the drag.
@@ -251,7 +253,7 @@ pub fn open_at(
 }
 
 /// Shows the editor for `site`'s Boost, with its `icon`, `style` and `on`, `at` its place in browser window
-/// `over`, `height` tall, drawn in `palette`, the Space's on a dark sheet as the theme picker's.
+/// `over`, to its left if `left`, `height` tall, drawn in `palette`, the Space's on a dark sheet as the theme picker's.
 /// `requested` gets what the user asks of the Boost.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
@@ -261,6 +263,7 @@ pub fn show(
     style: Style,
     on: bool,
     at: At,
+    left: bool,
     height: f32,
     palette: Palette,
     requested: Requested,
@@ -282,7 +285,7 @@ pub fn show(
                 editor.families = Some(families(&cx.text_system().all_font_names()));
             }
             let card = height_of(&style);
-            let (left, top, arrow_y) = theme_picker::placed_of(at, height, card);
+            let (x, top, arrow_y) = theme_picker::placed_of(at, left, height, card);
             editor.editing = Some(Editing {
                 site,
                 icon,
@@ -291,6 +294,7 @@ pub fn show(
                 requested,
                 undo: Vec::new(),
                 arrow_y,
+                left,
                 open: true,
                 drag: None,
                 focused: None,
@@ -300,10 +304,10 @@ pub fn show(
                 palette,
             });
             window.focus(&editor.focus, cx);
-            let corners = theme_picker::corners_of(arrow_y, card);
+            let corners = theme_picker::corners_of(arrow_y, left, card);
             // At its height before it shows, as Advanced was left open or closed.
             editor.host.resize(card, &corners);
-            editor.host.show(over, left, top, &corners);
+            editor.host.show(over, x, top, &corners);
             cx.notify();
         })
         .ok();
@@ -585,6 +589,11 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
 }
 
 impl BoostEditor {
+    /// Where the card starts across the editor's window, as it opened.
+    fn card_x(&self) -> f32 {
+        theme_picker::card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
+    }
+
     /// The host closed it, as a click outside does.
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -689,7 +698,7 @@ impl BoostEditor {
 
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let (x, y) = (
-            f32::from(event.position.x) - ARROW,
+            f32::from(event.position.x) - self.card_x(),
             f32::from(event.position.y),
         );
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -758,7 +767,8 @@ impl BoostEditor {
                 style.advanced = !style.advanced;
                 // check.sh reads this line.
                 log!("browser: boost editor advanced {}", style.advanced);
-                let corners = theme_picker::corners_of(editing.arrow_y, height_of(&style));
+                let corners =
+                    theme_picker::corners_of(editing.arrow_y, editing.left, height_of(&style));
                 self.host.resize(height_of(&style), &corners);
                 self.set(style, true, cx);
             }
@@ -905,7 +915,7 @@ impl BoostEditor {
     }
 
     fn moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(position.x) - ARROW, f32::from(position.y));
+        let (x, y) = (f32::from(position.x) - self.card_x(), f32::from(position.y));
         self.drag_to(x, y, cx);
     }
 
@@ -1045,8 +1055,9 @@ impl Render for BoostEditor {
         let editing = &*editing;
         let style = &editing.style;
         let palette = editing.palette;
-        let card_x = |x: f32| px(ARROW + x);
-        let arrow_y = editing.arrow_y;
+        let (arrow_y, left) = (editing.arrow_y, editing.left);
+        let card_left = theme_picker::card_x(left);
+        let card_x = |x: f32| px(card_left + x);
         let card_fill = palette::current(cx).card_drawn();
         // One card, one shape and one fill, at the height Advanced gives it.
         let card_height = height_of(style);
@@ -1054,7 +1065,7 @@ impl Render for BoostEditor {
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let corners = theme_picker::corners_of(arrow_y, card_height);
+                let corners = theme_picker::corners_of(arrow_y, left, card_height);
                 icon_picker::paint_card(bounds.origin, &corners, card_fill, window)
             },
         )
@@ -1323,6 +1334,7 @@ impl Render for BoostEditor {
                         editing.focused == Some(adjust),
                         &palette,
                         a11y,
+                        card_left,
                         cx.weak_entity(),
                     )
                 })
@@ -1586,6 +1598,7 @@ fn slider_line(
     focused: bool,
     palette: &Palette,
     a11y: bool,
+    card_left: f32,
     editor: gpui::WeakEntity<BoostEditor>,
 ) -> Vec<gpui::AnyElement> {
     let y = slider_y(adjust);
@@ -1597,7 +1610,7 @@ fn slider_line(
     let line = |left: f32, width: f32, height: f32| {
         div()
             .absolute()
-            .left(px(ARROW + left))
+            .left(px(card_left + left))
             .top(px(y - height / 2.))
             .w(px(width))
             .h(px(height))

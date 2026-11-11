@@ -313,6 +313,9 @@ struct Browser {
   void (*reveal_pointer)(void* ui_view, double x);
   double reveal_width = 0;
   id reveal_monitor;
+  // Whether the sidebar is on the window's right, with the window's buttons and the reveal there
+  // too (host_set_sidebar_right).
+  bool sidebar_right = false;
 
   // A Little ilo window's, and whether it grows in as it first comes on screen
   // (host_set_window_little). Its opening, held small until its UI draws and then growing, the
@@ -1185,11 +1188,13 @@ void PlaceHud() {
                             NSMaxY(content) - browser->page_top - top - size.height)];
 }
 
-// At the browser window's left edge and as tall as its content, so a point is at the same place in
-// both windows.
+// At the browser window's edge on the sidebar's side and as tall as its content, so a point is at
+// the same height in both windows.
 void PlaceReveal(Browser* browser) {
   NSRect content = [browser->window contentRectForFrameRect:browser->window.frame];
-  [browser->reveal setFrame:NSMakeRect(NSMinX(content), NSMinY(content), browser->reveal_width,
+  const CGFloat x = browser->sidebar_right ? NSMaxX(content) - browser->reveal_width
+                                           : NSMinX(content);
+  [browser->reveal setFrame:NSMakeRect(x, NSMinY(content), browser->reveal_width,
                                        NSHeight(content))
                     display:NO];
 }
@@ -1881,7 +1886,7 @@ static void OrderLittleOut(NSWindow* self, SEL selector, id sender) {
 // windows all share it, so it's added once, and it passes the others on.
 static void WatchLittleOrderingOut(NSWindow* window) {
   const SEL selector = @selector(orderOut:);
-  Class kind = object_getClass(window);
+  Class kind = window.class;
   if (class_getMethodImplementation(kind, selector) == (IMP)OrderLittleOut) {
     return;
   }
@@ -4691,6 +4696,63 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+// The browser windows whose sidebar is on the right lay their title bar out right to left, so AppKit
+// puts zoom, minimize and close at the window's right, close at the corner, and the core's inset
+// for them from that edge. AppKit's windowTitlebarLayoutDirection is read-only, so the windows'
+// class answers it for each window, and the rest of the window keeps its direction: the title,
+// which is hidden, and the Window menu and Mission Control, which read the title, not this.
+static char kSidebarRight;
+static IMP g_titlebar_direction;
+
+static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
+  if ([objc_getAssociatedObject(self, &kSidebarRight) boolValue]) {
+    return NSUserInterfaceLayoutDirectionRightToLeft;
+  }
+  return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
+}
+
+static bool AnswerTitlebarDirection(NSWindow* window) {
+  if (g_titlebar_direction) {
+    return true;
+  }
+  Class kind = window.class;
+  SEL selector = @selector(windowTitlebarLayoutDirection);
+  Method own = class_getInstanceMethod(kind, selector);
+  if (!own) {
+    return false;
+  }
+  g_titlebar_direction = method_getImplementation(own);
+  if (!class_addMethod(kind, selector, (IMP)TitlebarDirection, method_getTypeEncoding(own))) {
+    method_setImplementation(own, (IMP)TitlebarDirection);
+  }
+  return true;
+}
+
+void host_set_sidebar_right(void* ui_view, bool right) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser || browser->sidebar_right == right) {
+    return;
+  }
+  browser->sidebar_right = right;
+  NSWindow* window = browser->window;
+  if (!AnswerTitlebarDirection(window)) {
+    fprintf(stderr, "browser: the title bar's direction can't be answered\n");
+    return;
+  }
+  objc_setAssociatedObject(window, &kSidebarRight, right ? @YES : nil,
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // AppKit places the buttons as the window's frame view changes size, and not when its layout is
+  // only marked or the style mask set again (check/titlebar-right.sh on a hosted Mac, run
+  // 42943383202), so the frame view grows by a point and back. The window's frame stays as it is.
+  NSView* frame = window.contentView.superview;
+  const NSSize size = frame.frame.size;
+  [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
+  [frame setFrameSize:size];
+  if (browser->reveal_monitor) {
+    PlaceReveal(browser);
+  }
+}
+
 // The diameter of the circle |button| draws, from the middle row of a picture of it: macOS 26
 // draws a larger one for an app built with its SDK than for one built with an older SDK, in a
 // frame of the same width (#1310). A pixel counts once it's half as covered as the most covered.
@@ -4728,9 +4790,10 @@ bool host_window_buttons(void* ui_view, double centres[3], double* y, double* di
       if (!button || button.hidden) {
         return false;
       }
-      // As drive.mm's layout line gives them: points from the window's top-left corner.
+      // As drive.mm's layout line gives them: points from the window's top-left corner, or from
+      // its top-right one, mirrored, in a window with the sidebar there.
       NSRect frame = [button convertRect:button.bounds toView:nil];
-      read[i] = NSMidX(frame);
+      read[i] = browser->sidebar_right ? NSWidth(window.frame) - NSMidX(frame) : NSMidX(frame);
       row = NSHeight(window.frame) - NSMidY(frame);
     }
     const CGFloat drawn = DrawnDiameter([window standardWindowButton:NSWindowCloseButton]);

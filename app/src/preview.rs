@@ -2225,6 +2225,11 @@ fn main() {
             browser::face::register(cx);
             shell::bind_keys(cx);
             browser::text_input::bind_keys(cx);
+            // PREVIEW_SIDEBAR_RIGHT=1 puts the sidebar on the window's right, as Settings' Sidebar
+            // position does.
+            if std::env::var_os("PREVIEW_SIDEBAR_RIGHT").is_some() {
+                cx.set_global(shell::SidebarRight(true));
+            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.
@@ -2710,7 +2715,7 @@ fn main() {
                     let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                     let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
                     let at = theme_picker::At::Row(anchor);
-                    theme_picker::show(0, 1, preview_theme(), at, f32::MAX, changed, cx);
+                    theme_picker::show(0, 1, preview_theme(), at, false, f32::MAX, changed, cx);
                 }
             }
             // PREVIEW_BOOST_EDITOR=new shows the Boost editor for a site's new Boost, its hint up
@@ -2755,6 +2760,7 @@ fn main() {
                         style,
                         true,
                         at,
+                        false,
                         f32::MAX,
                         palette,
                         requested,

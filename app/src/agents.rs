@@ -3143,6 +3143,12 @@ impl Agents {
 
     /// As `note`, for what on the page, `target`.
     fn note_on(&mut self, agent: &str, action: &str, site: &str, target: &str, refused: &str) {
+        // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
+        // which never reach the core's line.
+        match refused.is_empty() {
+            true => log!("browser: agent logged {agent} {action} {site}"),
+            false => log!("browser: agent logged {agent} {action} {site} refused: {refused}"),
+        }
         if refused.is_empty() {
             let doing = match site.is_empty() {
                 true => tools::describe(action).to_string(),

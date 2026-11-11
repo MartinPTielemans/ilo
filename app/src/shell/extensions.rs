@@ -273,7 +273,7 @@ impl Shell {
         .filter(|_| self.url_field_bounds().is_some() || self.little_title().is_some())
         .map(|place| self.action_bounds(place));
         let anchor = button.or(self.url_field_bounds()).unwrap_or_else(|| {
-            let corner = point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET));
+            let corner = point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET));
             Bounds::new(corner, Default::default())
         });
         self.run_extension_from(id, anchor, cx);
@@ -454,7 +454,7 @@ impl Shell {
                 size(px(URL_BUTTON_SIZE), px(URL_BUTTON_SIZE)),
             );
         }
-        let end = self.width() - PLATE_INSET - URL_BUTTON_INSET;
+        let end = self.column_x() + self.width() - PLATE_INSET - URL_BUTTON_INSET;
         let left = end - (shown + overflow as usize - index) as f32 * URL_BUTTON_SIZE;
         Bounds::new(
             point(px(left), px(URL_FIELD_TOP + URL_BUTTON_INSET)),

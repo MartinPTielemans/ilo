@@ -494,6 +494,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_shortcuts(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
+        settings::read_new_note(cx);
+        settings::read_clean_links(cx);
         translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
@@ -734,7 +736,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // window's (settings::set_sidebar_right).
+    let right = settings::sidebar_right_kept();
+    let picture =
+        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });

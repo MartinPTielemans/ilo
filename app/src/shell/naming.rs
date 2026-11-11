@@ -256,7 +256,8 @@ impl Shell {
             return;
         };
         let anchor = point(f32::from(brush.right()), f32::from(brush.center().y));
-        self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
+        // The Library stays as it is on either side until it moves with the sidebar.
+        self.show_theme_picker(space, theme_picker::At::Row(anchor), false, cx);
         self.light_card_while_picking(space, cx);
     }
 
@@ -370,7 +371,8 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                return self.show_theme_picker(space, theme_picker::At::Edge(self.width()), cx);
+                let edge = theme_picker::At::Edge(self.page_edge_x());
+                return self.show_theme_picker(space, edge, self.right, cx);
             }
         };
         let shell = cx.weak_entity();

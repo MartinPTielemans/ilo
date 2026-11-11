@@ -208,6 +208,8 @@ pub struct Card {
 pub struct Anchor {
     pub row: Bounds<Pixels>,
     pub window: Size<Pixels>,
+    /// Whether it opens on the row's left, toward the page from a sidebar on the right (#2375).
+    pub left: bool,
 }
 
 /// What the card tells the shell that asked for it.
@@ -283,14 +285,18 @@ pub fn height(picture: f32) -> f32 {
     }
 }
 
-/// Where a card `height` tall has its top left: GAP right of its row, its top at the row's, and
-/// EDGE inside the window, the top and left first if it can't be both.
+/// Where a card `height` tall has its top left: GAP right of its row, or left of it toward a page on
+/// the left, its top at the row's, and EDGE inside the window, the top and left first if it can't be
+/// both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + GAP;
+    let left = match anchor.left {
+        true => f32::from(anchor.row.left()) - GAP - WIDTH,
+        false => f32::from(anchor.row.right()) + GAP,
+    };
     let top = f32::from(anchor.row.top());
     (
         left.min(width - WIDTH - EDGE).max(EDGE),
