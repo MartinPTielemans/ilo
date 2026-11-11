@@ -181,8 +181,9 @@ TEST(MemoryKeepOutTest, SitesSayWhatTheyAre) {
 
 // Not a gate: logs what indexing and a query take on this machine, with Chromium's own SQLite,
 // ICU and BoringSSL, on made-up pages whose words follow Zipf's law as a language's do.
-// spikes/memory-2324/bench measures the same on real pages.
-TEST_F(MemoryIndexTest, Timing) {
+// spikes/memory-2324/bench measures the same on real pages. Run it with
+// --gtest_also_run_disabled_tests: its 2,000 pages outlast the launcher's 45 s on CI's runners.
+TEST_F(MemoryIndexTest, DISABLED_Timing) {
   std::vector<std::string> vocabulary;
   for (int i = 0; i < 50000; ++i) {
     vocabulary.push_back(base::StrCat({"w", base::NumberToString(i * 7919 % 99991)}));
