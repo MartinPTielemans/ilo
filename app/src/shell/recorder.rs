@@ -1312,6 +1312,10 @@ impl Browser for Recorder {
 
     fn show_window_buttons(&self, _: bool, _: &mut App) {}
 
+    fn set_sidebar_right(&self, right: bool, _: &mut App) {
+        self.record(format!("sidebar right {right}"))
+    }
+
     fn little_drawn(&self, _: &mut App) {
         self.record("little drawn".into());
     }

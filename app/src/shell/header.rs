@@ -279,7 +279,7 @@ impl Shell {
                     .collect();
                 let anchor = match side {
                     TipSide::Under => Anchor::under(frame, self.viewport),
-                    TipSide::Beside => Anchor::beside(frame, self.viewport),
+                    TipSide::Beside => Anchor::beside(frame, self.viewport, self.right),
                 };
                 (
                     Tip {
@@ -341,7 +341,8 @@ impl Shell {
             log!("browser: nav glyphs dimmed {dimmed}");
         }
         let page = self.page(self.field_tab());
-        let [sidebar, back, forward, reload_x] = nav_places(self.width(), self.full_screen);
+        let [sidebar, back, forward, reload_x] =
+            nav_places(self.width(), self.full_screen, self.right);
         let reload = match page.loading {
             true => (reload_x, reload_glyph(true), Command::Stop, true),
             false => (
@@ -366,7 +367,10 @@ impl Shell {
         let buttons = [
             (
                 sidebar,
-                "icons/nav-sidebar.svg",
+                match self.right {
+                    true => "icons/nav-sidebar-right.svg",
+                    false => "icons/nav-sidebar.svg",
+                },
                 Command::ToggleSidebar,
                 true,
             ),
@@ -421,7 +425,7 @@ impl Shell {
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
         (docked && self.form().is_none() && self.library.is_none()).then(|| {
             Bounds::new(
-                point(px(PLATE_INSET), px(URL_FIELD_TOP)),
+                point(px(self.column_x() + PLATE_INSET), px(URL_FIELD_TOP)),
                 size(px(self.width() - 2. * PLATE_INSET), px(URL_FIELD_HEIGHT)),
             )
         })
@@ -453,7 +457,7 @@ impl Shell {
                 );
                 Place::Button { field, button }
             }
-            None => Place::Corner(point(px(self.card_left() + PLATE_INSET), px(PLATE_INSET))),
+            None => Place::Corner(point(px(self.card_corner() + PLATE_INSET), px(PLATE_INSET))),
         };
         let extensions = self.site_controls_extensions();
         let profiles = self.site_controls_profiles();
@@ -1017,8 +1021,10 @@ pub(super) fn reload_glyph(loading: bool) -> &'static str {
 /// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
 /// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
 /// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
-/// NAV_AFTER_SIDEBAR.
-pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
+/// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
+/// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
+/// from the page (#2375).
+pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
     let sidebar = if full_screen {
         FULL_SCREEN_SIDEBAR_BUTTON_X
     } else {
@@ -1032,8 +1038,14 @@ pub(super) fn nav_places(width: f32, full_screen: bool) -> [Option<f32>; 4] {
     let mut places = [Some(sidebar), None, None, None];
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {
-            places[1 + index] = Some(last - (count - 1 - index) as f32 * NAV_PITCH);
+            places[1 + index] = Some(match right {
+                true => NAV_TRAIL + index as f32 * NAV_PITCH,
+                false => last - (count - 1 - index) as f32 * NAV_PITCH,
+            });
         }
+    }
+    if right {
+        places[0] = Some(width - sidebar - NAV_SIZE);
     }
     places
 }

@@ -403,7 +403,8 @@ impl Shell {
         }
     }
 
-    /// The form's Choose a Theme row's picker, pointing at the row's right end, as Arc's does. A
+    /// The form's Choose a Theme row's picker, pointing at the row's end toward the page, as Arc's
+    /// does. A
     /// press on the row while it shows closes it, as a click outside it does, without opening it
     /// again.
     fn form_theme_picker(&mut self, _: Point<Pixels>, cx: &mut Context<Self>) {
@@ -411,9 +412,12 @@ impl Shell {
             return;
         }
         if let Some(space) = self.form().map(|form| form.space) {
-            let right = self.width() - FORM_INSET;
-            let anchor = point(right, FORM_THEME_TOP + FORM_PLATE_HEIGHT / 2.);
-            self.show_theme_picker(space, theme_picker::At::Row(anchor), cx);
+            let end = match self.right {
+                true => self.column_x() + FORM_INSET,
+                false => self.width() - FORM_INSET,
+            };
+            let anchor = point(end, FORM_THEME_TOP + FORM_PLATE_HEIGHT / 2.);
+            self.show_theme_picker(space, theme_picker::At::Row(anchor), self.right, cx);
         }
     }
 }

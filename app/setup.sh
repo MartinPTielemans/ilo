@@ -43,7 +43,7 @@ sha256() { if command -v shasum >/dev/null; then shasum -a 256 "$@"; else sha256
 vendor() {
   crate=.deps/$1-$2.crate
   if ! echo "$3  $crate" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
+    curl -sSfL --retry 5 "https://static.crates.io/crates/$1/$1-$2.crate" -o "$crate"
     echo "$3  $crate" | sha256 -c --status
   fi
   rm -rf ".deps/$1" "${crate%.crate}"
@@ -67,7 +67,7 @@ if [ "$(uname -s)" = Darwin ]; then
   SPARKLE_SHA256=1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
   archive=.deps/Sparkle-$SPARKLE.tar.xz
   if ! echo "$SPARKLE_SHA256  $archive" | sha256 -c --status 2>/dev/null; then
-    curl -sSfL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
+    curl -sSfL --retry 5 "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE/Sparkle-$SPARKLE.tar.xz" -o "$archive"
     echo "$SPARKLE_SHA256  $archive" | sha256 -c --status
   fi
   rm -rf .deps/Sparkle
