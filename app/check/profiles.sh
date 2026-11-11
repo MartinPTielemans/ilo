@@ -353,7 +353,7 @@ settings_drew General
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
-in_sight "share favorites option In Every Space" || fail "Settings didn't draw In Every Space's drawing"
+in_sight "share favorites option In every Space" || fail "Settings didn't draw In Every Space's drawing"
 send clickkey $at
 expect "^browser: favorites scope In Every Space\$" "a click on In Every Space's drawing didn't set it"
 expect '^browser: favorites [0-9][0-9]*$' "the favorite has no twin in the other profile's Space"
@@ -404,7 +404,7 @@ send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew 'Tabs & Sidebar'
 in_sight "share favorites In Every Space" || fail "Share favorites didn't show In Every Space chosen"
-in_sight "share favorites option In Each Profile's Spaces" ||
+in_sight "share favorites option In each profile's Spaces" ||
   fail "Settings didn't draw In Each Profile's Spaces' drawing"
 send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
