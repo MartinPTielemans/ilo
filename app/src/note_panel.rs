@@ -285,7 +285,6 @@ impl NotePanel {
         let Some(shown) = self.shown.take() else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: note panel dismissed");
         self.host.hide();
         cx.notify();

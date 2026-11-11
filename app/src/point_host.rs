@@ -57,7 +57,6 @@ pub(crate) unsafe extern "C" fn tab_point_picked(
 
 /// Point ended on `tab` without the app asking: a new page, the tab moved or closed.
 pub(crate) unsafe extern "C" fn tab_point_ended(_: *mut c_void, tab: bc::bc_id) {
-    // check.sh reads this line.
     log!("browser: point ended in {tab}");
     agents_core::update(move |agents, cx| agents.point_ended(tab, cx));
 }
