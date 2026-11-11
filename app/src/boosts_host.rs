@@ -20,11 +20,20 @@ pub(crate) fn all_off() -> bool {
     std::path::Path::new(&format!("{}/{NO_BOOSTS}", crate::profile_dir())).exists()
 }
 
-/// Has the core show each site's CSS as it changed.
+/// Has the core show each site's CSS and arrangement as they changed.
 pub(crate) fn show(changes: Vec<boosts::Change>) {
     for change in changes {
-        let (Ok(site), Ok(css)) = (CString::new(change.site.as_str()), CString::new(change.css))
-        else {
+        let css = match change.shows {
+            boosts::Shows::Css(css) => css,
+            boosts::Shows::Arrangement(bytes) => {
+                let state = set_arrangement(change.profile, &change.site, &bytes);
+                if !bytes.is_empty() {
+                    boosts::with(|boosts| boosts.set_arranged(change.profile, &change.site, state));
+                }
+                continue;
+            }
+        };
+        let (Ok(site), Ok(css)) = (CString::new(change.site.as_str()), CString::new(css)) else {
             continue;
         };
         // check.sh reads this line.
@@ -35,6 +44,16 @@ pub(crate) fn show(changes: Vec<boosts::Change>) {
         );
         unsafe { bc::bc_profile_set_boost(change.profile, site.as_ptr(), css.as_ptr()) };
     }
+}
+
+/// Gives the core `site`'s arrangement, as Browser::set_arrangement. Not yet: the call comes with
+/// the core's slice of Arrange (#2347), so the arrangement is off, as one never kept here.
+pub(crate) fn set_arrangement(_: u64, site: &str, bytes: &str) -> boosts::Arranged {
+    log!(
+        "browser: arrangement for {site} ({} bytes) not placed: no core call yet",
+        bytes.len()
+    );
+    boosts::Arranged::New
 }
 
 /// Reads `profile`'s Boosts, has the core show them and watches their folder, once a launch.

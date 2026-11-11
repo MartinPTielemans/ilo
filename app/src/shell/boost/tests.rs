@@ -435,3 +435,252 @@ fn window_view_boosts_opens_the_list(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.boosts_changed(cx));
     assert!(!offered(&host), "an agent's Space offered View Boosts…");
 }
+
+/// What the core hands over after Arrange's changes on example.com: three, one of them a trade.
+const ARRANGED: &str = r#"{"version":1,"changes":[{"kind":"settle","name":"The video","before":{"name":"the article"}},{"kind":"trade","name":"Trending","with":{"name":"the sign-up box"}},{"kind":"float","name":"More like this","pin":"screen"}]}"#;
+
+impl Folder {
+    fn arrangement(&self, site: &str) -> Option<String> {
+        let name = format!("{site}{}", crate::boosts::arrange::SUFFIX);
+        std::fs::read_to_string(self.0.join("Boosts").join(name)).ok()
+    }
+}
+
+/// The names the site's arrangement lists, in its file's order.
+fn arranged(folder: &Folder) -> Vec<String> {
+    let bytes = folder.arrangement("example.com").unwrap_or_default();
+    let changes = crate::boosts::arrange::read(&bytes).unwrap_or_default();
+    changes.into_iter().map(|change| change.title()).collect()
+}
+
+/// The card's list of `count` changes ends this far over its bottom, over its two lines of
+/// buttons, and each of its rows is this tall, its ↺ or × in the middle of its two lines.
+const LIST_END: f32 = 88.;
+const ROW: f32 = 42.;
+
+/// Clicks the ↺ or × of the change at `index` of `count` in the card's list.
+fn put_back(shell: &Entity<Shell>, index: usize, count: usize, cx: &mut VisualTestContext) {
+    let card = card(shell, cx).expect("no Boost card");
+    let up = LIST_END + (count - 1 - index) as f32 * ROW + 18.;
+    let at = point(
+        card.origin.x + card.size.width - px(24.),
+        card.origin.y + card.size.height - px(up),
+    );
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+}
+
+/// The calls of Arrange and the Boosts', without the pointer's hovers.
+fn arrange_calls(host: &Recorder) -> Vec<String> {
+    let calls = host.take().into_iter();
+    calls.filter(|call| !call.starts_with("card ")).collect()
+}
+
+/// The card's Arrange, beside Customize…, starts Arrange on the page shown in place of the card
+/// and of Zap, and escape ends it; what the core saves meanwhile goes in the site's Boost, which
+/// the card then counts and lists.
+#[gpui::test]
+fn arrange_starts_from_the_card_and_its_changes_are_kept(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::NewBoost, "ui", cx);
+        shell.start_zap(cx);
+    });
+    host.take();
+    shell.update(cx, |shell, cx| shell.stop_zap(cx));
+    host.take();
+    // Arrange is the right of the card's last line of buttons.
+    press(&shell, 0.75, LAST, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 true"]);
+    assert_eq!(card(&shell, cx), None, "the card stayed over the page");
+    assert!(shell.read_with(cx, |shell, _| shell.arranging(10)));
+
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        // Hide is Zap's rule.
+        shell.boost_zapped(10, Some("#promo"), cx);
+    });
+    assert_eq!(
+        host.take(),
+        ["boost 1 example.com: #promo { display: none !important; } /* Zap */"],
+        "the core was given back what it saved"
+    );
+    assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+
+    cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(arrange_calls(&host), ["arrange 10 false"]);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_ended(10, cx);
+        shell.run(Command::EditBoost, "ui", cx);
+    });
+    assert!(card(&shell, cx).is_some());
+    let detail = crate::boosts::with(|boosts| boosts.get(1, "example.com"))
+        .map(|boost| boost.summary.describe());
+    assert_eq!(detail.as_deref(), Some("Hides 1 thing and arranges 3."));
+
+    // Starting Zap ends Arrange, and the other way round.
+    press(&shell, 0.75, LAST, cx);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::EditBoost, "ui", cx);
+        shell.start_zap(cx);
+    });
+    assert_eq!(arrange_calls(&host), ["arrange 10 false", "zap 10 true"]);
+}
+
+/// ↺ puts a change back: it goes from the file, and the core keeps the rest. A change that no
+/// longer fits is dimmed with ×, which removes it the same way, and the last one taken back takes
+/// the arrangement away.
+#[gpui::test]
+fn put_back_drops_one_change_and_the_last_ends_the_arrangement(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| {
+        shell.arrange_saved(10, "example.com", ARRANGED, cx);
+        shell.arrangement_fits(10, "example.com", vec![2], cx);
+        shell.run(Command::EditBoost, "ui", cx);
+    });
+    cx.run_until_parked();
+    host.take();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (Some("1 change no longer fits".into()), None)
+    );
+
+    put_back(&shell, 0, 3, cx);
+    assert_eq!(
+        arrange_calls(&host),
+        ["keep arrangement 1 example.com: 2 changes"]
+    );
+    assert_eq!(arranged(&folder), ["Trending", "More like this"]);
+    // The misfit followed its change down the list.
+    assert_eq!(
+        shell
+            .read_with(cx, |shell, _| shell.arrangement_note(10))
+            .0
+            .as_deref(),
+        Some("1 change no longer fits")
+    );
+    put_back(&shell, 1, 2, cx);
+    assert_eq!(
+        arrange_calls(&host),
+        ["keep arrangement 1 example.com: 1 changes"]
+    );
+    assert_eq!(arranged(&folder), ["Trending"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (None, None)
+    );
+
+    put_back(&shell, 0, 1, cx);
+    assert_eq!(
+        arrange_calls(&host),
+        ["arrangement 1 example.com: 0 changes"]
+    );
+    assert_eq!(folder.arrangement("example.com"), None);
+}
+
+/// A file the core keeps off, as one changed outside ilo, says so in Site Controls and the card,
+/// isn't edited from the list, and Turn On keeps it as it is.
+#[gpui::test]
+fn an_arrangement_changed_outside_ilo_is_off_until_turned_on(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    host.arranged.set(Some(crate::boosts::Arranged::Changed));
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(boosts.join("example.com.arrange.json"), ARRANGED).unwrap();
+    shell.update(cx, |shell, cx| shell.run(Command::EditBoost, "ui", cx));
+    cx.run_until_parked();
+    assert_eq!(host.take(), ["arrangement 1 example.com: 3 changes"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (None, Some("Changed outside ilo, off"))
+    );
+    // Where the first ↺ would be is the list's words, with nothing to press.
+    put_back(&shell, 0, 3, cx);
+    assert_eq!(
+        arrange_calls(&host),
+        Vec::<String>::new(),
+        "an off file was editable"
+    );
+    assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+
+    shell.update(cx, |shell, cx| shell.turn_on_arrangement(10, cx));
+    assert_eq!(host.take(), ["keep arrangement 1 example.com: 3 changes"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (None, None)
+    );
+    assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+}
+
+/// A file the core refuses for what's in it is off whatever the user does: the card says so, with
+/// nothing to press, and Site Controls has no Turn On for it.
+#[gpui::test]
+fn an_arrangement_the_core_refuses_stays_off(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    host.arranged.set(Some(crate::boosts::Arranged::Refused));
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(boosts.join("example.com.arrange.json"), ARRANGED).unwrap();
+    shell.update(cx, |shell, cx| shell.run(Command::EditBoost, "ui", cx));
+    cx.run_until_parked();
+    assert_eq!(host.take(), ["arrangement 1 example.com: 3 changes"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (None, None)
+    );
+    put_back(&shell, 0, 3, cx);
+    shell.update(cx, |shell, cx| shell.turn_on_arrangement(10, cx));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+    assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+}
+
+/// Where the core won't run Arrange, the app doesn't count it as on.
+#[gpui::test]
+fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    host.take();
+    host.arrange_refused.set(true);
+    press(&shell, 0.75, LAST, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 true"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+}
+
+/// Neither a private window nor an agent's Space offers Arrange, and what the core says of one
+/// there is dropped: no file, no call.
+#[gpui::test]
+fn no_arrange_in_a_private_window_or_an_agents_space(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    for private in [true, false] {
+        shell.update(cx, |shell, cx| {
+            shell.private = private;
+            if !private {
+                host.space_agents.borrow_mut().insert(1, "claude".into());
+            }
+            shell.run(Command::NewBoost, "ui", cx);
+            shell.start_arrange(cx);
+            shell.arrange_saved(10, "example.com", ARRANGED, cx);
+            shell.arrangement_fits(10, "example.com", vec![0], cx);
+            shell.turn_on_arrangement(10, cx);
+        });
+        assert_eq!(card(&shell, cx), None);
+        assert_eq!(host.take(), Vec::<String>::new(), "private {private}");
+        assert_eq!(folder.arrangement("example.com"), None);
+        assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
+    }
+}
+
+/// The core takes its own default for a motion value outside its range (bc_arrange_look), so one
+/// of the sidebar's springs moved past it would be dropped without a word: each stays inside.
+#[test]
+fn arranges_motion_is_inside_the_cores_ranges() {
+    use crate::shell::{ROOM_OMEGA, ROW_DAMPING, ROW_RESPONSE};
+    use crate::tokens::shell::boost::motion::REST;
+    assert!((0.05..=1.).contains(&REST), "rest {REST}");
+    assert!((5. ..=100.).contains(&ROOM_OMEGA), "room {ROOM_OMEGA}");
+    assert!((0.05..=1.).contains(&ROW_RESPONSE), "land {ROW_RESPONSE}");
+    assert!((0.2..=0.99).contains(&ROW_DAMPING), "land {ROW_DAMPING}");
+}
