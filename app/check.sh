@@ -23,7 +23,8 @@
 # Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
 # Linux under Xvfb, so it runs only when named too.
 # Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
-# so it runs only when named too.
+# so it runs only when named too. So does bench, the Mac's alone, which measures Speedometer and power
+# in the app and in Chrome for Testing, on a real Mac.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
 # take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
@@ -109,7 +110,7 @@ runs="$runs passwords links preview access trouble dialogs crash import quit onb
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
 runs="$runs handback webrtc count translate pictures boosts"
-named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf bench"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;

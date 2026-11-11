@@ -37,7 +37,8 @@ takes a command a line on its standard input:
                   blocker's, and "answered" with its id for a response from no server, network
                   cache or service worker, as the browser's own ad blocker's stand-in is, then
                   logs "cdp: recording requests"
-For perf's Chrome on the same runner (check/perf.sh), which has no driver of its own:
+For perf's Chrome on the same runner (check/perf.sh) and bench's (check/bench.sh), which has no
+driver of its own:
   titles          logs "cdp: title TARGET TITLE" for each page's title now, then each time a page's
                   changes, where perf's page stamps its paint and each time it's shown
   open URL        logs "cdp: opening at MS", the Unix ms, then opens URL in a new tab in front,
@@ -47,6 +48,11 @@ For perf's Chrome on the same runner (check/perf.sh), which has no driver of its
                   pipe aren't in the time
   window          logs "cdp: window LEFT TOP WIDTH HEIGHT STATE", a page's window's bounds on the
                   screens, from the main display's top left, once there's a page
+  state minimized|normal
+                  minimizes a page's window, or brings it back, then logs "cdp: window STATE"
+  scroll TARGET X Y DY COUNT
+                  COUNT wheel events at (X, Y) in the page TARGET, one each 8 ms, each DY pixels
+                  down, as the driver's trackpad's are, then logs "cdp: scrolled"
   histogram NAME  logs "cdp: histogram NAME SUM COUNT", or "cdp: histogram NAME none" while the
                   browser has none by that name, such as Chrome's startup times
 For perf's traced switches, in ilo and Chrome:
@@ -278,6 +284,8 @@ def attach(wanted):
 
 
 attached = session = authenticator = None
+# The session for each page bench scrolls, by its target.
+scrolled = {}
 if page:
     attach(lambda url: url.endswith(page))
 # Sessions on the other pages shows looked in, by their targets.
@@ -456,6 +464,24 @@ for line in sys.stdin:
         window = call("Browser.getWindowForTarget", {"targetId": target})["bounds"]
         log("window %d %d %d %d %s" % (window["left"], window["top"], window["width"],
                                        window["height"], window["windowState"]))
+    elif words[:1] == ["state"] and words[1:] in (["minimized"], ["normal"]):
+        with answered:
+            target = page_target(lambda url: True)
+        window = call("Browser.getWindowForTarget", {"targetId": target})["windowId"]
+        call("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": words[1]}})
+        log("window " + words[1])
+    elif words[:1] == ["scroll"] and len(words) == 6:
+        # Into the page as the trackpad's events come, one each 8 ms, as the driver's scroll does.
+        if words[1] not in scrolled:
+            scrolled[words[1]] = call("Target.attachToTarget",
+                                      {"targetId": words[1], "flatten": True})["sessionId"]
+        at = time.monotonic()
+        for n in range(int(words[5])):
+            call("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": float(words[2]),
+                                              "y": float(words[3]), "deltaX": 0,
+                                              "deltaY": float(words[4])}, scrolled[words[1]])
+            time.sleep(max(at + (n + 1) * 0.008 - time.monotonic(), 0))
+        log("scrolled")
     elif words[:1] == ["histogram"] and len(words) == 2:
         try:
             histogram = call("Browser.getHistogram", {"name": words[1]})["histogram"]

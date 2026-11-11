@@ -425,6 +425,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     extensions_map = {
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         ".crx": "application/x-chrome-extension",
+        # The modules of Speedometer (check/bench.sh), which a browser runs only as scripts.
+        ".mjs": "text/javascript",
     }
 
     def do_GET(self):
