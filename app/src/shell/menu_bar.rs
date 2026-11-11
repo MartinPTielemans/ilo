@@ -20,6 +20,8 @@ pub struct MenuBar {
     pub pinned_shut: bool,
     /// Whether View's pinned tabs item would show or hide a row now, else it's dimmed.
     pub pinned_offered: bool,
+    /// Whether Tabs › Sort Today Tabs by Site would move a row now, else it's dimmed (#2344).
+    pub sort_offered: bool,
     /// Whether the page shown is in Developer Mode, or None where it can't change: no web page, or
     /// a private window.
     pub developer_mode: Option<bool>,
@@ -140,6 +142,7 @@ impl Shell {
                 .is_some_and(|space| space.folders.pinned_shut),
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
+            sort_offered: self.offers(Command::SortBySite),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
             little_off: !self.little_windows,

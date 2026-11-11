@@ -139,20 +139,40 @@ fn undo_leaves_a_tab_opened_since_where_it_is(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), back);
 }
 
-/// With every site's tabs together already, it's dimmed, and run anyway it does nothing and takes
-/// no ⌘Z step.
+/// With every site's tabs together already, it's dimmed, in the Tabs menu and the divider's menu
+/// too, and run anyway it does nothing and takes no ⌘Z step. A Today tab gone to another site
+/// offers it again.
 #[gpui::test]
 fn it_is_dimmed_when_it_would_change_nothing(cx: &mut TestAppContext) {
     let (shell, cx, host) = shell(cx);
+    // Whether the command, the Tabs menu's item and the divider menu's offer it.
     let offers = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.offers(Command::SortBySite))
+        shell.update(cx, |shell, cx| {
+            shell.divider_menu(gpui::point(gpui::px(100.), gpui::px(200.)), cx)
+        });
+        let divider = host.entries.borrow()[0].enabled;
+        let tabs_menu = host.menu_bar.borrow().sort_offered;
+        let command = shell.read_with(cx, |shell, _| shell.offers(Command::SortBySite));
+        [command, tabs_menu, divider]
     };
-    assert!(offers(&shell, cx));
+    assert_eq!(offers(&shell, cx), [true; 3]);
     shell.update(cx, |shell, cx| shell.run(Command::SortBySite, "ui", cx));
     play(&shell, cx, &host);
-    assert!(!offers(&shell, cx));
+    assert_eq!(offers(&shell, cx), [false; 3]);
     shell.update(cx, |shell, cx| shell.run(Command::SortBySite, "ui", cx));
     assert_eq!(play(&shell, cx, &host), 0);
+
+    // 20, github.com's last after the sort, goes to Hacker News, away from that site's two.
+    let page = |url: &str| Page {
+        url: url.into(),
+        ..Page::default()
+    };
+    let hacker_news = page("https://news.ycombinator.com/newest");
+    shell.update(cx, |shell, cx| shell.set_page(20, hacker_news, cx));
+    assert_eq!(offers(&shell, cx), [true; 3]);
+    let github = page("https://docs.github.com/en");
+    shell.update(cx, |shell, cx| shell.set_page(20, github, cx));
+    assert_eq!(offers(&shell, cx), [false; 3]);
     shell.update(cx, |shell, cx| shell.undo(cx));
     play(&shell, cx, &host);
     assert_eq!(today(&shell, cx), BEFORE, "one ⌘Z undid the one sort");
