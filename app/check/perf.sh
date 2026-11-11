@@ -149,6 +149,14 @@ perf_memory() {
   perf_snap "memory-$1" kinds
   memory=$(python3 -I check/usage.py memory "$perf_dir/memory-$1.json")
   kinds=$(python3 -I check/usage.py kinds "$perf_dir/memory-$1.json")
+  # Proof only (#2138): the main browser process's mappings, to see where its private memory is.
+  if [ "$(uname)" = Linux ]; then
+    main=$(python3 -I -c 'import json, sys
+procs = json.load(open(sys.argv[1]))["procs"]
+print(max((p for p in procs if procs[p][0] == "browser"), key=lambda p: procs[p][3]))' \
+      "$perf_dir/memory-$1.json")
+    cat "/proc/$main/smaps" > "$perf_dir/smaps-$1.txt" 2> /dev/null || true
+  fi
 }
 # Idle CPU and wakeups over the next minute, in 10 s windows: sets $cpu and $wakeups to their stats.
 perf_idle() {
