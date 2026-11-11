@@ -82,7 +82,8 @@ ours/chromium-core-bluetooth-pair.patch
 ours/chromium-customize-chrome-private.patch
 ours/chromium-omnibox-match-last-visit.patch
 ours/chromium-agent-extension-nodes.patch
-ours/chromium-agent-extension-listeners.patch
+ours/chromium-agent-extension-listeners.patch <157
+ours/chromium-agent-extension-listeners-157.patch >=157
 ours/chromium-agent-field-sources.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
