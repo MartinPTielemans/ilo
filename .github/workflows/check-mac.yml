@@ -42,6 +42,11 @@ on:
         description: Build the app, even if a check of this commit kept one
         type: boolean
         default: false
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 # Main's running check finishes, with only the newest dispatch or night waiting behind it; a branch's
 # dispatch replaces the one before it.
@@ -346,6 +351,7 @@ jobs:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
@@ -393,7 +399,10 @@ jobs:
             *" $run "*)
               start=$SECONDS
               status=0
-              ${limit:+$limit 20m} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
+              # Perf measures Chrome beside the app.
+              minutes=20m
+              [ "$run" != perf ] || minutes=40m
+              ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
               # A run that passes may have skipped steps, or all of itself, such as when the app
