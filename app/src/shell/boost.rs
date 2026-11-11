@@ -173,7 +173,7 @@ impl Shell {
                 })
                 .ok();
         });
-        let anchor = point(self.width(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
+        let anchor = point(self.page_edge_x(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
         let height = f32::from(self.viewport.height);
         // The editor is a dark sheet over a dark or a light window, as the theme picker is.
         let theme = self.spaces.iter().find(|each| each.id == self.space);
@@ -197,6 +197,7 @@ impl Shell {
             style,
             on,
             At::Row(anchor),
+            self.right,
             height,
             palette,
             requested,
