@@ -292,9 +292,21 @@ if [ "$major" -ge 157 ]; then
   expect '^browser: command bar shown$' "⌘T on Chrome's warning before http didn't open the command bar"
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  # The warning's in a second tab, so one ⌘W on it is seen to close that tab alone: under Wayland
+  # the UI, which the closed tab gives the keyboard, read the press again and ran it twice (#2442).
+  kept=$tab
+  send key t cmd
+  expect '^browser: command bar shown$' "⌘T didn't open the command bar for a second tab"
+  send type "$nearby:$port"
+  send key return
+  expect "^browser: today [0-9][0-9]* $kept\$" "the second tab didn't open over $kept: Today is \"$(today)\""
+  tab=$(today | cut -d' ' -f1)
+  expect "^browser: loaded $tab http://$nearby:$port/\$" "$nearby:$port didn't load in the second tab"
   warned
   send key w cmd
   expect '^browser: command close-tab via page$' "⌘W on Chrome's warning before http didn't reach the UI"
+  expect_tabs "$kept" "$kept" "after one ⌘W on Chrome's warning before http"
+  ran_once close-tab "one ⌘W on Chrome's warning before http"
 fi
 exec 3>&-
 quit
