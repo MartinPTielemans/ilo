@@ -111,13 +111,27 @@ fn show_bar(cx: &mut TestAppContext, window: WindowHandle<MiniBar>, shown: Shown
     pressed
 }
 
+/// Makes the bar's window the size the host makes it: the bar at `place` and the margin round it.
+fn as_host_shows(
+    cx: &mut TestAppContext,
+    host: &Recorder,
+    window: WindowHandle<MiniBar>,
+) -> VisualTestContext {
+    let place = *host.1.borrow().last().unwrap();
+    let visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_resize(place.dilate(px(MARGIN)).size);
+    visual.run_until_parked();
+    visual
+}
+
 /// Clicks the bar's last button, at its right end.
 fn click_last(cx: &mut TestAppContext, host: &Recorder, window: WindowHandle<MiniBar>) {
     let place = *host.1.borrow().last().unwrap();
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
-    visual.simulate_resize(place.size);
-    visual.run_until_parked();
-    let at = point(place.size.width - px(INSET + 6.), place.size.height / 2.);
+    let mut visual = as_host_shows(cx, host, window);
+    let at = point(
+        px(MARGIN) + place.size.width - px(INSET + 6.),
+        px(MARGIN) + place.size.height / 2.,
+    );
     visual.simulate_click(at, Modifiers::none());
     visual.run_until_parked();
 }
@@ -144,6 +158,33 @@ fn a_press_asks_the_mode_and_never_takes_the_keyboard(cx: &mut TestAppContext) {
     cx.update(|cx| super::show(7, None, cx));
     assert_eq!(host.0.take(), ["hide"], "hidden once");
     assert_eq!(cx.update(|cx| shown_over(cx)), None);
+}
+
+/// Its window reaches MARGIN past the bar for the shadow the bar draws, and a click there, which
+/// the host lets through to the page, presses nothing.
+#[gpui::test]
+fn its_shadows_margin_presses_nothing(cx: &mut TestAppContext) {
+    let (host, window) = open_bar(cx);
+    let pressed = show_bar(cx, window, shown(Some(true), true));
+    let place = *host.1.borrow().last().unwrap();
+    let mut visual = as_host_shows(cx, &host, window);
+    for at in [
+        point(px(MARGIN / 2.), px(MARGIN) + place.size.height / 2.),
+        point(px(MARGIN) + px(INSET + 6.), px(MARGIN / 2.)),
+        point(
+            px(MARGIN) + place.size.width - px(INSET + 6.),
+            px(MARGIN * 1.5) + place.size.height,
+        ),
+    ] {
+        visual.simulate_click(at, Modifiers::none());
+        visual.run_until_parked();
+    }
+    assert_eq!(pressed.take(), []);
+    // And on the bar, its first button, the pin.
+    let at = point(px(MARGIN + INSET + 6.), px(MARGIN) + place.size.height / 2.);
+    visual.simulate_click(at, Modifiers::none());
+    visual.run_until_parked();
+    assert_eq!(pressed.take(), [(10, Press::Pin)]);
 }
 
 /// The bar's width is its buttons', each a glyph and its label, with the pin's divider.

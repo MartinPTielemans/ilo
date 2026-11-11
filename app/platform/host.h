@@ -543,13 +543,15 @@ void host_show_toast(void* ui_view);
 void host_hide_toast(void);
 
 // Makes the window of |mini_bar_view| Arrange's mini bar: the small bar over the thing selected on
-// a page, as a child of the browser window. A click on it reaches its buttons, but it never takes
-// the keyboard, which stays with the browser window and so with the page. It starts hidden.
-void host_add_mini_bar(void* mini_bar_view);
+// a page, as a child of the browser window. A click on the bar reaches its buttons, but it never
+// takes the keyboard, which stays with the browser window and so with the page. The window reaches
+// |margin| points past the bar on every side, for its shadow, and the margin lets the mouse
+// through. It starts hidden.
+void host_add_mini_bar(void* mini_bar_view, double margin);
 
-// Shows the mini bar's window over |ui_view|'s window, or moves it there: |width| by |height|
-// points, its top left |x| and |y| points from the top left of the window's content. It keeps that
-// place as the window resizes, until the UI moves it.
+// Shows the mini bar's window over |ui_view|'s window, or moves it there: the bar |width| by
+// |height| points, its top left |x| and |y| points from the top left of the window's content. It
+// keeps that place as the window resizes, until the UI moves it.
 void host_show_mini_bar(void* ui_view, double x, double y, double width, double height);
 
 // Hides the mini bar's window.

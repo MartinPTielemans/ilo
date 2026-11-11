@@ -395,7 +395,7 @@ unsafe extern "C" {
     pub fn host_set_toast_plate(x: f64, y: f64, width: f64, height: f64);
     pub fn host_show_toast(ui_view: *mut c_void);
     pub fn host_hide_toast();
-    pub fn host_add_mini_bar(mini_bar_view: *mut c_void);
+    pub fn host_add_mini_bar(mini_bar_view: *mut c_void, margin: f64);
     pub fn host_show_mini_bar(ui_view: *mut c_void, x: f64, y: f64, width: f64, height: f64);
     pub fn host_hide_mini_bar();
     pub fn host_add_tooltip(tooltip_view: *mut c_void, margin: f64, away: extern "C" fn());

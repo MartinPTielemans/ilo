@@ -3,9 +3,11 @@
 //! once the thing has a change to take back. The mode's state gives what it shows (Shell's
 //! `arrange_state`), and the bar draws it in the find bar's material. GPUI can't draw over the
 //! page's native view, so as the find bar is, it's a window of its own that the host shows over the
-//! browser window, as its child. It takes clicks on its buttons and never the keyboard, which stays
-//! with the browser window, so with the page, whose keys the mode handles itself. What it asks of
-//! its window goes through `Host`.
+//! browser window, as its child. Its window is the bar and `MARGIN` round it, where the bar draws
+//! its popover shadow, as the hover card's is, so it's the same on every OS; only the bar takes the
+//! pointer, the margin letting it through to the page. It takes clicks on its buttons and never the
+//! keyboard, which stays with the browser window, so with the page, whose keys the mode handles
+//! itself. What it asks of its window goes through `Host`.
 //!
 //! The core sends the selection's box once a scroll rests and none while the page scrolls, so the
 //! bar hides as a scroll starts and comes back at the box after, and nothing runs each frame.
@@ -22,16 +24,20 @@ use gpui::{
     px, rgb, rgba, size, svg,
 };
 
-use crate::elevation::Level;
+use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::palette::{Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::find_bar::FILL;
 use crate::tokens::mini_bar::*;
 use crate::tokens::text::SMALL;
 
+/// How far the bar's window reaches past the bar on every side, for its shadow.
+pub const MARGIN: f32 = WINDOW_MARGIN;
+
 /// What the bar asks of its window.
 pub trait Host {
-    /// Shows the bar's window over the browser window `window`, or moves it there, at `place`, in
-    /// points from that window's content's top left.
+    /// Shows the bar's window over the browser window `window`, or moves it there, with the bar at
+    /// `place`, in points from that window's content's top left: the window is `MARGIN` bigger on
+    /// every side, and only the bar takes the pointer.
     fn show(&self, window: u64, place: Bounds<Pixels>);
     /// Hides it.
     fn hide(&self);
@@ -121,6 +127,9 @@ pub fn sample(kind: &str, page: Bounds<Pixels>, accent: Hsla) -> Option<Shown> {
     })
 }
 
+/// The labels' weight: regular, as the mock's.
+const WEIGHT: FontWeight = FontWeight::NORMAL;
+
 /// How wide some words are, in a size and weight of the UI's font.
 type Measure<'a> = &'a dyn Fn(&SharedString, f32, FontWeight) -> f32;
 
@@ -129,7 +138,7 @@ fn bar_size(shown: &Shown, measure: Measure) -> Size<Pixels> {
     let buttons = buttons(shown);
     let widths: f32 = (buttons.iter())
         .map(|(_, _, label)| {
-            let label = measure(&SharedString::from(*label), SMALL, FontWeight::MEDIUM);
+            let label = measure(&SharedString::from(*label), SMALL, WEIGHT);
             BUTTON_PAD * 2. + GLYPH + GLYPH_GAP + label
         })
         .sum();
@@ -192,7 +201,8 @@ impl Global for MiniBarWindow {}
 
 /// Opens the bar's window, hidden, ahead of time as the find bar's is.
 pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<MiniBar>> {
-    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(HEIGHT), px(HEIGHT)));
+    let side = px(HEIGHT + 2. * MARGIN);
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(side, side));
     open_at(host, bounds, false, cx)
 }
 
@@ -216,7 +226,7 @@ pub fn open_at(
         is_movable: false,
         is_resizable: false,
         is_minimizable: false,
-        // The bar's rounded shape is drawn, and the shadow takes it, as the find bar's does.
+        // The bar's rounded shape and its shadow are drawn, in the margin round it.
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
@@ -290,7 +300,7 @@ impl MiniBar {
 
 impl Render for MiniBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().size_full().font_family(crate::face::UI);
+        let root = div().size_full().p(px(MARGIN)).font_family(crate::face::UI);
         let Some(showing) = &mut self.showing else {
             return root;
         };
@@ -363,8 +373,9 @@ impl Render for MiniBar {
                 .p(px(INSET))
                 .rounded(px(RADIUS))
                 .bg(rgb(FILL))
+                .shadow(Level::Popover.shadow())
                 .text_size(px(SMALL))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(WEIGHT)
                 .text_color(rgba(INK))
                 .children(buttons)
                 // The popover level's rim, as the find bar's, its own layer so the border doesn't

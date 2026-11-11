@@ -3045,7 +3045,8 @@ fn preview_mini_bar(
     let Some(place) = MINI_BAR_PLACE.get() else {
         return;
     };
-    let at = Bounds::new(bounds.origin + place.origin, place.size);
+    // The bar's window is the bar and the margin its shadow draws in.
+    let at = Bounds::new(bounds.origin + place.origin, place.size).dilate(px(mini_bar::MARGIN));
     if mini_bar::open_at(Rc::new(PreviewMiniBar), at, true, cx).is_some() {
         mini_bar::show(0, Some((shown, on_press)), cx);
         // The made-up box, for the captures.

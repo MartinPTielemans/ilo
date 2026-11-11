@@ -726,7 +726,7 @@ pub(crate) fn finish_opening(
     if let Some(bar) = browser::mini_bar::open(Rc::new(MiniBarHost), cx)
         && let Ok(view) = bar.update(cx, |_, window, _| ns_view(window))
     {
-        unsafe { platform::host_add_mini_bar(view) };
+        unsafe { platform::host_add_mini_bar(view, browser::mini_bar::MARGIN.into()) };
     }
     if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)
         && let Ok(view) = capture.update(cx, |_, window, _| ns_view(window))

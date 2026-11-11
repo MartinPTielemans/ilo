@@ -518,23 +518,36 @@ NSWindow* g_toast;
 NSView* g_toast_view;
 bool g_toast_shown = false;
 
-// Arrange's mini bar, the browser window it shows over, and where: its frame in points from the
-// top left of that window's content (host_show_mini_bar).
+// Arrange's mini bar, the browser window it shows over, and where: the bar's frame in points from
+// the top left of that window's content (host_show_mini_bar), and how far its window reaches past
+// the bar, for the shadow the bar draws, where the mouse goes through. A window is all or nothing
+// for the mouse, so a monitor hears the pointer move on and off the bar while it shows.
 Browser* g_mini_bar_over;
 NSWindow* g_mini_bar;
 NSView* g_mini_bar_view;
 bool g_mini_bar_shown = false;
 unsigned g_mini_bar_changes = 0;
 NSRect g_mini_bar_place;
+double g_mini_bar_margin = 0;
+id g_mini_bar_monitor;
 
 void PlaceMiniBar() {
   NSWindow* window = g_mini_bar_over->window;
   NSRect content = [window contentRectForFrameRect:window.frame];
-  [g_mini_bar setFrame:NSMakeRect(NSMinX(content) + NSMinX(g_mini_bar_place),
-                                  NSMaxY(content) - NSMinY(g_mini_bar_place) -
-                                      NSHeight(g_mini_bar_place),
-                                  NSWidth(g_mini_bar_place), NSHeight(g_mini_bar_place))
+  const NSRect frame = NSInsetRect(g_mini_bar_place, -g_mini_bar_margin, -g_mini_bar_margin);
+  [g_mini_bar setFrame:NSMakeRect(NSMinX(content) + NSMinX(frame),
+                                  NSMaxY(content) - NSMinY(frame) - NSHeight(frame),
+                                  NSWidth(frame), NSHeight(frame))
                display:NO];
+}
+
+// Lets the mouse through the mini bar's window but on the bar, with the pointer at |screen|.
+void PlaceMiniBarClicks(NSPoint screen) {
+  NSPoint at = [g_mini_bar convertPointFromScreen:screen];
+  at.y = NSHeight(g_mini_bar.frame) - at.y;
+  const NSRect bar = NSMakeRect(g_mini_bar_margin, g_mini_bar_margin, NSWidth(g_mini_bar_place),
+                                NSHeight(g_mini_bar_place));
+  g_mini_bar.ignoresMouseEvents = !NSPointInRect(at, bar);
 }
 // Whether the toast has buttons, so its plate takes clicks; its window's margin, where its shadow
 // falls, never does. The plate, from the window's top left, and the monitor that hears the pointer
@@ -4291,14 +4304,15 @@ void host_hide_toast(void) {
   [g_toast orderOut:nil];
 }
 
-void host_add_mini_bar(void* mini_bar_view) {
+void host_add_mini_bar(void* mini_bar_view, double margin) {
   g_mini_bar_view = (__bridge NSView*)mini_bar_view;
   g_mini_bar = g_mini_bar_view.window;
+  g_mini_bar_margin = margin;
   MakeOverlay(g_mini_bar);
-  // The UI draws the bar's rounded shape, which a borderless window's shadow takes, as the find
-  // bar's does.
+  // The UI draws the bar and its shadow, in the margin round it, as the hover card's.
   g_mini_bar.styleMask = NSWindowStyleMaskBorderless;
-  g_mini_bar.hasShadow = YES;
+  g_mini_bar.hasShadow = NO;
+  g_mini_bar.ignoresMouseEvents = YES;
   // Its buttons take clicks, and the keyboard stays with the browser window, where the page has
   // the mode's keys.
   NeverKey(g_mini_bar);
@@ -4325,7 +4339,21 @@ void host_show_mini_bar(void* ui_view, double x, double y, double width, double 
     PlaceMiniBar();
     [g_mini_bar_view.layer setNeedsDisplay];
     [g_mini_bar_view.layer displayIfNeeded];
-    [g_mini_bar invalidateShadow];
+    // The page's view takes the pointer's moves while it's over the page, so the bar's window
+    // doesn't hear them. Only while it shows, so an idle browser is never woken.
+    if (!g_mini_bar_monitor) {
+      g_mini_bar_monitor =
+          [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskMouseMoved
+                                                handler:^NSEvent*(NSEvent* event) {
+                                                  NSPoint at = event.locationInWindow;
+                                                  if (event.window) {
+                                                    at = [event.window convertPointToScreen:at];
+                                                  }
+                                                  PlaceMiniBarClicks(at);
+                                                  return event;
+                                                }];
+    }
+    PlaceMiniBarClicks(NSEvent.mouseLocation);
     if (g_mini_bar.parentWindow != browser->window) {
       AddOver(browser->window, g_mini_bar);
       RaiseOverlays(browser, g_mini_bar);
@@ -4341,6 +4369,12 @@ void host_hide_mini_bar(void) {
   g_mini_bar_shown = false;
   // Cancels a show still waiting for the bar to draw.
   ++g_mini_bar_changes;
+  // A show still waiting hasn't added it.
+  if (g_mini_bar_monitor) {
+    [NSEvent removeMonitor:g_mini_bar_monitor];
+    g_mini_bar_monitor = nil;
+  }
+  g_mini_bar.ignoresMouseEvents = YES;
   [g_mini_bar.parentWindow removeChildWindow:g_mini_bar];
   [g_mini_bar orderOut:nil];
   fprintf(stderr, "browser: mini bar hidden\n");
