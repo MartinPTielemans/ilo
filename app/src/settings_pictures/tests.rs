@@ -8,7 +8,7 @@ use gpui::{
 };
 
 use super::*;
-use crate::palette::INK;
+use crate::palette::{INK, PAPER};
 
 struct Pair {
     right: bool,
@@ -302,4 +302,94 @@ fn voiceover_reads_appearance_as_three_options_with_one_chosen(cx: &mut TestAppC
     cx.simulate_a11y_action(dark, Action::Click);
     cx.run_until_parked();
     assert_eq!(picked(&view, cx), [Appearance::Dark]);
+}
+
+/// Who shares reads without the colours: each list's marks have a shape no other list's has, and
+/// under each scope the Spaces that share show one list and those that don't show different ones.
+#[test]
+fn share_favorites_tells_who_shares_by_the_marks_shape_too() {
+    let shapes = LISTS.map(|(_, mark)| mark);
+    assert!(
+        shapes[0] != shapes[1] && shapes[1] != shapes[2] && shapes[0] != shapes[2],
+        "two lists share a shape: {shapes:?}"
+    );
+    // The first two Spaces are one profile's, the third another's.
+    let shared = |scope| {
+        let [a, b, c] = lists(scope);
+        (a == b, b == c)
+    };
+    assert_eq!(shared(FavoritesScope::Every), (true, true));
+    assert_eq!(shared(FavoritesScope::Profile), (true, false));
+    assert_eq!(shared(FavoritesScope::Space), (false, false));
+}
+
+struct Shared {
+    chosen: FavoritesScope,
+    picks: Vec<FavoritesScope>,
+    logged: Rc<RefCell<Vec<String>>>,
+}
+
+impl Render for Shared {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().downgrade();
+        div().size_full().p(px(20.)).child(favorites_picker(
+            &Look::settings(true),
+            rgb(PAPER),
+            true,
+            self.chosen,
+            window.is_a11y_active(),
+            self.logged.clone(),
+            move |scope, _, cx| {
+                view.update(cx, |view, cx| {
+                    view.chosen = scope;
+                    view.picks.push(scope);
+                    cx.notify();
+                })
+                .ok();
+            },
+        ))
+    }
+}
+
+#[gpui::test]
+fn share_favorites_draws_its_three_scopes_and_a_click_or_voiceover_picks_one(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = cx.add_window_view(|_, _| Shared {
+        chosen: FavoritesScope::Profile,
+        picks: Vec::new(),
+        logged: Rc::default(),
+    });
+    cx.simulate_resize(size(px(600.), px(200.)));
+    cx.run_until_parked();
+    let at = |scope: FavoritesScope, cx: &mut VisualTestContext| {
+        let prefix = format!(
+            "browser: settings share favorites option {} at ",
+            scope.title()
+        );
+        let logged = view.read_with(cx, |view, _| view.logged.borrow().clone());
+        let line = (logged.iter())
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{scope:?} wasn't drawn: {logged:?}"));
+        let (x, y) = line.split_once(' ').expect("x and y");
+        point(px(x.parse::<f32>().unwrap()), px(y.parse::<f32>().unwrap()))
+    };
+    let [every, profile, space] = FavoritesScope::ALL.map(|scope| at(scope, cx));
+    assert!(
+        every.x < profile.x && profile.x < space.x,
+        "not in the menu's order"
+    );
+    cx.simulate_click(space, Modifiers::none());
+    let picks = view.read_with(cx, |view, _| view.picks.clone());
+    assert_eq!(picks, [FavoritesScope::Space]);
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    named(cx, Role::RadioGroup, "Share favorites");
+    let (_, node) = named(cx, Role::RadioButton, "In Each Space");
+    assert_eq!(node.toggled(), Some(Toggled::True));
+    let (every, _) = named(cx, Role::RadioButton, "In Every Space");
+    cx.simulate_a11y_action(every, Action::Click);
+    cx.run_until_parked();
+    let picks = view.read_with(cx, |view, _| view.picks.clone());
+    assert_eq!(picks, [FavoritesScope::Space, FavoritesScope::Every]);
 }

@@ -353,11 +353,9 @@ settings_drew General
 send clickkey $(drawn "toolbar Tabs & Sidebar")
 expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
 settings_drew 'Tabs & Sidebar'
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space, In Each Profile's Spaces (checked), In Each Space")\$" \
-  "a click on Share favorites didn't show the choices"
-send choose "$(cased 'In Every Space')"
-expect "^browser: favorites scope In Every Space\$" "choosing In Every Space in Settings didn't set it"
+in_sight "share favorites option In Every Space" || fail "Settings didn't draw In Every Space's drawing"
+send clickkey $at
+expect "^browser: favorites scope In Every Space\$" "a click on In Every Space's drawing didn't set it"
 expect '^browser: favorites [0-9][0-9]*$' "the favorite has no twin in the other profile's Space"
 twin=$(grep '^browser: favorites' "$log" | tail -1 | cut -d' ' -f3)
 send key w cmd
@@ -405,12 +403,12 @@ expect "^browser: title $twin cookie none\$" \
 send menu Settings…
 expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
 settings_drew 'Tabs & Sidebar'
-post clickkey $(drawn favorites)
-expect "^browser: menu shown $(cased "In Every Space (checked), In Each Profile's Spaces, In Each Space")\$" \
-  "a click on Share favorites didn't show In Every Space chosen"
-send choose "$(cased "In Each Profile's Spaces")"
+in_sight "share favorites In Every Space" || fail "Share favorites didn't show In Every Space chosen"
+in_sight "share favorites option In Each Profile's Spaces" ||
+  fail "Settings didn't draw In Each Profile's Spaces' drawing"
+send clickkey $at
 expect "^browser: favorites scope In Each Profile's Spaces\$" \
-  "choosing In Each Profile's Spaces in Settings didn't set it"
+  "a click on In Each Profile's Spaces' drawing didn't set it"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 [ "$(grep '^browser: favorites' "$log" | tail -1)" = "browser: favorites $twin" ] ||
