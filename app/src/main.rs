@@ -960,6 +960,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         tab_favicon_changed: Some(tab_favicon_changed),
         tab_history: Some(tab_history),
         archive_changed: Some(archive_changed),
+        tab_unsnoozed: Some(tab_unsnoozed),
         page_favicon: Some(page_favicon),
         downloads_changed: Some(downloads_changed),
         download_icon: Some(download_icon),

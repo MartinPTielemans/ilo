@@ -20,6 +20,7 @@ fn tab(id: u64, url: &str) -> Archived {
         title: format!("Tab {id}").into(),
         archived: 3000. - id as f64,
         little: false,
+        snoozed_until: 0.,
     }
 }
 

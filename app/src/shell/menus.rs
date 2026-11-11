@@ -54,6 +54,8 @@ pub struct MenuEntry {
     pub enabled: bool,
     /// The keystroke it shows, as SHORTCUTS writes it.
     pub shortcut: Option<String>,
+    /// Words in the shortcut's place, such as the time a snooze means: "Wed 08:00".
+    pub note: Option<SharedString>,
     /// The item whose submenu it's in, by index.
     pub parent: Option<usize>,
     /// Whether it shows a check mark.
@@ -96,6 +98,7 @@ impl MenuEntry {
             title: title.into(),
             enabled,
             shortcut: None,
+            note: None,
             parent: None,
             checked: false,
             destructive: false,
@@ -121,7 +124,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(super) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
@@ -880,7 +883,14 @@ impl Shell {
                 Box::new(move |shell, cx| shell.move_chosen_to_space(space, cx)),
             ));
         }
-        items.extend([line(), copy, line(), close]);
+        items.extend([line(), copy, line()]);
+        let snoozing = self.chosen_to_snooze();
+        if !snoozing.is_empty() {
+            let snooze = items.len();
+            items.push((MenuEntry::new("Snooze", true), "", Box::new(|_, _| {})));
+            items.extend(self.snooze_items(snoozing, snooze));
+        }
+        items.push(close);
         items
     }
 
@@ -1292,6 +1302,12 @@ impl Shell {
             ));
         }
         items.push((MenuEntry::line(), "", Box::new(|_, _| {})));
+        // Snoozing archives the tab until a time, so it sits with Archive Tab (#2350).
+        if self.snoozable(tab) {
+            let snooze = items.len();
+            items.push((MenuEntry::new("Snooze", true), "", Box::new(|_, _| {})));
+            items.extend(self.snooze_items(vec![tab], snooze));
+        }
         // Closing a Today tab archives it.
         items.push((
             MenuEntry::new("Archive Tab", true),
@@ -1937,6 +1953,14 @@ mod tests {
         assert_eq!(space_menu_label("glyph:star", "Work"), "Work");
     }
 
+    /// Tuesday 10 November 2026 at 14:25, for the times Snooze lists.
+    fn stop_clock() {
+        let tuesday = chrono::NaiveDate::from_ymd_opt(2026, 11, 10)
+            .and_then(|day| day.and_hms_opt(14, 25, 0))
+            .unwrap();
+        crate::snooze::stop_clock(tuesday);
+    }
+
     /// A menu as the host logs it: lines left out, a submenu's items after their parent's title,
     /// and the dimmed and checked ones marked.
     fn logged(entries: &[MenuEntry]) -> Vec<String> {
@@ -1945,6 +1969,11 @@ mod tests {
             (false, _) => format!("{title} (disabled)"),
             (true, true) => format!("{title} (checked)"),
             (true, false) => title,
+        };
+        // A snooze's time, in the shortcut's place, after its title.
+        let noted = |entry: &MenuEntry, title: String| match &entry.note {
+            Some(note) => format!("{title} {note}"),
+            None => title,
         };
         (entries.iter().enumerate())
             .filter(|(at, entry)| {
@@ -1955,7 +1984,7 @@ mod tests {
                     Some(parent) => format!("{} › {}", entries[parent].title, entry.title),
                     None => entry.title.to_string(),
                 };
-                mark(entry, title)
+                mark(entry, noted(entry, title))
             })
             .collect()
     }
@@ -1987,6 +2016,7 @@ mod tests {
     #[gpui::test]
     fn a_today_tabs_menu_is_arcs(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[1], &[10, 11], Folders::default());
+        stop_clock();
         *host.share_services.borrow_mut() = vec!["Mail".into(), "Messages".into()];
         let link = page("https://example.com/", false, false);
         shell.update(cx, |shell, cx| shell.set_page(10, link, cx));
@@ -2005,6 +2035,11 @@ mod tests {
                 "Add to Folder › New Folder",
                 "Move to › Work (checked)",
                 "Move to › New Space…",
+                "Snooze › Later Today 17:25",
+                "Snooze › This Evening 18:00",
+                "Snooze › Tomorrow Morning Wed 08:00",
+                "Snooze › Next Week Mon 08:00",
+                "Snooze › Pick a Date and Time…",
                 "Archive Tab",
                 "Archive Tabs Below",
             ]
@@ -2533,6 +2568,7 @@ mod tests {
     #[gpui::test]
     fn the_chosen_rows_menu_pins_folders_and_moves_them_together(cx: &mut TestAppContext) {
         let (shell, host) = shell_with(cx, &[2], &[3, 4, 5], Folders::default());
+        stop_clock();
         fn tabs(
             shell: &Entity<Shell>,
             cx: &mut TestAppContext,
@@ -2579,6 +2615,11 @@ mod tests {
                 "Add to Folder › New Folder",
                 "Move to Space › Home",
                 "Copy URLs",
+                "Snooze › Later Today 17:25",
+                "Snooze › This Evening 18:00",
+                "Snooze › Tomorrow Morning Wed 08:00",
+                "Snooze › Next Week Mon 08:00",
+                "Snooze › Pick a Date and Time…",
                 "Close Tabs"
             ]
         );

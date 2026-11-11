@@ -323,10 +323,25 @@ struct Fake {
     /// Shared with the changes it makes later, which make ids too.
     next_id: Rc<Cell<u64>>,
     spaces: RefCell<Vec<SpaceEntry>>,
-    archive: RefCell<Vec<(u64, &'static str, &'static str, f64)>>,
+    archive: RefCell<Vec<(u64, &'static str, &'static str, f64, f64)>>,
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+}
+
+/// With PREVIEW_SNOOZE set, the first archived tab comes back tomorrow at 08:00 and the sixth next
+/// Monday, so the Library's Snoozed filter shows.
+fn snoozed(index: usize) -> f64 {
+    if std::env::var_os("PREVIEW_SNOOZE").is_none() {
+        return 0.;
+    }
+    let choice = match index {
+        0 => browser::snooze::Choice::TomorrowMorning,
+        5 => browser::snooze::Choice::NextWeek,
+        _ => return 0.,
+    };
+    let now = browser::snooze::now();
+    choice.at(now).map_or(0., browser::snooze::millis)
 }
 
 impl Fake {
@@ -335,13 +350,14 @@ impl Fake {
             .archive
             .borrow()
             .iter()
-            .map(|&(id, title, url, archived)| Archived {
+            .map(|&(id, title, url, archived, snoozed_until)| Archived {
                 id,
                 url: url.into(),
                 title: title.into(),
                 archived,
                 // Every fourth, so the archive's filter shows (Little ilo).
                 little: id % 4 == 0,
+                snoozed_until,
             })
             .collect();
         self.later(cx, move |shell, cx| shell.set_archive(archive, cx));
@@ -752,6 +768,15 @@ impl Browser for Fake {
     fn restore_archived(&self, archived: u64, cx: &mut App) {
         self.archive.borrow_mut().retain(|&(id, ..)| id != archived);
         self.report_archive(cx);
+    }
+
+    fn snooze(&self, tab: u64, _: f64, cx: &mut App) -> bool {
+        self.close(tab, false, cx);
+        true
+    }
+
+    fn snooze_archived(&self, _: u64, _: f64, _: &mut App) -> bool {
+        true
     }
 
     // The preview has nothing to undo, so no removal has an id.
@@ -2324,7 +2349,10 @@ fn main() {
                     let first_archived = first_space + count as u64;
                     let archive = (first_archived..)
                         .zip(ARCHIVE)
-                        .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
+                        .enumerate()
+                        .map(|(index, (id, (title, url, days)))| {
+                            (id, title, url, now() - days * DAY, snoozed(index))
+                        })
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
                     let downloads = (first_download..)

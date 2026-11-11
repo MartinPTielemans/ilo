@@ -2044,15 +2044,15 @@ fn breath_strength(phase: f32) -> f32 {
 impl Shell {
     /// A tab's status dot, in the slot at its row's end, while its page loads: the row's text,
     /// breathing.
+    /// The dot at a row's end: breathing in the text's colour while its page loads, else steady
+    /// in the Space's accent for a tab back from a snooze and not shown since (#2350).
     fn status_dot(&self, tab: u64) -> Option<impl IntoElement + use<>> {
-        if !self.page(tab).loading {
-            return None;
-        }
-        let dot = div()
-            .size(px(STATUS_DOT))
-            .rounded_full()
-            .bg(self.palette.text(STATUS_LOADING));
-        let strength = self.breath.strength();
+        let (color, strength) = match self.page(tab).loading {
+            true => (self.palette.text(STATUS_LOADING), self.breath.strength()),
+            false if self.unsnoozed.contains(&tab) => (self.palette.accent.into(), 1.),
+            false => return None,
+        };
+        let dot = div().size(px(STATUS_DOT)).rounded_full().bg(color);
         Some(
             div()
                 .flex_none()

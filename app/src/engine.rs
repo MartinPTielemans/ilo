@@ -524,6 +524,16 @@ impl Browser for Engine {
         unsafe { bc::bc_archive_remove(archived) }
     }
 
+    fn snooze(&self, tab: u64, until: f64, _: &mut App) -> bool {
+        // check.sh waits for this line.
+        log!("browser: snooze {tab} until {until}");
+        unsafe { bc::bc_tab_snooze(tab, until) }
+    }
+
+    fn snooze_archived(&self, archived: u64, until: f64, _: &mut App) -> bool {
+        unsafe { bc::bc_archive_snooze(archived, until) }
+    }
+
     fn clear_archive(&self, _: &mut App) -> u64 {
         unsafe { bc::bc_archive_clear() }
     }

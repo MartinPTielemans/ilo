@@ -205,6 +205,12 @@ pub trait Browser {
     fn restore_archived(&self, archived: u64, cx: &mut App);
     /// Takes the archived tab `archived` out of the archive, and returns the removal's id, or 0.
     fn remove_archived(&self, archived: u64, cx: &mut App) -> u64;
+    /// Closes the Today tab into the archive until `until`, in milliseconds since the Unix epoch,
+    /// when it comes back at the top of its Space's Today tabs. Whether it did: not for a pinned
+    /// tab, a favorite or a private window's, nor a time that has passed.
+    fn snooze(&self, tab: u64, until: f64, cx: &mut App) -> bool;
+    /// Has the snoozed archived tab come back at `until` instead. Whether it could.
+    fn snooze_archived(&self, archived: u64, until: f64, cx: &mut App) -> bool;
     /// Empties the archive, and returns the removal's id, or 0 if it was empty.
     fn clear_archive(&self, cx: &mut App) -> u64;
     /// Does `action` to the download.

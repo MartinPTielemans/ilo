@@ -705,6 +705,17 @@ impl Browser for Recorder {
         self.record(format!("restore archived {archived}"))
     }
 
+    fn snooze(&self, tab: u64, until: f64, _: &mut App) -> bool {
+        self.edit(format!("snooze {tab} until {until}"));
+        self.record(format!("snooze {tab}"));
+        true
+    }
+
+    fn snooze_archived(&self, archived: u64, until: f64, _: &mut App) -> bool {
+        self.record(format!("snooze archived {archived} until {until}"));
+        true
+    }
+
     fn remove_archived(&self, archived: u64, _: &mut App) -> u64 {
         let id = self.core.removed(1);
         self.edit(format!("archive remove {archived} as {id}"));

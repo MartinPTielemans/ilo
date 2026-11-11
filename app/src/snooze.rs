@@ -67,7 +67,22 @@ fn to_minute(at: NaiveDateTime) -> NaiveDateTime {
 
 /// The clock here now, to the minute.
 pub fn now() -> NaiveDateTime {
+    #[cfg(test)]
+    if let Some(now) = TEST_NOW.get() {
+        return now;
+    }
     to_minute(Local::now().naive_local())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_NOW: std::cell::Cell<Option<NaiveDateTime>> = const { std::cell::Cell::new(None) };
+}
+
+/// Stops the clock at `now` for a test's thread, so a menu lists the same times whenever it runs.
+#[cfg(test)]
+pub fn stop_clock(now: NaiveDateTime) {
+    TEST_NOW.set(Some(now));
 }
 
 /// `at` on the clock here, in milliseconds since 1970, as the core keeps a snooze's time. A time

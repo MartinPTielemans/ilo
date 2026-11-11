@@ -1153,6 +1153,7 @@ fn archived(id: u64) -> Archived {
         title: "A".into(),
         archived: 0.,
         little: false,
+        snoozed_until: 0.,
     }
 }
 

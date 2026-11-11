@@ -194,6 +194,9 @@ pub struct Archived {
     pub archived: f64,
     /// Whether it closed in a Little ilo window, which the archive's filter picks out (Arc).
     pub little: bool,
+    /// When it comes back by itself, in milliseconds since the Unix epoch, or 0 if it isn't
+    /// snoozed (#2350).
+    pub snoozed_until: f64,
 }
 
 /// A video a Media tile plays: its file's name, for the log, and the frame it shows, none before
@@ -4044,6 +4047,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little: false,
+            snoozed_until: 0.,
         };
         shell.update(cx, |shell, cx| shell.set_archive(vec![tab], cx));
         assert_eq!(menu(cx), [("Clear Archive".into(), true)]);
@@ -4066,6 +4070,7 @@ mod tests {
             title: "".into(),
             archived: 0.,
             little,
+            snoozed_until: 0.,
         };
         shell.update(cx, |shell, cx| {
             shell.section = Section::Archive;

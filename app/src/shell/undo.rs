@@ -39,6 +39,9 @@ impl What {
     pub const CLOSE_TAB: What = What::quiet("Close Tab");
     pub const CLOSE_TABS: What = What::said("Close Tabs", "Tabs Closed");
     pub const CLOSE_PREVIEW: What = What::quiet("Close Link Preview");
+    // Its toast says when the tabs come back, which a step's words can't (#2350).
+    pub const SNOOZE_TAB: What = What::quiet("Snooze Tab");
+    pub const SNOOZE_TABS: What = What::quiet("Snooze Tabs");
     pub const REMOVE_TAB: What = What::said(super::rows::REMOVE_TIP, "Tab Removed");
     pub const DISMISS_TASK: What = What::quiet("Dismiss Task");
     pub const PIN: What = What::quiet("Pin Tab");
@@ -170,6 +173,18 @@ pub(super) enum Edit {
     },
     /// Closes Today tabs, last first, so the Reopen it returns has them in that order.
     Close(Vec<u64>),
+    /// Snoozes Today tabs until `until`, in milliseconds since the Unix epoch, last first, as
+    /// `Close` closes them (#2350).
+    Snooze {
+        tabs: Vec<u64>,
+        until: f64,
+    },
+    /// Reopens snoozed tabs, as `Reopen` does, which snooze again until `until` on Redo.
+    Unsnooze {
+        tabs: Vec<u64>,
+        show: Option<u64>,
+        until: f64,
+    },
     /// Reopens the tabs of a pinned row the user removed, by the ids they had, each with the URL it
     /// went back to, and pins the row again at `spot`.
     Repin {
@@ -342,7 +357,11 @@ impl Edit {
                 ids(tabs);
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
-            Edit::Close(tabs) => ids(tabs),
+            Edit::Close(tabs) | Edit::Snooze { tabs, .. } => ids(tabs),
+            Edit::Unsnooze { tabs, show, .. } => {
+                ids(tabs);
+                show.iter_mut().for_each(|each| id_of(each, from, to));
+            }
             Edit::Repin { tabs, spot } => {
                 tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -480,6 +499,26 @@ impl Edit {
                 }
                 (!tabs.is_empty()).then_some(Edit::Reopen { tabs, show })
             }
+            Edit::Snooze { tabs, until } => {
+                let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| shell.has_tab(tab)).collect();
+                let show = shell.shown_among(&tabs);
+                // The core takes none whose time has passed, as on a Redo long after.
+                let mut snoozed: Vec<u64> = (tabs.iter().rev())
+                    .copied()
+                    .filter(|&tab| shell.browser.snooze(tab, until, cx))
+                    .collect();
+                snoozed.reverse();
+                (!snoozed.is_empty()).then_some(Edit::Unsnooze {
+                    tabs: snoozed,
+                    show,
+                    until,
+                })
+            }
+            Edit::Unsnooze { tabs, show, until } => match (Edit::Reopen { tabs, show }).apply(shell, cx)
+            {
+                Some(Edit::Close(tabs)) => Some(Edit::Snooze { tabs, until }),
+                _ => None,
+            },
             Edit::Repin { tabs: closed, spot } => {
                 let At::Pinned { folder, index } = spot.at else {
                     return None;
@@ -743,7 +782,10 @@ impl Shell {
         // ⇧⌘T reopens what closed last: a tab closed since comes before the preview.
         if matches!(
             edit,
-            Edit::Reopen { .. } | Edit::Repin { .. } | Edit::UndoClear { .. }
+            Edit::Reopen { .. }
+                | Edit::Unsnooze { .. }
+                | Edit::Repin { .. }
+                | Edit::UndoClear { .. }
         ) {
             self.closed_preview = None;
             self.closed_pinned = None;
@@ -842,7 +884,7 @@ impl Shell {
         done
     }
 
-    fn offer_undo(&mut self, words: &str, cx: &mut Context<Self>) {
+    pub(super) fn offer_undo(&mut self, words: &str, cx: &mut Context<Self>) {
         let shell = cx.weak_entity();
         let undo = Rc::new(move |cx: &mut gpui::App| {
             shell.update(cx, |shell, cx| shell.undo(cx)).ok();
@@ -1486,7 +1528,7 @@ impl Shell {
     }
 
     /// Whether some Space, or the favorites, has `tab`.
-    fn has_tab(&self, tab: u64) -> bool {
+    pub(super) fn has_tab(&self, tab: u64) -> bool {
         self.spot_of(tab).is_some()
     }
 
