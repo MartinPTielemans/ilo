@@ -25,6 +25,9 @@ browser = { path = ".." }
 gpui = { path = "../.deps/zed/crates/gpui" }
 gpui_platform = { path = "../.deps/zed/crates/gpui_platform", features = ["wayland", "x11"] }
 gpui_linux = { path = "../.deps/zed/crates/gpui_linux" }
+# The wgpu instance, made on a thread while Chromium starts (src/main.rs, launching), as ../Cargo.toml
+# has it.
+gpui_wgpu = { path = "../.deps/zed/crates/gpui_wgpu" }
 # The version GPUI decodes with, as the browser crate has, for a video tile's frame (src/main.rs)
 # and a photo's preview (platform/linux/previews.rs), in the formats GPUI decodes.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

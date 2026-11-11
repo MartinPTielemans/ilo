@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "browser"
-version = "0.1.13"
+version = "0.2.0"
 dependencies = [
  "async-io",
  "base64 0.22.1",
@@ -645,6 +645,7 @@ dependencies = [
  "gpui_linux",
  "gpui_macos",
  "gpui_platform",
+ "gpui_wgpu",
  "gpui_windows",
  "image",
  "libc",
@@ -674,6 +675,7 @@ dependencies = [
  "gpui",
  "gpui_linux",
  "gpui_platform",
+ "gpui_wgpu",
  "image",
  "raw-window-handle",
  "serde_json",
