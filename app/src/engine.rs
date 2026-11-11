@@ -1007,23 +1007,22 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_boost_zap(tab, on) };
     }
 
-    // Arrange's calls reach the core with its slice (#2347), on the engine with its header;
-    // until then a tab has no Arrange and no arrangement is placed.
     fn arrange(
         &self,
         tab: u64,
         look: Option<&browser::boosts::arrange::Look>,
         _: &mut App,
     ) -> bool {
+        // check.sh reads this line.
         log!(
             "browser: arrange {tab} {}",
             if look.is_some() { "on" } else { "off" }
         );
-        false
+        boosts_host::arrange(tab, look)
     }
 
     fn arrange_do(&self, tab: u64, ask: browser::boosts::arrange::Ask, _: &mut App) {
-        log!("browser: arrange {tab} {ask:?}: no core call yet");
+        boosts_host::arrange_do(tab, ask);
     }
 
     fn show_mini_bar(
@@ -1039,9 +1038,8 @@ impl Browser for Engine {
         boosts_host::set_arrangement(profile, site, bytes)
     }
 
-    fn keep_arrangement(&self, _: u64, site: &str, _: &str) -> bool {
-        log!("browser: arrangement for {site} not kept: no core call yet");
-        false
+    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
+        boosts_host::keep_arrangement(profile, site, bytes)
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {

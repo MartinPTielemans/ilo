@@ -46,14 +46,230 @@ pub(crate) fn show(changes: Vec<boosts::Change>) {
     }
 }
 
-/// Gives the core `site`'s arrangement, as Browser::set_arrangement. Not yet: the call comes with
-/// the core's slice of Arrange (#2347), so the arrangement is off, as one never kept here.
-pub(crate) fn set_arrangement(_: u64, site: &str, bytes: &str) -> boosts::Arranged {
+/// Gives the core `site`'s arrangement, as Browser::set_arrangement, or takes it away for empty
+/// bytes, and says what the core made of it.
+pub(crate) fn set_arrangement(profile: u64, site: &str, bytes: &str) -> boosts::Arranged {
+    let Ok(name) = CString::new(site) else {
+        return boosts::Arranged::Refused;
+    };
+    let arrangement = match bytes.is_empty() {
+        true => std::ptr::null(),
+        false => bytes.as_ptr().cast::<c_char>(),
+    };
+    let state =
+        unsafe { bc::bc_profile_set_arrangement(profile, name.as_ptr(), arrangement, bytes.len()) };
+    let arranged = arranged(state);
+    // check.sh reads this line.
     log!(
-        "browser: arrangement for {site} ({} bytes) not placed: no core call yet",
+        "browser: arrangement for {site} ({} bytes) {arranged:?}",
         bytes.len()
     );
-    boosts::Arranged::New
+    arranged
+}
+
+/// The user's own edit of `site`'s arrangement, as Browser::keep_arrangement: Turn On, or a change
+/// put back. False where the core refuses the bytes.
+pub(crate) fn keep_arrangement(profile: u64, site: &str, bytes: &str) -> bool {
+    let Ok(name) = CString::new(site) else {
+        return false;
+    };
+    let arrangement = bytes.as_ptr().cast::<c_char>();
+    let kept = unsafe {
+        bc::bc_profile_turn_on_arrangement(profile, name.as_ptr(), arrangement, bytes.len())
+    };
+    log!(
+        "browser: arrangement for {site} ({} bytes) {}",
+        bytes.len(),
+        if kept { "kept" } else { "refused" }
+    );
+    kept
+}
+
+/// A BC_ARRANGEMENT_ state, any other read as refused.
+fn arranged(state: c_int) -> boosts::Arranged {
+    match state as u32 {
+        bc::BC_ARRANGEMENT_ON => boosts::Arranged::On,
+        bc::BC_ARRANGEMENT_NEW => boosts::Arranged::New,
+        bc::BC_ARRANGEMENT_CHANGED => boosts::Arranged::Changed,
+        _ => boosts::Arranged::Refused,
+    }
+}
+
+/// Turns Arrange on `tab`'s page on with `look`'s marks and motion, or off for none, as
+/// Browser::arrange. Whether it's on.
+pub(crate) fn arrange(tab: u64, look: Option<&boosts::arrange::Look>) -> bool {
+    let Some(look) = look else {
+        unsafe { bc::bc_tab_arrange(tab, false, std::ptr::null()) };
+        return false;
+    };
+    // The words outlive the call, which copies them.
+    let words: Vec<(CString, CString)> = (boosts::arrange::KINDS.iter())
+        .filter_map(|(kind, word)| Some((CString::new(*kind).ok()?, CString::new(*word).ok()?)))
+        .collect();
+    let kinds: Vec<bc::bc_arrange_kind> = (words.iter())
+        .map(|(kind, word)| bc::bc_arrange_kind {
+            kind: kind.as_ptr(),
+            word: word.as_ptr(),
+        })
+        .collect();
+    let other = CString::new(boosts::arrange::OTHER).unwrap_or_default();
+    let marks = bc::bc_arrange_look {
+        accent: look.accent,
+        label: look.label,
+        ink: look.ink,
+        line: f64::from(look.line),
+        radius: f64::from(look.radius),
+        kinds: kinds.as_ptr(),
+        count: kinds.len(),
+        other: other.as_ptr(),
+        rest: f64::from(look.rest),
+        room_omega: f64::from(look.room_omega),
+        land_response: f64::from(look.land_response),
+        land_damping: f64::from(look.land_damping),
+    };
+    unsafe { bc::bc_tab_arrange(tab, true, &marks) }
+}
+
+/// Asks Arrange on `tab`'s page for `ask`, as Browser::arrange_do.
+pub(crate) fn arrange_do(tab: u64, ask: boosts::arrange::Ask) {
+    use boosts::arrange::Ask;
+    let action = match ask {
+        Ask::Outer => bc::BC_ARRANGE_DO_OUTER,
+        Ask::Inner => bc::BC_ARRANGE_DO_INNER,
+        Ask::Undo => bc::BC_ARRANGE_DO_UNDO,
+        Ask::Hide => bc::BC_ARRANGE_DO_HIDE,
+        Ask::PutBack => bc::BC_ARRANGE_DO_PUT_BACK,
+        Ask::StaysOnScreen => bc::BC_ARRANGE_DO_STAYS_ON_SCREEN,
+        Ask::ScrollsWithPage => bc::BC_ARRANGE_DO_SCROLLS_WITH_PAGE,
+        Ask::Reset => bc::BC_ARRANGE_DO_RESET,
+    };
+    log!("browser: arrange {tab} asked {ask:?}");
+    unsafe { bc::bc_tab_arrange_do(tab, action as c_int) };
+}
+
+/// `text` from the core, or "" for none.
+fn text(text: *const c_char) -> String {
+    match text.is_null() {
+        true => String::new(),
+        false => unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+fn element(element: &bc::bc_arrange_element) -> boosts::arrange::Element {
+    boosts::arrange::Element {
+        kind: text(element.kind),
+        name: text(element.name),
+    }
+}
+
+/// Where the user is in Arrange on `tab`'s page, read while the call lasts.
+pub(crate) unsafe extern "C" fn tab_arrange_state(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    state: *const bc::bc_arrange_state,
+) {
+    use boosts::arrange::{Outcome, Refused, State, Step};
+    let Some(state) = (unsafe { state.as_ref() }) else {
+        return;
+    };
+    let step = match state.step as u32 {
+        bc::BC_ARRANGE_CARRYING => Step::Carrying,
+        bc::BC_ARRANGE_PREVIEW => Step::Preview,
+        bc::BC_ARRANGE_SELECTED => Step::Selected,
+        _ => Step::Pointing,
+    };
+    let outcome = |change: c_int| match change as u32 {
+        bc::BC_ARRANGE_SETTLES => Outcome::Settles,
+        bc::BC_ARRANGE_TRADES => Outcome::Trades,
+        bc::BC_ARRANGE_FLOATS => Outcome::Floats,
+        bc::BC_ARRANGE_REFUSED => Outcome::Refused,
+        _ => Outcome::None,
+    };
+    let refused = match state.refused as u32 {
+        bc::BC_ARRANGE_DOESNT_FIT => Refused::DoesntFit,
+        bc::BC_ARRANGE_NOT_SHOWN => Refused::NotShown,
+        bc::BC_ARRANGE_COVERED => Refused::Covered,
+        _ => Refused::Fits,
+    };
+    let at = &state.box_;
+    let selection = (at.width > 0.).then_some([at.x, at.y, at.width, at.height].map(|v| v as f32));
+    let state = State {
+        step,
+        element: element(&state.element),
+        change: outcome(state.change),
+        before: element(&state.before),
+        after: element(&state.after),
+        refused,
+        on_screen: state.on_screen,
+        can_undo: state.can_undo,
+        can_reset: state.can_reset,
+        selection,
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_state(tab, state, cx));
+        }
+    });
+}
+
+/// Arrange ended on `tab`'s page without the app asking.
+pub(crate) unsafe extern "C" fn tab_arrange_ended(_: *mut c_void, tab: bc::bc_id) {
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_ended(tab, cx));
+        }
+    });
+}
+
+/// The user changed `site`'s arrangement in `tab`'s Arrange: all of it, for its file, or none after
+/// Reset.
+pub(crate) unsafe extern "C" fn tab_arrange_saved(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    site: *const c_char,
+    arrangement: *const c_char,
+    size: usize,
+) {
+    let site = text(site);
+    let bytes = match arrangement.is_null() || size == 0 {
+        true => String::new(),
+        false => {
+            let bytes = unsafe { std::slice::from_raw_parts(arrangement.cast::<u8>(), size) };
+            String::from_utf8_lossy(bytes).into_owned()
+        }
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| shell.arrange_saved(tab, &site, &bytes, cx));
+        }
+    });
+}
+
+/// Which of `site`'s changes found no element on `tab`'s page, by index.
+pub(crate) unsafe extern "C" fn tab_arrangement_fits(
+    _: *mut c_void,
+    tab: bc::bc_id,
+    site: *const c_char,
+    misfits: *const u32,
+    count: usize,
+) {
+    let site = text(site);
+    let misfits = match misfits.is_null() {
+        true => Vec::new(),
+        false => unsafe { std::slice::from_raw_parts(misfits, count) }
+            .iter()
+            .map(|&index| index as usize)
+            .collect(),
+    };
+    update_app_later(move |cx| {
+        if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+            shell.update(cx, |shell, cx| {
+                shell.arrangement_fits(tab, &site, misfits, cx)
+            });
+        }
+    });
 }
 
 /// Reads `profile`'s Boosts, has the core show them and watches their folder, once a launch.
