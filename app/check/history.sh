@@ -164,7 +164,15 @@ else
 fi
 [ "$(tls)" -gt "$before" ] || fail "$plain came to http without trying https first"
 before=$(tls)
-go_from_bar "$nearby:$port"
+# go_from_bar's steps, with a ⌘L of its own to name: under Wayland, ⌘L on Chrome's warning with the
+# keyboard in the page doesn't open the command bar (#2416, quarantined on that failure alone).
+page="$plain's page"
+[ "$major" -lt 157 ] || page="Chrome's warning before http"
+send key l cmd
+expect '^browser: command bar shown$' "⌘L on $page didn't open the command bar"
+send type "$nearby:$port"
+send key return
+expect '^browser: command bar hidden$' "going to $nearby:$port didn't close the command bar"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$nearby:$port/\$" \
   "$nearby:$port didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
 [ "$(tls)" = "$before" ] || fail "$nearby:$port was tried over https"
