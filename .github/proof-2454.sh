@@ -13,10 +13,11 @@ dumps() { find "$crashpad" -name '*.dmp' 2> /dev/null | wc -l; }
 # The app's processes as the host numbers them: kind, namespaces, seccomp.
 procs() {
   for p in $(pgrep -f '^/app/ilo/chrome'); do
-    args=$(tr '\0' '\n' < "/proc/$p/cmdline" 2> /dev/null) || continue
-    kind=$(printf '%s\n' "$args" | sed -n 's/^--type=//p' | head -1)
-    case $(printf '%s\n' "$args" | head -1) in *chrome_crashpad_handler) kind=handler ;; esac
-    printf '%s\n' "$args" | grep -q '^--extension-process' && kind="$kind(extension)"
+    # Chromium's processes set their title, which puts their arguments in one string.
+    args=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null) || continue
+    kind=$(printf '%s\n' "$args" | grep -o -- '--type=[a-z-]*' | head -1 | cut -d= -f2)
+    case $args in *chrome_crashpad_handler*) kind=handler ;; esac
+    case $args in *--extension-process*) kind="$kind(extension)" ;; esac
     echo "$p ${kind:-browser} pidns=$(readlink "/proc/$p/ns/pid") userns=$(readlink "/proc/$p/ns/user")" \
       "$(grep -E '^(Seccomp|NoNewPrivs|PPid):' "/proc/$p/status" | tr '\t\n' '  ')"
   done
@@ -30,7 +31,7 @@ pid_of() {
 launch() {
   name=$1
   shift
-  flatpak run app.ilo.browser "$@" > "$out/$name.log" 2>&1 &
+  flatpak run "$@" app.ilo.browser > "$out/$name.log" 2>&1 &
   fpid=$!
   for _ in $(seq 120); do
     grep -q 'browser: UI shown' "$out/$name.log" && break
@@ -63,13 +64,13 @@ crash() {
 }
 
 page='data:text/html,<title>probe</title><h1>probe</h1>'
-launch signals "$page"
+launch signals --env=BROWSER_URL="$page"
 crash renderer "$(pid_of renderer)" SEGV
 crash gpu-process "$(pid_of gpu-process)" SEGV
 crash "browser, as a panic's abort ends" "$(pid_of browser)" ABRT
 stop
 
-launch browser-segv "$page"
+launch browser-segv --env=BROWSER_URL="$page"
 crash browser "$(pid_of browser)" SEGV
 stop
 
@@ -77,9 +78,9 @@ stop
 for url in chrome://crash chrome://gpucrash chrome://inducebrowsercrashforrealz; do
   name=url-${url#chrome://}
   before=$(dumps)
-  launch "$name" "$url"
+  launch "$name" --env=BROWSER_URL="$url"
   sleep 10
-  say "$name: minidumps $before -> $(dumps)"
+  say "$name: minidumps $before -> $(dumps); loaded: $(grep -c "loaded [0-9]* $url" "$out/$name.log"); crashed: $(grep -c -i 'crash' "$out/$name.log")"
   stop
 done
 
