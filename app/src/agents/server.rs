@@ -9,6 +9,8 @@
 //!
 //! There's no TCP port, so no web page and no other user's process can reach it. The token says
 //! which agent a connection is, and once the user disconnects the agent its connections close.
+//! The site's demo, on the web, has neither, and never starts one.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -16,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
-use std::time::Instant;
+use web_time::Instant;
 
 use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
@@ -34,6 +36,34 @@ use super::pipe;
 pub(super) type Stream = UnixStream;
 #[cfg(windows)]
 pub(super) type Stream = pipe::Pipe;
+/// The site's demo, on the web, has neither: no connection is ever made there.
+#[cfg(not(any(unix, windows)))]
+pub(super) enum Stream {}
+
+#[cfg(not(any(unix, windows)))]
+impl Stream {
+    pub(super) fn try_clone(&self) -> io::Result<Stream> {
+        match *self {}
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl Read for Stream {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        match *self {}
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl Write for Stream {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        match *self {}
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match *self {}
+    }
+}
 
 /// The line the bridge sends where it can't close its end for writing alone, as a named pipe
 /// can't, once its client has closed its end: the server ends the session as it would at the end
@@ -115,6 +145,12 @@ impl Server {
             .name("agents-server".into())
             .spawn(move || accept(listener, accepting))?;
         Ok(Server { shared })
+    }
+
+    /// On the web there's nothing for a client to connect to, so the server never starts.
+    #[cfg(not(any(unix, windows)))]
+    pub fn start(_: &Path, _: Tokens, _: UnboundedSender<Event>) -> io::Result<Server> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 
     /// Makes the named pipe at `path`, which only the user can open, unless it's there already.
@@ -223,6 +259,10 @@ pub fn address(folder: &Path) -> PathBuf {
 }
 #[cfg(windows)]
 pub use pipe::address;
+#[cfg(not(any(unix, windows)))]
+pub fn address(folder: &Path) -> PathBuf {
+    folder.join("Agents")
+}
 
 /// Connects to the server at `path`, as the bridge does.
 #[cfg(unix)]
@@ -233,12 +273,20 @@ pub(super) fn connect(path: &Path) -> io::Result<Stream> {
 pub(super) fn connect(path: &Path) -> io::Result<Stream> {
     pipe::Pipe::connect(path)
 }
+#[cfg(not(any(unix, windows)))]
+pub(super) fn connect(_: &Path) -> io::Result<Stream> {
+    Err(io::ErrorKind::Unsupported.into())
+}
 
 /// Tells the server the client closed its end, which it ends the session at, then closes the
 /// connection once it has answered.
 #[cfg(unix)]
 pub(super) fn close_write(stream: &mut Stream) -> io::Result<()> {
     stream.shutdown(std::net::Shutdown::Write)
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn close_write(stream: &mut Stream) -> io::Result<()> {
+    match *stream {}
 }
 #[cfg(windows)]
 pub(super) fn close_write(stream: &mut Stream) -> io::Result<()> {

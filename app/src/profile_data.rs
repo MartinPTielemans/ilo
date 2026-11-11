@@ -190,8 +190,8 @@ pub(crate) unsafe extern "C" fn sync_pairing_asked(
         update_app_later(dialog::withdraw_account);
         return;
     };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map_or(0., |since| since.as_secs_f64() * 1e3);
     let mut day_starts = [0.; 4];
     unsafe { platform::host_day_starts(day_starts.as_mut_ptr()) };

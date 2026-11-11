@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use browser::account::{self, Account};
 use browser::agents::ready::Ready;
@@ -3605,7 +3606,7 @@ impl Settings {
         // A list for each agent, as each has its own Space (decision 8): what the user let it do
         // or never do on a site, to revoke, then what it did.
         let model = agents.read(cx);
-        let now = std::time::SystemTime::now();
+        let now = web_time::SystemTime::now();
         let mut listed_any = false;
         for client in Client::ALL {
             let grants = self.grants(agents, client, cx);
@@ -3722,7 +3723,7 @@ impl Settings {
             Block::Heading("Scripts".into()),
             Block::Group(group(look, [row])),
         ];
-        let now = std::time::SystemTime::now();
+        let now = web_time::SystemTime::now();
         let entries: Vec<gpui::Div> = (agents.read(cx).activity(agents::scripts::AGENT))
             .take(ACTIVITY_SHOWN)
             .map(|entry| {

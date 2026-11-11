@@ -111,6 +111,10 @@ jobs:
       # function main.rs builds on the Mac and Windows alone.
       - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+      # The site's demo is the preview built for the web (demo.yml), which only a release builds, so
+      # a change that breaks it is caught here. A check, not demo.yml's build: no LTO or wasm-bindgen.
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --release --target wasm32-unknown-unknown --bin preview
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:

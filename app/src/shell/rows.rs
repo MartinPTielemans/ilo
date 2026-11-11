@@ -1,11 +1,8 @@
 //! The list's rows: a tab's, a split view's and a folder's, the Space's name, and the
 //! divider with Clear and New Tab.
 
-use std::{
-    cell::Cell,
-    f32::consts::FRAC_PI_2,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, f32::consts::FRAC_PI_2, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, MouseButton,

@@ -16,8 +16,9 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 #[cfg(target_os = "linux")]
 use browser::flatpak;

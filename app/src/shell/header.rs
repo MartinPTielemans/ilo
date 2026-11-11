@@ -1,7 +1,8 @@
 //! The sidebar's header: the buttons to hide the sidebar and go back, forward and
 //! reload, and the URL field under them.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use web_time::Instant;
 
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::site_controls::Place;

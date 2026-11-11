@@ -10,10 +10,8 @@
 //! (AGENTS.md › Over the page). What the menu decides is in `Tracking` and `lay_out`, which the
 //! tests drive; what it asks of its window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,

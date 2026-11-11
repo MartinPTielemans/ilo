@@ -4,10 +4,8 @@
 //! as its child, and the mouse goes through it to the page. What it asks of its window goes
 //! through `Host`.
 
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, Hsla, Task, TitlebarOptions, WeakEntity, Window,

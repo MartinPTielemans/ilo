@@ -5,11 +5,8 @@
 //! shows over the browser window, as its child, and the mouse goes through it. What it asks of its
 //! window goes through `Host`.
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, Div, FontWeight, Global, Pixels, Rgba, SharedString, Size, Task, TextRun,

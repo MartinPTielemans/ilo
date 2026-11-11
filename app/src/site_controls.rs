@@ -8,11 +8,8 @@
 //! `Host`. Tab and the arrows take a ring over its tiles, rows and footer buttons, and space or
 //! return does what a click on the ringed one does (#1382).
 
-use std::{
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{rc::Rc, sync::Arc, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FocusHandle, Global, Image, KeyBinding, MouseButton,
