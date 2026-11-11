@@ -1199,6 +1199,7 @@ impl Browser for Fake {
         place: site_controls::Place,
         window: Size<Pixels>,
         extensions: Vec<site_controls::Extension>,
+        profiles: Option<site_controls::Profiles>,
         cx: &mut App,
     ) {
         if std::env::var_os("PREVIEW_SITE_CONTROLS").is_none() {
@@ -1208,7 +1209,7 @@ impl Browser for Fake {
         let room = size(px(site_controls::WIDTH), window.height - at.y);
         let bounds = Bounds::new(PREVIEW_ORIGIN.get() + at, room);
         if site_controls::open_at(Rc::new(PreviewSiteControls), bounds, true, cx).is_some() {
-            site_controls::show(tab, place, window, extensions, cx);
+            site_controls::show(tab, place, window, extensions, profiles, cx);
             site_controls::changed(tab, preview_site(), cx);
         }
     }
@@ -1902,6 +1903,15 @@ fn preview_theme() -> Option<Theme> {
     }
 }
 
+/// PREVIEW_PROFILES=Personal,Work names the profiles, the Spaces' the first, as a second one
+/// shows the profile in the name row and Site Controls (#2339).
+fn preview_profiles() -> Vec<(u64, SharedString)> {
+    let names = std::env::var("PREVIEW_PROFILES").unwrap_or_else(|_| "Default".into());
+    (0..)
+        .zip(names.split(',').map(|name| name.to_owned().into()))
+        .collect()
+}
+
 /// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
 /// as a headless session has none to switch.
 fn preview_tone() -> Option<Tone> {
@@ -2384,7 +2394,7 @@ fn main() {
                         _ => Shell::new(browser, cx),
                     };
                     shell.force_tone(preview_tone());
-                    shell.set_profiles(vec![(0, "Default".into())], cx);
+                    shell.set_profiles(preview_profiles(), cx);
                     shell.set_spaces(spaces, cx);
                     shell.set_space(first_space, cx);
                     // The shell forgets what it knows of a tab in no list, so the lists come first.
@@ -3085,11 +3095,21 @@ fn preview_site() -> Site {
             state: state.to_string().into(),
             choices: choices.to_vec(),
         };
+    // PREVIEW_CONNECTION=not-secure shows a page over plain http, and =internal the browser's own.
+    let (site, connection, summary) = match std::env::var("PREVIEW_CONNECTION").as_deref() {
+        Ok("not-secure") => ("en.wikipedia.org", Connection::NotSecure, "Not secure"),
+        Ok("internal") => ("ilo", Connection::Internal, "ilo"),
+        _ => (
+            "en.wikipedia.org",
+            Connection::Secure,
+            "Connection is secure",
+        ),
+    };
     Site {
-        site: "en.wikipedia.org".into(),
-        connection: Connection::Secure,
-        connection_summary: "Connection is secure".into(),
-        certificate: true,
+        site: site.into(),
+        connection,
+        connection_summary: summary.into(),
+        certificate: connection == Connection::Secure,
         permissions: vec![
             permission(
                 5,
