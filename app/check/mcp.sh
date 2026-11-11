@@ -1064,8 +1064,9 @@ CARD
   # frame of another site and half out of view too. Each field's text is red blocks: a field shown
   # has red in the picture, and one withheld has none. The check's extension puts two frames of its
   # own with red text in the page, one over it and one in its flow below the fields, which the
-  # outline leaves out, so the picture has no red there either.
-  printf '%s' '<!doctype html><style>
+  # outline leaves out, so the picture has no red there either. The site's frame has a rule of its
+  # own, as one for every iframe would place the extension's too.
+  printf '%s' '<!doctype html><meta charset=utf-8><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 40%; height: 40%; margin: 0;
   padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 30vh/1 monospace;
@@ -1076,12 +1077,12 @@ input, textarea { position: absolute; box-sizing: border-box; width: 40%; height
 <script src="painted.js"></script>
 <script>document.querySelector("[aria-label=\"Frame filled\"]").value = "██████";
 painted(() => parent.postMessage("painted", "*"));</script>' > "$out/site/withheld-inner.html"
-  printf '%s' "<!doctype html><title>loading</title><style>
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><style>
 body { margin: 0; background: #fff }
 input, textarea { position: absolute; box-sizing: border-box; width: 20vw; height: 12vh; margin: 0;
   padding: 0; border: 2px solid #888; background: #fff; color: #f00; font: 9vh/1 monospace;
   -webkit-text-stroke: 0.1em #f00; resize: none; overflow: hidden }
-iframe { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
+#site { position: absolute; left: 2vw; top: 40vh; width: 60vw; height: 30vh; border: 0 }
 button { position: absolute; left: 70vw; top: 50vh }
 </style>
 <input aria-label=Typed style='left: 2vw; top: 2vh'>
@@ -1092,7 +1093,7 @@ button { position: absolute; left: 70vw; top: 50vh }
 <input aria-label='Shown password' type=password value='██████' style='left: 26vw; top: 20vh'>
 <input aria-label=Card autocomplete=cc-number value='██████' style='left: 50vw; top: 20vh'>
 <textarea aria-label=Note style='left: 74vw; top: 20vh'>██████</textarea>
-<iframe src=http://127.0.0.1:$port/withheld-inner.html></iframe>
+<iframe id=site src=http://127.0.0.1:$port/withheld-inner.html></iframe>
 <button onclick='document.querySelector(\"[aria-label=Changed]\").value += \"█\"'>Change</button>
 <input aria-label=Below style='left: 2vw; top: 94vh'>
 <div style='height: 76vh'></div>
