@@ -14,10 +14,21 @@ index 3ce9dcecc4..ce6de4149b 100644
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 16d451f008..bb3d226cf2 100644
+index 16d451f008..86c32284ee 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -17,6 +17,8 @@ pub struct WgpuContext {
+@@ -7,6 +7,10 @@ use std::sync::Arc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use wgpu::TextureFormat;
+ 
++/// The instance make_instance_early started, until a renderer takes it.
++#[cfg(not(target_family = "wasm"))]
++static EARLY_INSTANCE: Mutex<Option<std::thread::JoinHandle<wgpu::Instance>>> = Mutex::new(None);
++
+ #[derive(Clone)]
+ pub struct WgpuContext {
+     pub instance: wgpu::Instance,
+@@ -17,6 +21,8 @@ pub struct WgpuContext {
      dual_source_blending: bool,
      color_texture_format: wgpu::TextureFormat,
      errors: Arc<DeviceErrorState>,
@@ -26,7 +37,7 @@ index 16d451f008..bb3d226cf2 100644
  }
  
  /// Errors reported by wgpu's device-wide callbacks.
-@@ -313,6 +315,7 @@ impl WgpuContext {
+@@ -313,6 +319,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -34,7 +45,7 @@ index 16d451f008..bb3d226cf2 100644
          }
      }
  
-@@ -412,6 +415,7 @@ impl WgpuContext {
+@@ -412,6 +419,7 @@ impl WgpuContext {
              dual_source_blending,
              color_texture_format,
              errors,
@@ -42,6 +53,40 @@ index 16d451f008..bb3d226cf2 100644
          };
          Ok(PreparedWebGraphics { context, surface })
      }
+@@ -470,8 +478,33 @@ impl WgpuContext {
+         ))
+     }
+ 
++    /// Starts making the instance on a thread, for the first renderer to take rather than make its
++    /// own. Loading the Vulkan drivers took 32 ms of the main thread as the browser's first window
++    /// opened, on the CI runner's llvmpipe (#2384). It needs no window, and Vulkan, the one backend
++    /// this crate builds on Linux (Cargo.toml), reads no display handle as it makes one.
++    #[cfg(not(target_family = "wasm"))]
++    pub fn make_instance_early() {
++        let mut early = EARLY_INSTANCE.lock();
++        if early.is_none() {
++            *early = std::thread::Builder::new()
++                .name("wgpu instance".into())
++                .spawn(|| Self::new_instance(None))
++                .ok();
++        }
++    }
++
+     #[cfg(not(target_family = "wasm"))]
+     pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
++        // The one made early serves once: after a lost device, the next is made here.
++        let early = EARLY_INSTANCE.lock().take();
++        if let Some(instance) = early.and_then(|early| early.join().ok()) {
++            return instance;
++        }
++        Self::new_instance(display)
++    }
++
++    #[cfg(not(target_family = "wasm"))]
++    fn new_instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
+         wgpu::Instance::new(wgpu::InstanceDescriptor {
+             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+             flags: wgpu::InstanceFlags::default(),
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
 index a148a4ccfb..c116ec74c6 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs

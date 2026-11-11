@@ -677,6 +677,7 @@ dependencies = [
  "gpui_linux",
  "gpui_macos",
  "gpui_platform",
+ "gpui_wgpu",
  "gpui_windows",
  "image",
  "libc",

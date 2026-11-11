@@ -43,10 +43,10 @@ index 2328e954df..936315173d 100644
 +#[cfg(not(target_os = "linux"))]
 +pub fn launch_mark(_: &str) {}
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 17eb434609..b4884ea20a 100644
+index a56dd63fc9..c5b787b627 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -1842,7 +1842,20 @@ impl Window {
+@@ -1864,7 +1864,20 @@ impl Window {
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
              let mut deferred_force_render = false;
@@ -67,7 +67,7 @@ index 17eb434609..b4884ea20a 100644
                  #[cfg(feature = "profiler")]
                  let (_foreground_turn, window_id) = {
                      let foreground_turn = profiler::journal::foreground_turn();
-@@ -1918,6 +1931,9 @@ impl Window {
+@@ -1940,6 +1953,9 @@ impl Window {
                      {
                          // Don't lose a pending forced render to throttling.
                          deferred_force_render |= force_render;
@@ -77,7 +77,7 @@ index 17eb434609..b4884ea20a 100644
                          // Deferred by throttling: ask demand-driven platforms to retry.
                          handle
                              .update(&mut cx, |_, window, _| {
-@@ -1979,8 +1995,17 @@ impl Window {
+@@ -2001,8 +2017,17 @@ impl Window {
                                      // atlas tile references after a GPU device recovery.
                                      window.refresh();
                                  }
@@ -96,7 +96,7 @@ index 17eb434609..b4884ea20a 100644
                              })
                              .log_err();
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index aadbb9afad..b52005878d 100644
+index d0081a535a..f59009dd23 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -654,6 +654,7 @@ impl X11WindowState {
@@ -115,7 +115,16 @@ index aadbb9afad..b52005878d 100644
  
              let mut renderer = {
                  let raw_window = RawWindow {
-@@ -970,6 +972,7 @@ impl X11WindowState {
+@@ -962,13 +964,15 @@ impl X11WindowState {
+                     // Transparent, as Wayland's: every window of the browser's is, and a renderer
+                     // made opaque built a set of pipelines that GPUI's background then replaced,
+                     // 8 ms on llvmpipe at launch (#2384). An opaque window's appearance updates it.
+-                    transparent: true,
++                    // Proof only (#2384): BROWSER_PROOF_BEFORE makes it opaque, as before.
++                    transparent: std::env::var_os("BROWSER_PROOF_BEFORE").is_none(),
+                     preferred_present_mode: None,
+                 };
+                 WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
              };
  
              renderer.set_subpixel_layout(is_bgr);
@@ -124,10 +133,40 @@ index aadbb9afad..b52005878d 100644
              // Set max window size hints based on the GPU's maximum texture dimension.
              // This prevents the window from being resized larger than what the GPU can render.
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index bb3d226cf2..9ae7a50b53 100644
+index 86c32284ee..8df9d07bf4 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -519,7 +519,9 @@ impl WgpuContext {
+@@ -484,11 +484,20 @@ impl WgpuContext {
+     /// this crate builds on Linux (Cargo.toml), reads no display handle as it makes one.
+     #[cfg(not(target_family = "wasm"))]
+     pub fn make_instance_early() {
++        // Proof only (#2384): BROWSER_PROOF_BEFORE makes it as the window opens, as before.
++        if std::env::var_os("BROWSER_PROOF_BEFORE").is_some() {
++            return;
++        }
++        gpui::launch_mark("instance early, starting");
+         let mut early = EARLY_INSTANCE.lock();
+         if early.is_none() {
+             *early = std::thread::Builder::new()
+                 .name("wgpu instance".into())
+-                .spawn(|| Self::new_instance(None))
++                .spawn(|| {
++                    let instance = Self::new_instance(None);
++                    gpui::launch_mark("instance early, made on its thread");
++                    instance
++                })
+                 .ok();
+         }
+     }
+@@ -498,6 +507,7 @@ impl WgpuContext {
+         // The one made early serves once: after a lost device, the next is made here.
+         let early = EARLY_INSTANCE.lock().take();
+         if let Some(instance) = early.and_then(|early| early.join().ok()) {
++            gpui::launch_mark("instance early, taken");
+             return instance;
+         }
+         Self::new_instance(display)
+@@ -548,7 +558,9 @@ impl WgpuContext {
          bool,
          TextureFormat,
      )> {
@@ -137,7 +176,7 @@ index bb3d226cf2..9ae7a50b53 100644
  
          if adapters.is_empty() {
              anyhow::bail!("No GPU adapters found");
-@@ -560,8 +562,10 @@ impl WgpuContext {
+@@ -589,8 +601,10 @@ impl WgpuContext {
  
              log::info!("Testing adapter: {} ({:?})...", info.name, info.backend);
  
