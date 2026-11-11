@@ -654,6 +654,7 @@ impl Browser for Engine {
             placeholder: placeholder.clone(),
             text: text.clone(),
             secure,
+            reads: None,
         };
         let none = SharedString::default();
         let fields = match asked.kind {

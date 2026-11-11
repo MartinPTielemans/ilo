@@ -554,6 +554,7 @@ fn field(text: &str, secure: bool) -> Field {
         placeholder: "".into(),
         text: text.to_owned().into(),
         secure,
+        reads: None,
     }
 }
 
@@ -615,6 +616,27 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     dialog.cx.simulate_input("Grace");
     dialog.keys("enter");
     assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
+}
+
+/// The snooze picker's field reads its text as it's typed, and ↩ does nothing while it reads as
+/// nothing, with no other sign than the line under it (#2350).
+#[gpui::test]
+fn return_waits_while_a_field_reads_as_nothing(cx: &mut TestAppContext) {
+    let number = Field {
+        reads: Some(Rc::new(|text: &str| match text.parse::<u32>() {
+            Ok(number) => Ok(format!("{number}").into()),
+            Err(_) => Err("Not a number".into()),
+        })),
+        ..field("", false)
+    };
+    let mut dialog = Asking::page(page_question(vec![number], None), cx);
+    dialog.cx.simulate_input("x");
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), ["show over 100"], "↩ waited");
+    dialog.keys("backspace");
+    dialog.cx.simulate_input("5");
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), left(&[], "accept 5"));
 }
 
 #[gpui::test]

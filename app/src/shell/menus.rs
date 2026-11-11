@@ -682,6 +682,7 @@ impl Shell {
                 placeholder: numbered.clone().into(),
                 text: numbered.clone().into(),
                 secure: false,
+                reads: None,
             }],
             check: None,
             on_return: crate::dialog::Return::Action,
