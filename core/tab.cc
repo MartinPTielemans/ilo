@@ -27,6 +27,7 @@
 #include "browser_core/page_press.h"
 #include "browser_core/page_translate.h"
 #include "browser_core/password_offer.h"
+#include "browser_core/pinned_url.h"
 #include "browser_core/platform/keyboard.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/point.h"
@@ -507,22 +508,19 @@ GURL Tab::Url() const {
 }
 
 bool Tab::At(const GURL& url) const {
-  if (!url.is_valid()) {
-    return false;
-  }
-  if (Url() == url) {
-    return true;
-  }
   if (content::WebContents* contents = web_contents()) {
     // A page in the system's engine, or one waiting to load, is only at its own URL.
-    if (system_page_ || waiting_) {
-      return false;
-    }
-    content::NavigationEntry* entry = contents->GetController().GetLastCommittedEntry();
-    return entry && !entry->IsInitialEntry() && entry->GetOriginalRequestURL() == url;
+    content::NavigationEntry* entry =
+        system_page_ || waiting_ ? nullptr : contents->GetController().GetLastCommittedEntry();
+    const GURL requested =
+        entry && !entry->IsInitialEntry() ? entry->GetOriginalRequestURL() : GURL();
+    return AtPinnedUrl(url, PageUrl(contents), requested);
   }
-  return unloaded_ && !unloaded_->history.empty() &&
-         unloaded_->history[unloaded_->current].original_request_url() == url;
+  if (!unloaded_ || unloaded_->history.empty()) {
+    return false;
+  }
+  const sessions::SerializedNavigationEntry& entry = unloaded_->history[unloaded_->current];
+  return AtPinnedUrl(url, entry.virtual_url(), entry.original_request_url());
 }
 
 std::string Tab::SessionStorageId() const {
