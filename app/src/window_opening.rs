@@ -758,6 +758,11 @@ pub(crate) fn finish_opening(
     );
     // Auto-archive at launch can come before the toast its note shows in is asked for.
     show_archive_note(cx);
+    if let Some(bar) = browser::mini_bar::open(Rc::new(MiniBarHost), cx)
+        && let Ok(view) = bar.update(cx, |_, window, _| ns_view(window))
+    {
+        unsafe { platform::host_add_mini_bar(view, browser::mini_bar::MARGIN.into()) };
+    }
     when_asked::<capture::Capture>(
         move |cx| {
             if let Some(capture) = capture::open(Rc::new(CaptureHost { toast: toast_host }), cx)

@@ -102,6 +102,13 @@ pub(super) struct Recorder {
     pub(super) shown: RefCell<Vec<u64>>,
     /// The id of the agent each agent's Space belongs to, as `space_agent` answers.
     pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
+    /// What the core makes of each arrangement it's given, On unless a test says.
+    pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
+    /// Whether the core refuses Arrange, as on a page that isn't http(s).
+    pub(super) arrange_refused: Cell<bool>,
+    /// The tab Arrange's mini bar shows for and what its press runs, while it shows.
+    #[allow(clippy::type_complexity)]
+    pub(super) mini_bar: RefCell<Option<(u64, crate::mini_bar::OnPress)>>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -1059,18 +1066,69 @@ impl Browser for Recorder {
     }
 
     fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
+        use crate::boosts::Shows;
         for change in changes {
-            self.record(format!(
-                "boost {} {}: {}",
-                change.profile,
-                change.site,
-                change.css.trim_end()
-            ));
+            let (profile, site) = (change.profile, change.site);
+            match change.shows {
+                Shows::Css(css) => {
+                    self.record(format!("boost {profile} {site}: {}", css.trim_end()))
+                }
+                Shows::Arrangement(bytes) => {
+                    let state = self.set_arrangement(profile, &site, &bytes);
+                    if !bytes.is_empty() {
+                        crate::boosts::with(|boosts| boosts.set_arranged(profile, &site, state));
+                    }
+                }
+            }
         }
     }
 
     fn zap(&self, tab: u64, on: bool, _: &mut App) {
         self.record(format!("zap {tab} {on}"))
+    }
+
+    fn arrange(&self, tab: u64, look: Option<&crate::boosts::arrange::Look>, _: &mut App) -> bool {
+        self.record(format!("arrange {tab} {}", look.is_some()));
+        look.is_some() && !self.arrange_refused.get()
+    }
+
+    fn arrange_do(&self, tab: u64, ask: crate::boosts::arrange::Ask, _: &mut App) {
+        self.record(format!("arrange {tab} {ask:?}"))
+    }
+
+    fn show_mini_bar(
+        &self,
+        shown: Option<(crate::mini_bar::Shown, crate::mini_bar::OnPress)>,
+        _: &mut App,
+    ) {
+        let Some((shown, on_press)) = shown else {
+            self.mini_bar.replace(None);
+            return self.record("mini bar none".into());
+        };
+        let labels = crate::mini_bar::buttons(&shown).into_iter();
+        let labels: Vec<_> = labels.map(|(_, _, label)| label).collect();
+        let at = shown.selection.origin;
+        let (x, y) = (f32::from(at.x), f32::from(at.y));
+        self.record(format!(
+            "mini bar {} at {x},{y}: {}",
+            shown.tab,
+            labels.join(", ")
+        ));
+        self.mini_bar.replace(Some((shown.tab, on_press)));
+    }
+
+    fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {
+        let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
+        self.record(format!("arrangement {profile} {site}: {changes} changes"));
+        self.arranged.get().unwrap_or(crate::boosts::Arranged::On)
+    }
+
+    fn keep_arrangement(&self, profile: u64, site: &str, bytes: &str) -> bool {
+        let changes = crate::boosts::arrange::read(bytes).map_or(0, |changes| changes.len());
+        self.record(format!(
+            "keep arrangement {profile} {site}: {changes} changes"
+        ));
+        true
     }
 
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {

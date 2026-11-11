@@ -23,6 +23,7 @@ use browser::import::sources::{Os, Roots};
 use browser::link_preview;
 use browser::log;
 use browser::menu;
+use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
@@ -402,7 +403,58 @@ impl Fake {
     }
 }
 
+/// PREVIEW_BOOST_CARD=list, nofit or changed: the Boost of the first tab's site, its CSS and an
+/// arrangement of four changes in a profile folder of its own, the last that no longer fits with
+/// nofit, and off as it changed outside ilo with changed.
+fn preview_boost_folder() -> Option<std::path::PathBuf> {
+    std::env::var_os("PREVIEW_BOOST_CARD")?;
+    let folder = std::env::temp_dir().join(format!("ilo-preview-boost-{}", std::process::id()));
+    let boosts = folder.join(browser::boosts::FOLDER);
+    std::fs::create_dir_all(&boosts).ok()?;
+    let site = browser::boosts::site_of(TABS[0].1)?;
+    let css = "#banner { display: none !important; } /* Zap */\n.promo { display: none !important; } /* Zap */\n";
+    let css = css.to_owned() + &"main { max-width: 42em; }\n".repeat(12);
+    std::fs::write(boosts.join(format!("{site}.css")), css).ok()?;
+    let arrangement = r#"{"version": 1, "changes": [
+  {"kind": "settle", "name": "", "role": "video", "before": {"name": "", "role": "article"}},
+  {"kind": "trade", "name": "Trending", "role": "aside", "with": {"name": "Get the newsletter", "role": "form"}},
+  {"kind": "float", "name": "More like this", "role": "complementary", "pin": "screen"},
+  {"kind": "settle", "name": "", "role": "banner", "after": {"name": "", "role": "contentinfo"}}
+]}
+"#;
+    let name = format!("{site}{}", browser::boosts::arrange::SUFFIX);
+    std::fs::write(boosts.join(name), arrangement).ok()?;
+    Some(folder)
+}
+
 impl Browser for Fake {
+    fn profile_folder(&self, _: u64) -> Option<std::path::PathBuf> {
+        preview_boost_folder()
+    }
+
+    fn set_arrangement(&self, _: u64, _: &str, _: &str) -> browser::boosts::Arranged {
+        match std::env::var("PREVIEW_BOOST_CARD").as_deref() {
+            Ok("changed") => browser::boosts::Arranged::Changed,
+            _ => browser::boosts::Arranged::On,
+        }
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, cx: &mut App) {
+        for change in changes {
+            if let browser::boosts::Shows::Arrangement(bytes) = change.shows {
+                let state = self.set_arrangement(change.profile, &change.site, &bytes);
+                let nofit = std::env::var("PREVIEW_BOOST_CARD").as_deref() == Ok("nofit");
+                browser::boosts::with(|each| {
+                    each.set_arranged(change.profile, &change.site, state);
+                    if nofit {
+                        each.set_misfits(change.profile, &change.site, vec![3]);
+                    }
+                });
+            }
+        }
+        let _ = cx;
+    }
+
     fn select(&self, tab: u64, cx: &mut App) {
         self.later(cx, move |shell, cx| shell.set_selected(tab, cx));
     }
@@ -2771,6 +2823,16 @@ fn main() {
                     );
                 }
             }
+            // PREVIEW_BOOST_CARD opens the Boost card of the tab shown (preview_boost_folder).
+            if let Some(shell) =
+                shell_window.filter(|_| std::env::var_os("PREVIEW_BOOST_CARD").is_some())
+            {
+                shell
+                    .update(cx, |shell, _, cx| {
+                        shell.run(Command::EditBoost, "preview", cx)
+                    })
+                    .ok();
+            }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
             // drawn the URL field they hang from.
             let site_controls = std::env::var_os("PREVIEW_SITE_CONTROLS").is_some();
@@ -2807,6 +2869,14 @@ fn main() {
                     });
                 })
                 .detach();
+            }
+            // PREVIEW_MINI_BAR=selected shows Arrange's mini bar over a made-up thing selected on the
+            // page, with Hide and Put back; =float adds the pin, the thing staying on screen, and
+            // =scrolls the pin with the thing scrolling with the page.
+            if let Ok(kind) = std::env::var("PREVIEW_MINI_BAR")
+                && let Some(shell) = shell_window
+            {
+                preview_mini_bar(&kind, shell, bounds, cx);
             }
             // PREVIEW_MENU=<x>,<y>[,<key>…] right-clicks there in the window, as on a row or a Space's
             // name, and then presses the keys in ilo's menu, such as `m,right` for a submenu.
@@ -2946,6 +3016,65 @@ fn preview_page_menu(
 /// ilo's menu over the preview's window, whose host can't move it: its window covers the preview's.
 struct PreviewMenu;
 
+thread_local! {
+    /// Where the mini bar asked to go.
+    static MINI_BAR_PLACE: std::cell::Cell<Option<Bounds<Pixels>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct PreviewMiniBar;
+
+impl mini_bar::Host for PreviewMiniBar {
+    fn show(&self, _: u64, place: Bounds<Pixels>) {
+        MINI_BAR_PLACE.set(Some(place));
+    }
+
+    fn hide(&self) {}
+}
+
+/// Shows Arrange's mini bar over a made-up thing selected on the page of the preview's `window` at
+/// `bounds` (`mini_bar::sample`). The bar sizes its window to what it shows, so a hidden one lays it
+/// out first, as the host would place it.
+fn preview_mini_bar(
+    kind: &str,
+    window: gpui::WindowHandle<Shell>,
+    bounds: Bounds<Pixels>,
+    cx: &mut App,
+) {
+    let Ok((page, palette)) = window.read_with(cx, |shell, _| {
+        (shell.page_frame(bounds.size).0, shell.palette())
+    }) else {
+        return;
+    };
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+        return;
+    };
+    let selection = shown.selection;
+    let on_press: mini_bar::OnPress =
+        Rc::new(|_, press, _| log!("preview: mini bar {} pressed", press.name()));
+    let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
+    let Some(measuring) = mini_bar::open_at(Rc::new(PreviewMiniBar), hidden, false, cx) else {
+        return;
+    };
+    mini_bar::show(0, Some((shown.clone(), on_press.clone())), cx);
+    let _ = measuring.update(cx, |_, window, _| window.remove_window());
+    let Some(place) = MINI_BAR_PLACE.get() else {
+        return;
+    };
+    // The bar's window is the bar and the margin its shadow draws in.
+    let at = Bounds::new(bounds.origin + place.origin, place.size).dilate(px(mini_bar::MARGIN));
+    if mini_bar::open_at(Rc::new(PreviewMiniBar), at, true, cx).is_some() {
+        mini_bar::show(0, Some((shown, on_press)), cx);
+        // The made-up box, for the captures.
+        let (x, y) = (f32::from(selection.origin.x), f32::from(selection.origin.y));
+        let (w, h) = (
+            f32::from(selection.size.width),
+            f32::from(selection.size.height),
+        );
+        log!("preview: mini bar shown over {x},{y} {w}x{h}");
+    }
+}
+
 impl menu::Host for PreviewMenu {
     fn show(&self, _: Bounds<Pixels>, _: &[Bounds<Pixels>]) {}
 
@@ -3048,6 +3177,7 @@ impl site_controls::Host for PreviewSiteControls {
     fn set_developer_mode(&self, _: u64, _: bool) {}
 
     fn set_boost(&self, _: u64, _: bool) {}
+    fn turn_on_arrangement(&self, _: u64) {}
 
     fn run(&self, _: site_controls::Run, _: u64, _: &mut App) {}
 
@@ -3124,6 +3254,11 @@ fn preview_site() -> Site {
             Ok("off") => Some(false),
             _ => None,
         },
+        // PREVIEW_ARRANGEMENT=nofit or changed: what Site Controls says of the Boost's arrangement.
+        arrangement_misfits: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
+            .then(|| "1 change no longer fits".into()),
+        arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
+            .then(|| "Changed outside ilo, off".into()),
     }
 }
 

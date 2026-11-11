@@ -3132,6 +3132,37 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     }
 }
 
+/// A Boost and Arrange are the user's own view of their pages (#695, #2347): no tool, for an agent
+/// from outside or a task, and no run_steps step names them, and the agents' code reaches neither
+/// the Boosts nor an arrangement's file.
+#[test]
+fn no_agent_path_reaches_arrange_or_a_boost() {
+    let named = |text: &str| {
+        let text = text.to_lowercase();
+        ["arrange", "boost", "zap"]
+            .iter()
+            .any(|word| text.contains(word))
+    };
+    for agent in ["claude-code", "task-1"] {
+        let tools = tools::list(agent).to_string();
+        assert!(!named(&tools), "{agent}'s tools name one");
+    }
+    assert!(!tools::STEPS.iter().any(|step| named(step)));
+    let sources = [
+        include_str!("../agents.rs"),
+        include_str!("tools.rs"),
+        include_str!("task.rs"),
+        include_str!("server.rs"),
+        include_str!("page.rs"),
+        include_str!("request.rs"),
+        include_str!("runner.rs"),
+    ];
+    for source in sources {
+        assert!(!source.contains("boosts::"), "the agents reach the Boosts");
+        assert!(!source.contains("arrange"), "the agents reach Arrange");
+    }
+}
+
 /// The request tool (#1439): HTTP requests from a tab's page to its own site.
 mod requests {
     use super::*;

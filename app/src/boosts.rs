@@ -11,12 +11,18 @@
 //!
 //! A site's script, `Boosts/<site>.js` (#2297), is the user's too: Edit Script… starts and opens
 //! it, and it runs only once the user turns it on in the browser.
+//!
+//! A Boost also keeps what Arrange moved on the site's pages, `Boosts/<site>.arrange.json`
+//! (arrange.rs), which the core places only while it's what the user kept in the browser.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use gpui::SharedString;
+
+pub mod arrange;
+pub use arrange::Arranged;
 
 /// The folder in a profile's folder that holds its Boosts.
 pub const FOLDER: &str = "Boosts";
@@ -82,6 +88,8 @@ pub struct Summary {
     pub zaps: usize,
     /// The user's own lines of CSS, without blank lines and lines that are only a comment.
     pub lines: usize,
+    /// The things Arrange moved.
+    pub arranges: usize,
 }
 
 impl Summary {
@@ -97,29 +105,61 @@ impl Summary {
         summary
     }
 
-    /// Says it in a sentence: "Hides 3 things and adds 12 lines of your CSS."
+    /// Says it in a sentence: "Hides 2 things, arranges 4 and adds 12 lines of your CSS."
     pub fn describe(self) -> String {
         let plural = |count: usize, one: &str, many: &str| match count {
             1 => format!("1 {one}"),
             _ => format!("{count} {many}"),
         };
-        let hides = plural(self.zaps, "thing", "things");
-        let lines = plural(self.lines, "line", "lines");
-        match (self.zaps, self.lines) {
-            (0, 0) => "Empty. Zap what you don't want to see, or add your own CSS.".into(),
-            (_, 0) => format!("Hides {hides}."),
-            (0, _) => format!("Adds {lines} of your CSS."),
-            _ => format!("Hides {hides} and adds {lines} of your CSS."),
-        }
+        let said: Vec<String> = [
+            (self.zaps > 0).then(|| format!("hides {}", plural(self.zaps, "thing", "things"))),
+            (self.arranges > 0).then(|| format!("arranges {}", self.arranges)),
+            (self.lines > 0)
+                .then(|| format!("adds {} of your CSS", plural(self.lines, "line", "lines"))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let sentence = match said.as_slice() {
+            [] => return "Empty. Zap what you don't want to see, or add your own CSS.".into(),
+            [one] => one.clone(),
+            [first @ .., last] => format!("{} and {last}", first.join(", ")),
+        };
+        let mut chars = sentence.chars();
+        let first = chars.next().map(|first| first.to_ascii_uppercase());
+        format!(
+            "{}{}.",
+            first.into_iter().collect::<String>(),
+            chars.as_str()
+        )
     }
 }
 
-/// A site's CSS as the core should show it now: empty to show none.
+/// A site's CSS or arrangement as the core should show it now: empty to show none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
     pub profile: u64,
     pub site: String,
-    pub css: String,
+    pub shows: Shows,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Shows {
+    Css(String),
+    /// The file's bytes, which the core places only while they're what the user kept
+    /// (`Browser::set_arrangement`).
+    Arrangement(String),
+}
+
+/// A site's arrangement, as its card and Site Controls show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Arrangement {
+    /// Its changes, none for a file the app can't read, which is off as a whole.
+    pub changes: Option<Vec<arrange::Change>>,
+    /// What the core made of it, none before it says.
+    pub state: Option<Arranged>,
+    /// Its changes that didn't find their element on the page's last load, by index.
+    pub misfits: Vec<usize>,
 }
 
 /// A Boost, as the card and the Library show it.
@@ -129,6 +169,7 @@ pub struct Boost {
     pub summary: Summary,
     /// The user hasn't turned it off on its site.
     pub on: bool,
+    pub arrangement: Option<Arrangement>,
 }
 
 /// Each loaded profile's Boosts, and whether Settings has them all off.
@@ -157,6 +198,13 @@ struct Kept {
     off: BTreeSet<String>,
     /// What the core was last given, by site, to give it only what changed.
     shown: BTreeMap<String, String>,
+    /// Each site's arrangement file, empty for one too large to read.
+    arranged: BTreeMap<String, String>,
+    /// What the core made of each, and which of its changes didn't fit, as it said.
+    arranged_as: BTreeMap<String, Arranged>,
+    misfits: BTreeMap<String, Vec<usize>>,
+    /// The arrangements the core was last given, as `shown`.
+    shown_arranged: BTreeMap<String, String>,
 }
 
 impl Kept {
@@ -172,8 +220,17 @@ impl Kept {
         self.boosts().join(format!("{site}.js"))
     }
 
+    fn arrangement_path(&self, site: &str) -> PathBuf {
+        self.boosts().join(format!("{site}{}", arrange::SUFFIX))
+    }
+
     fn read(&mut self) {
         self.sites = read_folder(&self.boosts());
+        let arranged = read_arrangements(&self.boosts());
+        // Which changes fit says nothing of a file that changed.
+        (self.misfits).retain(|site, _| arranged.get(site) == self.arranged.get(site));
+        (self.arranged_as).retain(|site, _| arranged.get(site) == self.arranged.get(site));
+        self.arranged = arranged;
         let off = std::fs::read_to_string(self.folder.join(OFF_FILE)).unwrap_or_default();
         self.off = off.lines().filter_map(site_of_line).collect();
     }
@@ -196,6 +253,28 @@ impl Kept {
         if let Err(error) = saved {
             crate::log!("couldn't save the Boosts turned off: {error}");
         }
+    }
+
+    fn write_arrangement(&mut self, site: &str, bytes: &str) -> bool {
+        let path = self.arrangement_path(site);
+        let written = match bytes.is_empty() {
+            true => std::fs::remove_file(path).or_else(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(error),
+            }),
+            false => {
+                std::fs::create_dir_all(self.boosts()).and_then(|_| std::fs::write(path, bytes))
+            }
+        };
+        if let Err(error) = written {
+            crate::log!("couldn't save the arrangement for {site}: {error}");
+            return false;
+        }
+        match bytes.is_empty() {
+            true => self.arranged.remove(site),
+            false => self.arranged.insert(site.to_owned(), bytes.to_owned()),
+        };
+        true
     }
 
     fn write(&mut self, site: &str, css: &str) -> bool {
@@ -239,6 +318,23 @@ pub fn read_folder(folder: &Path) -> BTreeMap<String, String> {
             let name = entry.file_name().into_string().ok()?;
             let site = site_of_line(name.strip_suffix(".css")?)?;
             Some((site, std::fs::read_to_string(entry.path()).ok()?))
+        })
+        .collect()
+}
+
+/// The arrangements in `folder`, by site: each `<site>.arrange.json` that names one, empty for
+/// one over arrange::MAX_BYTES or not text, which isn't read.
+fn read_arrangements(folder: &Path) -> BTreeMap<String, String> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return BTreeMap::new();
+    };
+    (entries.flatten())
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let site = site_of_line(name.strip_suffix(arrange::SUFFIX)?)?;
+            let small = (entry.metadata().ok()?.len()) <= arrange::MAX_BYTES as u64;
+            let bytes = small.then(|| std::fs::read_to_string(entry.path()).ok());
+            Some((site, bytes.flatten().unwrap_or_default()))
         })
         .collect()
 }
@@ -299,11 +395,26 @@ impl Boosts {
     /// `site`'s Boost in `profile`, if it has one.
     pub fn get(&self, profile: u64, site: &str) -> Option<Boost> {
         let kept = self.profiles.get(&profile)?;
-        let css = kept.sites.get(site)?;
+        let css = kept.sites.get(site);
+        let arrangement = kept.arranged.get(site).map(|bytes| Arrangement {
+            changes: arrange::read(bytes),
+            state: kept.arranged_as.get(site).copied(),
+            misfits: kept.misfits.get(site).cloned().unwrap_or_default(),
+        });
+        if css.is_none() && arrangement.is_none() {
+            return None;
+        }
+        let arranges = (arrangement.as_ref())
+            .and_then(|arrangement| arrangement.changes.as_ref())
+            .map_or(0, Vec::len);
         Some(Boost {
             site: site.to_owned().into(),
-            summary: Summary::of(css),
+            summary: Summary {
+                arranges,
+                ..Summary::of(css.map_or("", String::as_str))
+            },
             on: !kept.off.contains(site),
+            arrangement,
         })
     }
 
@@ -312,7 +423,8 @@ impl Boosts {
         let Some(kept) = self.profiles.get(&profile) else {
             return Vec::new();
         };
-        (kept.sites.keys())
+        let sites: BTreeSet<&String> = kept.sites.keys().chain(kept.arranged.keys()).collect();
+        (sites.into_iter())
             .filter_map(|site| self.get(profile, site))
             .collect()
     }
@@ -410,10 +522,103 @@ impl Boosts {
         {
             crate::log!("couldn't delete the Boost script for {site}: {error}");
         }
+        if !kept.write_arrangement(site, "") {
+            return self.changes(profile);
+        }
+        kept.arranged_as.remove(site);
+        kept.misfits.remove(site);
         if kept.off.remove(site) {
             kept.save_off();
         }
         self.changes(profile)
+    }
+
+    /// Keeps the arrangement the core made on `site`'s pages, `bytes`, which it has placed and
+    /// recorded already, and turns the Boost on, as Zap does. Empty bytes, after Reset, remove the
+    /// file. Refused, with nothing written, for bytes arrange::read refuses.
+    pub fn save_arrangement(&mut self, profile: u64, site: &str, bytes: &str) -> Vec<Change> {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        if !bytes.is_empty() && arrange::read(bytes).is_none() {
+            crate::log!("refused an arrangement for {site} that isn't of its shape");
+            return Vec::new();
+        }
+        if kept.write_arrangement(site, bytes) {
+            kept.misfits.remove(site);
+            if bytes.is_empty() {
+                kept.shown_arranged.remove(site);
+                kept.arranged_as.remove(site);
+                return self.changes(profile);
+            }
+            (kept.shown_arranged).insert(site.to_owned(), bytes.to_owned());
+            kept.arranged_as.insert(site.to_owned(), Arranged::On);
+            if kept.off.remove(site) {
+                kept.save_off();
+            }
+        }
+        self.changes(profile)
+    }
+
+    /// ↺ and ×: what's left of `site`'s arrangement without its change at `index`, for the core
+    /// to keep before `put_back` writes it, or empty once none is left. None while the core
+    /// keeps it off, as only Turn On keeps a file changed outside ilo.
+    pub fn without(&self, profile: u64, site: &str, index: usize) -> Option<String> {
+        let kept = self.profiles.get(&profile)?;
+        if kept.arranged_as.get(site) != Some(&Arranged::On) {
+            return None;
+        }
+        let left = arrange::without(kept.arranged.get(site)?, index)?;
+        let empty = arrange::read(&left).is_some_and(|changes| changes.is_empty());
+        Some(if empty { String::new() } else { left })
+    }
+
+    /// Writes `left`, what `without` gave for `index` and the core has kept, as `site`'s
+    /// arrangement: the file goes with the last change, and the changes take it away.
+    pub fn put_back(&mut self, profile: u64, site: &str, index: usize, left: &str) -> Vec<Change> {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        if !kept.write_arrangement(site, left) {
+            return Vec::new();
+        }
+        if let Some(misfits) = kept.misfits.get_mut(site) {
+            misfits.retain(|each| *each != index);
+            (misfits.iter_mut())
+                .filter(|each| **each > index)
+                .for_each(|each| *each -= 1);
+        }
+        if left.is_empty() {
+            kept.arranged_as.remove(site);
+            kept.misfits.remove(site);
+        } else {
+            // The core keeps and places these itself.
+            kept.shown_arranged.insert(site.to_owned(), left.to_owned());
+        }
+        self.changes(profile)
+    }
+
+    /// `site`'s arrangement file as it is, for Turn On, if the app can read it.
+    pub fn arrangement(&self, profile: u64, site: &str) -> Option<String> {
+        let bytes = self.profiles.get(&profile)?.arranged.get(site)?;
+        arrange::read(bytes).map(|_| bytes.clone())
+    }
+
+    /// What the core made of `site`'s arrangement, as it answered its bytes.
+    pub fn set_arranged(&mut self, profile: u64, site: &str, state: Arranged) {
+        if let Some(kept) = self.profiles.get_mut(&profile) {
+            kept.arranged_as.insert(site.to_owned(), state);
+        }
+    }
+
+    /// Which of `site`'s changes didn't find their element on the page's last load.
+    pub fn set_misfits(&mut self, profile: u64, site: &str, misfits: Vec<usize>) {
+        if let Some(kept) = self.profiles.get_mut(&profile) {
+            match misfits.is_empty() {
+                true => kept.misfits.remove(site),
+                false => kept.misfits.insert(site.to_owned(), misfits),
+            };
+        }
     }
 
     /// `site`'s file, for the user's editor, started with a line saying what it is if the site has
@@ -469,7 +674,38 @@ impl Boosts {
                 true => kept.shown.remove(&site),
                 false => kept.shown.insert(site.clone(), css.clone()),
             };
-            changes.push(Change { profile, site, css });
+            changes.push(Change {
+                profile,
+                site,
+                shows: Shows::Css(css),
+            });
+        }
+        // A file the app can't read is off as a whole.
+        let sites: BTreeSet<String> = (kept
+            .arranged
+            .keys()
+            .chain(kept.shown_arranged.keys())
+            .cloned())
+        .collect();
+        for site in sites {
+            let bytes = match kept.arranged.get(&site) {
+                Some(bytes) if !all_off && !kept.off.contains(&site) => {
+                    arrange::read(bytes).map_or(String::new(), |_| bytes.clone())
+                }
+                _ => String::new(),
+            };
+            if kept.shown_arranged.get(&site).map_or("", String::as_str) == bytes {
+                continue;
+            }
+            match bytes.is_empty() {
+                true => kept.shown_arranged.remove(&site),
+                false => kept.shown_arranged.insert(site.clone(), bytes.clone()),
+            };
+            changes.push(Change {
+                profile,
+                site,
+                shows: Shows::Arrangement(bytes),
+            });
         }
         changes
     }

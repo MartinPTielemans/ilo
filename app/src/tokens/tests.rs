@@ -109,6 +109,7 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
     "menu.radius",
+    "mini-bar.radius",
 ];
 
 #[test]
@@ -147,7 +148,7 @@ fn every_corner_is_one_of_the_four_radii() {
 #[test]
 fn a_corner_inside_another_is_concentric() {
     use super::{
-        command_bar, hover_card, menu, radius, shell,
+        command_bar, hover_card, menu, mini_bar, radius, shell,
         shell::{extensions, recent_downloads},
         site_controls, toast,
     };
@@ -156,6 +157,7 @@ fn a_corner_inside_another_is_concentric() {
         hover_card::RADIUS,
         hover_card::PICTURE_RADIUS + hover_card::PADDING
     );
+    assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
     assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET

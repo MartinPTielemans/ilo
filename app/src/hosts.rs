@@ -183,6 +183,14 @@ impl site_controls::Host for SiteControlsHost {
         });
     }
 
+    fn turn_on_arrangement(&self, tab: u64) {
+        update_app_later(move |cx| {
+            if let Some(shell) = tab_window(tab, cx).and_then(|window| window.shell.upgrade()) {
+                shell.update(cx, |shell, cx| shell.turn_on_arrangement(tab, cx));
+            }
+        });
+    }
+
     fn set_ad_blocking(&self, tab: u64, on: bool) {
         unsafe { bc::bc_tab_set_ad_blocking(tab, on) };
         // Settings lists the sites it's off on.
@@ -351,6 +359,24 @@ pub(crate) extern "C" fn site_controls_dismissed() {
 thread_local! {
     /// The toast's view once its window is open, which a Share button's sheet hangs from.
     pub(crate) static TOAST_VIEW: Cell<*mut c_void> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// Arrange's mini bar's requests, to the host's mini bar window, over the browser window it names.
+pub(crate) struct MiniBarHost;
+
+impl browser::mini_bar::Host for MiniBarHost {
+    fn show(&self, window: u64, place: Bounds<Pixels>) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (x, y) = (place.origin.x.into(), place.origin.y.into());
+        let (width, height) = (place.size.width.into(), place.size.height.into());
+        unsafe { platform::host_show_mini_bar(view, x, y, width, height) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_mini_bar() };
+    }
 }
 
 /// The toast's requests, to the host's toast window.

@@ -354,6 +354,33 @@ not-found = 0xdb1929
 # The command bar's.
 placeholder = 0xffff_ff87
 
+[mini-bar]
+# Arrange's small bar over the thing selected (#2347): ours, from the accepted mock, in the find
+# bar's material (find-bar.fill, the popover level's rim and the system's shadow). Its right end is
+# at the outline's, `gap` over its top, or under its bottom where there's no room over it, and it
+# stays `edge` inside the page.
+gap = 8.0
+edge = 8.0
+height = 30.0
+inset = 3.0
+# Concentric with its buttons' over the inset.
+radius = 9.0
+# Its buttons, each a glyph and its label in text.small, medium: the pin while a floating thing is
+# selected, a divider, Hide, and Put back once the thing has a change to take back.
+button-height = 24.0
+button-pad = 8.0
+# A control's.
+button-radius = 6.0
+button-gap = 2.0
+glyph = 13.0
+glyph-gap = 5.0
+ink = 0xffffffeb
+# The pin while the thing stays on screen: the accent at this much under its label.
+pin-on = 0.3
+divider = 0xffffff26
+divider-height = 14.0
+divider-gap = 4.0
+
 [icon-picker]
 # Arc's, measured at 2× (docs/ux-spec.md › Spaces › Icon). The card is square, and the window
 # holds the arrow over it too.
@@ -1744,6 +1771,27 @@ close-inset = 7.0
 close-glyph = 12.0
 # Above each change a request card lists, and above why it asks, so each reads as one.
 change-gap = 6.0
+
+[shell.boost]
+# Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.
+# Each change is its name over what it did, with its put-back button at the line's end, on the
+# card's quiet plate, as the mock has it. One that no longer fits is dimmed to `misfit`.
+list-top = 8.0
+row-top = 6.0
+row-gap = 8.0
+put-back = 24.0
+put-back-glyph = 14.0
+# Arrange's marks in the page, in CSS px, as the mock draws them: the outline's width and corners.
+mark-line = 2.0
+mark-radius = 6.0
+misfit = 0.5
+
+[shell.boost.motion]
+# Seconds a carry in Arrange holds still before the page shows the drop made (ours, the owner's
+# call on #2347). The rest of its motion is the sidebar's, which the look takes from shell.rs, as
+# this file has no references: the page's other things make room on Favorites room's spring
+# (ROOM_OMEGA) and a dropped thing lands on Row motion's (ROW_RESPONSE, ROW_DAMPING).
+rest = 0.3
 
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a

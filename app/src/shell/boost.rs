@@ -26,7 +26,7 @@ use crate::{
     theme_picker::At,
 };
 
-actions!(boost, [Escape]);
+actions!(boost, [Escape, ArrangeOuter, ArrangeInner]);
 
 /// Escape while the UI has the keyboard ends Zap, or else closes the card, and otherwise falls
 /// through, as the DRM note's does.
@@ -35,7 +35,13 @@ pub(super) fn escape_binding() -> KeyBinding {
 }
 
 pub(super) fn bind(cx: &mut gpui::App) {
-    cx.bind_keys([escape_binding()]);
+    // ↑ and ↓ with the UI holding the keyboard pick the box around or inside while Arrange is on,
+    // as they do with the page focused (run_arrange_key); a field's or the sidebar's own win.
+    cx.bind_keys([
+        escape_binding(),
+        KeyBinding::new("up", ArrangeOuter, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", ArrangeInner, Some(KEY_CONTEXT)),
+    ]);
     cx.on_action(|_: &Escape, cx| {
         let shell = super::commands::key_shell(cx);
         let done =
@@ -44,6 +50,22 @@ pub(super) fn bind(cx: &mut gpui::App) {
             cx.propagate();
         }
     });
+    cx.on_action(|_: &ArrangeOuter, cx| arrange_key("up", cx));
+    cx.on_action(|_: &ArrangeInner, cx| arrange_key("down", cx));
+}
+
+fn arrange_key(keystroke: &str, cx: &mut gpui::App) {
+    let shell = super::commands::key_shell(cx);
+    let done = shell.and_then(|shell| {
+        shell
+            .update(cx, |shell, cx| {
+                shell.run_arrange_key(shell.field_tab(), keystroke, cx)
+            })
+            .ok()
+    });
+    if !done.unwrap_or(false) {
+        cx.propagate();
+    }
 }
 
 impl Shell {
@@ -107,7 +129,7 @@ impl Shell {
     }
 
     /// Reads `profile`'s Boosts the first time, so what's offered knows the ones it has.
-    fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
+    pub(super) fn read_profile_boosts(&self, profile: u64, cx: &mut gpui::App) {
         if !boosts::with(|boosts| boosts.loaded(profile)) {
             self.browser.load_boosts(profile, cx);
         }
@@ -247,9 +269,14 @@ impl Shell {
         true
     }
 
-    /// Escape: Zap ends on the page shown, or else its card closes. Says whether either did.
+    /// Escape: Zap or Arrange ends on the page shown, or else its card closes. Says whether any
+    /// did.
     pub fn escape_boost(&mut self, cx: &mut Context<Self>) -> bool {
         let tab = self.field_tab();
+        if self.arranging(tab) {
+            self.stop_arrange(cx);
+            return true;
+        }
         match self.zapping == Some(tab) && tab != 0 {
             true => {
                 self.stop_zap(cx);
@@ -270,8 +297,9 @@ impl Shell {
         if self.shown_boost(cx).is_none() || self.zapping == Some(tab) {
             return;
         }
-        // One page at a time, as Zap is the pointer's.
+        // One page at a time, as Zap is the pointer's, and not with Arrange.
         self.stop_zap(cx);
+        self.stop_arrange(cx);
         self.zapping = Some(tab);
         self.browser.zap(tab, true, cx);
         cx.notify();
@@ -284,10 +312,12 @@ impl Shell {
         }
     }
 
-    /// The core says what the user clicked on `tab`'s page with Zap on, as a selector, or none for
-    /// the page itself: its Boost hides it from now on, and at once.
+    /// The core says what the user clicked on `tab`'s page with Zap on, or hid with Arrange's
+    /// Hide, as a selector, or none for the page itself: its Boost hides it from now on, and at
+    /// once.
     pub fn boost_zapped(&mut self, tab: u64, selector: Option<&str>, cx: &mut Context<Self>) {
-        let Some(selector) = selector.filter(|_| self.zapping == Some(tab)) else {
+        let hiding = self.zapping == Some(tab) || self.arranging == Some(tab);
+        let Some(selector) = selector.filter(|_| hiding) else {
             return;
         };
         let Some((profile, site)) = self.boost_site(tab) else {
@@ -295,6 +325,9 @@ impl Shell {
         };
         let changes = boosts::with(|boosts| boosts.zap(profile, &site, selector));
         self.browser.show_boosts(changes, cx);
+        if self.arranging == Some(tab) {
+            self.arrange_mode.kept(super::arrange::Undoable::Hide);
+        }
         cx.notify();
     }
 
@@ -306,7 +339,7 @@ impl Shell {
         }
     }
 
-    fn undo_zap(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn undo_zap(&mut self, cx: &mut Context<Self>) {
         let Some((profile, site, _)) = self.shown_boost(cx) else {
             return;
         };
@@ -384,11 +417,25 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| shell.start_zap(cx)));
         let customize = quiet("boost-customize", "Customize…")
             .on_click(cx.listener(|shell, _, _, cx| shell.customize_boost(cx)));
+        let arrange = quiet("boost-arrange", "Arrange")
+            .on_click(cx.listener(|shell, _, _, cx| shell.start_arrange(cx)));
         let zaps = boost.as_ref().map_or(0, |boost| boost.summary.zaps);
-        // Customize… has a line of its own under the other two, as three don't fit the card, so
-        // Zap's row stays where it is as Zap starts and Done comes up under the pointer.
-        let customize =
-            (self.zapping != Some(tab)).then(|| div().mt(px(BUTTON_GAP)).flex().child(customize));
+        // Customize… and Arrange have a line of their own under the other two, as four don't fit
+        // the card, so Zap's row stays where it is as Zap starts and Done comes up under the
+        // pointer. Arrange sits beside Customize… as Zap beside Edit CSS….
+        let zapping = self.zapping == Some(tab);
+        let customize = (!zapping).then(|| {
+            div()
+                .mt(px(BUTTON_GAP))
+                .flex()
+                .gap(px(BUTTON_GAP))
+                .child(customize)
+                .child(arrange)
+        });
+        let arranged = (boost.as_ref())
+            .and_then(|boost| boost.arrangement.as_ref())
+            .filter(|_| !zapping)
+            .map(|arrangement| self.arranged_list(arrangement, cx));
         let (title, detail, buttons): (String, String, Vec<gpui::AnyElement>) =
             match (self.zapping == Some(tab), boost) {
                 (true, _) => (
@@ -438,6 +485,7 @@ impl Shell {
                         .child(title),
                 )
                 .child(div().text_color(palette.on_overlay(DETAIL)).child(detail))
+                .children(arranged)
                 .child(
                     div()
                         .mt(px(BUTTONS_TOP))
