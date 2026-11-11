@@ -543,6 +543,15 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
+    /// back on its left (Sidebar position, #2375).
+    fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
+    /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
+    /// and every window follows.
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        cx.set_global(super::SidebarRight(right));
+        cx.refresh_windows();
+    }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
     /// (host_grow_little_window).
     fn little_drawn(&self, cx: &mut App);
@@ -705,8 +714,9 @@ pub trait Browser {
     /// (crate::folder_preview).
     fn folder_preview(&self, ask: crate::folder_preview::Ask, cx: &mut App);
     /// Asks for a small picture of `tab`'s page, as it was last drawn, for its hover card, which
-    /// the browser keeps for it. The user's: agents get none, as with the page's picture.
-    fn card_picture(&self, tab: u64, cx: &mut App);
+    /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
+    /// page's picture.
+    fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
     /// Shows `plate`, the address of the link the pointer is on, at `frame` in the window, in
     /// `side` of the card, after its delay or at once if one shows or just went; or moves it there
     /// if it shows. `None` ends it.

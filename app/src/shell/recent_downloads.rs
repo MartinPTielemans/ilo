@@ -304,6 +304,10 @@ impl Shell {
             return;
         }
         let recent = &self.recent_downloads;
+        if recent.over_rows && !recent.going && !recent.rows.is_empty() {
+            // check.sh reads this line, which says the pointer keeps them.
+            log!("browser: recent downloads under the pointer");
+        }
         if !recent.over_button && !(recent.over_rows && !recent.going) {
             self.recent_downloads.wait = None;
             return self.hide_recent_downloads(cx);

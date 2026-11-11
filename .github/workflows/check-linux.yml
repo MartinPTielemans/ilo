@@ -30,6 +30,11 @@ on:
         type: choice
         options: [xvfb, sway, kwin, wayland]
         default: xvfb
+      trace:
+        description: >-
+          The trace categories for tabs and perf's traced switches (app/check/lib.sh), such as
+          #2377's, latency among them; empty for latency alone in tabs and no traced switches
+        default: ''
 
 concurrency:
   group: check-linux-${{ github.ref }}
@@ -48,7 +53,7 @@ env:
     extensions capture popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live widevine sync sync-account sync-devices
     sync-extensions little devices pair notifications calls battery battery-os idle handback
-    webrtc tab-drag count ranking everyday hosts policies translate
+    webrtc tab-drag count ranking everyday hosts policies translate pictures boosts rules
   # The runs that pass on Wayland so far, in the headless sway session.
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
@@ -57,7 +62,7 @@ env:
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
-    media
+    media pictures boosts links notifications
   # The runs that don't apply to Linux, a line each with why, which the summary gives. They're
   # skipped even when named.
   LINUX_SKIPS: |
@@ -257,11 +262,11 @@ jobs:
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-      # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
-      # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
-      # at the commit ilo's sync was last checked against, in the leg that has them.
+      # The sync-account, sync-devices, sync-extensions and sync-versions runs sign in to an
+      # ilo-server of their own, on SQLite with a throwaway account, never the hosted one: built from
+      # the server's repo at the commit ilo's sync was last checked against, in the leg that has them.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ')) }}
+        if: ${{ steps.engine.outputs.found == 'true' && (contains(format(' {0} ', matrix.runs), ' sync-account ') || contains(format(' {0} ', matrix.runs), ' sync-devices ') || contains(format(' {0} ', matrix.runs), ' sync-extensions ') || contains(format(' {0} ', matrix.runs), ' sync-versions ')) }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -288,6 +293,23 @@ jobs:
           path: app/.deps/ilo-server/target
           key: ilo-server-882f2736e5a3b228543ae33b821aeeb52f80426d
 
+      # The sync-versions run syncs with an older ilo, the release ILO_OLD names, as its users
+      # have it: ilo's Flatpak, installed from the release's bundle, which runs in bubblewrap's
+      # user namespaces as Chromium's sandbox does.
+      - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' sync-versions ') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD: 0.1.12
+        run: |
+          sudo apt-get install -yq flatpak
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          dir=$(mktemp -d)
+          gh release download "v$OLD" -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
+          flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
+          flatpak info --user app.ilo.browser
+          echo "ILO_OLD=$OLD" >> "$GITHUB_ENV"
+
       # The devices run grants a HID device, a fake one the kernel's uhid makes (check/uhid.py),
       # which stays plugged in for the job: in the leg that has it.
       - if: ${{ steps.engine.outputs.found == 'true' && contains(format(' {0} ', matrix.runs), ' devices ') }}
@@ -311,6 +333,7 @@ jobs:
           SESSION: ${{ matrix.session }}
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
           # DuckDuckGo, the one the core picks, so the command bar would offer no search.
           LANG: en_US.UTF-8
@@ -330,16 +353,22 @@ jobs:
           for run in $RUNS; do
             start=$SECONDS
             status=0
-            # The updates run builds a Flatpak first.
+            # The updates run builds a Flatpak first, and perf measures Chrome beside the app.
             limit=20m
             [ "$run" != updates ] || limit=45m
+            [ "$run" != perf ] || limit=40m
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
             skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
-            if [ "$status" = 0 ]; then
+            # A run that skips all of itself, as one whose build lacks what it checks, says why on a
+            # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
+            whole=$(grep -m1 '^skip all: ' "$dir/$run.log" | cut -c11- | tr '|\t' '/ ') || true
+            if [ "$status" = 0 ] && [ -n "$whole" ]; then
+              result="skip: $whole"
+            elif [ "$status" = 0 ]; then
               result="passed in $((SECONDS - start)) s${skipped:+, skipping: $skipped}"
             else
               result="failed ($status): $(grep -m1 '^FAIL' "$dir/$run.log" | cut -c7- | tr '|\t' '/ ')"
@@ -566,7 +595,7 @@ jobs:
                 'any(.[]; .session == $s and ((" " + .runs + " ") | contains(" " + $r + " ")))' > /dev/null; then
                 result=$(result "$session" "$run")
                 case $result in
-                passed*) ;;
+                passed* | skip:*) ;;
                 failed*) failure "$session" "$run" "$result" "The $run run failed on $session. Its log: $where$run.log in the artifact." ;;
                 *) unfinished "$result" ;;
                 esac

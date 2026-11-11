@@ -715,6 +715,7 @@ impl Shell {
             | Command::ToggleSidebar
             | Command::RecordTrace
             | Command::StayOnTop
+            | Command::MoveSidebar
             | Command::TaskManager
             | Command::Settings
             | Command::KeyboardShortcuts
@@ -1028,7 +1029,6 @@ impl Shell {
                             .on_click(cx.listener(move |shell, _, _, cx| {
                                 cx.stop_propagation();
                                 let from = shell.foot.strip_open.get();
-                                // check.sh reads this line.
                                 log!("browser: command open-task-pages via strip");
                                 shell.open_task_pages(agent.clone(), Some(tab), from, cx);
                             }))

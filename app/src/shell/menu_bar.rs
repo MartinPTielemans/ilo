@@ -29,6 +29,9 @@ pub struct MenuBar {
     pub little_off: bool,
     /// Window › Stay On Top's tick, or None where the window can't stay on top.
     pub on_top: Option<bool>,
+    /// Whether Window has View Boosts…: not in a private window or an agent's Space, nor with
+    /// Settings' switch off, which takes every way into Boosts away.
+    pub boosts: bool,
     /// Spaces › Change Profile: each profile by id and name, whether the Space shown can change to
     /// it and whether it's in it, then whether New Profile can be chosen. None in a private window.
     pub profiles: Option<(Vec<ProfileChoice>, bool)>,
@@ -141,6 +144,7 @@ impl Shell {
             tracing: trace::recording(cx),
             little_off: !self.little_windows,
             on_top: self.browser.can_stay_on_top().then_some(self.on_top),
+            boosts: self.offers(Command::ViewBoosts),
             profiles: self
                 .profile_choices(self.space)
                 .filter(|_| !self.one_space()),

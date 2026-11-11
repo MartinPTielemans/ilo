@@ -37,7 +37,13 @@ answer_macos() {
   [ -x "$out/alert" ] ||
     clang++ -fobjc-arc -framework Cocoa -o "$out/alert" check/alert.mm 2> "$out/alert-build.log" ||
     fail "check/alert.mm didn't build: $(cat "$out/alert-build.log")"
-  asked=$("$out/alert" 2>&1) || fail "ilo lost its activation $2, to no question: $asked"
+  # The job on GitHub's hosted Mac answers the local network's question as it comes
+  # (check-mac.yml), and ilo has its activation back.
+  asked=$("$out/alert" 2>&1) || {
+    send state
+    [ "$active" = 1 ] && return 0
+    fail "ilo lost its activation $2, to no question: $asked"
+  }
   echo "macOS asked $2, and the run answers Allow: $asked"
   "$out/alert" "" Allow > "$out/alert.txt" 2>&1 || true
   for _ in $(seq 50); do
@@ -730,6 +736,8 @@ expect "^browser: menu shown .*$(cased 'Picture in Picture')" \
   "the video's menu had no Picture in Picture"
 ../tools/window-screenshot.sh "$pid" "$out/video-menu.png" || fail "no window to capture"
 send choose "$(cased 'Picture in Picture')"
+# The core lays the Mini Player out as it shows, before the commands Linux's keyboard step sends.
+floated=$step
 expect "^browser: title $v floating\$" "the video menu's Picture in Picture didn't float the video"
 # The core's last place for a Mini Player, x, y, w and h, then its screen's work area's.
 placed() {
@@ -747,6 +755,18 @@ PLACED
 # Mac's yet.
 if [ "$(uname)" = Linux ]; then
   kept_keys "the video floating from its menu"
+fi
+
+# Its look, Dia's: 6 pt corners and a rim, one flat scrim, and its close button 28 × 28 at the top
+# left and back to its tab 29 × 28 at the top right, 12 in. An engine older than its core has
+# Chrome's.
+if engine_has ../core/mini_player.cc ../engine/patches/ours/chromium-core-mini-player.patch; then
+  expect 'browser: mini player look ' "the core didn't give the Mini Player its look" "$floated"
+  look=$(grep 'browser: mini player look ' "$log" | tail -1)
+  case "$look" in
+  *" close 12,12 28x28 back "*",12 29x28") ;;
+  *) fail "the Mini Player's buttons weren't Dia's: $look" ;;
+  esac
 fi
 
 # The floating video, the Mini Player, moves with a scroll or a drag, and ⌘-scroll, Ctrl-scroll

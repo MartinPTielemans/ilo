@@ -686,6 +686,17 @@ pub(crate) fn finish_opening(
             platform::host_set_overlay_shrink(THEME_PICKER);
         }
     }
+    let opener: boost_editor::Opener = Rc::new(|cx| {
+        let editor = boost_editor::open(Rc::new(BoostEditorHost), cx)?;
+        let view = editor.update(cx, |_, window, _| ns_view(window)).ok()?;
+        elevate(BOOST_EDITOR, Level::Modal);
+        unsafe {
+            platform::host_add_overlay(BOOST_EDITOR, view, 0., boost_editor_dismissed);
+            platform::host_set_overlay_shrink(BOOST_EDITOR);
+        }
+        Some(editor)
+    });
+    boost_editor::open_when_asked(opener, cx);
     if let Some(dialog) = dialog::open(Rc::new(DialogHost), cx)
         && let Ok(view) = dialog.update(cx, |_, window, _| ns_view(window))
     {

@@ -14,7 +14,9 @@
 # text and in its outline, and the agent can't type into the password field. It types into another.
 # A frame nested two sites deep, one the page adds after its load and one it fills by posting a
 # form into it are in the page's outline and text too, an empty helper frame is in neither, and a
-# click two frames deep lands.
+# click two frames deep lands. A skip link in a frame, off the page until it's focused, is focused
+# and then clicked, as Tab would bring it, and a click on one off the page that can't take focus
+# is refused rather than answered as done.
 # It puts tabs of its own in a split view, adds one, lists it and separates one, each in the
 # activity log, and is refused a tab of the user's.
 # A page's frames, of its own site and of another, are in its outline, where the agent clicks and
@@ -35,7 +37,8 @@
 # connected. Relaunched, a call with a tab's id from before is refused as one from before ilo
 # restarted.
 # It scrolls in a panel and in another site's frame by their refs, until each answers that
-# nothing scrolled.
+# nothing scrolled. A table's rows and a menu's items have refs it clicks by, and an answer says what
+# changed in an element, as a button now enabled.
 # Through all it does before the user first looks at its card, the user's Space, tab and focused
 # field stay as the user left them, and the user's next keys go into that field (decision 8).
 
@@ -693,7 +696,9 @@ painted(() => document.title = "fields");
   # nor the text has what it holds, as with any field's value.
   printf '%s' '<p>Inner text</p><button>Inner button</button><input aria-label="Inner field">' \
     > "$out/site/inner.html"
-  printf '%s' '<p>Cross text</p>
+  printf '%s' '<style>.skip { position: absolute; top: -2000px } .skip:focus { top: 0 }</style>
+<a class=skip href=#cross onclick="document.body.append(&quot;skip clicked&quot;)">Skip to cross</a>
+<p id=cross>Cross text</p>
 <button onclick="document.body.append(&quot;cross clicked&quot;)">Cross button</button>
 <input aria-label="Cross field" oninput="document.body.append(&quot;cross typed&quot;)">
 <input type=password aria-label="Cross password"><script src="painted.js"></script>
@@ -714,6 +719,8 @@ painted(() => document.title = "fields");
 <iframe src=http://127.0.0.1:$port/cross.html></iframe>
 <iframe title='Helper frame' src=empty.html width=1 height=1></iframe>
 <iframe name=posted></iframe><form target=posted action=http://127.0.0.1:$port/posted.html></form>
+<div role=button style='position: absolute; left: -9999px'
+  onclick='document.body.append(&quot;reached&quot;)'>Out of reach</div>
 <script>const heard = new Set();
 addEventListener('message', (event) => {
   if (event.data === 'painted') {
@@ -789,6 +796,19 @@ addEventListener('message', (event) => {
     "Clicked button “Deep button”."*"deep clicked"*) ;;
     *) fail "clicking two frames deep answered: $clicked" ;;
   esac
+  # A skip link, as Office's frame has, is above the page until it's focused, where no click
+  # reaches it: the agent's click focuses it first, as a keyboard user's Tab would (#2174). One off
+  # the page that can't take focus is refused, rather than pressed where nothing is.
+  clicked=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of link "Skip to cross")\"}")
+  case "$clicked" in
+    "Clicked link “Skip to cross”."*"skip clicked"*) ;;
+    *) fail "clicking a skip link answered: $clicked" ;;
+  esac
+  refused=$(call click "{\"tab\":$frames_tab,\"ref\":\"$(ref_of button "Out of reach")\"}")
+  case "$refused" in
+    "error: The element is outside the page"*) ;;
+    *) fail "clicking a button off the page that can't take focus answered: $refused" ;;
+  esac
 
   # select chooses an option by its text: in a select through the option's own action, and in a
   # dropdown of the page's own by clicking it open and then the option. A miss chooses nothing and
@@ -846,6 +866,46 @@ painted(() => document.title = "choose");
     fail "choosing an option the select hasn't answered: $missed"
   last=$(sed -n "s/^browser: title $choose_tab //p" "$log" | tail -1)
   [ "$last" = "priority High" ] || fail "a missed option changed the page, to $last"
+
+  # A console's list page: its table's rows and its side menu's items, which a person clicks, have
+  # refs, and a click on a row opens it. Ticking the box enables Continue, and the click's answer
+  # says what changed in each, not only that each did (#2355).
+  printf '%s' '<script src="painted.js"></script>
+<ul aria-label=Menu><li onclick="document.title = this.textContent">Instances<li
+ onclick="document.title = this.textContent">Volumes</ul>
+<table aria-label=Instances><tr><th>Name<th>State</tr></table>
+<p><label><input type=checkbox id=agree> I agree</label> <button id=next disabled>Continue</button>
+<script>
+const table = document.querySelector("table");
+for (let i = 1; i <= 8; i++) {
+  const row = table.insertRow();
+  row.insertCell().textContent = "web-" + i;
+  row.insertCell().textContent = i % 2 ? "Running" : "Stopped";
+  row.onclick = () => document.title = "opened web-" + i;
+}
+agree.onchange = () => next.disabled = !agree.checked;
+painted(() => document.title = "console");
+</script>' > "$out/site/console.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/console.html\"}")
+  console_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$console_tab" ] || fail "opening the console page answered: $opened"
+  await_log "^browser: title $console_tab console\$" "the console page didn't paint"
+  outline=$(call snapshot "{\"tab\":$console_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-console.txt"
+  row=$(printf '%s\n' "$outline" | sed -n 's/.*- row "web-3[^"]*" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  volumes=$(ref_of listitem Volumes)
+  agree=$(ref_of checkbox "I agree")
+  [ -n "$row" ] && [ -n "$volumes" ] && [ -n "$agree" ] ||
+    fail "the console page's row, menu item and box had the refs '$row', '$volumes' and '$agree': $out/mcp-console.txt"
+  call click "{\"tab\":$console_tab,\"ref\":\"$row\"}" > /dev/null
+  await_log "^browser: title $console_tab opened web-3\$" "a click on a row by its ref didn't open it"
+  call click "{\"tab\":$console_tab,\"ref\":\"$volumes\"}" > /dev/null
+  await_log "^browser: title $console_tab Volumes\$" "a click on a menu item by its ref didn't reach it"
+  ticked=$(call click "{\"tab\":$console_tab,\"ref\":\"$agree\"}")
+  case "$ticked" in
+    *"Changed:"*'button "Continue" [e'*']: now enabled'*) ;;
+    *) fail "ticking the box answered without saying Continue is now enabled: $ticked" ;;
+  esac
 
   # It scrolls in what it names by ref, a panel and another site's frame, as a wheel there does,
   # and once one is at its end the answer says nothing scrolled. The page around them is too short

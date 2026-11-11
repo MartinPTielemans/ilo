@@ -804,6 +804,10 @@ class Account : public syncer::SyncServiceObserver,
       activity->trouble = BC_SYNC_TROUBLE_STOPPED;
       return;
     }
+    if (sync_spaces::NeedsUpdate()) {
+      activity->trouble = BC_SYNC_TROUBLE_UPDATE;
+      return;
+    }
     // The last cycle's results, which the next cycle replaces, so a trouble goes once it's over.
     const syncer::ModelNeutralState cycle =
         service->GetLastCycleSnapshotForDebugging().model_neutral_state();
@@ -1889,6 +1893,15 @@ void Install() {
     // sends nothing; dropping the commit instead would leave its changes in flight for good.
     CHECK(SyncCommitIsCiphertext(type, commit))
         << "plaintext in a commit of " << syncer::DataTypeToDebugString(type);
+  };
+  g_browser_core_sync_keep_update = [](syncer::DataType type, bool encrypted,
+                                       const sync_pb::SyncEntity& update) {
+    if (KeepSyncUpdate(type, encrypted, update)) {
+      return true;
+    }
+    LOG(ERROR) << "browser: sync dropped an update of " << syncer::DataTypeToDebugString(type)
+               << " that isn't ciphertext";
+    return false;
   };
   g_browser_core_sync_password_tag = &SyncPasswordTag;
   g_browser_core_sync_controllers = [](Profile* profile, syncer::SyncService*) {

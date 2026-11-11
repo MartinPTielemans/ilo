@@ -125,14 +125,17 @@ pub fn height(count: usize) -> f32 {
 }
 
 /// Where a preview `height` tall has its top left: BESIDE right of the sidebar, whose edge is
-/// PLATE_INSET past its row's plate, centred on the row, and INSIDE the window, the top and left
-/// first if it can't be both.
+/// PLATE_INSET past its row's plate, or as far left of a sidebar on the right, centred on the row,
+/// and INSIDE the window, the top and left first if it can't be both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + PLATE_INSET + BESIDE;
+    let left = match anchor.left {
+        true => f32::from(anchor.row.left()) - PLATE_INSET - BESIDE - WIDTH,
+        false => f32::from(anchor.row.right()) + PLATE_INSET + BESIDE,
+    };
     let top = (f32::from(anchor.row.center().y) - height / 2.).round();
     (
         left.min(width - WIDTH - INSIDE).max(INSIDE),
@@ -258,7 +261,6 @@ pub fn dismissed(cx: &mut App) {
         preview.on_card = false;
         preview.on_row = false;
         if preview.shown.take().is_some() {
-            // check.sh reads this line.
             log!("browser: folder preview dismissed");
             cx.notify();
         }

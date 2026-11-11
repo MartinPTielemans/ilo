@@ -54,7 +54,7 @@ struct SavedTab {
   bool focused = false;
   // A pinned tab's folder, among its Space's saved folders, else -1.
   int folder = -1;
-  // A pinned tab's node, or none if it was saved before pinned tabs had them.
+  // A pinned or Today tab's node, or none if it was saved before they had them.
   Space::Node node;
   // Whether it was muted, for a tab closed and reopened. The session file doesn't keep it.
   bool muted = false;

@@ -23,7 +23,8 @@ server_url="http://localhost:$server_port"
 # Git Bash converts a path it's given alone, never one inside a URL.
 db_path=$db
 ! windows || db_path=$(cygpath -m "$db")
-DEV_MODE=1 HOST=127.0.0.1 PORT=$server_port PUBLIC_URL=$server_url NO_COLOR=1 \
+# Each query logged, so a run can count the commits it sent (sync-devices).
+DEV_MODE=1 HOST=127.0.0.1 PORT=$server_port PUBLIC_URL=$server_url NO_COLOR=1 LOG=info,sqlx::query=debug \
   DATABASE_URL="sqlite:$db_path?mode=rwc" "$ILO_SERVER" > "$server_log" 2>&1 3>&- &
 ilo_server=$!
 for _ in $(seq 100); do

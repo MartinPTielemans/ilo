@@ -43,9 +43,14 @@ pub const DWELL: Duration = Duration::from_millis(500);
 pub const LEAVE: Duration = Duration::from_millis(150);
 /// The picture's box is as wide as the card inside its padding.
 pub const INNER: f32 = WIDTH - 2. * PADDING;
-/// The pictures the core takes are scaled down to fit this, in pixels: twice the picture's box at
-/// its tallest, for a Retina screen.
-pub const PICTURE_PIXELS: (i32, i32) = ((2. * INNER) as i32, (2. * INNER * PICTURE_MOST) as i32);
+/// The pixels the core scales a picture down to fit: the picture's box at its tallest, at the
+/// window's `scale`. One is kept for each hidden tab, so a 1× screen's are a quarter of a Retina
+/// screen's, which needs the twice (#2138).
+pub fn picture_pixels(scale: f32) -> (i32, i32) {
+    let scale = scale.max(1.);
+    let side = |points: f32| (points * scale).ceil() as i32;
+    (side(INNER), side(INNER * PICTURE_MOST))
+}
 /// The card's window, as big as the card at its tallest and the margin its shadow draws in.
 pub const WINDOW_WIDTH: f32 = WIDTH + 2. * WINDOW_MARGIN;
 pub const WINDOW_HEIGHT: f32 = PADDING + INNER * PICTURE_MOST + TEXT + 2. * WINDOW_MARGIN;
@@ -203,6 +208,8 @@ pub struct Card {
 pub struct Anchor {
     pub row: Bounds<Pixels>,
     pub window: Size<Pixels>,
+    /// Whether it opens on the row's left, toward the page from a sidebar on the right (#2375).
+    pub left: bool,
 }
 
 /// What the card tells the shell that asked for it.
@@ -278,14 +285,18 @@ pub fn height(picture: f32) -> f32 {
     }
 }
 
-/// Where a card `height` tall has its top left: GAP right of its row, its top at the row's, and
-/// EDGE inside the window, the top and left first if it can't be both.
+/// Where a card `height` tall has its top left: GAP right of its row, or left of it toward a page on
+/// the left, its top at the row's, and EDGE inside the window, the top and left first if it can't be
+/// both.
 pub fn place(anchor: Anchor, height: f32) -> (f32, f32) {
     let (width, tall) = (
         f32::from(anchor.window.width),
         f32::from(anchor.window.height),
     );
-    let left = f32::from(anchor.row.right()) + GAP;
+    let left = match anchor.left {
+        true => f32::from(anchor.row.left()) - GAP - WIDTH,
+        false => f32::from(anchor.row.right()) + GAP,
+    };
     let top = f32::from(anchor.row.top());
     (
         left.min(width - WIDTH - EDGE).max(EDGE),
@@ -467,7 +478,6 @@ pub fn forget_all(cx: &mut App) {
         let count = card.pictures.len();
         card.pictures.clear();
         card.let_go(cx);
-        // check.sh reads this line.
         log!("browser: hover card pictures dropped {count}");
     });
 }

@@ -79,13 +79,18 @@ fn card(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<gpui::Bound
     shell.read_with(cx, |shell, _| shell.boost_card_drawn.get())
 }
 
-/// Clicks the card's button at `along` its bottom row, 0.25 for the left of two and 0.75 the
-/// right.
-fn press(shell: &Entity<Shell>, along: f32, cx: &mut VisualTestContext) {
+/// How far over the card's bottom the middle of its last line of buttons is, and of the line
+/// over that: Edit CSS… and Zap's, over Customize….
+const LAST: f32 = 26.;
+const OVER_LAST: f32 = 62.;
+
+/// Clicks the card's button at `along` the line `up` from its bottom, 0.25 for the left of two
+/// and 0.75 the right.
+fn press(shell: &Entity<Shell>, along: f32, up: f32, cx: &mut VisualTestContext) {
     let card = card(shell, cx).expect("no Boost card");
     let at = point(
         card.origin.x + card.size.width * along,
-        card.origin.y + card.size.height - px(26.),
+        card.origin.y + card.size.height - px(up),
     );
     cx.simulate_click(at, Modifiers::none());
     cx.run_until_parked();
@@ -126,7 +131,7 @@ fn zap_hides_each_click_and_undo_takes_it_back(cx: &mut TestAppContext) {
     let (shell, host, folder, cx) = window(cx);
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
     assert!(card(&shell, cx).is_some(), "New Boost opened no card");
-    press(&shell, 0.75, cx);
+    press(&shell, 0.75, OVER_LAST, cx);
     assert_eq!(host.take(), ["zap 10 true"]);
 
     shell.update(cx, |shell, cx| {
@@ -148,8 +153,8 @@ fn zap_hides_each_click_and_undo_takes_it_back(cx: &mut TestAppContext) {
         Some(format!("{ad}\n{aside}\n"))
     );
 
-    // Undo is the left of the zapping card's two buttons.
-    press(&shell, 0.25, cx);
+    // Undo is the left of the zapping card's two buttons, its last line.
+    press(&shell, 0.25, LAST, cx);
     assert_eq!(host.take(), [format!("boost 1 example.com: {ad}")]);
 
     cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
@@ -188,7 +193,7 @@ fn a_new_page_ends_zap(cx: &mut TestAppContext) {
 fn edit_css_opens_the_sites_file(cx: &mut TestAppContext) {
     let (shell, host, folder, cx) = window(cx);
     shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
-    press(&shell, 0.25, cx);
+    press(&shell, 0.25, OVER_LAST, cx);
     let calls = host.take();
     assert_eq!(
         calls.last().map(String::as_str),
@@ -350,4 +355,83 @@ fn the_plus_menu_makes_then_edits_a_boost(cx: &mut TestAppContext) {
         "{:?}",
         menu(&host)
     );
+}
+
+struct Unseen;
+
+impl crate::boost_editor::Host for Unseen {
+    fn show(&self, _: u64, _: f32, _: f32, _: &[(f32, f32, f32)]) {}
+    fn hide(&self) {}
+}
+
+/// Customize…, the card's last line, closes the card for the editor on the site; a change the
+/// editor keeps goes in the site's file and to its pages, and its Zap brings the card back
+/// zapping.
+#[gpui::test]
+fn customize_hands_the_site_to_the_editor(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    cx.update(|_, cx| crate::boost_editor::open(Rc::new(Unseen), cx))
+        .expect("no window for the editor");
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    press(&shell, 0.5, LAST, cx);
+    assert_eq!(card(&shell, cx), None, "Customize… left the card open");
+    assert_eq!(
+        cx.update(|_, cx| crate::boost_editor::open_for(cx))
+            .as_deref(),
+        Some("example.com")
+    );
+
+    let style = crate::boost_style::Style::default().shuffled(7);
+    let block = style.block().expect("a shuffled style has no block");
+    shell.update(cx, |shell, cx| {
+        let request = crate::boost_editor::Request::Style(style, true);
+        shell.boost_requested(1, "example.com", request, cx);
+    });
+    let file = folder.boost("example.com").expect("the edit made no file");
+    assert!(file.contains(&block), "{file}");
+    assert!(
+        host.take()
+            .iter()
+            .any(|call| call.starts_with("boost 1 example.com:")),
+        "the edit reached no page"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.boost_requested(1, "example.com", crate::boost_editor::Request::Zap, cx)
+    });
+    assert_eq!(host.take(), ["zap 10 true"]);
+    assert!(card(&shell, cx).is_some(), "Zap brought no card back");
+}
+
+/// Window › View Boosts… opens Library › Boosts. Settings' switch off takes it away and on gives
+/// it back, and an agent's Space has none.
+#[gpui::test]
+fn window_view_boosts_opens_the_list(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    let offered = |host: &Recorder| host.menu_bar.borrow().boosts;
+    shell.update(cx, |shell, cx| shell.boosts_changed(cx));
+    assert!(offered(&host));
+    shell.update(cx, |shell, cx| shell.run(Command::ViewBoosts, "ui", cx));
+    cx.run_until_parked();
+    let section = shell.read_with(cx, |shell, _| shell.library_open.then_some(shell.section));
+    assert_eq!(section, Some(crate::shell::library::Section::Boosts));
+    shell.update(cx, |shell, cx| {
+        crate::boosts::with(|boosts| boosts.set_all_off(true));
+        shell.boosts_changed(cx);
+    });
+    assert!(
+        !offered(&host),
+        "View Boosts… stayed with Settings' switch off"
+    );
+    shell.update(cx, |shell, cx| {
+        crate::boosts::with(|boosts| boosts.set_all_off(false));
+        shell.boosts_changed(cx);
+    });
+    assert!(
+        offered(&host),
+        "View Boosts… didn't come back with the switch on"
+    );
+    host.space_agents.borrow_mut().insert(1, "claude".into());
+    shell.update(cx, |shell, cx| shell.boosts_changed(cx));
+    assert!(!offered(&host), "an agent's Space offered View Boosts…");
 }

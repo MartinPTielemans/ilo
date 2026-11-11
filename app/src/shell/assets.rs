@@ -195,6 +195,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/compass.svg"),
     ),
     (
+        "icons/contrast.svg",
+        include_bytes!("../../assets/icons/contrast.svg"),
+    ),
+    (
         "icons/cookie.svg",
         include_bytes!("../../assets/icons/cookie.svg"),
     ),
@@ -439,6 +443,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
+        "icons/nav-sidebar-right.svg",
+        include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
+    ),
+    (
         "icons/nav-stop.svg",
         include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
@@ -461,6 +469,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-left.svg",
         include_bytes!("../../assets/icons/panel-left.svg"),
+    ),
+    (
+        "icons/panel-right.svg",
+        include_bytes!("../../assets/icons/panel-right.svg"),
     ),
     (
         "icons/paw-print.svg",
@@ -573,6 +585,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/shopping-basket.svg",
         include_bytes!("../../assets/icons/shopping-basket.svg"),
+    ),
+    (
+        "icons/shuffle.svg",
+        include_bytes!("../../assets/icons/shuffle.svg"),
     ),
     (
         "icons/skip-back.svg",

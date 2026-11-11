@@ -32,9 +32,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, capture, command_bar, dialog, dock_dot, elevation::Level, folder_preview, hover_card,
-    icon_picker, launch, launch_picture, link_preview, link_target, log, log_in, menu, offer,
-    passwords, site_controls, theme_picker, toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
+    log, log_in, menu, offer, passwords, site_controls, theme_picker, toast, tooltip, updates,
+    zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
@@ -331,7 +332,6 @@ fn leave_agent_space(window: bc::bc_id) {
             && unsafe { bc::bc_space_profile(space) } == profile
     });
     if let Some(home) = home {
-        // check.sh reads this line.
         log!("browser: window {window} left space {shown} of an agent for space {home}");
         unsafe { bc::bc_window_show_space(window, home) };
     }
@@ -494,6 +494,8 @@ unsafe extern "C" fn started(_: *mut c_void) {
         settings::read_shortcuts(cx);
         settings::read_look(cx);
         settings::read_portrait_background(cx);
+        settings::read_new_note(cx);
+        settings::read_clean_links(cx);
         translate_host::read_always(cx);
         give_host_appearance(shell::app_appearance(cx));
         shell::bind_keys(cx);
@@ -662,7 +664,6 @@ unsafe extern "C" fn agent_request_done(
         cut: response.cut,
         error: text(response.error),
     };
-    // check.sh reads this line.
     log!(
         "browser: agent request {request} answered {} {}",
         response.status,
@@ -735,7 +736,11 @@ unsafe extern "C" fn launching(_: *mut c_void) {
             taken.height
         );
     }
-    let picture = taken.filter(|taken| !maximized && launch_picture::shows(taken, width, height));
+    // A picture of the column on the left, from before the sidebar moved right, is none of this
+    // window's (settings::set_sidebar_right).
+    let right = settings::sidebar_right_kept();
+    let picture =
+        taken.filter(|taken| !maximized && !right && launch_picture::shows(taken, width, height));
     let (taken_width, taken_height, foot_top) = picture.map_or((0., 0., 0.), |taken| {
         (taken.width, taken.height, taken.foot_top)
     });

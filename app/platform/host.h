@@ -243,14 +243,15 @@ double host_since_launch(void);
 // The browser window of |ui_view| has closed: what showed over it hides, and its windows go.
 void host_forget_window(void* ui_view);
 
-// The overlays: the command bar, the Space's icon and theme pickers, and a closed folder's preview.
-// One shows at a time.
+// The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview and
+// the Boost editor. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
+#define HOST_BOOST_EDITOR 4
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
-#define HOST_SITE_CONTROLS 4
+#define HOST_SITE_CONTROLS 5
 
 // Gives the |overlay| (or the Site Controls) the shadow its elevation level draws, in Core
 // Animation's terms: a black line round its shape and a black drop shadow, each with an opacity
@@ -608,6 +609,11 @@ int host_ask(const char* message, const char* detail, const char* const* buttons
 // Shows the close, minimize and zoom buttons of |ui_view|'s window, or hides them, as Arc does
 // while its sidebar is hidden.
 void host_show_window_buttons(void* ui_view, bool shown);
+
+// Puts |ui_view|'s window's close, minimize and zoom buttons at its right, mirrored, so close is at
+// the corner, and the reveal's window and the edge that brings it out at the right too, or back on
+// the left: Sidebar position (#2375). The UI lays out the rest.
+void host_set_sidebar_right(void* ui_view, bool right);
 
 // The Mac's close, minimize and zoom buttons as AppKit draws them in |ui_view|'s window, for the
 // copies the UI draws in their place: each one's centre across from the window's left edge, their

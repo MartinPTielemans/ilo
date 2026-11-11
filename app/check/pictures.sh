@@ -1,9 +1,8 @@
-# The picture of a page in the window it left follows the page's loads, from the core's reports, not
-# on a timer (#359). A still page moves from the first window into a second, and the first
+# The picture of a page in the window it left follows the page's loads, from the core's reports and
+# never on a timer (#359). A still page moves from the first window into a second, and the first
 # window draws its picture. A same-page navigation in the second window (a click pushes a URL and
 # sets its colour) and then the page loaded again from the command bar each take the first window's
-# picture again, the load's asked again if the core had none yet (a page that has drawn no frame,
-# as on Windows). The page is the check's site's, as a data: URL's fragment commits no navigation.
+# picture again. The page is the check's site's, as a data: URL's fragment commits no navigation.
 # Settled for 10 s, an idle browser is then measured, in PICTURES_ROUNDS (3) rounds of
 # PICTURES_SECONDS (20), with the picture as it first came and again once those have refreshed it:
 # the CPU and wakeups of the app's processes, with no picture taken while it's idle, and the wakeups
@@ -40,12 +39,18 @@ if [ "$active" != 1 ]; then
   echo "skip: pictures. Browser wasn't the active app."
   exit 0
 fi
-send place 0 40 900 500
+# Side by side on the screen, which is 1280 wide in Linux's sessions, where Wayland's pointer can't
+# go off it to click the second window's page, and 1920 on the Macs and Windows.
+case $(uname) in
+Linux) left=10 right=640 wide=620 ;;
+*) left=0 right=920 wide=900 ;;
+esac
+send place $left 40 $wide 500
 send key n cmd
 expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
 second=$(grep '^browser: window opened ' "$log" | sed -n 2p | cut -d' ' -f4)
 send window 2
-send place 920 40 900 500
+send place $right 40 $wide 500
 send click $(row 0)
 expect "^browser: window $second shows $a\$" "the page didn't move into the second window"
 expect "^browser: window $first pictures tab $a\$" "the first window got no picture of the page"
@@ -105,7 +110,7 @@ n=$(taken)
 go_from_bar "${page}?three"
 expect "^browser: loaded $a ${page}?three\$" "the page didn't load again from the command bar"
 taken_by $((n + 1)) "a page that loaded"
-sleep 10
+sleep 10 # settled 10 s, past the load's asks again, as the first picture was
 capture refreshed
 idle "refreshed picture"
 exec 3>&-

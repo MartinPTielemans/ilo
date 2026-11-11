@@ -34,6 +34,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1045,10 +1046,11 @@ void WatchForeground() {
   (void)hook;
 }
 
-Floating g_overlays[4];
+Floating g_overlays[5];
 // What check.sh calls each overlay, as the Mac's and Linux's hosts do.
 const char* const kOverlayNames[std::size(g_overlays)] = {"command bar", "icon picker",
-                                                         "theme picker", "folder preview"};
+                                                         "theme picker", "folder preview",
+                                                         "boost editor"};
 int const kFolderPreview = 3;
 // Hides overlay |index| if it's shown, on screen or not, saying so, and whether it was, as the
 // Mac's host does: its show waits for the UI's next frame, and Windows hides it with its minimized
@@ -1245,6 +1247,25 @@ struct Reveal {
   void (*pointer_moved)(void*, double) = nullptr;
 };
 std::map<void*, Reveal> g_reveals;
+
+// The browser windows whose sidebar is on the right, with the window's buttons and the reveal
+// there too (host_set_sidebar_right).
+std::set<HWND>& SidebarRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
+// How far across |ui_view|'s content its reveal |width| wide starts: at the left edge, or against
+// the right one with the sidebar there.
+double RevealLeft(void* ui_view, double width) {
+  HWND root = Root(ui_view);
+  if (!SidebarRight().count(root)) {
+    return 0;
+  }
+  double content_width, content_height;
+  ContentSize(root, &content_width, &content_height);
+  return content_width - width;
+}
 Floating g_settings;
 bool g_settings_placed = false;
 
@@ -1397,7 +1418,7 @@ void ReleaseKeys(HWND from) {
   HWND to = g_keys_for ? g_keys_for : (from ? from : GetFocus());
   g_keys_for = nullptr;
   if (!g_held_keys.empty()) {
-    // check.sh reads this line, which names the window that took them as the Mac's does.
+    // It names the window that took them as the Mac's does.
     fprintf(stderr, "browser: held %zu key events for %s\n", g_held_keys.size(),
             to_bar ? "GPUIPanel" : "BrowserCoreNSWindow");
   }
@@ -1587,6 +1608,14 @@ void Moved(HWND root) {
     PostMenuDismiss(true);
   }
   const double scale = Scale(root);
+  // A reveal on the right keeps to the right edge as the window's width changes.
+  for (auto& [ui_view, reveal] : g_reveals) {
+    if (Root(ui_view) == root && reveal.floating.place && SidebarRight().count(root)) {
+      double width, height;
+      WindowSize(reveal.floating.hwnd, &width, &height);
+      reveal.floating.place->first = RevealLeft(ui_view, width);
+    }
+  }
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (floating->place && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root) {
       POINT origin{std::lround(floating->place->first * scale),
@@ -2396,11 +2425,14 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
+  // there, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
+  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
+                                                   : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
-  if (shown != WindowButtonsShown().end() && shown->second &&
-      std::abs(at.x / scale - 43) <= 11 && std::abs(at.y / scale - 24) <= 11) {
+  if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
+      std::abs(at.y / scale - 24) <= 11) {
     return HTMAXBUTTON;
   }
   return 0;
@@ -2629,6 +2661,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
         }
       }
       WindowButtonsShown().erase(hwnd);
+      SidebarRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -4352,6 +4385,18 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+void host_set_sidebar_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    SidebarRight().insert(root);
+  } else {
+    SidebarRight().erase(root);
+  }
+}
+
 void host_set_window_on_top(void* ui_view, bool on) {
   // The overlays are windows it owns, which Windows makes topmost and back with it.
   SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
@@ -4384,7 +4429,7 @@ void host_show_reveal(void* ui_view, double width) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   // The UI shows it again as its width changes; check.sh reads the line once a showing.
   const bool was_shown = it->second.floating.hwnd && IsWindowVisible(it->second.floating.hwnd);
-  Show(it->second.floating, ui_view, 0, 0, width, content_height, false);
+  Show(it->second.floating, ui_view, RevealLeft(ui_view, width), 0, width, content_height, false);
   if (!was_shown) {
     LogShown(it->second.floating, "reveal");
   }
@@ -4575,7 +4620,6 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
     });
     const std::wstring model = BrowserModelId();
     if (model.empty()) {
-      // check.sh reads this line.
       fprintf(stderr, "browser: needs you posted %llu: no AppUserModelID\n",
               static_cast<unsigned long long>(id));
       return;
@@ -5202,7 +5246,6 @@ void host_set_little_status_item(void (*clicked)(void)) {
   if (!clicked) {
     if (g_tray_clicked) {
       TrayIcon(NIM_DELETE);
-      // check.sh reads this line.
       fprintf(stderr, "browser: notification icon removed\n");
     }
     g_tray_clicked = nullptr;
@@ -5224,7 +5267,6 @@ void host_set_little_status_item(void (*clicked)(void)) {
                              nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     g_taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
   }
-  // check.sh reads this line.
   fprintf(stderr, "browser: notification icon %s\n", TrayIcon(NIM_ADD) ? "shown" : "refused");
 }
 

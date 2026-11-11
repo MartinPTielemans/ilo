@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use gpui::{App, Bounds, Context, Pixels, Point, px, size};
+use gpui::{App, Bounds, Context, Pixels, Point, point, px, size};
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use crate::space_icon::has_icon;
 use crate::{icon_picker, theme_picker};
 
 use super::recent_downloads::{age, now};
-use super::{PLATE_INSET, Row, Shell, host};
+use super::{PLATE_INSET, REVEAL_INSET, Row, Shell, host};
 
 /// How long the switches are quiet before a page they hid is pictured: the Dock dot's `QUIET`. A
 /// page the core still keeps on screen then, as a switch does until the new one draws, it holds
@@ -34,22 +34,33 @@ impl Shell {
         if !hovered {
             return self.browser.hover_card(Hover::Left(tab), cx);
         }
-        let picker = theme_picker::is_open(cx) || icon_picker::is_open(cx);
+        let picker = theme_picker::is_open(cx)
+            || icon_picker::is_open(cx)
+            || crate::boost_editor::is_open(cx);
         let naming = self.renaming.is_some();
         let busy = self.dragging().is_some() || self.menu_row.is_some() || naming || picker;
         let Some(card) = self.card(tab).filter(|_| !busy) else {
             return;
         };
-        let Some(frame) = self.tip_frames.borrow().get(&tab).copied() else {
+        let Some(frame) = self.tip_frame(tab) else {
             return;
         };
         // A tile's card starts where a row's would, past the sidebar's rows, not over the tiles
-        // beside it.
-        let right = self.sidebar_origin.get().x + px(self.rows_width() - PLATE_INSET);
-        let row = Bounds::new(
-            frame.origin,
-            size(right.max(frame.right()) - frame.origin.x, frame.size.height),
-        );
+        // beside it: on their right, or with the sidebar on the right, on their left.
+        let origin = self.sidebar_origin.get().x + self.reveal_offset();
+        let row = match self.right() {
+            true => {
+                let left = (origin + px(PLATE_INSET)).min(frame.left());
+                Bounds::from_corners(point(left, frame.top()), frame.bottom_right())
+            }
+            false => {
+                let right = origin + px(self.rows_width() - PLATE_INSET);
+                Bounds::new(
+                    frame.origin,
+                    size(right.max(frame.right()) - frame.origin.x, frame.size.height),
+                )
+            }
+        };
         let shell = cx.weak_entity();
         // It may tell of the card inside this update, so what it tells waits for the update's end.
         let events = Rc::new(move |tab: u64, event: Event, cx: &mut App| {
@@ -63,6 +74,7 @@ impl Shell {
         let anchor = Anchor {
             row,
             window: self.viewport,
+            left: self.right(),
         };
         let window = self.browser.window();
         self.browser.hover_card(
@@ -107,7 +119,7 @@ impl Shell {
         if busy || items.is_empty() {
             return;
         }
-        let Some(row) = self.tip_frames.borrow().get(&folder).copied() else {
+        let Some(row) = self.tip_frame(folder) else {
             return;
         };
         let shell = cx.weak_entity();
@@ -128,6 +140,7 @@ impl Shell {
             anchor: Anchor {
                 row,
                 window: self.viewport,
+                left: self.right(),
             },
             chosen,
         };
@@ -296,7 +309,7 @@ impl Shell {
                         && !self.page(tab).unloaded
                         && !self.frozen(tab)
                     {
-                        self.browser.card_picture(tab, cx);
+                        self.browser.card_picture(tab, self.scale, cx);
                     }
                 }
             }
@@ -349,6 +362,7 @@ impl Shell {
         crate::menu::dismissed(cx);
         crate::icon_picker::leave(cx);
         crate::theme_picker::leave(cx);
+        crate::boost_editor::leave(cx);
         crate::site_controls::dismissed(cx);
     }
 
@@ -378,7 +392,7 @@ impl Shell {
         for tab in hidden {
             let open = self.tabs.get(&tab).is_some_and(|each| !each.page.unloaded);
             if open && !self.on_screen(tab) {
-                self.browser.card_picture(tab, cx);
+                self.browser.card_picture(tab, self.scale, cx);
             }
         }
     }
@@ -386,3 +400,22 @@ impl Shell {
 
 #[cfg(test)]
 mod tests;
+
+impl Shell {
+    /// Where `id`'s tile or folder row was last drawn, in the browser window. The reveal's window
+    /// draws the hidden sidebar, at the browser window's left edge, or with the sidebar on the
+    /// right, at its right edge, where its points are `reveal_offset` from the browser window's.
+    fn tip_frame(&self, id: u64) -> Option<Bounds<Pixels>> {
+        let frame = self.tip_frames.borrow().get(&id).copied()?;
+        Some(frame + point(self.reveal_offset(), px(0.)))
+    }
+
+    /// How far across the browser window the reveal's window starts while it shows the sidebar at
+    /// rest: 0 on the left, past the page on the right.
+    pub(super) fn reveal_offset(&self) -> Pixels {
+        match self.right() && self.sidebar_hidden && self.reveal_shown() {
+            true => self.viewport.width - px(REVEAL_INSET + self.width()),
+            false => px(0.),
+        }
+    }
+}

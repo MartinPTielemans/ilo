@@ -415,6 +415,8 @@ enum Popup {
     Appearance,
     /// General's Page zoom.
     PageZoom,
+    /// Tabs & Sidebar's Sidebar position.
+    SidebarPosition,
 }
 
 impl Popup {
@@ -431,6 +433,7 @@ impl Popup {
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
+            Popup::SidebarPosition => "Sidebar position".into(),
         }
     }
 }
@@ -605,6 +608,7 @@ impl account::Host for CoreAccount {
             bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
             bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
             bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
+            bc::BC_SYNC_TROUBLE_UPDATE => Some(account::Trouble::Update),
             _ => None,
         };
         // check.sh waits for this line.
@@ -1493,13 +1497,15 @@ impl Settings {
     /// ⌘Z: on Links, the last rule its trash took comes back. The other sections' changes show
     /// as they're made and are made back the same way.
     fn undo(&mut self, cx: &mut Context<Self>) {
-        if let Some(links) = self
-            .links
-            .as_ref()
-            .filter(|_| self.section == Section::Links)
-        {
-            links.update(cx, |links, cx| links.undo(cx));
-        }
+        let links = (self.links.as_ref()).filter(|_| self.section == Section::Links);
+        let undone = links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
+        let what = if undone {
+            "brought a rule back"
+        } else {
+            "had nothing"
+        };
+        // check.sh reads this line.
+        log!("browser: settings undo {what}");
     }
 
     fn forget_undo(&mut self, cx: &mut Context<Self>) {
@@ -1759,7 +1765,6 @@ impl Settings {
         };
         let make = default.offers().then(|| {
             let make = cx.listener(|settings: &mut Self, _, _, cx| {
-                // check.sh waits for this line.
                 log!("browser: make default browser");
                 settings.default_browser.read(cx).make_default();
             });
@@ -1960,8 +1965,7 @@ impl Settings {
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, and
-    /// how the hidden sidebar comes.
+    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
@@ -2069,6 +2073,27 @@ impl Settings {
             ),
             Block::Rows(vec![favorites]),
         ];
+        let right = shell::sidebar_right(cx);
+        let position = self.popup(
+            Popup::SidebarPosition,
+            side_title(right).into(),
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_sidebar_position(right, window, cx)
+            }),
+        );
+        let position = setting(
+            look,
+            "Sidebar position",
+            Some("The side of the window the sidebar and the window's buttons are on.".into()),
+            vec![
+                position
+                    .child(self.drawn("sidebar position".into()))
+                    // Drawn again once the side changes, which check.sh waits for.
+                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
+                    .into_any_element(),
+            ],
+        );
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2078,15 +2103,21 @@ impl Settings {
             cx,
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
-        let mut hidden = vec![setting(
-            look,
-            "Show the hidden sidebar at the window's edge",
-            Some(
-                format!("Move the pointer along the left edge. {toggle_keys} shows it either way.")
+        let side = if right { "right" } else { "left" };
+        let mut hidden = vec![
+            position,
+            setting(
+                look,
+                "Show the hidden sidebar at the window's edge",
+                Some(
+                    format!(
+                        "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
+                    )
                     .into(),
+                ),
+                vec![edge],
             ),
-            vec![edge],
-        )];
+        ];
         // Where the host watches for it (host_watch_option_taps), or on Windows the core.
         if cfg!(any(
             target_os = "macos",
@@ -2118,7 +2149,7 @@ impl Settings {
             };
             hidden.push(setting(look, name, Some(line.into()), vec![option]));
         }
-        blocks.push(Block::Heading("The hidden sidebar".into()));
+        blocks.push(Block::Heading("The sidebar".into()));
         blocks.push(Block::Rows(hidden));
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
@@ -2281,19 +2312,40 @@ impl Settings {
             Some("A playing video or call floats over your work when you leave its tab.".into()),
             vec![mini_player],
         );
+        let note_on = new_note_on(cx);
+        let note_switch = self.toggle("new note", "New Note", note_on, set_new_note, accent, cx);
         let note_keys = shell::user_keys(cx).label(Command::NewNote);
-        let note_line: SharedString = match note_keys {
-            Some(keys) => format!("{keys} opens a new document in the service you pick.").into(),
-            None => "New Note opens a new document in the service you pick.".into(),
+        // Off, the line is the receipt, as Little ilo's is.
+        let note_line: SharedString = match (note_on, note_keys) {
+            (true, Some(keys)) => {
+                format!("{keys} opens a new document in the service you pick.").into()
+            }
+            (true, None) => "New Note opens a new document in the service you pick.".into(),
+            (false, Some(keys)) => format!(
+                "Off: {keys} does nothing, and the + menu and the command bar have no New Note. \
+                 The documents it opened stay."
+            )
+            .into(),
+            (false, None) => "Off: the + menu and the command bar have no New Note. The \
+                              documents it opened stay."
+                .into(),
         };
-        // One profile's service on the feature's row, else each profile's under it.
+        // One profile's service on the feature's row, else each profile's under it, and its
+        // services only while it's on.
         let note = match profiles {
+            _ if !note_on => vec![feature(
+                look,
+                "icons/pencil.svg",
+                "New Note",
+                Some(note_line),
+                vec![note_switch],
+            )],
             [profile] => vec![feature(
                 look,
                 "icons/pencil.svg",
                 "New Note",
                 Some(note_line),
-                vec![self.notes_popup(profile.id, cx)],
+                vec![self.notes_popup(profile.id, cx), note_switch],
             )],
             _ => {
                 let services = profiles.iter().map(|profile| {
@@ -2309,7 +2361,7 @@ impl Settings {
                     "icons/pencil.svg",
                     "New Note",
                     Some(note_line),
-                    Vec::new(),
+                    vec![note_switch],
                 );
                 [head].into_iter().chain(services).collect()
             }
@@ -2379,11 +2431,30 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: whether sites may ask to send notifications, whether calls are only relayed, each
+    /// Privacy: whether copied links leave out trackers, whether sites may ask to send
+    /// notifications, whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
     fn privacy(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
+        let clean_links = self.toggle(
+            "clean links",
+            "Copy links without tracking",
+            clean_links_on(cx),
+            set_clean_links,
+            accent,
+            cx,
+        );
+        let line = concat!(
+            "Copied and shared links leave out what only tells a site where a click came from. ",
+            "A video's time stays. The URL field's own text copies whole."
+        );
+        let clean_links = setting(
+            look,
+            "Copy links without tracking",
+            Some(line.into()),
+            vec![clean_links],
+        );
         let prompts = unsafe { bc::bc_notification_prompts() };
         let prompts_switch = self.toggle(
             "notification prompts",
@@ -2403,7 +2474,7 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![prompts])];
+        let mut blocks = vec![Block::Rows(vec![clean_links]), Block::Rows(vec![prompts])];
         let relay = unsafe { bc::bc_relay_calls() };
         let relay = self.toggle(
             "relay calls",
@@ -2881,7 +2952,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((title, seconds)) = picked.map(|index| LITTLE_ARCHIVE_AFTER[index]) {
-                // check.sh waits for this line.
                 log!("browser: little windows archive after {title}");
                 unsafe { bc::bc_set_little_archive_after(seconds) };
             }
@@ -2952,6 +3022,26 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
+    }
+
+    /// Sidebar position's pop-up menu, Left or Right, over its button.
+    fn choose_sidebar_position(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
+        let items: Vec<MenuEntry> = [false, true]
+            .iter()
+            .map(|&each| MenuEntry {
+                checked: each == right,
+                over: each == right,
+                ..MenuEntry::new(side_title(each), true)
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(index) = picked {
+                set_sidebar_right(index == 1, cx);
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::SidebarPosition, items, picked, window, cx);
     }
 
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
@@ -3162,7 +3252,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&(name, title, _)) = picked.and_then(|index| notes::SERVICES.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: notes service {profile} {title}");
                 let name = CString::new(name).unwrap_or_default();
                 unsafe { bc::bc_profile_set_notes_service(profile, name.as_ptr()) };
@@ -3845,7 +3934,6 @@ impl Settings {
             let copy = self
                 .button(("copy-task-command", cli as usize), "Copy")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: task command copied {command}");
                     cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
                 });
@@ -3906,7 +3994,6 @@ impl Settings {
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: tasks run on {}", cli.id());
                 agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
             }
@@ -4068,7 +4155,6 @@ impl Settings {
         let copy = setup.map(|setup| {
             self.button(("copy-agent-setup", index), "Copy Setup")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: agent setup copied");
                     cx.write_to_clipboard(ClipboardItem::new_string(setup.clone()));
                 })
@@ -4160,17 +4246,16 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
-        // Little ilo's commands have no row while it's off.
+        // Little ilo's commands and New Note's have no row while it's off.
         let little = unsafe { bc::bc_little_windows() };
+        let note = new_note_on(cx);
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
-                .filter(|(_, keys)| {
-                    little
-                        || !matches!(
-                            keys,
-                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
-                        )
+                .filter(|(_, keys)| match keys {
+                    Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow) => little,
+                    Keys::Of(Command::NewNote | Command::NewNoteSplit) => note,
+                    _ => true,
                 })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
@@ -4430,7 +4515,7 @@ impl Settings {
         // The Mac's and Windows' own updater's: a Flatpak's updates are the system's, and the
         // Store's are the Store's.
         let checks = (cfg!(not(target_os = "linux")) && updates::own_updater(cx)).then(|| {
-            let on = automatic_update_checks();
+            let on = automatic_update_checks(cx);
             let switch = self.toggle(
                 "automatic update checks",
                 "Check for updates automatically",
@@ -4533,7 +4618,6 @@ impl Settings {
         let plain = !keystroke.modifiers.modified();
         let keys = match keystroke.key.as_str() {
             "escape" if plain => {
-                // check.sh waits for this line.
                 log!("browser: shortcut recording stopped");
                 self.recording = None;
                 self.refused = None;
@@ -4551,7 +4635,6 @@ impl Settings {
             }
             Err(refused) => {
                 let why = refusal(refused);
-                // check.sh waits for this line.
                 log!("browser: shortcut refused {why}");
                 self.refused = Some((command, why.into()));
             }
@@ -4593,6 +4676,60 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
 
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
+}
+
+/// Where New Note's switch is kept: there while it's off. The app's, not a profile's, as its keys
+/// and the command bar are.
+fn new_note_off_path() -> String {
+    format!("{}/new-note-off", crate::profile_dir())
+}
+
+/// Reads New Note's switch, before the windows open and read it.
+pub fn read_new_note(cx: &mut App) {
+    let on = !std::path::Path::new(&new_note_off_path()).exists();
+    cx.set_global(shell::NewNoteOn(on));
+}
+
+fn new_note_on(cx: &App) -> bool {
+    cx.try_global::<shell::NewNoteOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once; the tabs New Note opened stay.
+fn set_new_note(on: bool, cx: &mut App) {
+    let path = new_note_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::NewNoteOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
+}
+
+/// Where Copy links without tracking is kept: there while it's off (#2351). The app's, not a
+/// profile's, as its copy paths are.
+fn clean_links_off_path() -> String {
+    format!("{}/copy-links-as-is", crate::profile_dir())
+}
+
+/// Reads Copy links without tracking, before the windows open and read it.
+pub fn read_clean_links(cx: &mut App) {
+    let on = !std::path::Path::new(&clean_links_off_path()).exists();
+    cx.set_global(shell::CleanLinksOn(on));
+}
+
+fn clean_links_on(cx: &App) -> bool {
+    cx.try_global::<shell::CleanLinksOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once.
+fn set_clean_links(on: bool, cx: &mut App) {
+    let path = clean_links_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::CleanLinksOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_clean_links(on, cx));
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
@@ -4725,6 +4862,9 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
 const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+/// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
+/// never synced.
+const SIDEBAR_RIGHT: &str = "sidebar-right";
 
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
@@ -4741,7 +4881,26 @@ fn set_off(name: &str, is_off: bool) {
 /// Hands the app's switches to what they change, at launch.
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
+    cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+}
+
+/// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
+pub fn sidebar_right_kept() -> bool {
+    off(SIDEBAR_RIGHT)
+}
+
+/// Sidebar position's names.
+fn side_title(right: bool) -> &'static str {
+    if right { "Right" } else { "Left" }
+}
+
+/// Moves the sidebar to the window's right, or back to its left: kept on this device, and every
+/// window follows at once, as each reads the side as it draws.
+pub fn set_sidebar_right(right: bool, cx: &mut App) {
+    set_off(SIDEBAR_RIGHT, right);
+    cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
 }
 
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
@@ -4754,19 +4913,21 @@ fn set_dock_icon_color(colored: bool, cx: &mut App) {
     browser::dock_dot::set_plain(!colored, cx);
 }
 
-/// About's "Check for updates automatically", which only the Mac and Windows show.
-fn automatic_update_checks() -> bool {
+/// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
+/// updates' own state first, so it shows what the update banner's Update Automatically set.
+fn automatic_update_checks(cx: &App) -> bool {
+    if let Some(on) = updates::automatic(cx) {
+        return on;
+    }
     #[cfg(not(target_os = "linux"))]
     return crate::updates_host::automatic_checks();
     #[cfg(target_os = "linux")]
     true
 }
 
-fn set_automatic_update_checks(on: bool, _: &mut App) {
-    #[cfg(not(target_os = "linux"))]
-    crate::updates_host::set_automatic_checks(on);
-    #[cfg(target_os = "linux")]
-    let _ = on;
+// Through the updates' own state, as the update banner reads it.
+fn set_automatic_update_checks(on: bool, cx: &mut App) {
+    updates::set_automatic(on, cx);
 }
 
 fn set_whats_new(shown: bool, _: &mut App) {
@@ -4807,7 +4968,6 @@ fn restore_earlier_sidebar(cx: &mut App) {
     let Some(shell) = front_shell() else {
         return;
     };
-    // check.sh waits for this line.
     log!("browser: settings restore sidebar");
     hide(cx);
     shell.update(cx, |shell, cx| {
@@ -5535,7 +5695,6 @@ impl Settings {
                     .and_then(|import| import.read(cx).focus())
             })
             .flatten();
-        // check.sh reads this line.
         log!(
             "browser: settings keyboard back to {}",
             if import.is_some() {

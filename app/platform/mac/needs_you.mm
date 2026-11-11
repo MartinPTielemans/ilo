@@ -56,7 +56,7 @@ UNUserNotificationCenter* Center() {
   if (!center.delegate) {
     center.delegate = delegate;
   } else if (center.delegate != delegate) {
-    // check.sh reads this line: a click on one would reach no task.
+    // A click on one would reach no task.
     fprintf(stderr, "browser: needs you clicks are another's\n");
   }
   return center;
@@ -112,7 +112,6 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
         // Banners and the list alone: the badge is the Dock tile's, and no sound.
         [center requestAuthorizationWithOptions:UNAuthorizationOptionAlert
                               completionHandler:^(BOOL granted, NSError*) {
-                                // check.sh reads this line.
                                 fprintf(stderr, "browser: needs you asked: %s\n",
                                         granted ? "allowed" : "refused");
                                 if (granted) {
@@ -122,7 +121,6 @@ void host_needs_you_notify(uint64_t id, const char* title, const char* body) {
         return;
       }
       case UNAuthorizationStatusDenied:
-        // check.sh reads this line.
         fprintf(stderr, "browser: needs you not allowed\n");
         return;
       default:

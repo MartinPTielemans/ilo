@@ -303,15 +303,21 @@ pub(crate) fn menus(
         ),
         menu(
             "Window",
-            vec![
-                MenuItem::action("Minimize Window", Minimize),
-                stay_on_top(bar.on_top),
-                MenuItem::separator(),
-                item("Open Library…", Command::ViewLibrary),
-                item("View Downloads…", Command::ViewDownloads),
-                item("View Media…", Command::ViewMedia),
-                item("View Agents…", Command::ViewAgents),
-            ],
+            [
+                Some(MenuItem::action("Minimize Window", Minimize)),
+                Some(stay_on_top(bar.on_top)),
+                Some(MenuItem::separator()),
+                Some(item("Open Library…", Command::ViewLibrary)),
+                Some(item("View Downloads…", Command::ViewDownloads)),
+                Some(item("View Media…", Command::ViewMedia)),
+                // Arc's, after View Media…, where the window lists Boosts (Library › Boosts).
+                bar.boosts
+                    .then(|| item("View Boosts…", Command::ViewBoosts)),
+                Some(item("View Agents…", Command::ViewAgents)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         ),
         menu(
             "Help",

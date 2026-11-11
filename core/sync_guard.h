@@ -13,6 +13,10 @@
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
 
+namespace sync_pb {
+class SyncEntity;
+}
+
 namespace browser_core {
 
 // Whether |type|'s changes wait to commit: a type Chromium can encrypt waits until it's encrypted
@@ -38,6 +42,12 @@ void TrimSyncCommit(syncer::DataType type, syncer::CommitRequestDataList& commit
 // encrypted it, if |type| is one Chromium can encrypt: named "encrypted" or not at all, with
 // specifics that hold ciphertext only.
 bool SyncCommitIsCiphertext(syncer::DataType type, const syncer::CommitRequestDataList& commit);
+
+// Whether to take |update|, which the server sent for |type|: for a type the account encrypts
+// (|encrypted|), only what its devices write, which is ciphertext, a deletion, or one of the
+// server's permanent folders with nothing in it. The server can't encrypt, so a plain update of
+// such a type is one no device of the account wrote, and the device would act on it as its own.
+bool KeepSyncUpdate(syncer::DataType type, bool encrypted, const sync_pb::SyncEntity& update);
 
 // Gives the account's secret, which keys passwords' client tags, or takes it away.
 void SetSyncPasswordTagKey(const std::optional<SyncSecret>& secret);

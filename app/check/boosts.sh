@@ -1,12 +1,14 @@
 # A site's Boost (#695): the CSS in its file in the profile's Boosts folder shows on its pages as
 # they load, and each save of the file at once; Edit Boost in the command bar opens its card, whose
-# Zap hides what the user clicks, now and in the file, until escape in the page ends it; and with
-# the file gone the page is its own again, as with a Boost turned off.
+# Zap hides what the user clicks, now and in the file, until escape in the page ends it; its
+# Customize… opens the editor, whose changes show at once in each window on the site and ⌘Z takes
+# back; and with the file gone the page is its own again, as with a Boost turned off.
 
 serve
 # The page says in its title how #ad and its body look, each time that changes, so the run reads
-# what the Boost does to it.
+# what the Boost does to it. Its icon, the site's, is the one the editor's header shows.
 printf '%s' '<!doctype html><meta charset="utf-8"><title>Boosted</title>
+<link rel="icon" href="icon.png">
 <body style="margin:0;background:rgb(51, 51, 51)">
 <div id="ad" style="height:100vh;background:#c33;color:#fff">an ad</div>
 <script>
@@ -63,8 +65,8 @@ read -r bx by bw bh << EOF
 $(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
 EOF
 ../tools/window-screenshot.sh "$pid" "$out/boost-card.png" || fail "no window to capture"
-# Zap, the right of the card's two buttons.
-send click $((bx + bw * 3 / 4)) $((by + bh - 26))
+# Zap, the right of the card's two buttons, over Customize….
+send click $((bx + bw * 3 / 4)) $((by + bh - 62))
 expect "^browser: zap $tab on\$" "the card's Zap didn't turn Zap on"
 expect "browser: tab $tab zap on\$" "the core didn't start Zap on the page"
 send click $page_point
@@ -77,6 +79,13 @@ grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
 send key escape
 expect "^browser: zap $tab off\$" "escape in the page didn't end Zap"
 expect "browser: tab $tab zap off\$" "the core didn't end Zap on the page"
+# The card's ×, 7 inside its top right corner and 22 square, closes it, as it covers the tab's row.
+send layout
+read -r bx by bw bh << EOF
+$(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+send click $((bx + bw - 18)) $((by + 18))
+expect "^browser: boost card $tab closed\$" "the card's × didn't close it"
 # A Today tab's menu has the Boost after Mute, in Arc's Customize Page…'s place, and the +'s menu
 # after New Note; each opens the card.
 post rightclick $(row 0)
@@ -97,6 +106,77 @@ expect '^browser: menu drawn ' "the +'s menu didn't draw"
 send choose "$(cased 'Edit Boost…')"
 expect "^browser: boost card $tab opened\$" "the +'s Edit Boost… opened no card"
 
+# A second window on the site, which takes the editor's changes as they're made.
+send key n cmd
+expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
+new_window_bar
+send window 2
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+send insert "${site}boost.html"
+send key return
+expect "^browser: loaded [0-9]* ${site}boost.html\$" "the second window didn't load the page"
+other=$(sed -n "s|^browser: loaded \([0-9]*\) ${site}boost.html\$|\1|p" "$log" | tail -1)
+expect "^browser: title $other ad none rgb(0, 128, 0)\$" "the second window's page wasn't Boosted"
+send window 1
+# Waits for both windows' pages to say their body is $1, or fails with $2.
+both_are() {
+  for _ in $(seq 100); do
+    [ "$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      [ "$(grep "^browser: title $other " "$log" | tail -1 | cut -d' ' -f6-)" = "$1" ] &&
+      return 0
+    sleep 0.1
+  done
+  fail "$2: $(grep "^browser: title \($tab\|$other\) " "$log" | tail -2 | tr '\n' ' ')"
+}
+
+# Customize…, the last line of the card the +'s Edit Boost… left open, opens the editor in its
+# place. Its clicks are in its points: its arrow 13 wide, then the card, whose field is 340 wide
+# and 176 tall, 8.5 in and 48 down.
+send layout
+read -r bx by bw bh << EOF
+$(grep "^browser: boost card $tab at " "$log" | tail -1 | cut -d' ' -f6-)
+EOF
+send click $((bx + bw / 2)) $((by + bh - 26))
+expect "^browser: boost editor for $host\$" "Customize… didn't open the Boost editor"
+expect '^browser: boost editor drawn$' "the Boost editor didn't draw itself on screen"
+../tools/window-screenshot.sh "$pid" "$out/boost-editor.png" || fail "no window to capture"
+# A click in the field, at (0.6, -0.6) of it, places the ground's dot, and both pages take its
+# colour at once.
+send clickkey 293.5 83.2
+# Within a point's rounding, as the window's points can be a fraction off its pixels.
+near='ground 0\.60[0-9] -0\.60[0-9]; dragged'
+expect "^browser: boost editor set $host $near\$" \
+  "a click in the editor's field didn't place the ground's dot"
+grep -q "^/\* $near \*/\$" "$file" ||
+  fail "the editor didn't keep its change in the Boost's file: $(cat "$file")"
+grep -q '^#ad { display: none !important; } /\* Zap \*/$' "$file" ||
+  fail "the editor's change took Zap's line away: $(cat "$file")"
+for _ in $(seq 100); do
+  ground=$(grep "^browser: title $tab " "$log" | tail -1 | cut -d' ' -f6-)
+  [ "$ground" != "rgb(0, 128, 0)" ] && break
+  sleep 0.1
+done
+[ "$ground" != "rgb(0, 128, 0)" ] || fail "the editor's ground didn't show on the page"
+both_are "$ground" "the second window's page didn't take the editor's ground"
+../tools/window-screenshot.sh "$pid" "$out/boost-edited.png" || fail "no window to capture"
+# ⌘Z, while the editor has the keyboard, takes it back on both.
+send key z cmd
+expect '^browser: boost editor undo$' "⌘Z didn't take the editor's change back"
+both_are "rgb(0, 128, 0)" "⌘Z left the editor's ground on a page"
+send key escape
+expect '^browser: boost editor dismissed$' "escape didn't close the Boost editor"
+
+# Window › View Boosts…, after View Media… as Arc's, opens Library › Boosts, and closes it there.
+send menubar Window
+expect '^browser: menu bar Window: .*, View Media…, View Boosts…, ' \
+  "Window has no View Boosts… after View Media…"
+send menu 'View Boosts…'
+expect '^browser: command view-boosts via ui$' "Window › View Boosts… didn't run"
+expect '^browser: library section boosts$' "View Boosts… didn't open the Library on Boosts"
+send menu 'View Boosts…'
+expect '^browser: library hidden$' "View Boosts… didn't close the Library"
+
 # With its file gone, the page is its own again, as the core hears for a Boost turned off.
 rm -f "$file"
 expect "^browser: boost shown $host (0 bytes)\$" "the Boost's file going didn't take its CSS away"
@@ -105,7 +185,9 @@ exec 3>&-
 quit
 echo "ok: a site's Boost showed on its page as it loaded and at once as its file changed; Edit" \
   "Boost's card turned Zap on, whose click hid #ad and kept it in the file, and escape ended it;" \
-  "the tab's menu and the +'s offered Edit Boost…, which opened the card;" \
+  "the tab's menu and the +'s offered Edit Boost…, which opened the card; Customize… opened the" \
+  "editor, whose field coloured the page in both windows, ⌘Z took it back and escape closed it;" \
+  "Window › View Boosts… opened the Library on Boosts and closed it;" \
   "with the file gone the page was its own again." \
   "Windows: $out/boosted.png, $out/boost-card.png, $out/zapped.png," \
-  "$out/boost-tab-menu.png, $out/boost-plus-menu.png"
+  "$out/boost-tab-menu.png, $out/boost-plus-menu.png, $out/boost-editor.png, $out/boost-edited.png"

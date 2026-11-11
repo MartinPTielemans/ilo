@@ -967,7 +967,6 @@ impl Browser for Engine {
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App) {
         let profile = unsafe { bc::bc_space_profile(space) };
         let url = browser::notes::new_document(&name(bc::bc_profile_notes_service, profile));
-        // check.sh waits for this line.
         log!(
             "browser: new note {url}{}",
             if beside.is_some() { " split" } else { "" }
@@ -1246,6 +1245,10 @@ impl Browser for Engine {
 
     fn show_window_buttons(&self, shown: bool, _: &mut App) {
         unsafe { platform::host_show_window_buttons(self.ui_view, shown) };
+    }
+
+    fn set_sidebar_right(&self, right: bool, _: &mut App) {
+        unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
     fn little_drawn(&self, _: &mut App) {
@@ -1740,11 +1743,11 @@ impl Browser for Engine {
         folder_preview::ask(ask, cx);
     }
 
-    fn card_picture(&self, tab: u64, cx: &mut App) {
+    fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
         log!("browser: tab {tab} picturing {request}");
-        let (width, height) = hover_card::PICTURE_PIXELS;
+        let (width, height) = hover_card::picture_pixels(scale);
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
     }
 
@@ -1765,6 +1768,10 @@ impl Browser for Engine {
 
     fn settings(&self, cx: &mut App) {
         settings::show(cx);
+    }
+
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        settings::set_sidebar_right(right, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {
@@ -2035,7 +2042,6 @@ impl Browser for Engine {
         let id = self.window;
         cx.defer(move |_| {
             let Some(main) = main_window_for(space) else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no main window for {tab}");
                 return;
             };
@@ -2100,7 +2106,6 @@ impl Browser for Engine {
             let home = home_in_profile(own_home, profile);
             let Some(opened) = home.and_then(|home| open_little(from.unwrap_or(window), home, cx))
             else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no Space in profile {profile}");
                 return;
             };

@@ -1374,7 +1374,6 @@ impl SiteControls {
         let Some(site) = open.site.as_mut().filter(|site| site.boost.is_some()) else {
             return;
         };
-        // check.sh reads this line.
         log!(
             "browser: site controls set boost {}",
             if on { "on" } else { "off" }
