@@ -133,6 +133,7 @@ pub mod settings_card;
 pub mod settings_column;
 pub mod settings_rows;
 pub mod settings_search;
+pub mod settings_side;
 pub mod settling;
 pub mod shell;
 pub mod site_controls;
