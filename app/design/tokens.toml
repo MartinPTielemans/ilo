@@ -1101,6 +1101,9 @@ pinned-caret-gap = 2.0
 # is this far in from the plate's (Arc 1.171). Rename Space… puts Done there (Arc 1.171).
 space-more = 24.0
 space-more-inset = 6.0
+# Ours (#2339): while there's more than one profile the Space's name is followed, this far after
+# it, by its profile's in the secondary ink, which gives way first.
+space-profile-gap = 6.0
 space-done-width = 32.0
 space-done-height = 26.0
 icon-placeholder = 24.0
@@ -2293,6 +2296,13 @@ lock-slot = 10.0
 lock-glyph = 15.0
 lock-text-gap = 6.0
 lock-right = 8.0
+# Ours (#2339): the profile's chip, against "…" while there's more than one profile: the Profiles
+# glyph, the name, and this chevron this far after it, in the secondary ink.
+profile-chevron = 12.0
+profile-chevron-gap = 4.0
+# Beside a lock in words the chip's name cuts at its end, and with less room than this it goes,
+# the glyph and chevron left, as a letter and an ellipsis say nothing.
+profile-name-min = 24.0
 # The lock's words' cap top in its plate.
 lock-cap = 11.5
 # Ours: the lock button with no certificate to show.

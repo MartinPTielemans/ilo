@@ -8,8 +8,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
-    time::Instant,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
@@ -3669,7 +3669,7 @@ impl Shell {
             )
             // A task's card folding into it bumps its glyph as it lands.
             .child({
-                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
                 svg()
                     .path("icons/archive.svg")
                     .size(px(16.))

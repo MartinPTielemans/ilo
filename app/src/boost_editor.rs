@@ -744,8 +744,8 @@ impl BoostEditor {
         match target {
             Target::Name => editing.menu = true,
             Target::Shuffle => {
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let seed = web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .map_or(0, |since| since.as_nanos() as u64);
                 self.keep(|style| *style = style.shuffled(seed), cx);
             }

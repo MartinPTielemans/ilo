@@ -227,6 +227,18 @@ impl site_controls::Host for SiteControlsHost {
                     .update(cx, |shell, cx| shell.run_extension_from(&id, tile, cx))
                     .ok();
             }
+            site_controls::Run::OpenInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.open_in_profile(tab, profile, cx))
+                    .ok();
+            }
+            site_controls::Run::NewSpaceInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.new_space_in_profile(profile, cx))
+                    .ok();
+            }
             site_controls::Run::Certificate => unsafe { bc::bc_tab_show_certificate(tab) },
             site_controls::Run::RemoveLogin(login) => {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
