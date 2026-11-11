@@ -382,7 +382,7 @@ index 6cb33874b2..0066ba74a2 100644
  
  #[cfg_attr(
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c559412e56..17eb434609 100644
+index c559412e56..a56dd63fc9 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -147,7 +147,7 @@ struct FrameDirtyAccumulator {
@@ -394,7 +394,36 @@ index c559412e56..17eb434609 100644
      Inactive,
      /// The system is under thermal pressure.
      Thermal,
-@@ -360,6 +360,50 @@ thread_local! {
+@@ -348,6 +348,28 @@ thread_local! {
+     /// This allows multiple test Apps to have isolated arenas, preventing
+     /// cross-session corruption when the scheduler interleaves their tasks.
+     static CURRENT_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
++
++    /// The arena `with_scratch_element_arena` lends elements built outside a draw.
++    static SCRATCH_ELEMENT_ARENA: Cell<Option<*const RefCell<Arena>>> = const { Cell::new(None) };
++}
++
++/// Runs `f` with the elements it builds outside a draw in an arena of its own, freed as it returns.
++/// ELEMENT_ARENA, where they'd go otherwise, is never cleared, so a view built only to be read, such
++/// as for a search index, would hold its memory for the rest of the session. Nothing `f` builds may
++/// be used after it returns: the arena's elements are dropped with it.
++pub fn with_scratch_element_arena<R>(f: impl FnOnce() -> R) -> R {
++    struct Restore(Option<*const RefCell<Arena>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            SCRATCH_ELEMENT_ARENA.with(|scratch| scratch.set(self.0));
++        }
++    }
++    let arena = RefCell::new(Arena::new(256 * 1024));
++    let previous = SCRATCH_ELEMENT_ARENA.with(|scratch| scratch.replace(Some(&raw const arena)));
++    let restore = Restore(previous);
++    let result = f();
++    drop(restore);
++    result
+ }
+ 
+ /// Whether a window draw is currently in progress on this thread.
+@@ -360,6 +382,50 @@ thread_local! {
  /// arrive re-entrantly while a draw is already on the stack (e.g. via nested
  /// message pumping in the Windows window procedure), instead of running a
  /// nested draw or panicking on the already-borrowed App.
@@ -445,7 +474,7 @@ index c559412e56..17eb434609 100644
  fn draw_in_progress() -> bool {
      CURRENT_ELEMENT_ARENA.with(|current| current.get().is_some())
  }
-@@ -737,6 +781,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
+@@ -737,6 +803,19 @@ impl<M: Focusable + EventEmitter<DismissEvent> + Render> ManagedView for M {}
  /// Emitted by implementers of [`ManagedView`] to indicate the view should be dismissed, such as when a view is presented as a modal.
  pub struct DismissEvent;
  
@@ -465,7 +494,7 @@ index c559412e56..17eb434609 100644
  type FrameCallback = Box<dyn FnOnce(&mut Window, &mut App)>;
  
  pub(crate) type AnyMouseListener =
-@@ -1247,6 +1304,10 @@ pub struct Window {
+@@ -1247,6 +1326,10 @@ pub struct Window {
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
      pub(crate) element_opacity: f32,
@@ -476,7 +505,7 @@ index c559412e56..17eb434609 100644
      pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
      pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
      /// The [`TextInputConfiguration`] most recently forwarded to the platform
-@@ -1664,6 +1725,7 @@ impl Window {
+@@ -1664,6 +1747,7 @@ impl Window {
          let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
          let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
          let last_frame_time = Rc::new(Cell::new(None));
@@ -484,7 +513,7 @@ index c559412e56..17eb434609 100644
  
          platform_window
              .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
-@@ -1770,9 +1832,12 @@ impl Window {
+@@ -1770,9 +1854,12 @@ impl Window {
              }
          }));
          platform_window.on_request_frame(Box::new({
@@ -497,7 +526,7 @@ index c559412e56..17eb434609 100644
              let needs_present = needs_present.clone();
              let next_frame_callbacks = next_frame_callbacks.clone();
              let input_rate_tracker = input_rate_tracker.clone();
-@@ -1824,13 +1889,20 @@ impl Window {
+@@ -1824,13 +1911,20 @@ impl Window {
  
                  // Throttle frame rate based on conditions:
                  // - Thermal pressure (Serious/Critical): cap to ~60fps
@@ -520,7 +549,7 @@ index c559412e56..17eb434609 100644
                      inactive_frame_interval.map(|interval| (interval, FrameRateLimit::Inactive))
                  } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                      Some((Duration::from_micros(16667), FrameRateLimit::Thermal))
-@@ -1964,21 +2036,16 @@ impl Window {
+@@ -1964,21 +2058,16 @@ impl Window {
                      .log_err();
              }
          }));
@@ -547,7 +576,7 @@ index c559412e56..17eb434609 100644
          }));
          platform_window.on_display_changed(Box::new({
              let cx = cx.to_async();
-@@ -2053,10 +2120,31 @@ impl Window {
+@@ -2053,10 +2142,31 @@ impl Window {
          platform_window.on_input({
              let mut cx = cx.to_async();
              Box::new(move |event| {
@@ -583,7 +612,7 @@ index c559412e56..17eb434609 100644
              })
          });
          platform_window.on_hit_test_window_control({
-@@ -2156,6 +2244,9 @@ impl Window {
+@@ -2156,6 +2266,9 @@ impl Window {
              element_offset_stack: Vec::new(),
              content_mask_stack: Vec::new(),
              element_opacity: 1.0,
@@ -593,7 +622,7 @@ index c559412e56..17eb434609 100644
              requested_autoscroll: None,
              last_text_input_configuration: None,
              focused_text_input: None,
-@@ -2884,7 +2975,14 @@ impl Window {
+@@ -2884,7 +2997,14 @@ impl Window {
      /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
      /// This does not present the frame to screen - useful for visual testing where we want
      /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -609,7 +638,7 @@ index c559412e56..17eb434609 100644
      pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
          self.platform_window
              .render_to_image(&self.rendered_frame.scene)
-@@ -3636,6 +3734,14 @@ impl Window {
+@@ -3636,6 +3756,14 @@ impl Window {
          profiling::finish_frame!();
      }
  
@@ -624,7 +653,7 @@ index c559412e56..17eb434609 100644
      /// Presents the most recently drawn frame if it hasn't been presented yet.
      #[cfg(all(test, feature = "profiler"))]
      pub fn present_if_needed(&mut self) {
-@@ -3761,7 +3867,23 @@ impl Window {
+@@ -3761,7 +3889,23 @@ impl Window {
          #[cfg(feature = "profiler")]
          let paint_start = Instant::now();
          self.invalidator.set_phase(DrawPhase::Paint);
@@ -649,7 +678,7 @@ index c559412e56..17eb434609 100644
  
          #[cfg(any(feature = "inspector", debug_assertions))]
          self.paint_inspector(inspector_element, cx);
-@@ -4227,6 +4349,40 @@ impl Window {
+@@ -4227,6 +4371,40 @@ impl Window {
          result
      }
  
@@ -690,7 +719,7 @@ index c559412e56..17eb434609 100644
      pub(crate) fn with_element_opacity<R>(
          &mut self,
          opacity: Option<f32>,
-@@ -5578,9 +5734,8 @@ impl Window {
+@@ -5578,9 +5756,8 @@ impl Window {
      fn reset_cursor_style(&self, cx: &mut App) {
          // Set the cursor only if we're the active window.
          if self.is_window_hovered() {
@@ -702,7 +731,7 @@ index c559412e56..17eb434609 100644
                  .unwrap_or(CursorStyle::Arrow);
              cx.platform.set_cursor_style(style);
          }
-@@ -7097,18 +7252,24 @@ impl Window {
+@@ -7097,18 +7274,24 @@ impl Window {
  
          // Fall back to built-in action handling.
          match request.action {
@@ -730,7 +759,50 @@ index c559412e56..17eb434609 100644
                          position: center,
                          modifiers: Modifiers::default(),
                          click_count: 1,
-@@ -8179,6 +8340,101 @@ mod tests {
+@@ -7908,11 +8091,42 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
+         let arena_cell = unsafe { &*arena_pointer };
+         callback(&mut arena_cell.borrow_mut());
+         Ok(())
++    } else if let Some(arena_pointer) = SCRATCH_ELEMENT_ARENA.try_with(Cell::get)? {
++        // SAFETY: `with_scratch_element_arena` sets it to an arena it owns, and puts back what was
++        // there before as it returns, before the arena is dropped.
++        let arena_cell = unsafe { &*arena_pointer };
++        callback(&mut arena_cell.borrow_mut());
++        Ok(())
+     } else {
+         ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
+     }
+ }
+ 
++#[cfg(test)]
++mod scratch_arena_tests {
++    use super::{ELEMENT_ARENA, with_scratch_element_arena};
++    use crate::{IntoElement as _, div};
++
++    fn fallback_capacity() -> usize {
++        ELEMENT_ARENA.with(|arena| arena.borrow().capacity())
++    }
++
++    #[test]
++    fn elements_built_in_a_scratch_arena_leave_the_fallback_one_as_it_was() {
++        let before = fallback_capacity();
++        let built = with_scratch_element_arena(|| {
++            (0..5000).map(|_| div().into_any_element()).count()
++        });
++        assert_eq!(built, 5000);
++        assert_eq!(fallback_capacity(), before);
++
++        // Without it, the same elements grow the fallback arena, which nothing clears.
++        let elements: Vec<_> = (0..5000).map(|_| div().into_any_element()).collect();
++        drop(elements);
++        assert!(fallback_capacity() > before);
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{
+@@ -8179,6 +8393,101 @@ mod tests {
          }
      }
  
