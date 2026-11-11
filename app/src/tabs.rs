@@ -87,7 +87,9 @@ pub(crate) fn url_for(
 
 /// The site of the page at `url`, as the core gives it (bc_url_site), or None off the web.
 pub(crate) fn url_site(url: &str) -> Option<String> {
-    url_for(url, |url, site, capacity| unsafe { bc::bc_url_site(url, site, capacity) })
+    url_for(url, |url, site, capacity| unsafe {
+        bc::bc_url_site(url, site, capacity)
+    })
 }
 
 // The ⌃Tab walk and the file's drag were the user's in the window in front.

@@ -5955,7 +5955,10 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
         .collect();
     let sorted = ("sort_tabs_by_site".to_string(), String::new());
     assert_eq!(logged[..2], [sorted.clone(), sorted]);
-    assert_eq!(tools::describe("sort_tabs_by_site"), "Sorted its tabs by site");
+    assert_eq!(
+        tools::describe("sort_tabs_by_site"),
+        "Sorted its tabs by site"
+    );
     assert!(tools::names("claude-code").contains(&"sort_tabs_by_site".to_string()));
     assert!(!tools::names("task-1").contains(&"sort_tabs_by_site".to_string()));
 }

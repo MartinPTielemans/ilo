@@ -2921,12 +2921,15 @@ impl Agents {
         }
     }
 
-    /// Pins the agent's tab, or unpins or removes one it pinned (#1360). The core keeps every one
-    /// to the agent's own Space; a pinned tab the agent didn't pin is the user's, and stays.
     /// Sort Today Tabs by Site in the agent's own Space, by the user's command's rule
     /// (`crate::sort_by_site`): no tab outside it is ever listed, so none moves. One entry in the
     /// activity log.
-    fn sort_by_site(&mut self, agent: &str, reply: mpsc::Sender<ToolResult>, cx: &mut Context<Self>) {
+    fn sort_by_site(
+        &mut self,
+        agent: &str,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
         let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| !tab.pinned);
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
@@ -2939,7 +2942,9 @@ impl Agents {
             let site = alone.then(|| self.browser.url_site(&tab.url)).flatten();
             rows.push((tab.id, split.len().max(1), site));
         }
-        let sites: Vec<_> = (rows.iter()).map(|(row, _, site)| (*row, site.clone())).collect();
+        let sites: Vec<_> = (rows.iter())
+            .map(|(row, _, site)| (*row, site.clone()))
+            .collect();
         let order = sort_by_site::sorted(&sites);
         let counts: Vec<_> = (rows.iter()).map(|&(row, tabs, _)| (row, tabs)).collect();
         let moves = sort_by_site::moves(&counts, &order);
@@ -2961,6 +2966,8 @@ impl Agents {
         _ = reply.send(ToolResult::text(answer));
     }
 
+    /// Pins the agent's tab, or unpins or removes one it pinned (#1360). The core keeps every one
+    /// to the agent's own Space; a pinned tab the agent didn't pin is the user's, and stays.
     fn pin(
         &mut self,
         agent: &str,

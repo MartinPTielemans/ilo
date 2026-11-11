@@ -25,7 +25,14 @@ impl Shell {
     pub(super) fn sorted_by_site(&self, space: u64) -> Option<Vec<u64>> {
         let rows = self.today_rows(space);
         let sites: Vec<(u64, Option<String>)> = (rows.iter())
-            .map(|&(row, tabs)| (row, (tabs == 1).then(|| self.browser.url_site(&self.page(row).url)).flatten()))
+            .map(|&(row, tabs)| {
+                (
+                    row,
+                    (tabs == 1)
+                        .then(|| self.browser.url_site(&self.page(row).url))
+                        .flatten(),
+                )
+            })
             .collect();
         let order = sorted(&sites);
         (!order.iter().eq(rows.iter().map(|(row, _)| row))).then_some(order)

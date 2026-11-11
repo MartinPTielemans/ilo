@@ -298,12 +298,12 @@ impl Shell {
             (MenuEntry::line(), Box::new(|_, _| {})),
         ];
         let after = items.len();
-        items.extend(
-            (self.empty_space_items(self.space, cx).into_iter()).map(|(entry, action)| {
+        items.extend((self.empty_space_items(self.space, cx).into_iter()).map(
+            |(entry, action)| {
                 let parent = entry.parent.map(|parent| parent + after);
                 (MenuEntry { parent, ..entry }, action)
-            }),
-        );
+            },
+        ));
         self.show_menu(items, position, None, cx);
     }
 

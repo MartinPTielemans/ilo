@@ -31,7 +31,9 @@ pub fn sorted(rows: &[(u64, Option<String>)]) -> Vec<u64> {
             continue;
         }
         placed.push(site);
-        let same = rows.iter().filter(|(_, each)| each.as_deref() == Some(site));
+        let same = rows
+            .iter()
+            .filter(|(_, each)| each.as_deref() == Some(site));
         order.extend(same.map(|(row, _)| *row));
     }
     order
