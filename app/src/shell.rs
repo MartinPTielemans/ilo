@@ -1383,6 +1383,9 @@ pub struct Shell {
     /// that lifts them once the events stop.
     web_wheel: wheel_gestures::WheelGestures,
     web_wheel_quiet: Option<Task<()>>,
+    /// On the web, the way fingers that just landed have gone, held until it's enough to tell
+    /// across from along.
+    web_undecided: Option<Point<Pixels>>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1970,6 +1973,7 @@ impl Shell {
             paging_frames: Rc::default(),
             web_wheel: Default::default(),
             web_wheel_quiet: None,
+            web_undecided: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
