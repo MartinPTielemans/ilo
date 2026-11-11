@@ -1,0 +1,62 @@
+# Proof only (#2456): whether sites with strict fraud checks load in the released ilo and main's,
+# beside Google Chrome on the same runner, and whether a page can ask to share the screen with no
+# click.
+name: Proof 2456
+
+on:
+  push:
+    branches: ['fix/strict-sites-2456-*']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            libvulkan1 mesa-vulkan-drivers libegl1 libgl1-mesa-dri xvfb xauth openbox imagemagick
+            dbus-daemon flatpak
+      - name: The released Flatpak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          dir=$(mktemp -d)
+          tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          echo "released $tag"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
+          flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
+      # Main's app as its newest check kept it, on the engine main fetches.
+      - name: Main's app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r run sha < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" --jq \
+            '[.artifacts[] | select((.expired | not) and (.name | startswith("app-linux-")) and .workflow_run.head_branch == "main")][0] | "\(.workflow_run.id) \(.workflow_run.head_sha)"')
+          echo "main $sha, run $run"
+          git worktree add "$RUNNER_TEMP/main" "$sha"
+          cd "$RUNNER_TEMP/main/app"
+          engine=$(../engine/fetch.sh)
+          echo "engine $engine"
+          gh run download "$run" -R "$GITHUB_REPOSITORY" -n "app-linux-$sha" -D "$RUNNER_TEMP/art"
+          ../.github/scripts/app-artifact.sh unpack "$engine" "$RUNNER_TEMP/art/app.tar"
+          ls build/Browser | head
+      - run: dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash .github/proof-2456.sh "$RUNNER_TEMP/main/app/build/Browser"
+      - if: always()
+        run: cat "$RUNNER_TEMP/proof/summary" || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-2456
+          path: ${{ runner.temp }}/proof
+          if-no-files-found: ignore
