@@ -23,10 +23,35 @@ jobs:
           go-version: '1.26'
           cache: false
 
+      # A run reads no Ubuntu mirror, which failed to resolve for hours on 11-11 (#2425). The runner
+      # image has clang-format and ninja. gperf's .deb is kept in the Actions cache under its own
+      # version, which Ubuntu 24.04 hasn't changed since release, so the key holds across image
+      # updates. Only a miss fetches it, and saves it for the runs after.
+      - id: gperf
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/gperf
+          key: gperf_3.1-1build1-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04
+      - if: steps.gperf.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/gperf"
+          cd "$RUNNER_TEMP/gperf"
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
+          apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 download gperf=3.1-1build1 ||
+            { echo "::error::Ubuntu no longer has gperf 3.1-1build1: name its version in core-linux.yml."; exit 1; }
+      - if: steps.gperf.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/gperf
+          key: ${{ steps.gperf.outputs.cache-primary-key }}
+
       - name: Install tools
         run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update -q
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -yq gperf clang-format ninja-build
+          sudo dpkg -i "$RUNNER_TEMP"/gperf/gperf_*.deb
+          for tool in clang-format ninja; do
+            command -v "$tool" >/dev/null || { echo "::error::The runner image no longer has $tool (#2425)."; exit 1; }
+            echo "$tool $("$tool" --version | head -1), from the runner image"
+          done
           sudo npm install -g --prefix /usr esbuild typescript
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.
