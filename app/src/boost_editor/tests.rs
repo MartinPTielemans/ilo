@@ -6,6 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
 
 use super::*;
+use crate::tokens::theme_picker::ARROW;
 
 #[derive(Default)]
 struct Recorder {
@@ -47,7 +48,9 @@ impl Editor {
         cx.update(|cx| {
             let palette = Palette::default();
             let site = "news.example".to_string();
-            show(2, site, None, style, true, at, 800., palette, requested, cx)
+            show(
+                2, site, None, style, true, at, false, 800., palette, requested, cx,
+            )
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         // The host makes its window the key one as it shows it.

@@ -121,6 +121,30 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# A prod build or a released package sends its daily count to ilo's hosted server 30 s in, which
+# counted each check's launch on a fresh profile as a new user (#2303). Each such launch starts on
+# the profile $1 with the count off, as Settings › Privacy leaves it, which every release since
+# 0.1.10 honours, so its log says "daily count not sent: off" and nothing leaves. count.sh alone
+# sends counts, to a server of its own.
+count_off() {
+  mkdir -p "$1"
+  : > "$1/no-daily-count"
+}
+# The logs of launches that named a count server of the run's own, as count.sh's do.
+own_count_logs=
+# Fails the check if a launch's log says a count was sent and it named no server of the run's own:
+# that count reached the hosted server. check.sh asks after each run.
+counted_nowhere() {
+  for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
+    case " $own_count_logs " in
+      *" $counted "*) ;;
+      *)
+        log=$counted
+        fail "$counted says a daily count was sent with no server of the run's own: the launch needs count_off"
+        ;;
+    esac
+  done
+}
 # Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
@@ -231,6 +255,15 @@ exited() {
   [ "$(uname)" != Darwin ] || echo "engine sites after the quit: $(engine_sites)"
   return 0
 }
+# What the runs that trace record: tabs, and perf's traced switches. Unset, it's latency, Chrome's
+# tab switch spans, which tabs reads, and perf traces nothing. CHECK_TRACE_CATEGORIES names others for
+# a breakdown, as #2377's, latency among them, and a run on CI takes them from its check workflow's
+# trace input. More than latency fills tabs' trace before its run ends, so then it keeps the run's
+# last part, and says how many of its switches have a span; perf traces only its switches, through
+# DevTools, so its buffer holds them all.
+trace_categories=${CHECK_TRACE_CATEGORIES:-latency}
+trace_mode=
+[ "$trace_categories" = latency ] || trace_mode=--trace-startup-record-mode=record-continuously
 # A quit Apple Event goes through -[NSApplication terminate:], the way macOS quits apps when the
 # user logs out. On Windows each browser window is asked to close, as its close button does, and
 # Chromium quits with its last one: taskkill without /F closed one of two (#1017). On Linux SIGINT
@@ -825,6 +858,25 @@ start_with_cdp() {
   fi
   helper=$!
   exec 5> "$scratch/cdp"
+}
+# The display the app opens on, "X Y WIDTH HEIGHT" in points from the main display's top left, as
+# Chrome's --window-position takes a place: with BROWSER_DISPLAY=builtin the Mac's own screen, as the
+# app's host finds it (platform/mac/host.mm), so a Chrome a run starts doesn't cover what's playing
+# on another, else the main display.
+display_bounds() {
+  [ "$(uname)" = Darwin ] || fail "display_bounds is the Mac's"
+  osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    ObjC.import("CoreGraphics");
+    const screens = $.NSScreen.screens.js;
+    const main = screens[0].frame;
+    const builtin = ObjC.unwrap(
+      $.NSProcessInfo.processInfo.environment.objectForKey("BROWSER_DISPLAY")) == "builtin";
+    const own = screens.find((screen) => builtin &&
+      $.CGDisplayIsBuiltin(screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue));
+    const frame = (own || screens[0]).frame;
+    [frame.origin.x, main.size.height - frame.origin.y - frame.size.height, frame.size.width,
+     frame.size.height].map(Math.round).join(" ");' || fail "the displays didn't say where the Mac's own is"
 }
 # Starts the check's web server, in site.sh, unless a run before has. Its pages are at $site. It
 # serves every run after, so only cleanup stops it: a run that did would leave the next its address
