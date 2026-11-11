@@ -2072,7 +2072,10 @@ impl Settings {
         let position = setting(
             look,
             "Sidebar position",
-            Some("The side of the window the sidebar and the window's buttons are on.".into()),
+            Some(
+                "The side of the window the sidebar, the Library and the window's buttons are on."
+                    .into(),
+            ),
             vec![
                 position
                     .child(self.drawn("sidebar position".into()))
