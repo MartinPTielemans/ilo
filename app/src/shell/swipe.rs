@@ -1049,6 +1049,50 @@ mod tests {
         assert_eq!(*host.shown.borrow(), [1]);
     }
 
+    /// On either side, one long swipe right from the second Space stops on the first and never
+    /// carries on into the Library, however far the fingers go, and the Library stays shut while
+    /// they're still down; the next swipe from the first brings it out (#2375).
+    #[gpui::test]
+    fn on_either_side_a_swipe_from_the_second_space_stops_on_the_first(cx: &mut TestAppContext) {
+        for right in [false, true] {
+            let (shell, host, cx) = three_spaces(cx, 2);
+            cx.update(|_, cx| {
+                cx.set_global(SidebarRight(right));
+                cx.refresh_windows();
+            });
+            cx.run_until_parked();
+            shell.update_in(cx, |shell, window, cx| {
+                assert_eq!(shell.right(), right);
+                let way = shell.width() + 2. * shell.library_width();
+                fingers(shell, way, false, window, cx);
+                assert_eq!(
+                    shell.library_out(),
+                    0.,
+                    "the Library came out, right {right}"
+                );
+                let lift = ScrollEvent {
+                    delta: ScrollDelta::Pixels(point(px(0.), px(0.))),
+                    touch_phase: TouchPhase::Ended,
+                    ..Default::default()
+                };
+                shell.scroll(&lift, window, cx);
+                assert!(
+                    !shell.library_open,
+                    "the swipe opened the Library, right {right}"
+                );
+                // The pages land on the first Space.
+                shell.set_space(1, cx);
+                shell.settle = None;
+                swipe(shell, 0.9 * shell.library_width(), window, cx);
+                assert!(
+                    shell.library_open,
+                    "the next swipe left it shut, right {right}"
+                );
+            });
+            assert_eq!(*host.shown.borrow(), [1], "right {right}");
+        }
+    }
+
     /// A flick, fingers lifted while they're still going, goes on to the next Space though they
     /// went less than halfway, and lifted the same way back it goes back. check.sh's swipes go
     /// past halfway, as a frame of the hosted runners' that takes longer than SWIPE_HISTORY can
