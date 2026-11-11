@@ -595,6 +595,37 @@ expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on tab a's row didn't
 send key 2 ctrl
 expect "^browser: space $second in " "⌃2 didn't show the second Space after the restore"
 expect_tabs "$e" "$e" "back in the second Space"
+# Kept from its preview in the second Space, the tab goes back to the first too, as it is (#696).
+send menu "View Archive…"
+expect '^browser: library shown$' "View Archive… in the second Space didn't open the Library"
+send click 300 111
+expect '^browser: archived [0-9][0-9]* in preview$' \
+  "a click on the archived tab in the second Space didn't preview it"
+expect '^browser: link preview [1-9][0-9]* https://example.org/$' \
+  "the archived tab's preview in the second Space didn't open at its page"
+p=$(grep '^browser: link preview [1-9][0-9]* https://example.org/$' "$log" | tail -1 | cut -d' ' -f4)
+expect '^browser: link preview settled$' "the archived tab's preview in the second Space didn't settle"
+send key return cmd
+expect "^browser: link preview kept $p\$" "⌘↩ didn't keep the archived tab's preview in the second Space"
+expect '^browser: restore archived [0-9][0-9]* from preview$' \
+  "keeping the archived tab's preview in the second Space didn't restore it"
+# The core switches Space here too.
+expect "^browser: space $first\$" "the tab kept from the preview didn't take the window to its Space"
+expect "^browser: today $p $c $a\$" \
+  "the tab kept from the preview didn't go to the top of its Space's Today: Today is \"$(today)\""
+expect "^browser: selected $p\( in .*\)\{0,1\}\$" "the tab kept from the preview isn't shown in its Space"
+expect '^browser: archive 0 tabs$' "the tab kept from the preview in the second Space stayed in the archive"
+expect '^browser: library hidden$' "keeping the archived tab's preview didn't close the Library"
+../tools/window-screenshot.sh "$pid" "$out/archive-kept-to-space.png" || fail "no window to capture"
+grep -q "^browser: loaded $p https://example.org/\$" "$log" ||
+  fail "the tab kept from the preview in the second Space isn't at its page"
+send key w cmd
+expect_tabs "$c $a" "$c" "after closing the tab kept in its Space"
+send click $(row 1)
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on tab a's row didn't show it"
+send key 2 ctrl
+expect "^browser: space $second in " "⌃2 didn't show the second Space after the kept preview"
+expect_tabs "$e" "$e" "back in the second Space after the kept preview"
 # The window's close button, which ends the app too: the driver doesn't report it done. On Windows
 # the UI's buttons are minimize, maximize and close, so close is the third (appearance.sh).
 close_button="20 24"
@@ -958,6 +989,6 @@ grep -q '^browser: loaded ' "$log" && fail "a page loaded at a launch with Resto
 [ "$(grep -c '^browser: window opened ' "$log")" = 1 ] ||
   fail "the second window came back with Restore windows off"
 quit
-echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page, and from another Space in the one it closed in ($out/archive-restored-to-space.png). Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. The session ending keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays, and a download ended that long ago leaves the list, keeping its file; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
+echo "ok: after ⌘Q and after closing the window, the Spaces come back with their names, themes, icons, tabs, history and the tab each showed, in the Space shown last, with the sidebar's width; only tabs shown load, the others show their titles and favicons, a tab renamed with a double-click keeps its name over its page's title until Rename… takes it out, Change Icon… hangs the icon picker under its favicon, and the emoji picked there keeps the favicon's place until Remove Icon, and a closed tab stays closed, in the archive, from which it reopens at its page, and from another Space in the one it closed in, restored at once or kept from its preview ($out/archive-restored-to-space.png, $out/archive-kept-to-space.png). Back and Forward on a restored tab walk its saved history, and a window that quit full screen comes back so, unless a page took it there. A page's downloads are listed in the Library's Downloads, which ⇧⌘J opens, and a new one's icon flies into the Library button, though none of those a relaunch reads does. With one running, ⌘Q asks first, Continue Downloading shows Downloads and Quit cancels it, and after the relaunch Remove from List and Clear List take them off and keep their files. Resting on the Library button shows the newest finished downloads, until the pointer leaves them, and its right-click menu picks the kinds it lists, and Media plays a video downloaded in its tile while the Library shows it, and a row's menu is the Library row's. The session ending keeps a tab opened just before it. A site's sign-in in a session cookie and in sessionStorage outlives ⌘Q. Today tabs no window shows go in the archive after the interval, counted across a quit, and the tab shown stays, and a download ended that long ago leaves the list, keeping its file; the first ones bring a note, until View Archive answers it, opening Archived Tabs, and none after that ($out/archive-note.png). A tab put back unshown has no page until it's shown, when it loads scrolled where it was. With Restore windows from last session off, a launch opens one window with no page, the pinned tab back and the Today tab in the archive. Help › Restore Earlier Sidebar asks, then brings back a backup's sidebar, and the sidebar it replaced is the newest backup, which undoes it. Windows: $out/sidebar-restored.png, $out/fresh-window.png"
 echo "  Restore, 3 tabs in 2 Spaces: ${restore_ms}ms. Windows: $out/restored.png, $out/tab-icon-picker.png, $out/unloaded-scrolled.png,"
 echo "  $out/recent-downloads.png, $out/library-button-menu.png, $out/media-video.png"

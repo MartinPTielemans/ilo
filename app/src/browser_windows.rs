@@ -162,6 +162,8 @@ pub(crate) extern "C" fn ui_keyboard_left(ui_view: *mut c_void) {
 /// As `ui_keyboard_left`, for the window `id`. After the event: the host can tell in a call the UI
 /// made, such as one giving the page the keyboard.
 pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
+    // As the press comes, before what's queued behind it opens a field (#2260).
+    let opened = crate::shell::fields_opened();
     let Some((handle, shell)) = WINDOWS.with(|windows| {
         let windows = windows.try_borrow().ok()?;
         let window = windows.iter().find(|window| window.id == id)?;
@@ -173,7 +175,7 @@ pub(crate) fn ui_keyboard_left_in(id: bc::bc_id) {
         handle
             .update(cx, |_, window, cx| {
                 shell
-                    .update(cx, |shell, cx| shell.keyboard_left(window, cx))
+                    .update(cx, |shell, cx| shell.keyboard_left(opened, window, cx))
                     .ok()
             })
             .ok();

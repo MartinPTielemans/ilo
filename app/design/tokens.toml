@@ -20,6 +20,8 @@ height = 496.0
 header = 48.0
 # The name's and the lines' left edge, and the controls' right one.
 inset = 16.0
+# The site's icon at the inset, `gap` before the name, as the mock drew it.
+site-icon = 16.0
 # Between the header's controls, and between a line's label and its control.
 gap = 8.0
 # The switch's right edge from the card's.

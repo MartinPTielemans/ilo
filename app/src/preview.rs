@@ -2225,6 +2225,18 @@ fn main() {
             browser::face::register(cx);
             shell::bind_keys(cx);
             browser::text_input::bind_keys(cx);
+            // PREVIEW_SIDEBAR_RIGHT=1 puts the sidebar on the window's right, as Settings' Sidebar
+            // position does.
+            if std::env::var_os("PREVIEW_SIDEBAR_RIGHT").is_some() {
+                cx.set_global(shell::SidebarRight(true));
+            }
+            // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
+            // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
+            // as with the updater's automatic checks off.
+            let update = std::env::var("PREVIEW_UPDATE").ok();
+            if let Some(update) = &update {
+                preview_update(update, cx);
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -2633,6 +2645,15 @@ fn main() {
                         })
                         .ok();
                 }
+                Ok(window)
+                    if update
+                        .as_deref()
+                        .is_some_and(|update| update.ends_with("-open")) =>
+                {
+                    window
+                        .update(cx, |shell, _, cx| shell.preview_update_banner_open(cx))
+                        .ok();
+                }
                 Ok(_) => {}
                 Err(error) => {
                     log!("couldn't open the window: {error}");
@@ -2694,7 +2715,7 @@ fn main() {
                     let changed: theme_picker::Changed = Rc::new(|_, _, _| {});
                     let anchor = point(0., theme_picker::HEIGHT / 2. + 8.);
                     let at = theme_picker::At::Row(anchor);
-                    theme_picker::show(0, 1, preview_theme(), at, f32::MAX, changed, cx);
+                    theme_picker::show(0, 1, preview_theme(), at, false, f32::MAX, changed, cx);
                 }
             }
             // PREVIEW_BOOST_EDITOR=new shows the Boost editor for a site's new Boost, its hint up
@@ -2725,7 +2746,19 @@ fn main() {
                         browser::palette::Tone::Dark,
                     );
                     let site = "news.example".to_string();
-                    boost_editor::show(0, site, style, true, at, f32::MAX, palette, requested, cx);
+                    boost_editor::show(
+                        0,
+                        site,
+                        None,
+                        style,
+                        true,
+                        at,
+                        false,
+                        f32::MAX,
+                        palette,
+                        requested,
+                        cx,
+                    );
                 }
             }
             // PREVIEW_SITE_CONTROLS=1 opens the Site Controls of the tab shown, once the shell has
@@ -2955,7 +2988,7 @@ impl link_preview::Host for PreviewPeek {
 
     fn close(&self, _: u64) {}
 
-    fn keep(&self, _: u64, _: u64) {}
+    fn keep(&self, _: u64, _: u64, _: Option<u64>) {}
 
     fn closed(&self, _: u64, _: link_preview::Closed, _: bool, _: &mut App) {}
 
@@ -3290,13 +3323,15 @@ impl account::Host for PreviewAccount {
     fn read_devices(&self) {}
     fn remove_device(&self, _: &str) {}
     fn choose(&self, _: account::Choice, _: bool) {}
-    // PREVIEW_SYNC=never, unreachable, throttled or stopped shows that line, else synced at 15:04.
+    // PREVIEW_SYNC=never, unreachable, throttled, stopped or update shows that line, else synced at
+    // 15:04.
     fn activity(&self) -> account::Activity {
         let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
         let trouble = match shown.as_str() {
             "unreachable" => Some(account::Trouble::Unreachable),
             "throttled" => Some(account::Trouble::Throttled),
             "stopped" => Some(account::Trouble::Stopped),
+            "update" => Some(account::Trouble::Update),
             _ => None,
         };
         let synced = if shown == "never" { "" } else { "at 15:04" };
@@ -3328,4 +3363,25 @@ impl account::Host for PreviewAccount {
             cx,
         );
     }
+}
+
+/// An updater that does nothing, at the stage PREVIEW_UPDATE names.
+fn preview_update(update: &str, cx: &mut App) {
+    use browser::updates::{self, Stage, Track, Updater};
+    struct Made;
+    impl updates::Host for Made {
+        fn check(&self, _: &mut App) {}
+        fn show(&self, _: &mut App) {}
+        fn restart(&self, _: &mut App) {}
+        fn follow(&self, _: Track, _: &mut App) {}
+    }
+    updates::start(Updater::Own, std::rc::Rc::new(Made), cx);
+    let off = std::env::var("PREVIEW_UPDATE_CHECKS").is_ok_and(|checks| checks == "off");
+    updates::checks(Some(!off), cx);
+    let version = Some("0.1.5".into());
+    let stage = match update.trim_end_matches("-open") {
+        "available" => Stage::Available(version),
+        _ => Stage::Ready(version),
+    };
+    updates::changed(stage, cx);
 }

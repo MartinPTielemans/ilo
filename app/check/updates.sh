@@ -409,6 +409,8 @@ flatpak_updates_check() {
   export FLATPAK_USER_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/flatpak"
   export HOME=$scratch/home
   mkdir "$HOME"
+  # The Flatpak's profile, where its XDG_CONFIG_HOME puts it (main.rs's profile_dir).
+  count_off "$HOME/.var/app/$id/config/$(cat branding/name)"
   local started
   started=$(env -u XDG_DATA_HOME dbus-daemon --session --fork --print-address=1 --print-pid=1 |
     tr '\n' ' ')

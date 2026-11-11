@@ -17,10 +17,10 @@ use std::{rc::Rc, sync::Arc};
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, FontWeight, Global,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    RenderImage, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div, point,
-    prelude::*, px, rgb, size, svg,
+    ImageSource, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, RenderImage, SharedString, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, accesskit::Role, actions, canvas, div,
+    img, point, prelude::*, px, rgb, size, svg,
 };
 use image::{Frame, RgbaImage};
 
@@ -36,18 +36,21 @@ use crate::{
 
 actions!(boost_editor, [Dismiss, Commit, Undo]);
 
+/// The name's left edge, after the site's icon.
+const NAME_LEFT: f32 = INSET + SITE_ICON + GAP;
+
 pub use crate::tokens::boost_editor::HEIGHT;
 use crate::tokens::boost_editor::{
     BUTTON, CASE_Y, CHIP_PADDING, DIM, EDIT_WIDTH, FIELD_HEIGHT, FIELD_TOP, FONT_Y, FOOTER_Y, GAP,
     HEADER, HINT_RIGHT, HINT_TOP, INSET, INVERT_WIDTH, INVERT_Y, LABEL_WIDTH, MENU_LEFT, MENU_TOP,
     PLATE, PLATE_CHOSEN, PLATE_HOVERED, RULE, RULES, SEGMENT, SEGMENT_HEIGHT, SEGMENT_PADDING,
-    SIZE_Y, STEPPER_VALUE, SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT, TILE_RING, TILE_TEXT, TILES_TOP,
-    ZAP_WIDTH,
+    SITE_ICON, SIZE_Y, STEPPER_VALUE, SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT, TILE_RING, TILE_TEXT,
+    TILES_TOP, ZAP_WIDTH,
 };
 use crate::tokens::settings::{SWITCH_HEIGHT, SWITCH_WIDTH};
 use crate::tokens::theme_picker::{
-    ARROW, CARD_WIDTH, DOT_ALPHA, DOT_PITCH, FIELD, FIELD_FILL, FIELD_INSET, FIELD_RADIUS,
-    FIELD_RIM, HANDLE, HANDLE_RING, MAIN_HANDLE, MAIN_RING,
+    CARD_WIDTH, DOT_ALPHA, DOT_PITCH, FIELD, FIELD_FILL, FIELD_INSET, FIELD_RADIUS, FIELD_RIM,
+    HANDLE, HANDLE_RING, MAIN_HANDLE, MAIN_RING,
 };
 use crate::tokens::{menu, radius::CONTROL, text};
 
@@ -112,12 +115,16 @@ pub enum Target {
 
 struct Editing {
     site: String,
+    /// The site's icon, its page's favicon, or none for a globe.
+    icon: Option<ImageSource>,
     style: Style,
     on: bool,
     requested: Requested,
     /// The styles before each kept change, for ⌘Z.
     undo: Vec<Style>,
     arrow_y: Option<f32>,
+    /// Whether it opened to the left, its arrow on its right.
+    left: bool,
     /// False once it's closing: what it shows stays, for the host's shrink out.
     open: bool,
     /// The dot being dragged, where in it the pointer took it, and the style before the drag.
@@ -207,16 +214,18 @@ pub fn open_at(
     }
 }
 
-/// Shows the editor for `site`'s Boost, with `style` and `on`, `at` its place in browser window
-/// `over`, `height` tall, drawn in `palette`, the Space's on a dark sheet as the theme picker's.
+/// Shows the editor for `site`'s Boost, with its `icon`, `style` and `on`, `at` its place in browser window
+/// `over`, to its left if `left`, `height` tall, drawn in `palette`, the Space's on a dark sheet as the theme picker's.
 /// `requested` gets what the user asks of the Boost.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     over: u64,
     site: String,
+    icon: Option<ImageSource>,
     style: Style,
     on: bool,
     at: At,
+    left: bool,
     height: f32,
     palette: Palette,
     requested: Requested,
@@ -237,14 +246,16 @@ pub fn show(
             if editor.families.is_none() {
                 editor.families = Some(families(&cx.text_system().all_font_names()));
             }
-            let (left, top, arrow_y) = theme_picker::placed_of(at, height, HEIGHT);
+            let (x, top, arrow_y) = theme_picker::placed_of(at, left, height, HEIGHT);
             editor.editing = Some(Editing {
                 site,
+                icon,
                 style,
                 on,
                 requested,
                 undo: Vec::new(),
                 arrow_y,
+                left,
                 open: true,
                 drag: None,
                 menu: false,
@@ -253,8 +264,8 @@ pub fn show(
                 palette,
             });
             window.focus(&editor.focus, cx);
-            let corners = theme_picker::corners_of(arrow_y, HEIGHT);
-            editor.host.show(over, left, top, &corners);
+            let corners = theme_picker::corners_of(arrow_y, left, HEIGHT);
+            editor.host.show(over, x, top, &corners);
             cx.notify();
         })
         .ok();
@@ -423,7 +434,7 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
             Some(Target::Switch)
         } else if within(shuffle, BUTTON, middle, BUTTON) {
             Some(Target::Shuffle)
-        } else if within(INSET - GAP, shuffle - INSET, middle, BUTTON) {
+        } else if within(NAME_LEFT - GAP, shuffle - NAME_LEFT, middle, BUTTON) {
             Some(Target::Name)
         } else {
             None
@@ -477,6 +488,11 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
 }
 
 impl BoostEditor {
+    /// Where the card starts across the editor's window, as it opened.
+    fn card_x(&self) -> f32 {
+        theme_picker::card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
+    }
+
     /// The host closed it, as a click outside does.
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -579,7 +595,7 @@ impl BoostEditor {
 
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let (x, y) = (
-            f32::from(event.position.x) - ARROW,
+            f32::from(event.position.x) - self.card_x(),
             f32::from(event.position.y),
         );
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -735,7 +751,7 @@ impl BoostEditor {
     }
 
     fn moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (x, y) = (f32::from(position.x) - ARROW, f32::from(position.y));
+        let (x, y) = (f32::from(position.x) - self.card_x(), f32::from(position.y));
         self.drag_to(x, y, cx);
     }
 
@@ -873,13 +889,14 @@ impl Render for BoostEditor {
         let editing = &*editing;
         let style = &editing.style;
         let palette = editing.palette;
-        let card_x = |x: f32| px(ARROW + x);
-        let arrow_y = editing.arrow_y;
+        let (arrow_y, left) = (editing.arrow_y, editing.left);
+        let card_left = theme_picker::card_x(left);
+        let card_x = |x: f32| px(card_left + x);
         let card_fill = palette::current(cx).card_drawn();
         let card = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let corners = theme_picker::corners_of(arrow_y, HEIGHT);
+                let corners = theme_picker::corners_of(arrow_y, left, HEIGHT);
                 icon_picker::paint_card(bounds.origin, &corners, card_fill, window)
             },
         )
@@ -911,9 +928,17 @@ impl Render for BoostEditor {
         // The header: the name and its menu, Shuffle and the switch.
         let (shuffle_x, switch_x) = header_buttons();
         let name = style.name.clone().unwrap_or_else(|| editing.site.clone());
-        let name_width = shuffle_x - INSET;
+        let name_width = shuffle_x - NAME_LEFT;
+        let icon = at(INSET, HEADER / 2., SITE_ICON, SITE_ICON).child(match editing.icon.clone() {
+            Some(icon) => img(icon).size(px(SITE_ICON)).into_any_element(),
+            None => svg()
+                .path("icons/globe.svg")
+                .size(px(SITE_ICON))
+                .text_color(dim)
+                .into_any_element(),
+        });
         let title = match &editing.renaming {
-            Some(input) => at(INSET - GAP / 2., HEADER / 2., name_width, BUTTON)
+            Some(input) => at(NAME_LEFT - GAP / 2., HEADER / 2., name_width, BUTTON)
                 .flex()
                 .items_center()
                 .px(px(GAP / 2.))
@@ -923,7 +948,7 @@ impl Render for BoostEditor {
                 .text_color(palette.ink)
                 .child(input.clone())
                 .into_any_element(),
-            None => at(INSET - GAP / 2., HEADER / 2., name_width, BUTTON)
+            None => at(NAME_LEFT - GAP / 2., HEADER / 2., name_width, BUTTON)
                 .flex()
                 .items_center()
                 .child(
@@ -1294,6 +1319,7 @@ impl Render for BoostEditor {
         root.child(
             editor
                 .child(card)
+                .child(icon)
                 .child(title)
                 .child(shuffle)
                 .child(switch)

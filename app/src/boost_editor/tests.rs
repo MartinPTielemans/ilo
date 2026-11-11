@@ -6,6 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
 
 use super::*;
+use crate::tokens::theme_picker::ARROW;
 
 #[derive(Default)]
 struct Recorder {
@@ -47,7 +48,9 @@ impl Editor {
         cx.update(|cx| {
             let palette = Palette::default();
             let site = "news.example".to_string();
-            show(2, site, style, true, at, 800., palette, requested, cx)
+            show(
+                2, site, None, style, true, at, false, 800., palette, requested, cx,
+            )
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         // The host makes its window the key one as it shows it.
@@ -142,8 +145,13 @@ fn each_control_is_where_it_is_drawn() {
         Some(Target::Shuffle)
     );
     assert_eq!(
-        target(INSET + 4., header, &style, false),
+        target(NAME_LEFT + 4., header, &style, false),
         Some(Target::Name)
+    );
+    assert_eq!(
+        target(INSET + 4., header, &style, false),
+        None,
+        "the site's icon took a press for the name"
     );
     let (gx, gy) = in_card(REST[0]);
     assert_eq!(target(gx, gy, &style, false), Some(Target::Dot(0)));
@@ -296,7 +304,7 @@ fn a_face_and_a_case_are_kept(cx: &mut TestAppContext) {
 #[gpui::test]
 fn escape_closes_the_menu_and_then_the_editor(cx: &mut TestAppContext) {
     let mut editor = Editor::new(Style::default(), cx);
-    editor.click((INSET + 4., HEADER / 2.));
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
     assert!(editor.menu());
     editor.keys("escape");
     assert!(!editor.menu() && editor.open());
@@ -315,7 +323,7 @@ fn reset_takes_every_edit_away_but_the_name(cx: &mut TestAppContext) {
         ..Style::default()
     };
     let mut editor = Editor::new(style, cx);
-    editor.click((INSET + 4., HEADER / 2.));
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
     editor.click(find(Target::Item(Item::Reset), &Style::default(), true));
     let style = editor.style();
     assert!(!style.invert && style.size == 100, "{style:?}");
@@ -327,14 +335,14 @@ fn reset_takes_every_edit_away_but_the_name(cx: &mut TestAppContext) {
 #[gpui::test]
 fn rename_keeps_what_is_typed_and_escape_leaves_the_name(cx: &mut TestAppContext) {
     let mut editor = Editor::new(Style::default(), cx);
-    editor.click((INSET + 4., HEADER / 2.));
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
     editor.click(find(Target::Item(Item::Rename), &Style::default(), true));
     editor.cx.simulate_input("Quiet news");
     editor.keys("enter");
     assert_eq!(editor.style().name.as_deref(), Some("Quiet news"));
     assert!(editor.open(), "enter in the field closes only the field");
 
-    editor.click((INSET + 4., HEADER / 2.));
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
     editor.click(find(Target::Item(Item::Rename), &Style::default(), true));
     editor.cx.simulate_input("Other");
     editor.keys("escape");
@@ -354,7 +362,7 @@ fn edit_css_zap_and_delete_hand_over_to_the_window(cx: &mut TestAppContext) {
         assert!(!editor.open());
     }
     let mut editor = Editor::new(Style::default(), cx);
-    editor.click((INSET + 4., HEADER / 2.));
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
     editor.click(find(Target::Item(Item::Delete), &Style::default(), true));
     assert_eq!(editor.requests(), vec![Request::Delete]);
     assert!(!editor.open());

@@ -38,23 +38,29 @@
 # Spaces. A new one is empty, and each keeps its tabs and the one it showed last. The page puts
 # "hidden" in its title as it hides, and "visible <n>" as it shows again, with the n animation
 # frames it ran while hidden, where Chrome runs none, and "in <ms>" from the first to the last.
+# Hidden, it says "hidden f<frames> t<ticks>" at each frame and each second its timer ticks, so the
+# log has each frame in order with what the app asked of the page (ran_hidden).
 page='data:text/html,<title>loading</title>
 <script>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
-let frames = 0, first = 0, last = 0;
+let frames = 0, ticks = 0, first = 0, last = 0, ticking = 0;
+const say = () => document.title = "hidden f" + frames + " t" + ticks;
 const count = (now) => {
   if (document.hidden) {
     if (!frames) first = now;
     frames++;
     last = now;
+    say();
     requestAnimationFrame(count);
   }
 };
 document.onvisibilitychange = () => {
+  clearInterval(ticking);
   document.title = document.hidden ? "hidden"
     : "visible " + frames + (frames ? " in " + Math.round(last - first) : "");
   if (document.hidden) {
-    frames = 0;
+    frames = ticks = 0;
+    ticking = setInterval(() => (ticks++, say()), 1000);
     requestAnimationFrame(count);
   }
 };
@@ -278,34 +284,72 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # But for the frames its hover card's picture draws. The tabs a switch hides are pictured once the
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
-# preview. That's one run of frames, 0.1 s at most, once the app asks for the tab's picture,
-# which may answer only after the tab is shown again, so a step that keeps it hidden past 0.4 s
-# sees one. Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
-# the core showing another tab or the page's "hidden", which can reach the log after the picture
-# (#1678), so a picture between the two counts and one from before them doesn't.
+# preview. How long that takes is the machine's: 2 s once on a slow runner (#2239). So no time is
+# judged here, only order. Each frame the hidden page runs is in the log, and it has a reason only
+# once the app has asked for the tab's picture ("tab <a> picturing"). It keeps that reason past the
+# picture's answer ("tab <a> pictured"), which may come with no copy, until the page has been quiet
+# for a whole tick of its 1 s timer, as the copy's last frames can reach the log after it. A frame
+# with no picture asked for fails, and so does a page that never goes quiet. The page counts afresh
+# at each "hidden". The hidden stretch starts at whichever comes first, the core showing another
+# tab or the page's "hidden", which can reach the log after the picture (#1678), so a picture
+# between the two counts and one from before them doesn't.
+hidden_state() {
+  awk -v a="$a" '
+    function start() { asked = drawing = 0; why = ""; counts() }
+    function counts() { quiet = visible = frames = ticks = 0; tick_frames = -1 }
+    BEGIN { start() }
+    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) { shown = 0; start() } }
+    $0 == "browser: title " a " hidden" { if (shown) { shown = 0; start() } else counts() }
+    index($0, "browser: title " a " visible ") == 1 { visible = 1; asked = 0 }
+    index($0, "browser: tab " a " picturing ") == 1 { asked = drawing = 1; tick_frames = -1 }
+    index($0, "browser: tab " a " pictured ") == 1 { drawing = 0; tick_frames = -1 }
+    index($0, "browser: title " a " hidden f") == 1 {
+      split(substr($0, length("browser: title " a " hidden f") + 1), n, " t")
+      if (n[1] > frames && !asked && why == "")
+        why = "frame " n[1] " came with no picture asked for, " (quiet ? "after the page had gone quiet" : "since it hid")
+      if (n[2] > ticks && !drawing) {
+        if (tick_frames == n[1]) { asked = 0; quiet = 1 } else tick_frames = n[1]
+      }
+      frames = n[1]; ticks = n[2]
+    }
+    END {
+      state = why != "" ? "ran: " why : visible ? "visible" : quiet ? "quiet" : "running"
+      print state, "(" frames " frames, " ticks " ticks)"
+    }' "$log"
+}
+# Before the tab shows again: the page has gone quiet, with no frame it had no reason for, or it's
+# shown already.
+hidden_quiet() {
+  local state
+  for _ in $(seq 300); do
+    state=$(hidden_state)
+    case $state in
+    ran:*) fail "$1: $state" ;;
+    quiet* | visible*) return 0 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || gone
+    sleep 0.1
+  done
+  fail "$1: it didn't go quiet, $state"
+}
+# Once it shows: nothing ran between its going quiet and its showing.
 ran_hidden() {
-  local seen
-  seen=$(awk -v a="$a" '
-    /^browser: selected [0-9]+( in |$)/ { if ($3 == a) shown = 1; else if (shown) shown = pictured = 0 }
-    $0 == "browser: title " a " hidden" { if (shown) shown = pictured = 0 }
-    index($0, "browser: tab " a " picturing ") == 1 { pictured = 1 }
-    /^browser: handover picture copied / && index($0, "(tab " a ")") { pictured = 1 }
-    index($0, "browser: title " a " visible ") == 1 { title = substr($0, 17 + length(a)); was = pictured }
-    END { print was + 0, title }' "$log")
-  case $seen in
-  *" visible 0") ;;
-  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9]) ;;
-  *) fail "$1: $seen" ;;
+  local state
+  state=$(hidden_state)
+  case $state in
+  ran:*) fail "$1: $state" ;;
   esac
 }
 open_from_bar example.org
 expect "^browser: title $a hidden\$" "the tab behind the one shown isn't hidden"
+hidden_quiet "the tab behind the one shown ran frames while hidden, other than its picture's"
 send key w cmd
 expect_tabs "$a" "$a" "after closing the tab over the page"
 expect "^browser: title $a visible " "the tab shown again isn't visible"
 ran_hidden "the tab shown again ran frames while hidden, other than its picture's"
 show_space "click 131 $dots_y" select-space sidebar "$second" "$b"
 expect "^browser: title $a hidden\$" "the tab in the Space not shown isn't hidden"
+hidden_quiet "the tab in the Space not shown ran frames while hidden, other than its picture's"
 show_space "click 97 $dots_y" select-space sidebar "$first" "$a"
 expect "^browser: title $a visible " "the tab in the Space shown again isn't visible"
 ran_hidden "the tab in the Space shown again ran frames while hidden, other than its picture's"
@@ -528,7 +572,8 @@ send dismiss
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
 # the window only the look of the Space it shows, the first. $1 is the appearance and $2 its
-# button's x in the picker's window, which holds the 13 wide arrow left of the card.
+# button's x in the picker's window, which holds the 13 wide arrow left of the card. With open as
+# $3 the picker stays open.
 appear() {
   send click $brush_x $card_y
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
@@ -540,6 +585,7 @@ appear() {
     ../tools/window-screenshot.sh "$pid" "$out/library-theme-picker.png" ||
       fail "no window to capture"
   fi
+  [ "${3:-}" != open ] || return 0
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the brush's theme picker"
   none_since '^browser: library hidden$' || fail "escape in the card's theme picker closed the Library"
@@ -560,7 +606,11 @@ rename_card() {
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
 appear light 191.3
-appear dark 231.7
+appear dark 231.7 open
+# Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
+# takes a click, as a press while it fades leaves the showing that goes, not the next (#2237).
+post key escape
+appear light 191.3
 rename_card library-rename.png
 appear automatic 150.9
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
@@ -1431,6 +1481,7 @@ expect '^browser: theme picker hidden$' "escape didn't hide the theme picker fro
 # The page shown is hidden while its window is minimized, and while the app is hidden, as Chrome's
 # is, and visible once they're back. Last, as the app may not be active after it's been hidden.
 # Today is the tab ⇧⌘T reopened over the page's.
+hidden_quiet "the page behind Today's tab ran frames while hidden, other than its picture's"
 send click "$(row 1)"
 last_title=$(grep "^browser: title $a " "$log" | tail -1 | cut -d' ' -f4-)
 [ "${last_title%% *}" = visible ] ||

@@ -4,10 +4,10 @@
 # that order, and ./check.sh all of them:
 #   load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear
 #   split favorites cards extensions adblock adblock-lists windows private blank little capture media
-#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking
-#   appearance about sync sync-account sync-devices switch-frames devices pair filled scripting
-#   notifications calls battery battery-os policies hosts idle handback webrtc count translate
-#   pictures boosts
+#   passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules
+#   ranking appearance about sync sync-account sync-devices switch-frames devices pair filled
+#   scripting notifications calls battery battery-os policies hosts idle handback webrtc count
+#   translate pictures boosts sidebar-right
 # The store run installs from Google's Web Store, as sync-extensions does on one device for the
 # account's others, adblock-live blocks Google's ad servers with uBlock Origin's own lists,
 # adblock-parity loads 50 public sites to record what the ad blocker blocks on them, adblock-native
@@ -20,10 +20,12 @@
 # the Store's pictures from pages on the internet, so it runs only when named too. Tab-drag drags a
 # tab's row between windows with the data device's own drag, which only Wayland's sessions can, so it
 # runs only when named, and skips elsewhere, where the windows run checks it.
+# Sync-versions syncs one account with the release ILO_OLD names, installed as ilo's Flatpak, on
+# Linux under Xvfb, so it runs only when named too.
 # Perf measures the browser against #456's targets, and Chrome beside it, which takes it 16 minutes,
 # so it runs only when named too.
 # Every run but load and crash needs Browser to be the active app, and window, find and updates
-# take it full screen for a moment. Passkeys and scripting are the Mac's alone. Updates makes
+# take it full screen for a moment. Passkeys, scripting and sidebar-right are the Mac's alone. Updates makes
 # build/Updates.app on the Mac, a copy with Sparkle and a feed of its own (build.sh updates), and
 # ilo's Flatpak on Linux, which a repository of the run's own updates (check/updates.sh).
 # In a check VM the check turns the Mac's appearance dark for the runs, which read the window's
@@ -103,11 +105,11 @@ if [ "$(uname)" = Linux ] && [ -z "${BROWSER_HEADLESS:-}" ]; then
 fi
 runs="load keys tabs window popup history spaces agents profiles restore relaunch find pinned clear"
 runs="$runs split favorites cards extensions adblock adblock-lists windows private blank little capture media"
-runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp ranking"
+runs="$runs passwords links preview access trouble dialogs crash import quit onboarding passkeys mcp rules ranking"
 runs="$runs appearance about sync sync-account sync-devices switch-frames devices pair filled scripting notifications calls battery battery-os policies hosts idle"
 runs="$runs everyday"
-runs="$runs handback webrtc count translate pictures boosts"
-named="store sync-extensions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
+runs="$runs handback webrtc count translate pictures boosts sidebar-right"
+named="store sync-extensions sync-versions adblock-live passwords-live adblock-parity adblock-native adblock-cost widevine updates nightly update-checks keychain shots tab-drag perf"
 for run in "$@"; do
   case " $runs $named " in
     *" $run "*) ;;
@@ -159,6 +161,7 @@ elif [ -n "${BROWSER_FLATPAK:-}" ]; then
     done
     # A run's own profile, as sync-devices gives each device, or the check's.
     dir=${BROWSER_PROFILE_DIR:-$profile_dir}
+    count_off "$dir"
     exec flatpak run --cwd="$PWD" --filesystem="$PWD" --filesystem="$dir:create" \
       --env=BROWSER_PROFILE_DIR="$dir" "$@"
   }
@@ -194,9 +197,10 @@ saved="$profile_dir/Spaces.json"
 launch_frame="$(dirname "$saved")/launch-frame"
 # The mcp run turns agents on with a token of its own, which a failed one left. The keys run gives
 # Go to Space 1 ⌃⌘1 and leaves the favorites out of ⌘1–⌘8, which a failed one left for the runs after.
-# The translate run always translates Spanish, which a failed one left.
+# The translate run always translates Spanish, which a failed one left. The sidebar-right run moves
+# the sidebar to the right, which a failed one left for the runs after, which expect it on the left.
 rm -f "$(dirname "$saved")/Agents" "$(dirname "$saved")/Shortcuts" \
-  "$(dirname "$saved")/Always Translated"
+  "$(dirname "$saved")/Always Translated" "$(dirname "$saved")/sidebar-right"
 # DevTools open where the profile last had them, so an undocked try would leave them in a window.
 # The find run docks them, so they start on the right. The restore run's download goes in the
 # check's own folder, never the user's Downloads. A failed extensions run may have left one of its
@@ -286,8 +290,11 @@ for run in ${*:-$runs}; do
   rm -f "$profile_dir/Link rules"
   # And without the command bar's picks, which put a command picked first among equal matches
   # (#1395), so a run finds the bar's own order and not what an earlier run picked, as Wayland's
-  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953).
-  rm -f "$profile_dir/Command bar picks"
+  # pinned did after X11's clear had picked Clear Cookies and Refresh (#1953). Each profile keeps
+  # its own in its folder; the one file beside them is where they were before, which the app moves
+  # into each at launch. A check VM keeps the profile between checks, so missing them there put
+  # its earlier checks' picks first in pinned's "clear" (#2267).
+  rm -f "$profile_dir"/*/"Command bar picks" "$profile_dir/Command bar picks"
   # The windows and clear runs keep 127.0.0.1 for Safari's engine, whose pages would then open there
   # in a later run if one failed, and clear the note it closed and the listed host it turned off.
   forget_engine_sites
@@ -295,6 +302,7 @@ for run in ${*:-$runs}; do
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
   # replace lib.sh's for the runs after it.
   . "check/$run.sh"
+  counted_nowhere
   # On Windows GPUI lost a window's move, size or modifiers that came during an update (#1358).
   if windows && grep -q '^browser: gpui dropped ' "$log"; then
     fail "GPUI dropped updates that came during another: $(grep '^browser: gpui dropped ' "$log" |

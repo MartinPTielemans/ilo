@@ -6,16 +6,19 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
-    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
-    img, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
+    FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
+    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -54,6 +57,8 @@ mod clean_link;
 mod close_tab;
 mod commands;
 mod conversation;
+#[cfg(test)]
+mod copy_tests;
 #[cfg(test)]
 mod corner_tests;
 mod display_face;
@@ -104,6 +109,8 @@ mod pair;
 mod panes;
 mod permission;
 mod portrait;
+#[cfg(test)]
+mod side_tests;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -189,7 +196,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, edge_reveals};
+pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -605,6 +612,21 @@ use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
 
+/// Whether New Note is on, as Settings › Features keeps it for the app: on until the user turns
+/// it off. A window opened reads it, and `Shell::set_new_note` tells the open ones.
+#[derive(Clone, Copy)]
+pub struct NewNoteOn(pub bool);
+
+impl Global for NewNoteOn {}
+
+/// Whether links are copied without tracking, as Settings › Privacy keeps it for the app: on until
+/// the user turns it off (#2351). A window opened reads it, and `Shell::set_clean_links` tells the
+/// open ones.
+#[derive(Clone, Copy)]
+pub struct CleanLinksOn(pub bool);
+
+impl Global for CleanLinksOn {}
+
 #[derive(Clone, Default)]
 struct Tab {
     title: SharedString,
@@ -909,10 +931,28 @@ impl Naming {
     }
 }
 
+/// How many name fields have opened. The host says the page took the keyboard as the press comes,
+/// but a field hears it only after the events queued behind that press, a double-click's second
+/// press among them, which may have opened a field since (#2260). So the host's word counts the
+/// fields as the press comes (`fields_opened`), and a field opened after it stays.
+static FIELDS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// How many name fields have opened so far.
+pub fn fields_opened() -> u64 {
+    FIELDS_OPENED.load(Ordering::Relaxed)
+}
+
+/// Counts a field opening, giving its place among them.
+fn field_opens() -> u64 {
+    FIELDS_OPENED.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 /// The field a Space's name, a tab's title or a folder's name turns into for renaming it.
 struct Renaming {
     naming: Naming,
     name: Entity<TextInput>,
+    /// Its place among the fields opened (`fields_opened`).
+    opened: u64,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
     /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
@@ -1165,6 +1205,9 @@ struct Settle {
     from: f32,
     velocity: f32,
     start: Instant,
+    /// GPUI's: the real one in the app, and in a test one only the test moves, so a time into the
+    /// slide holds on a slow runner (#2265).
+    clock: BackgroundExecutor,
     /// A switch to the Space next to the one before, whose colour changes ahead of the slide.
     next_door: bool,
 }
@@ -1181,19 +1224,26 @@ struct FullScreenTiming {
 impl Settle {
     /// How much of the Space before's colour is left, for a switch next door.
     fn color_left(&self) -> Option<f32> {
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         self.next_door.then(|| (-t / SPACE_COLOR_TAU).exp())
     }
 
     /// How far the page is from its place, or None once it's there.
     fn offset(&self) -> Option<f32> {
         let omega = std::f32::consts::TAU / SPACE_SETTLE;
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         let decay = (-omega * t).exp();
         let rise = self.velocity + omega * self.from;
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
+    }
+
+    fn elapsed(&self) -> f32 {
+        self.clock
+            .now()
+            .saturating_duration_since(self.start)
+            .as_secs_f32()
     }
 }
 
@@ -1713,10 +1763,13 @@ pub struct Shell {
     update_banner: Option<update_banner::Waiting>,
     update_open: bool,
     update_restarting: bool,
+    /// The updater's checks are off, so the open banner offers to turn them on.
+    update_offer: bool,
     update_motion: Option<(f32, Instant)>,
     update_said: Option<&'static str>,
     /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
@@ -1782,9 +1835,18 @@ pub struct Shell {
     /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
     /// offers or opens a Little ilo window.
     little_windows: bool,
+    /// Whether New Note is on, as Settings › Features has it (`NewNoteOn`): off, nothing offers
+    /// or runs New Note or New Note Split.
+    new_note: bool,
+    /// Whether links copy without tracking, as Settings › Privacy has it (`CleanLinksOn`): off,
+    /// every copy path gives the address as it is.
+    clean_links: bool,
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
+    /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
+    /// drew (`Shell::right`).
+    right: bool,
     forced_tone: Option<Tone>,
     window_active: bool,
     window_watches: Vec<Subscription>,
@@ -2080,9 +2142,11 @@ impl Shell {
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
             update_restarting: false,
+            update_offer: crate::updates::automatic(cx) == Some(false),
             update_motion: None,
             update_said: None,
             update_drawn: Rc::default(),
+            update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -2125,7 +2189,10 @@ impl Shell {
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
             little_windows: true,
+            new_note: cx.try_global::<NewNoteOn>().is_none_or(|on| on.0),
+            clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
+            right: false,
             forced_tone: None,
             window_active: true,
             window_main: true,
@@ -2395,7 +2462,7 @@ impl Shell {
     }
 
     /// The tab whose row is `tab`'s: its split's first.
-    fn row_of(&self, tab: u64) -> u64 {
+    pub(super) fn row_of(&self, tab: u64) -> u64 {
         self.panes(tab)[0]
     }
 
@@ -2638,6 +2705,13 @@ impl Shell {
         }
     }
 
+    /// Where the card's top-left corner is across the window, the Library's push aside: past the
+    /// sidebar on the left, at the inset with it on the right, and 0 for a full-screen page.
+    pub(super) fn card_corner(&self) -> f32 {
+        let card = page_frame(self.viewport, self.card_left(), 0.);
+        f32::from(sidebar::mirrored(self.right, self.viewport.width, card).left())
+    }
+
     /// The Spaces, by id, name, colour, profile, icon and the name of the agent each belongs to,
     /// empty for the user's own, in the switcher's order.
     pub fn set_spaces(&mut self, spaces: Vec<SpaceEntry>, cx: &mut Context<Self>) {
@@ -2850,7 +2924,8 @@ impl Shell {
                 beside: Some(before),
                 from: if to > from { width } else { -width },
                 velocity: 0.,
-                start: crate::motion::start(cx),
+                start: crate::motion::start_at(cx.background_executor().now(), cx),
+                clock: cx.background_executor().clone(),
                 next_door: from.abs_diff(to) == 1,
             });
         }
@@ -3812,7 +3887,8 @@ impl Shell {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let below_rows = at.x < px(self.card_left()) && at.y >= px(self.under_tiles());
+        let in_sidebar = self.from_side(f32::from(at.x)) < self.card_left();
+        let below_rows = in_sidebar && at.y >= px(self.under_tiles());
         let sidebar = !self.page_fullscreen && self.library.is_none() && self.form().is_none();
         if sidebar && below_rows {
             self.run(Command::NewTab, "sidebar", cx);
@@ -4119,6 +4195,11 @@ impl Render for Shell {
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
+        // The side is read once a frame, and everything that places by it reads `self.right`.
+        let right = sidebar::sidebar_right(cx) && self.little.is_none();
+        if right != self.right {
+            self.set_sidebar_right(right, cx);
+        }
         self.full_screen_step("drawn", window.viewport_size());
         self.step_opening(window, cx);
         self.stop_videos(window, cx);
@@ -4377,12 +4458,20 @@ impl Render for Shell {
         // The sidebar leaves with the card's edge, all of it by the time the edge stops.
         let width = self.width();
         let sidebar_left = (card_left - width) * width / (width - CARD_INSET);
+        // On the right, the same motion mirrored: it leaves past the window's right edge.
+        let sidebar_left = match self.right {
+            true => f32::from(self.viewport.width) - width - sidebar_left,
+            false => sidebar_left,
+        };
         let sidebar_shown = !self.page_fullscreen
             && opacity > 0.
             && (!self.sidebar_hidden || self.sidebar_motion.is_some());
         let sidebar = sidebar_shown.then(|| {
             let scale = self.sidebar_scale();
-            let origin = point(px(width + RECEDE_X), self.viewport.height / 2.);
+            let origin = point(
+                px(self.from_side(width + RECEDE_X)),
+                self.viewport.height / 2.,
+            );
             // Whole: the Library fades in over it rather than cutting it (`library_opacity`).
             let sidebar = self
                 .sidebar(cx)
@@ -4392,7 +4481,7 @@ impl Render for Shell {
             // Its buttons recede with it, over the Library, as the window's do in Arc. Full screen
             // has none.
             let buttons = self.sidebar_buttons() && !window.is_fullscreen();
-            let buttons = buttons.then(|| self.window_buttons(cx));
+            let buttons = buttons.then(|| self.window_buttons(Some(self.viewport.width), cx));
             let receding = div().absolute().size_full().opacity(opacity);
             scaled(receding.child(sidebar).children(buttons), scale, origin)
         });
@@ -4403,7 +4492,7 @@ impl Render for Shell {
         let edge = docked.then(|| self.sidebar_edge(cx));
         let own_buttons = self
             .draws_own_window_buttons()
-            .then(|| self.window_buttons(cx));
+            .then(|| self.window_buttons(Some(self.viewport.width), cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
         self.breath.arm(cx);
@@ -4966,6 +5055,12 @@ impl Shell {
         self.step_pinned_turn(window);
         self.step_foot(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
+        // On the right, its window ends at the browser window's right edge, and the panel comes
+        // out of that edge.
+        let left = match self.right {
+            true => f32::from(window.viewport_size().width) - left - self.width(),
+            false => left,
+        };
         // Unless a field in the panel has it.
         if !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
@@ -5004,7 +5099,7 @@ impl Shell {
                     .border(px(0.5))
                     .border_color(self.palette.faint(REVEAL_BORDER))
                     .bg(self.gradient(Some(self.palette.underlay.into())))
-                    .child(self.window_buttons(cx))
+                    .child(self.window_buttons(Some(px(self.width())), cx))
                     .child(self.sidebar(cx).left_0())
                     .child(self.scroll_listener(false, cx)),
             )
@@ -5025,10 +5120,13 @@ impl Shell {
         self.window_button_geometry.unwrap_or_default().frames()
     }
 
-    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel.
-    fn window_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The window's close, minimize and zoom buttons, drawn in the reveal's panel. With the sidebar
+    /// on the right they're mirrored `across` what they're drawn in, so close is at its corner, as
+    /// AppKit's are; the Library's column draws them as they are.
+    fn window_buttons(&self, across: Option<Pixels>, cx: &mut Context<Self>) -> AnyElement {
+        let right = self.right && across.is_some();
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(cx);
+            return self.windows_buttons(right, cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"
@@ -5041,7 +5139,12 @@ impl Shell {
             (WindowButton::Zoom, zoom),
         ];
         let frames = self.window_button_frames();
-        let row = Bounds::from_corners(frames[0].origin, frames[2].bottom_right());
+        let frames =
+            frames.map(|frame| sidebar::mirrored(right, across.unwrap_or_default(), frame));
+        let row = Bounds::from_corners(
+            point(frames[0].left().min(frames[2].left()), frames[0].top()),
+            point(frames[0].right().max(frames[2].right()), frames[2].bottom()),
+        );
         div()
             .absolute()
             .left(row.left())
@@ -5083,8 +5186,9 @@ impl Shell {
 
     /// Windows' own buttons where the Mac's show, in Windows' order: minimize, maximize and close,
     /// so a Windows user doesn't read the window as a Mac port's (#1244). The host offers Snap
-    /// layouts over maximize, the middle one (platform/windows/host.cc's FrameHit).
-    fn windows_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// layouts over maximize, the middle one (platform/windows/host.cc's FrameHit). On the `right`
+    /// the group keeps its order at the right corner, close at the corner as Windows has it.
+    fn windows_buttons(&self, right: bool, cx: &mut Context<Self>) -> AnyElement {
         let maximize = match self.maximized {
             true => "icons/window-windows-restore.svg",
             false => "icons/window-windows-maximize.svg",
@@ -5098,9 +5202,13 @@ impl Shell {
         let (second, _) = WINDOW_BUTTONS[1];
         let ink = Hsla::from(self.palette.glyph(NAV));
         let plate = self.palette.plate(NAV_HOVERED);
+        let inset = px(first - WINDOWS_BUTTON_PLATE / 2.);
         div()
             .absolute()
-            .left(px(first - WINDOWS_BUTTON_PLATE / 2.))
+            .map(|row| match right {
+                true => row.right(inset),
+                false => row.left(inset),
+            })
             .top(px(WINDOW_BUTTON_Y - WINDOWS_BUTTON_PLATE / 2.))
             .flex()
             .gap(px(second - first - WINDOWS_BUTTON_PLATE))

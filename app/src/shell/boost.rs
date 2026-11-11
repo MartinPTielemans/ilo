@@ -173,19 +173,31 @@ impl Shell {
                 })
                 .ok();
         });
-        let anchor = point(self.width(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
+        let anchor = point(self.page_edge_x(), URL_FIELD_TOP + URL_FIELD_HEIGHT / 2.);
         let height = f32::from(self.viewport.height);
         // The editor is a dark sheet over a dark or a light window, as the theme picker is.
         let theme = self.spaces.iter().find(|each| each.id == self.space);
         let palette = Palette::of(theme.and_then(|each| each.theme).as_ref(), Tone::Dark);
         self.browser.hover_card(crate::hover_card::Hover::Close, cx);
         let window = self.browser.window();
+        // The page's favicon, a one-colour one in the ink, as the sidebar draws it on the dark
+        // sheet.
+        let icon = (self.tabs.get(&self.field_tab()))
+            .and_then(|each| each.favicon.clone())
+            .map(
+                |favicon| match super::tile_theme::ink_copy(&favicon, Tone::Dark) {
+                    Some(copy) => gpui::ImageSource::from(copy),
+                    None => gpui::ImageSource::from(favicon),
+                },
+            );
         boost_editor::show(
             window,
             site,
+            icon,
             style,
             on,
             At::Row(anchor),
+            self.right,
             height,
             palette,
             requested,
