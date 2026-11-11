@@ -488,12 +488,9 @@ jobs:
           XDG_RUNTIME_DIR=$(mktemp -d)
           export XDG_RUNTIME_DIR
           status=0
-          # Proof only: three times, each with every core kept busy, as a slow runner is.
-          for n in 1 2 3; do
-            loads=
-            for _ in $(seq $((2 * $(nproc)))); do yes > /dev/null & loads="$loads $!"; done
+          # Proof only: eight times, as the gate ran it, to catch a launch whose window sway lacks.
+          for n in 1 2 3 4 5 6 7 8; do
             timeout 10m check/drops.sh > "$out/drops-$n.log" 2>&1 || status=$?
-            kill $loads
             [ ! -d build/check/drops ] || mv build/check/drops "$out/drops-$n"
             pkill -9 -f "$PWD/build/Browser/" || true
           done
