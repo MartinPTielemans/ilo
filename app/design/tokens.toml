@@ -1138,9 +1138,6 @@ return-out = 3.0
 # The slot at a row's end for its status dot, where Arc's loading ring was, so the title doesn't
 # move as a load starts or ends.
 loading-size = 12.0
-# A row narrower than this, such as a split's segment in a narrow sidebar, leaves the dot out
-# (Dia), as it would leave the title no room.
-loading-row-min = 48.0
 # The status dot (ours, #321): the row's text at 0.6 while its page loads. Breathing, from 0.35
 # of its strength to all of it, says it's loading. Signal green is an agent at work, as a task's
 # card shows it.
@@ -1163,12 +1160,14 @@ close-glyph = 14.0
 # pinned tabs (owner, 2026-11-02, #1349): Lucide's trash, the icon picker's remove, drawn in the
 # close glyph's box, so it reads as remove beside ✕ and − without growing past them.
 remove-glyph = 14.0
-# A split's row (Arc): a segment per tab, all as wide, each after the first behind a line. Its
-# favicon is 7 pt after the line, its title 10 pt after the favicon, and it ends 5 pt before the
-# next line.
+# A split's row: a segment per tab, each after the first behind a line. Its favicon is 7 pt after the
+# line, its title 10 pt after the favicon, and it ends 5 pt before the next line (Arc). The pane
+# with the keyboard has the row's width and its title; the others fold to their favicon, with its
+# speaker and loading dot 4 pt after it, so a folded pane still says it plays or loads (#2340).
 segment-favicon-x = 7.0
 segment-title-gap = 10.0
 segment-end = 5.0
+segment-mark-gap = 4.0
 segment-line = 16.0
 # Arc's divider line is one device pixel, 18 in from each side of the sidebar. GPUI widens a border
 # under one device pixel to one, so borders use this 0.5 pt; a line that's a box's height has to
