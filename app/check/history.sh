@@ -3,7 +3,8 @@
 # the page again, and while a page loads, reload is stop, which ⌘., escape and the button do. A
 # tab's row shows its page's favicon, and keeps it until the next page has loaded without one. A
 # host typed in the command bar goes over https first, then http, or from Chromium 157 Chrome's
-# warning before http, and a local one over http. A right-click on reload lists Reload, Hard Reload
+# warning before http, whose dialog has the keyboard and still lets ⌘L, ⌘T and ⌘W reach the app,
+# and a local one over http. A right-click on reload lists Reload, Hard Reload
 # and Clear Site Data and Reload, the last deleting the site's cookies, storage and cache, not
 # another site's, before the page loads again.
 
@@ -164,8 +165,9 @@ else
 fi
 [ "$(tls)" -gt "$before" ] || fail "$plain came to http without trying https first"
 before=$(tls)
-# go_from_bar's steps, with a ⌘L of its own to name: under Wayland, ⌘L on Chrome's warning with the
-# keyboard in the page doesn't open the command bar (#2416, quarantined on that failure alone).
+# go_from_bar's steps, with a ⌘L of its own to name: Chrome's warning is a tab dialog of Chromium's
+# that holds the keyboard where Wayland gives it one, and its keys are asked about as a page's are
+# (#2416).
 page="$plain's page"
 [ "$major" -lt 157 ] || page="Chrome's warning before http"
 send key l cmd
@@ -259,7 +261,27 @@ expect '^browser: command clear-site-data via sidebar$' "Clear Site Data and Rel
 stored 127.0.0.1 "0 0 0" "Clear Site Data and Reload kept 127.0.0.1's cookie, localStorage or IndexedDB"
 go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
+# With Chrome's warning up, ⌘T opens the command bar for a new tab and escape closes it, and ⌘W
+# closes the tab, as from a page (#2416). Where the warning has the keyboard is said, since only
+# Wayland gives it one without a click.
+warned() {
+  go_from_bar "$plain"
+  expect "^browser: page $tab trouble network -20\$" "$plain had no warning before http again"
+  send state
+  echo "note: with Chrome's warning before http up, the keyboard is in $key, on $focus"
+}
+if [ "$major" -ge 157 ]; then
+  warned
+  send key t cmd
+  expect '^browser: command new-tab via page$' "⌘T on Chrome's warning before http didn't reach the UI"
+  expect '^browser: command bar shown$' "⌘T on Chrome's warning before http didn't open the command bar"
+  send key escape
+  expect '^browser: command bar hidden$' "escape didn't close the command bar ⌘T opened"
+  warned
+  send key w cmd
+  expect '^browser: command close-tab via page$' "⌘W on Chrome's warning before http didn't reach the UI"
+fi
 exec 3>&-
 quit
 kill "$stuck"
-echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
+echo "ok: ⌘← ⌘→ and the header's buttons go back and forward, with the page or the UI focused, and so does a swipe over the page but not over the sidebar; reload and force reload load the page again; ⌘., escape and the stop button stop a load; the row keeps a page's favicon until the next page has loaded without one; a host typed in the command bar goes over https first and then http, or from Chromium 157 Chrome's warning before http, where ⌘L, ⌘T and ⌘W reach the UI, and a local one goes over http at once; a right-click on reload lists Reload, Hard Reload and Clear Site Data and Reload, which each reload, the last with the site's cookie, localStorage and IndexedDB gone and another site's kept. Windows: $out/history.png, $out/loading.png, $out/reload-menu-dark.png, $out/reload-menu-light.png"
