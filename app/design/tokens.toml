@@ -992,7 +992,9 @@ on-detail = 0.77
 # buttons, then the page's card 4 in from the other edges at radius 5, a heading's line and four
 # of text on it. The chosen one is ringed in the accent 2 off its edge, 2 wide, and the other has
 # a hairline. The buttons are 4 across, 2.5 apart, the Windows glyphs 4 at 3 apart, at a row 6
-# tall 5 down, 4 in.
+# tall 5 down, 4 in. Appearance (#2429) is three of them, the sidebar on the left: Automatic, Light
+# and Dark, Light's and Dark's in that look whatever Settings' own, and Automatic's Light's with
+# Dark's right half over it.
 side-width = 128.0
 side-height = 80.0
 side-radius = 8.0
