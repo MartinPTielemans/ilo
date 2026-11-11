@@ -1251,6 +1251,13 @@ impl Settle {
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
     }
 
+    /// Keeps no more of the speed than lands the page without passing its place: from `from`, the
+    /// spring passes it going toward it faster than ω·|from|.
+    fn spend(&mut self) {
+        let most = std::f32::consts::TAU / SPACE_SETTLE * self.from.abs();
+        self.velocity = self.velocity.clamp(-most, most);
+    }
+
     fn elapsed(&self) -> f32 {
         self.clock
             .now()
