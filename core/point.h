@@ -111,6 +111,8 @@ class PagePoint : public content::WebContentsObserver,
   void Pick();
   void Document(Picked picked, const base::DictValue* result);
   void Styled(Picked picked, const base::DictValue* result);
+  // Whether an agent may read the frame DevTools names |frame|, and each it's in (IsWebFrame).
+  bool Readable(const std::string& frame);
   void Texted(Picked picked, std::string text, bool withheld);
   void Drawn(Picked picked, base::expected<SkBitmap, std::string> picture);
   void Encoded(Picked picked, std::optional<std::vector<uint8_t>> png);
@@ -160,6 +162,8 @@ class PagePoint : public content::WebContentsObserver,
   // The elements under the pointer, the hit one first, then each it's in, and which ↑ and ↓ have
   // shown.
   std::vector<Link> chain_;
+  // The frame the hit element is in, as DevTools names it, and so are those it's in.
+  std::string frame_;
   size_t at_ = 0;
   std::optional<Shown> shown_;
   // A pick is gathered one at a time; a click while one is still gathered is dropped.

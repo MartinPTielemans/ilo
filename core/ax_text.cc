@@ -1,10 +1,14 @@
 #include "browser_core/ax_text.h"
 
 #include <algorithm>
+#include <iterator>
+#include <map>
 #include <string_view>
 #include <vector>
 
+#include "base/containers/adapters.h"
 #include "base/containers/flat_map.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -89,6 +93,32 @@ void Append(std::string& text, std::string_view piece) {
     text += ' ';
   }
   text += piece;
+}
+
+// IsBlock's roles as DevTools names them, the landmark ones by their ARIA names.
+bool IsBlock(std::string_view role) {
+  static constexpr std::string_view kBlocks[] = {
+      "article", "banner", "blockquote", "caption", "contentinfo", "dialog", "figcaption",
+      "figure", "footer", "footerasnonlandmark", "form", "header", "headerasnonlandmark",
+      "heading", "list", "listitem", "main", "navigation", "paragraph", "region", "row",
+      "section", "table"};
+  const std::string lower = base::ToLowerASCII(role);
+  return std::ranges::find(kBlocks, lower) != std::end(kBlocks);
+}
+
+// Whether DevTools' tree has the node as not drawn, as the snapshot's IsInvisible: display: none,
+// or visibility: hidden.
+bool NotDrawn(const base::DictValue& node) {
+  if (const base::ListValue* reasons = node.FindList("ignoredReasons")) {
+    for (const base::Value& reason : *reasons) {
+      const base::DictValue* dict = reason.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      if (name && (*name == "notRendered" || *name == "notVisible")) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // Blink cuts a node's URL at this length, so a longer one is matched by what's left of it.
@@ -189,36 +219,136 @@ std::string TextOf(const ui::AXTreeUpdate& update,
               withheld);
 }
 
-ElementText TextUnder(const ui::AXTreeUpdate& update,
-                      const std::set<std::string, std::less<>>& readable,
-                      int node) {
-  const Nodes nodes = NodesOf(update);
-  base::flat_map<ui::AXNodeID, ui::AXNodeID> parents;
-  const ui::AXNodeData* start = nullptr;
-  for (const ui::AXNodeData& each : update.nodes) {
-    for (ui::AXNodeID child : each.child_ids) {
-      parents[child] = each.id;
+ElementText TextUnder(const base::ListValue& nodes, int node) {
+  std::map<std::string, const base::DictValue*, std::less<>> by_id;
+  const base::DictValue* start = nullptr;
+  for (const base::Value& each : nodes) {
+    const base::DictValue* dict = each.GetIfDict();
+    const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+    if (!id) {
+      continue;
     }
-    if (!start && each.GetIntAttribute(ax::mojom::IntAttribute::kDOMNodeId) == node) {
-      start = &each;
-    }
-  }
-  if (!start) {
-    return ElementText();
-  }
-  // Inside a document an agent may not read, nothing of it goes: each document's root, up to the
-  // page's, has to be readable.
-  for (auto up = parents.find(start->id); up != parents.end(); up = parents.find(up->second)) {
-    auto found = nodes.find(up->second);
-    if (found != nodes.end() && found->second->role == ax::mojom::Role::kRootWebArea &&
-        !IsReadable(found->second->GetStringAttribute(ax::mojom::StringAttribute::kUrl),
-                    readable)) {
-      return ElementText{std::string(), true};
+    by_id[*id] = dict;
+    if (!start && dict->FindInt("backendDOMNodeId") == node) {
+      start = dict;
     }
   }
   ElementText text;
-  text.text = Walk(nodes, *start, readable, text.withheld);
+  if (!start) {
+    return text;
+  }
+  // As Walk goes: a stack of its own, and a step back up out of a block ends its line. Each node
+  // once, whatever the tree says.
+  struct Step {
+    const base::DictValue* node;
+    bool leaving;
+  };
+  std::vector<Step> steps = {{start, false}};
+  std::set<const base::DictValue*> seen;
+  std::string out;
+  while (!steps.empty()) {
+    const Step step = steps.back();
+    steps.pop_back();
+    if (step.leaving) {
+      NewLine(out);
+      continue;
+    }
+    const base::DictValue& each = *step.node;
+    if (!seen.insert(&each).second || NotDrawn(each) || Has(each, "fromExtension")) {
+      continue;
+    }
+    // A field's value is the user's, and what's under it is that value again: none goes, as none
+    // goes into the outline (#2372), a filled email or card number as much as a password.
+    if (IsField(each)) {
+      const std::optional<std::string> value = ValueOf(each);
+      text.withheld |= value && !value->empty();
+      continue;
+    }
+    const std::string* role = each.FindStringByDottedPath("role.value");
+    const std::string_view kind = role ? std::string_view(*role) : std::string_view();
+    const bool shown = !each.FindBool("ignored").value_or(false);
+    if (shown && kind == "StaticText") {
+      const std::string* name = each.FindStringByDottedPath("name.value");
+      Append(out, name ? *name : std::string());
+      continue;
+    }
+    if (shown && kind == "LineBreak") {
+      NewLine(out);
+      continue;
+    }
+    if (shown && IsBlock(kind)) {
+      NewLine(out);
+      steps.push_back({&each, true});
+    }
+    if (const base::ListValue* children = each.FindList("childIds")) {
+      for (const base::Value& child : base::Reversed(*children)) {
+        const std::string* id = child.GetIfString();
+        if (auto found = id ? by_id.find(*id) : by_id.end(); found != by_id.end()) {
+          steps.push_back({found->second, false});
+        }
+      }
+    }
+  }
+  text.text = std::string(base::TrimWhitespaceASCII(out, base::TRIM_ALL));
   return text;
+}
+
+// Whether the node is a field, whose value is the user's: a text field of any kind, a select, a
+// date, time or number input, or an editable region such as a mail's body.
+bool IsField(const base::DictValue& node) {
+  if (const base::ListValue* properties = node.FindList("properties")) {
+    for (const base::Value& property : *properties) {
+      const base::DictValue* dict = property.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      if (name && *name == "editable") {
+        return true;
+      }
+    }
+  }
+  const std::string* role = node.FindStringByDottedPath("role.value");
+  if (!role) {
+    return false;
+  }
+  static constexpr std::string_view kFields[] = {
+      "textbox", "searchbox", "combobox",  "spinbutton",
+      "date",    "datetime",  "inputtime", "colorwell",
+  };
+  const std::string lower = base::ToLowerASCII(*role);
+  for (std::string_view field : kFields) {
+    if (lower == field) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether the node has the boolean |property|, such as "selected", and it's true.
+bool Has(const base::DictValue& node, std::string_view property) {
+  if (const base::ListValue* properties = node.FindList("properties")) {
+    for (const base::Value& each : *properties) {
+      const base::DictValue* dict = each.GetIfDict();
+      const std::string* name = dict ? dict->FindString("name") : nullptr;
+      if (name && *name == property) {
+        return dict->FindBoolByDottedPath("value.value").value_or(false);
+      }
+    }
+  }
+  return false;
+}
+
+// What a node of the tree holds, as text: a field's value, or a number field's number.
+std::optional<std::string> ValueOf(const base::DictValue& node) {
+  const base::Value* value = node.FindByDottedPath("value.value");
+  if (!value) {
+    return std::nullopt;
+  }
+  if (const std::string* text = value->GetIfString()) {
+    return *text;
+  }
+  if (const std::optional<double> number = value->GetIfDouble()) {
+    return base::NumberToString(*number);
+  }
+  return std::nullopt;
 }
 
 }  // namespace browser_core

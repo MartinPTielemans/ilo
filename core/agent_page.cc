@@ -25,6 +25,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "browser_core/ax_text.h"
 #include "browser_core/host.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/space.h"
@@ -113,35 +114,6 @@ constexpr Key kKeys[] = {
     {"Home", 36, ""},      {"End", 35, ""},
 };
 
-// Whether the node is a field, whose value is the user's: a text field of any kind, a select, a
-// date, time or number input, or an editable region such as a mail's body.
-bool IsField(const base::DictValue& node) {
-  if (const base::ListValue* properties = node.FindList("properties")) {
-    for (const base::Value& property : *properties) {
-      const base::DictValue* dict = property.GetIfDict();
-      const std::string* name = dict ? dict->FindString("name") : nullptr;
-      if (name && *name == "editable") {
-        return true;
-      }
-    }
-  }
-  const std::string* role = node.FindStringByDottedPath("role.value");
-  if (!role) {
-    return false;
-  }
-  static constexpr std::string_view kFields[] = {
-      "textbox", "searchbox", "combobox",  "spinbutton",
-      "date",    "datetime",  "inputtime", "colorwell",
-  };
-  const std::string lower = base::ToLowerASCII(*role);
-  for (std::string_view field : kFields) {
-    if (lower == field) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Whether an accessibility node is disabled, as a control, or one in a disabled fieldset, is.
 bool IsDisabled(const base::Value& node) {
   const base::DictValue* dict = node.GetIfDict();
@@ -169,35 +141,6 @@ std::string NameOf(const base::DictValue& node) {
 // A name as it compares in any case, as "Open" and "OPEN" do.
 std::u16string Folded(std::string_view name) {
   return base::i18n::FoldCase(base::UTF8ToUTF16(name));
-}
-
-// Whether the node has the boolean |property|, such as "selected", and it's true.
-bool Has(const base::DictValue& node, std::string_view property) {
-  if (const base::ListValue* properties = node.FindList("properties")) {
-    for (const base::Value& each : *properties) {
-      const base::DictValue* dict = each.GetIfDict();
-      const std::string* name = dict ? dict->FindString("name") : nullptr;
-      if (name && *name == property) {
-        return dict->FindBoolByDottedPath("value.value").value_or(false);
-      }
-    }
-  }
-  return false;
-}
-
-// What a node of the tree holds, as text: a field's value, or a number field's number.
-std::optional<std::string> ValueOf(const base::DictValue& node) {
-  const base::Value* value = node.FindByDottedPath("value.value");
-  if (!value) {
-    return std::nullopt;
-  }
-  if (const std::string* text = value->GetIfString()) {
-    return *text;
-  }
-  if (const std::optional<double> number = value->GetIfDouble()) {
-    return base::NumberToString(*number);
-  }
-  return std::nullopt;
 }
 
 // The attribute |name| of a node as DOM.describeNode gives it, if it has one.
