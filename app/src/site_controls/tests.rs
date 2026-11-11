@@ -78,6 +78,9 @@ impl Host for Recorder {
     fn set_boost(&self, tab: u64, on: bool) {
         self.push(format!("boost {tab} {on}"));
     }
+    fn turn_on_arrangement(&self, tab: u64) {
+        self.push(format!("turn on arrangement {tab}"));
+    }
     fn run(&self, run: Run, tab: u64, _: &mut App) {
         let run = match run {
             Run::Command(command) => format!("{command:?}"),
@@ -166,6 +169,8 @@ fn site() -> Site {
         devices: Vec::new(),
         boostable: false,
         boost: None,
+        arrangement_misfits: None,
+        arrangement_off: None,
     }
 }
 

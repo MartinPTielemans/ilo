@@ -1730,6 +1730,17 @@ close-glyph = 12.0
 # Above each change a request card lists, and above why it asks, so each reads as one.
 change-gap = 6.0
 
+[shell.boost]
+# Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.
+# Each change is its name over what it did, with its put-back button at the line's end, on the
+# card's quiet plate, as the mock has it. One that no longer fits is dimmed to `misfit`.
+list-top = 8.0
+row-top = 6.0
+row-gap = 8.0
+put-back = 24.0
+put-back-glyph = 14.0
+misfit = 0.5
+
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a
 # row in it, its glyph before its name over what it's doing. A page's device chooser has the same

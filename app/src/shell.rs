@@ -34,6 +34,7 @@ mod access;
 mod agent_bar;
 mod agent_pointer;
 mod agent_question;
+mod arrange;
 mod assets;
 #[cfg(test)]
 mod autofill_tests;
@@ -1789,6 +1790,8 @@ pub struct Shell {
     /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
     boost_pending: Option<u64>,
     zapping: Option<u64>,
+    /// The tab whose page Arrange is on (#2347), one at a time, as Zap.
+    arranging: Option<u64>,
     boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Library › Boosts' list, the window's profile's, read as it's shown.
     boost_list: Vec<crate::boosts::Boost>,
@@ -2156,6 +2159,7 @@ impl Shell {
             boost_card: None,
             boost_pending: None,
             zapping: None,
+            arranging: None,
             boost_card_drawn: Rc::default(),
             boost_list: Vec::new(),
             battery_saver: None,
