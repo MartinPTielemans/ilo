@@ -106,6 +106,8 @@ windows-sys = { version = "0.61", features = [
 gpui_platform = { path = ".deps/zed/crates/gpui_platform", features = ["wayland", "x11"] }
 # For running GPUI inside Chromium's loop and its window inside the browser's (patches/).
 gpui_linux = { path = ".deps/zed/crates/gpui_linux" }
+# The wgpu instance, made on a thread while Chromium starts (src/main.rs, launching).
+gpui_wgpu = { path = ".deps/zed/crates/gpui_wgpu" }
 # Flatpak's portal, for updates (src/flatpak.rs): the D-Bus GPUI's portals already use.
 zbus = { version = "5.13", default-features = false, features = ["async-io"] }
 futures-lite = "2"

@@ -684,6 +684,9 @@ unsafe extern "C" fn agent_request_done(
 
 unsafe extern "C" fn launching(_: *mut c_void) {
     safe_start_host::launching();
+    // While Chromium starts, about 280 ms before the first window opens (#2384).
+    #[cfg(target_os = "linux")]
+    gpui_wgpu::WgpuContext::make_instance_early();
     unsafe { platform::host_watch_finished_launching(finished_launching) };
     let Ok(profile) = CString::new(profile_dir()) else {
         return;
