@@ -1656,6 +1656,44 @@ static void LayTitlebarsRightToLeft() {
   fprintf(stderr, "browser: titlebar right to left\n");
 }
 
+// The same while the app runs, as #2389's setting does it (host_set_sidebar_right there): each
+// window answers by its own mark, so one window can turn while the others don't, and AppKit lays
+// the title bar out again once asked. The drive command titlebar calls it.
+static char kTitlebarRight;
+static IMP g_titlebar_direction;
+
+static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL selector) {
+  if ([objc_getAssociatedObject(self, &kTitlebarRight) boolValue]) {
+    return NSUserInterfaceLayoutDirectionRightToLeft;
+  }
+  return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
+}
+
+bool host_titlebar_right_for_testing(NSWindow* window, bool right) {
+  if (!g_titlebar_direction) {
+    Class kind = window.class;
+    SEL selector = @selector(windowTitlebarLayoutDirection);
+    Method own = class_getInstanceMethod(kind, selector);
+    if (!own) {
+      return false;
+    }
+    g_titlebar_direction = method_getImplementation(own);
+    if (!class_addMethod(kind, selector, (IMP)TitlebarDirection, method_getTypeEncoding(own))) {
+      method_setImplementation(own, (IMP)TitlebarDirection);
+    }
+  }
+  objc_setAssociatedObject(window, &kTitlebarRight, right ? @YES : nil,
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  NSView* frame = window.contentView.superview;
+  NSView* titlebar = [window standardWindowButton:NSWindowCloseButton].superview;
+  for (NSView* view : {frame, titlebar}) {
+    view.needsLayout = YES;
+  }
+  [frame layoutSubtreeIfNeeded];
+  fprintf(stderr, "browser: titlebar turned %s\n", right ? "right to left" : "left to right");
+  return true;
+}
+
 void* host_ui_view(void) {
   LayTitlebarsRightToLeft();
   auto browser = std::make_unique<Browser>();

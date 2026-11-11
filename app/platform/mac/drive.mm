@@ -62,6 +62,8 @@
 //   resize <width> <height>               resizes the window, keeping its top-left corner
 //   resizekey <width> <height>            as resize, the key window's content, such as Settings
 //   fullscreen                            enters or leaves full screen, like the green button
+//   titlebar right|left                   lays the window's title bar out right to left or back,
+//                                         as #2389's setting does while the app runs (#2375's test)
 //   display add <width> <height> [main]   plugs in a second display of that size in points, a
 //                                         virtual one, the main one with the menu bar if main
 //                                         says so, as an external monitor often is, logging "browser: display added at <x>
@@ -309,6 +311,8 @@ NSStatusBarButton* HostLittleStatusButton();
 // host.mm's: where this driver's pointer last was, which host_pointer answers.
 extern NSPoint g_driven_pointer;
 extern bool g_driven_pointer_known;
+// host.mm's, for #2375's test of the title bar turned while the app runs.
+bool host_titlebar_right_for_testing(NSWindow* window, bool right);
 
 namespace {
 
@@ -1594,6 +1598,16 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     NSRect frame = window.frame;
     [window setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - height, width, height) display:YES];
+    done();
+    return true;
+  }
+  if (action == "titlebar") {
+    std::string side;
+    words >> side;
+    if ((side != "right" && side != "left") ||
+        !host_titlebar_right_for_testing(window, side == "right")) {
+      return false;
+    }
     done();
     return true;
   }

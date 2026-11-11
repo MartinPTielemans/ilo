@@ -9,6 +9,7 @@
 # and right (after), logs the buttons' centres from the window's top-left into
 # $out/titlebar-right.txt and captures the window. Full screen's title bar comes down only for the
 # real pointer at the screen's top, which check/pointer.mm moves, so only in a CI job.
+# The left run then turns the title bar right and back while the app runs, as #2389's setting does.
 
 if [ "$(uname)" != Darwin ]; then
   echo "skip: titlebar-right is the Mac's alone."
@@ -96,6 +97,27 @@ EOF
   send key s cmd
   expect '^browser: sidebar shown$' "$side: ⌘S didn't bring the sidebar back"
   buttons $side "sidebar docked again"
+  if [ -z "$right" ]; then
+    # #2389's setting turns the title bar while the app runs: each window answers by its own mark,
+    # and AppKit lays the buttons out again once asked, through a resize and full screen.
+    send titlebar right
+    expect '^browser: titlebar turned right to left$' "the title bar didn't turn right to left"
+    buttons $side "turned right"
+    shot $side turned-right
+    send resize 1000 700
+    buttons $side "turned right, resized"
+    send resize 1280 800
+    send fullscreen
+    expect '^browser: window entered full screen$' "turned right: the window didn't go full screen"
+    buttons $side "turned right, full screen"
+    send fullscreen
+    expect '^browser: window left full screen$' "turned right: the window didn't leave full screen"
+    buttons $side "turned right, after full screen"
+    send titlebar left
+    expect '^browser: titlebar turned left to right$' "the title bar didn't turn back"
+    buttons $side "turned back left"
+    shot $side turned-back
+  fi
   send menubar Window
   echo "$side Window menu: $(grep '^browser: menu bar Window: ' "$log" | tail -1 | cut -d' ' -f5-)" \
     >> "$summary_file"
