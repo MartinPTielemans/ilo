@@ -40,6 +40,7 @@ use browser::menu::{self, Look};
 use browser::palette::{INK, PAPER};
 use browser::settings_card::{self, Card};
 use browser::settings_column::{self, Section};
+use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Chip, Look as RowLook, SLIDE, chip, detailed_row, end, frame, glyph_plate, group, group_lined,
     named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
@@ -49,10 +50,10 @@ use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_PADDING, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP,
-    FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
-    MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
-    SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+    HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME,
+    PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP,
+    TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -403,7 +404,6 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Popup {
     LittleArchiveAfter,
-    Favorites,
     PasswordsProfile,
     /// A profile's, in General.
     SearchEngine(u64),
@@ -415,12 +415,8 @@ enum Popup {
     TaskAgent,
     /// The model a CLI runs tasks with.
     TaskModel(Cli),
-    /// General's Appearance.
-    Appearance,
     /// General's Page zoom.
     PageZoom,
-    /// Tabs & Sidebar's Sidebar position.
-    SidebarPosition,
 }
 
 impl Popup {
@@ -428,16 +424,13 @@ impl Popup {
     fn spoken(self) -> SharedString {
         match self {
             Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
-            Popup::Favorites => "Share favorites".into(),
             Popup::PasswordsProfile => "Profile".into(),
             Popup::SearchEngine(_) => "Search engine".into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
             Popup::TaskAgent => "Run tasks on".into(),
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
-            Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
-            Popup::SidebarPosition => "Sidebar position".into(),
         }
     }
 }
@@ -448,6 +441,8 @@ pub struct Settings {
     /// Whether the window is dark, as View › Appearance or the system has it, which its rows,
     /// pop-up menus and the views it shows follow.
     dark: bool,
+    /// View › Appearance's choice, which General's Appearance rings.
+    appearance: Appearance,
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
@@ -1267,6 +1262,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             section: Section::General,
             focus: cx.focus_handle(),
             dark,
+            appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
             shown: false,
@@ -1339,7 +1335,11 @@ pub fn bar_hidden() {
 fn build_index(cx: &mut App) {
     let started = Instant::now();
     let accent = rgb(NO_THEME_ACCENT);
-    let entries = view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0);
+    // Its rows are built only to be read, so in an arena freed as it ends: the fallback one GPUI
+    // gives elements built outside a draw is never cleared, and each build added to it (#2138).
+    let entries = gpui::with_scratch_element_arena(|| {
+        view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0)
+    });
     // check.sh reads this line.
     log!(
         "browser: settings index {} rows in {:.1} ms",
@@ -1572,6 +1572,18 @@ impl Settings {
     /// Takes the look View › Appearance, else the system, gives it now, and hands it to the views
     /// it shows.
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice that leaves the look as it was, such as Automatic after Light on a light
+        // system, still moves Appearance's ring.
+        let appearance = shell::app_appearance(cx);
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            // check.sh waits for this line.
+            log!(
+                "browser: settings appearance {}",
+                appearance_title(appearance)
+            );
+            cx.notify();
+        }
         let dark = dark(window, cx);
         if dark == self.dark {
             return;
@@ -1863,18 +1875,45 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let appearance = shell::app_appearance(cx);
-        let appearance_popup = self.popup(
-            Popup::Appearance,
-            appearance_label(appearance).into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_appearance(appearance, window, cx)
-            }),
-        );
-        let appearance_line = match cfg!(target_os = "macos") {
+        let appearance = self.appearance;
+        let appearance_line: SharedString = match cfg!(target_os = "macos") {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
+        }
+        .into();
+        let appearances = browser::settings_pictures::appearance_picker(
+            look,
+            self.base(),
+            appearance,
+            browser::settings_pictures::Buttons::HERE,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |appearance, _, cx| {
+                crate::browser_windows::update_shells_in(cx, |shell, cx| {
+                    shell.run(Command::Appearance(appearance), "settings", cx)
+                })
+            },
+        )
+        .relative()
+        // Drawn once for each choice the first time it's shown, which check.sh waits for.
+        .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let appearances = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Appearance", Some(appearance_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(appearances),
+                ),
+            name: "Appearance".into(),
+            line: Some(appearance_line),
+            keys: None,
+            nested: false,
         };
         let zoom = unsafe { bc::bc_page_zoom() };
         let zoom_chosen = PAGE_ZOOM
@@ -1893,16 +1932,7 @@ impl Settings {
             }),
         );
         let mut looks = vec![
-            setting(
-                look,
-                "Appearance",
-                Some(appearance_line.into()),
-                vec![
-                    appearance_popup
-                        .child(self.drawn("appearance".into()))
-                        .into_any_element(),
-                ],
-            ),
+            appearances,
             setting(
                 look,
                 "Page zoom",
@@ -2025,21 +2055,45 @@ impl Settings {
             vec![battery],
         );
         let scope = favorites_scope();
-        let favorites = self.popup(
-            Popup::Favorites,
-            MenuEntry::label(scope.title()),
-            FAVORITES_POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_favorites_scope(scope, window, cx)
-            }),
-        );
-        let favorites = favorites.child(self.drawn("favorites".into()));
-        let favorites = setting(
+        let settings = cx.weak_entity();
+        let shared = browser::settings_pictures::favorites_picker(
             look,
-            "Share favorites",
-            Some("Which Spaces show the same favorites.".into()),
-            vec![favorites.into_any_element()],
-        );
+            self.base(),
+            self.dark,
+            scope,
+            self.a11y,
+            self.drawn_logged.clone(),
+            // The core keeps the favorites it had, copying or merging the lists, and tells the
+            // windows (`favorites_changed`).
+            move |scope, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: favorites scope {}", scope.title());
+                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
+                settings.update(cx, |_, cx| cx.notify()).ok();
+            },
+        )
+        .relative()
+        // Drawn again once the scope changes, which check.sh waits for.
+        .child(self.drawn(format!("share favorites {}", scope.title())));
+        let favorites_line: SharedString = "Which Spaces show the same favorites.".into();
+        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
+        let favorites = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Share favorites", Some(favorites_line.clone())))
+                .child(
+                    div()
+                        .flex()
+                        .mt(px(SIDE_TOP))
+                        .ml(px(-SIDE_ROOM))
+                        .child(shared),
+                ),
+            name: "Share favorites".into(),
+            line: Some(favorites_line),
+            keys: None,
+            nested: false,
+        };
         let moving = self.toggle(
             "warn moving profiles",
             "Ask before moving a tab to another profile",
@@ -2065,26 +2119,33 @@ impl Settings {
             Block::Rows(vec![favorites]),
         ];
         let right = shell::sidebar_right(cx);
-        let position = self.popup(
-            Popup::SidebarPosition,
-            side_title(right).into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_sidebar_position(right, window, cx)
-            }),
-        );
-        let position = setting(
+        let line: SharedString =
+            "The side of the window the sidebar and the window's buttons are on.".into();
+        let pair = browser::settings_pictures::picker(
             look,
-            "Sidebar position",
-            Some("The side of the window the sidebar and the window's buttons are on.".into()),
-            vec![
-                position
-                    .child(self.drawn("sidebar position".into()))
-                    // Drawn again once the side changes, which check.sh waits for.
-                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
-                    .into_any_element(),
-            ],
-        );
+            self.base(),
+            self.dark,
+            right,
+            browser::settings_pictures::Buttons::HERE,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |side, _, cx| set_sidebar_right(side, cx),
+        )
+        .relative()
+        // Drawn again once the side changes, which check.sh waits for.
+        .child(self.drawn(format!("sidebar position {}", side_title(right))));
+        // The drawings go under the row's line, at its start, their ring's room outside it.
+        let position = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Sidebar position", Some(line.clone())))
+                .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair)),
+            name: "Sidebar position".into(),
+            line: Some(line),
+            keys: None,
+            nested: false,
+        };
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2869,57 +2930,6 @@ impl Settings {
         self.pop_up(Popup::SearchEngine(profile), items, picked, window, cx);
     }
 
-    /// Opens the favorites' pop-up menu over its button, as the archive's, and sets the scope
-    /// picked. The core keeps the favorites it had, copying or merging the lists, and tells the
-    /// windows (`favorites_changed`).
-    fn choose_favorites_scope(
-        &mut self,
-        chosen: shell::FavoritesScope,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let items: Vec<MenuEntry> = (shell::FavoritesScope::ALL.iter())
-            .map(|&scope| {
-                let on = scope == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(scope.title(), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(scope) = picked.map(|index| shell::FavoritesScope::ALL[index]) {
-                // check.sh waits for this line.
-                log!("browser: favorites scope {}", scope.title());
-                unsafe { bc::bc_set_favorites_scope(scope.to_core()) };
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Favorites, items, picked, window, cx);
-    }
-
-    /// Sidebar position's pop-up menu, Left or Right, over its button.
-    fn choose_sidebar_position(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
-        let items: Vec<MenuEntry> = [false, true]
-            .iter()
-            .map(|&each| MenuEntry {
-                checked: each == right,
-                over: each == right,
-                ..MenuEntry::new(side_title(each), true)
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(index) = picked {
-                set_sidebar_right(index == 1, cx);
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::SidebarPosition, items, picked, window, cx);
-    }
-
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
     fn choose_page_zoom(&mut self, chosen: Option<usize>, window: &Window, cx: &mut Context<Self>) {
         let items: Vec<MenuEntry> = (PAGE_ZOOM.iter().enumerate())
@@ -2942,32 +2952,6 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::PageZoom, items, picked, window, cx);
-    }
-
-    /// General's Appearance: Automatic, Light or Dark, View › Appearance's choice, which every
-    /// window takes.
-    fn choose_appearance(&mut self, chosen: Appearance, window: &Window, cx: &mut Context<Self>) {
-        const ALL: [Appearance; 3] = [Appearance::Automatic, Appearance::Light, Appearance::Dark];
-        let items: Vec<MenuEntry> = (ALL.iter())
-            .map(|&each| {
-                let on = each == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::new(appearance_label(each), true)
-                }
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(appearance) = picked.map(|index| ALL[index]) {
-                crate::browser_windows::update_shells_in(cx, |shell, cx| {
-                    shell.run(Command::Appearance(appearance), "settings", cx)
-                });
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Appearance, items, picked, window, cx);
     }
 
     /// Shows `which` pop-up's menu of `items` in ilo's menu over Settings' window, light or dark as
@@ -4701,11 +4685,6 @@ pub fn sidebar_right_kept() -> bool {
     off(SIDEBAR_RIGHT)
 }
 
-/// Sidebar position's names.
-fn side_title(right: bool) -> &'static str {
-    if right { "Right" } else { "Left" }
-}
-
 /// Moves the sidebar to the window's right, or back to its left: kept on this device, and every
 /// window follows at once, as each reads the side as it draws.
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
@@ -4755,15 +4734,6 @@ fn set_notification_prompts(on: bool, _: &mut App) {
 
 fn set_warn_moving_profiles(warn: bool, _: &mut App) {
     unsafe { bc::bc_set_warn_moving_profiles(warn) };
-}
-
-/// Appearance's choices as View › Appearance names them.
-fn appearance_label(appearance: Appearance) -> &'static str {
-    match appearance {
-        Appearance::Automatic => "Automatic",
-        Appearance::Light => "Light",
-        Appearance::Dark => "Dark",
-    }
 }
 
 /// The browser window in front's shell, if there's one.

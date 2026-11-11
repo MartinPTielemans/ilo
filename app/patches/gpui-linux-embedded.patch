@@ -31,7 +31,7 @@ index a91818acd0..2d1de9aa21 100644
  # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
  xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e77f8..a6fdee5995 100644
+index a5390e77f8..cda50bc677 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -1,4 +1,25 @@
@@ -45,7 +45,7 @@ index a5390e77f8..a6fdee5995 100644
 +    marked_range, open_next_window_in,
 +};
 +pub use linux::{
-+    Corner, CursorPicture, EmbeddedKeyboard, EmbedderDrag, EmbedderDropped, current_platform, dispatch_embedded,
++    Corner, CursorPicture, EmbeddedKeyboard, EmbedderDrag, EmbedderDropped, answered_key, current_platform, dispatch_embedded,
 +    dispatch_embedded_after_read, embed, embed_wayland, embed_x11, embedded_fd, embedder_size, embedder_windows_going,
 +    give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    linux_platform, move_overlay, new_host_window, overlay_size, overlays_blend, overlays_blur,
@@ -62,7 +62,7 @@ index a5390e77f8..a6fdee5995 100644
 +    open_next_window_in_surface, resize_embedded,
 +};
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index e4da54b52b..45fd6d97ed 100644
+index e4da54b52b..a8604a2a42 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -1,7 +1,9 @@
@@ -97,7 +97,7 @@ index e4da54b52b..45fd6d97ed 100644
  pub(crate) use headless::*;
  pub(crate) use keyboard::*;
 +pub use overlay::{
-+    Corner, CursorPicture, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
++    Corner, CursorPicture, answered_key, embedder_size, embedder_windows_going, give_held_keys, hide_overlay, hide_window, hold_keys, leave_overlay,
 +    move_overlay, overlay_size, overlays_blend, overlays_blur,
 +    set_overlay_blur, set_overlay_cursor, set_overlay_keyboard, set_overlay_menu, set_overlay_outline,
 +    set_overlay_outlines,
@@ -243,10 +243,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..1c6b15bf76
+index 0000000000..b21bc89d9f
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,1243 @@
+@@ -0,0 +1,1252 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -930,6 +930,15 @@ index 0000000000..1c6b15bf76
 +pub fn hold_keys(#[allow(unused_variables)] shortcut: Option<&gpui::Keystroke>) {
 +    #[cfg(feature = "wayland")]
 +    super::wayland::hold_keys(shortcut);
++}
++
++/// The embedder answered the press of `shortcut` as a shortcut of its own, before its page had it.
++/// Under Wayland GPUI reads that press after the embedder, and the answer can have given GPUI's
++/// window the keys, as closing the page that had them does, so GPUI drops the press rather than
++/// run the shortcut a second time. On X11 the press reaches only the embedder.
++pub fn answered_key(#[allow(unused_variables)] shortcut: &gpui::Keystroke) {
++    #[cfg(feature = "wayland")]
++    super::wayland::answered_key(shortcut);
 +}
 +
 +/// The overlay `view` takes the keys held since a shortcut (`hold_keys`), and gets them once it
@@ -1919,7 +1928,7 @@ index cbc962bcff..46c3b3e249 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 2d40cf7fa9..28f2fb7841 100644
+index 2d40cf7fa9..82f0296198 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -12,11 +12,7 @@ use std::{
@@ -2244,9 +2253,7 @@ index 2d40cf7fa9..28f2fb7841 100644
 +    ) -> bool {
 +        let Some(wl_pointer) = self.wl_pointer.clone() else {
 +            return false;
-         };
--        let scale = focused_window.primary_output_scale();
--        self.cursor.set_icon(
++        };
 +        let scale = picture.scale.round().max(1.) as u32;
 +        if picture.width % scale != 0 || picture.height % scale != 0 {
 +            return false;
@@ -2264,7 +2271,9 @@ index 2d40cf7fa9..28f2fb7841 100644
 +                    .collect();
 +                shm_buffer(self, picture.width, picture.height, &bgra).ok_or(())
 +            }
-+        };
+         };
+-        let scale = focused_window.primary_output_scale();
+-        self.cursor.set_icon(
 +        let Ok(buffer) = made else {
 +            return false;
 +        };
@@ -2715,7 +2724,7 @@ index 2d40cf7fa9..28f2fb7841 100644
 +                }
  
 -                let focused_window = state.keyboard_focused_window.clone();
-+                if holds_key(&state, key, key_state) {
++                if holds_key(&state, key, key_state) || answered_press(&state, key, key_state) {
 +                    return;
 +                }
 +                // A key's release ends its repeat wherever it goes: a key that closed an
@@ -3223,7 +3232,7 @@ index 2d40cf7fa9..28f2fb7841 100644
              }
              _ => {}
          }
-@@ -3479,3 +4081,649 @@ mod tests {
+@@ -3479,3 +4081,691 @@ mod tests {
          );
      }
  }
@@ -3722,6 +3731,48 @@ index 2d40cf7fa9..28f2fb7841 100644
 +        held.keys.push(input);
 +        true
 +    })
++}
++
++thread_local! {
++    /// The press the embedder answered as a shortcut of its own (`answered_key`), which GPUI has
++    /// yet to read, and since when.
++    static ANSWERED_KEY: RefCell<Option<(Keystroke, Instant)>> = const { RefCell::new(None) };
++}
++
++pub(crate) fn answered_key(shortcut: &Keystroke) {
++    if EMBEDDED_CLIENT.with_borrow(|client| client.is_none()) {
++        return;
++    }
++    ANSWERED_KEY.set(Some((shortcut.clone(), Instant::now())));
++}
++
++/// Whether the key `key`, pressed or released as `key_state` says, is the press the embedder
++/// answered (`answered_key`), which GPUI then drops. The key's next press is that one, as the
++/// embedder reads each key first; its release ends the mark too, since an answer to a repeat the
++/// embedder made has no press of GPUI's to drop.
++fn answered_press(state: &WaylandClientState, key: u32, key_state: wl_keyboard::KeyState) -> bool {
++    let Some((shortcut, since)) = ANSWERED_KEY.take() else {
++        return false;
++    };
++    let Some(keymap_state) = state.keymap_state.as_ref() else {
++        return false;
++    };
++    let keycode = Keycode::from(key + MIN_KEYCODE);
++    let keystroke = keystroke_from_xkb(keymap_state, state.modifiers, keycode);
++    let keyed = !keymap_state.key_get_one_sym(keycode).is_modifier_key()
++        && keystroke.key == shortcut.key;
++    if since.elapsed() > HOLD_KEYS_FOR
++        || keyed && key_state == wl_keyboard::KeyState::Released
++    {
++        return false;
++    }
++    let answered = keyed
++        && key_state == wl_keyboard::KeyState::Pressed
++        && keystroke.modifiers == shortcut.modifiers;
++    if !answered {
++        ANSWERED_KEY.set(Some((shortcut, since)));
++    }
++    answered
 +}
 +
 +fn overlay_window(view: *mut std::ffi::c_void) -> Option<WaylandWindowStatePtr> {

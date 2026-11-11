@@ -3,14 +3,17 @@
 //! the user gives them Full Disk Access, so reading it may say ReadError::NoAccess.
 
 use std::path::Path;
-use std::time::SystemTime;
+use web_time::SystemTime;
 
 use plist::{Dictionary, Value};
 
 use super::found::{Node, Page, Tab, opens_here};
-use super::read::{Copy, Kind, Read, ReadError, folder_name, micros, pinned};
+#[cfg(not(target_family = "wasm"))]
+use super::read::{Copy, micros};
+use super::read::{Kind, Read, ReadError, folder_name, pinned};
 
 /// Safari's times count seconds from 2001, 978,307,200 seconds after 1970.
+#[cfg(not(target_family = "wasm"))]
 const FROM_2001: f64 = 978_307_200.;
 
 /// The names Safari's own folders have in the file, which it shows by others.
@@ -131,6 +134,7 @@ fn tab(leaf: &Dictionary) -> Option<Tab> {
     opens_here(&url).then_some(Tab { url, name: title })
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// The pages of `History.db` at `path` visited since `since`, the latest first, each by the title
 /// of its last visit. It reads a copy, as Safari keeps the file open while it runs.
 pub fn history(path: &Path, since: SystemTime) -> Result<Vec<Page>, ReadError> {
@@ -161,4 +165,9 @@ pub fn history(path: &Path, since: SystemTime) -> Result<Vec<Page>, ReadError> {
         }
     }
     Ok(pages)
+}
+
+#[cfg(target_family = "wasm")]
+pub fn history(_: &Path, _: SystemTime) -> Result<Vec<Page>, ReadError> {
+    Err(super::read::on_the_web())
 }

@@ -8,8 +8,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
-    time::Instant,
 };
+use web_time::Instant;
 
 use gpui::{
     AnyElement, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity, Focusable,
@@ -20,10 +20,10 @@ use gpui::{
 };
 
 use super::{
-    Command, DRAG_START, Edit, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT,
-    MenuEntry, NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
-    SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
-    UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
+    Command, DRAG_START, Edit, FAVICON_SIZE, FOLDER_INDENT, FOOTER_HEIGHT, FORM_TEXT, MenuEntry,
+    NAV, NAV_RADIUS, NAV_SIZE, Naming, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, SECONDARY,
+    SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
+    URL_BUTTON_SIZE, What,
     access::Accessible,
     dashed_square,
     display_face::{cap_top, display_text},
@@ -1824,12 +1824,24 @@ impl Shell {
                             });
                     return card_row(depth, plate);
                 }
-                let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
-                let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
-                let width = plate / panes.len() as f32;
-                let segments = panes.iter().enumerate().map(|(index, &pane)| {
-                    self.segment(&palette, pane, width, index == 0, false, cx)
-                });
+                let weights = self.rest_weights(&panes, self.browser.space_tab(id));
+                let segments =
+                    panes
+                        .iter()
+                        .zip(weights)
+                        .enumerate()
+                        .map(|(index, (&pane, weight))| {
+                            let speaker = self.still_speaker(&palette, pane);
+                            self.segment(
+                                &palette,
+                                pane,
+                                (weight, 0.),
+                                index == 0,
+                                false,
+                                speaker,
+                                cx,
+                            )
+                        });
                 card_row(depth, split_plate(segments))
             }
         });
@@ -3625,7 +3637,7 @@ impl Shell {
             )
             // A task's card folding into it bumps its glyph as it lands.
             .child({
-                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+                let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
                 svg()
                     .path("icons/archive.svg")
                     .size(px(16.))

@@ -153,7 +153,7 @@ pub extern "C" fn host_show_link_preview(ui_view: *mut c_void) {
     let bounds = Bounds::new(point(px(0.), px(0.)), content);
     crate::overlays::show_over(view, ui_view, bounds, px(0.), false, left);
     // check.sh reads this line.
-    eprintln!("browser: link preview shown");
+    browser::log!("browser: link preview shown");
 }
 
 #[unsafe(no_mangle)]
@@ -193,7 +193,7 @@ fn release(except: *mut c_void) -> Option<Shown> {
     })?;
     place(view, &shown);
     // check.sh reads this line.
-    eprintln!("browser: link preview released");
+    browser::log!("browser: link preview released");
     Some(shown)
 }
 
@@ -226,7 +226,7 @@ pub extern "C" fn host_hide_link_preview() {
     if let Some(view) = view {
         gpui_linux::hide_overlay(view, || {});
         // check.sh reads this line.
-        eprintln!("browser: link preview hidden");
+        browser::log!("browser: link preview hidden");
     }
 }
 
