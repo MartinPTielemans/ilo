@@ -44,15 +44,11 @@ if [ "$(uname)" = Darwin ]; then
     codesign --verify --deep --strict --verbose=2 "$app"/Contents/Frameworks/*Framework.framework \
       > "$out/notifications-codesign.txt" 2>&1 ||
       fail "the framework's signature doesn't hold: $(tail -3 "$out/notifications-codesign.txt")"
-    # macOS asks only an app it has no answer for, and keeps that answer: one that was refused
-    # delivers the page's notifications to no banner, and one that was allowed is asked no more, as
-    # on a VM that ran this check before. The run never changes what macOS keeps, as it runs on
-    # real Macs too; a check VM clears it before the run to be asked as a new app is (#2396).
-    kept=$(kept_answers)
-    refused=$(echo "$kept" | awk '$2 == "refused" { printf "%s%s, flags %s", sep, $1, $3; sep = "; " }')
-    [ -z "$refused" ] ||
-      fail "macOS keeps an earlier answer for the app's notifications as not allowed: $refused"
-    allowed=$(echo "$kept" | grep -c ' allowed ' || true)
+    # macOS asks only an app it has no answer for, and keeps that answer, so one allowed before,
+    # as on a VM that ran this check, is asked no more. The run never changes what macOS keeps, as
+    # it runs on real Macs too; a check VM clears it before the run to be asked as a new app is
+    # (#2396).
+    allowed=$(kept_answers | grep -c ' allowed ' || true)
     clang++ -fobjc-arc -framework Cocoa -o "$out/banner" check/banner.mm 2> "$out/banner-build.log" ||
       fail "check/banner.mm didn't build: $(cat "$out/banner-build.log")"
     # The hosted runner's image turns Notification Center's agent off, which draws the banners:
@@ -166,8 +162,23 @@ PY
     for _ in 1 2; do
       "$out/banner" Notifications Allow >> "$notes" 2>&1 || break
     done
-    grep -q '^pressed .* with Name:Allow: done$' "$notes" ||
-      fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+    if ! grep -q '^pressed .* with Name:Allow: done$' "$notes"; then
+      # usernoted writes an answer to its file some seconds after it's given, as a new entry
+      # without leave first, so a run close behind one that pressed Allow reads that until then.
+      for _ in $(seq 20); do
+        kept=$(kept_answers)
+        [ "$(echo "$kept" | grep -c ' allowed ' || true)" = 2 ] && break
+        sleep 0.5
+      done
+      refused=$(echo "$kept" | awk '$2 == "refused" { printf "%s%s, flags %s", sep, $1, $3; sep = "; " }')
+      [ -z "$refused" ] ||
+        fail "macOS didn't ask whether the app may notify, and keeps an earlier answer for it as not allowed: $refused"
+      [ "$(echo "$kept" | grep -c ' allowed ' || true)" = 2 ] ||
+        fail "macOS didn't ask whether the app may notify: $(grep '^banner' "$notes" | head -3)"
+      echo "kept: allowed" > "$out/notifications-asked.txt"
+      kept_note=", macOS having kept its answer, allowed, for the app and its alert helper"
+      return
+    fi
     asked=$(grep '^pressed .* with Name:Allow' "$notes" | sed 's/^pressed \(“[^”]*”\) Notifications.*/\1/')
     while read -r each; do
       # Braced: bash 3.2 on the Mac reads the quote's first byte as a letter of the name.
