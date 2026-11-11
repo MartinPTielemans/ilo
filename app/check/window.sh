@@ -1138,7 +1138,9 @@ cpu_each() {
     line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
     kind=$(echo "$line" | grep -o -- '--type=[a-z-]*' | head -1)
     case $line in *--extension-process*) kind="$kind,extension" ;; esac
-    echo "$p ${kind:-browser} $(sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+    for t in /proc/$p/task/*; do
+      echo "$p/${t##*/} ${kind:-browser}/$(tr ' ' _ < "$t/comm" 2> /dev/null) $(sed 's/^.*) //' "$t/stat" 2> /dev/null | awk '{ print $12 + $13 }')"
+    done
   done
 }
 rest_cpu() {
@@ -1151,7 +1153,7 @@ rest_cpu() {
   sleep 4 # the window measured
   cpu_each > "$out/cpu-to-$step"
   echo "diag rest to log line $(wc -l < "$log")" >> "$out/window-cpu.txt"
-  awk 'NR == FNR { was[$1] = $3; next } { printf "diag cpu %s %s %d ticks\n", $1, $2, $3 - was[$1] }' \
+  awk 'NR == FNR { was[$1] = $3; next } $3 - was[$1] > 0 { printf "diag cpu %s %s %d ticks\n", $1, $2, $3 - was[$1] }' \
     "$out/cpu-from-$step" "$out/cpu-to-$step" >> "$out/window-cpu.txt"
   set -- $from $(cpu --extension-process)
   rest=$(echo "$1 $3" | awk '{ printf "%.2f", $2 - $1 }') rest_procs=$4
@@ -1166,6 +1168,13 @@ hover_out "the sidebar out by the edge"
 ../tools/window-screenshot.sh "$pid" "$out/sidebar-reveal-hover.png" || fail "no window to capture"
 rest_cpu
 out_cpu=$rest
+# #2400's proof branch: six more takes with the sidebar out, as the step fails only now and then.
+for _ in 1 2 3 4 5 6; do
+  hover_out "the sidebar out again"
+  rest_cpu
+  echo "window: diag again out ${rest} s" >> "$out/window-cpu.txt"
+  echo "window: diag again out ${rest} s"
+done
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU with the sidebar docked and ${out_cpu} s with it out"
 awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }' &&
   fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s, against ${docked_cpu} s docked"
