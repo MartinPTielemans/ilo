@@ -1,0 +1,39 @@
+# Proof only (#2454): in the released Flatpak, which crashes leave a minidump, and whether a process
+# in its sandbox can read another's memory without the ptrace syscall, which Flatpak blocks.
+name: Proof 2454
+
+on:
+  push:
+    branches: ['fix/flatpak-crash-dumps-2454-*']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      # flatpak.yml's list, whose cached .debs main keeps.
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            libclang-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+            flatpak flatpak-builder xvfb imagemagick
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          dir=$(mktemp -d)
+          gh release download v0.1.15 -R "$GITHUB_REPOSITORY" -p ilo-linux-x86_64.flatpak -D "$dir"
+          flatpak install --user -y --noninteractive "$dir/ilo-linux-x86_64.flatpak"
+          flatpak info --user app.ilo.browser
+      - run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash .github/proof-2454.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proof-2454
+          path: ${{ runner.temp }}/proof
+          if-no-files-found: ignore
