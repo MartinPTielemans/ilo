@@ -579,6 +579,15 @@ pub trait Browser {
     fn set_pane_corner(&self, left: f32, right: f32, top: f32, cx: &mut App);
     /// Shows the window's close, minimize and zoom buttons, or hides them.
     fn show_window_buttons(&self, shown: bool, cx: &mut App);
+    /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
+    /// back on its left (Sidebar position, #2375).
+    fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
+    /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
+    /// and every window follows.
+    fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
+        cx.set_global(super::SidebarRight(right));
+        cx.refresh_windows();
+    }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
     /// (host_grow_little_window).
     fn little_drawn(&self, cx: &mut App);

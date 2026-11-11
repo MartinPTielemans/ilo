@@ -34,6 +34,7 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1246,6 +1247,25 @@ struct Reveal {
   void (*pointer_moved)(void*, double) = nullptr;
 };
 std::map<void*, Reveal> g_reveals;
+
+// The browser windows whose sidebar is on the right, with the window's buttons and the reveal
+// there too (host_set_sidebar_right).
+std::set<HWND>& SidebarRight() {
+  static std::set<HWND> right;
+  return right;
+}
+
+// How far across |ui_view|'s content its reveal |width| wide starts: at the left edge, or against
+// the right one with the sidebar there.
+double RevealLeft(void* ui_view, double width) {
+  HWND root = Root(ui_view);
+  if (!SidebarRight().count(root)) {
+    return 0;
+  }
+  double content_width, content_height;
+  ContentSize(root, &content_width, &content_height);
+  return content_width - width;
+}
 Floating g_settings;
 bool g_settings_placed = false;
 
@@ -1595,6 +1615,14 @@ void Moved(HWND root) {
     PostMenuDismiss(true);
   }
   const double scale = Scale(root);
+  // A reveal on the right keeps to the right edge as the window's width changes.
+  for (auto& [ui_view, reveal] : g_reveals) {
+    if (Root(ui_view) == root && reveal.floating.place && SidebarRight().count(root)) {
+      double width, height;
+      WindowSize(reveal.floating.hwnd, &width, &height);
+      reveal.floating.place->first = RevealLeft(ui_view, width);
+    }
+  }
   for (auto& [hwnd, floating] : FloatingByHwnd()) {
     if (floating->place && IsWindowVisible(hwnd) && GetWindow(hwnd, GW_OWNER) == root) {
       POINT origin{std::lround(floating->place->first * scale),
@@ -2404,11 +2432,14 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is
+  // there, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
+  const double across = SidebarRight().count(root) ? client.right / scale - at.x / scale
+                                                   : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
-  if (shown != WindowButtonsShown().end() && shown->second &&
-      std::abs(at.x / scale - 43) <= 11 && std::abs(at.y / scale - 24) <= 11) {
+  if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
+      std::abs(at.y / scale - 24) <= 11) {
     return HTMAXBUTTON;
   }
   return 0;
@@ -2637,6 +2668,7 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
         }
       }
       WindowButtonsShown().erase(hwnd);
+      SidebarRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -4396,6 +4428,18 @@ void host_show_window_buttons(void* ui_view, bool shown) {
   }
 }
 
+void host_set_sidebar_right(void* ui_view, bool right) {
+  HWND root = Root(ui_view);
+  if (!root) {
+    return;
+  }
+  if (right) {
+    SidebarRight().insert(root);
+  } else {
+    SidebarRight().erase(root);
+  }
+}
+
 void host_set_window_on_top(void* ui_view, bool on) {
   // The overlays are windows it owns, which Windows makes topmost and back with it.
   SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
@@ -4428,7 +4472,7 @@ void host_show_reveal(void* ui_view, double width) {
   ContentSize(Root(ui_view), &content_width, &content_height);
   // The UI shows it again as its width changes; check.sh reads the line once a showing.
   const bool was_shown = it->second.floating.hwnd && IsWindowVisible(it->second.floating.hwnd);
-  Show(it->second.floating, ui_view, 0, 0, width, content_height, false);
+  Show(it->second.floating, ui_view, RevealLeft(ui_view, width), 0, width, content_height, false);
   if (!was_shown) {
     LogShown(it->second.floating, "reveal");
   }

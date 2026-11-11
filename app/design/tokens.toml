@@ -1771,6 +1771,13 @@ mark-line = 2.0
 mark-radius = 6.0
 misfit = 0.5
 
+[shell.boost.motion]
+# Seconds a carry in Arrange holds still before the page shows the drop made (ours, the owner's
+# call on #2347). The rest of its motion is the sidebar's, which the look takes from shell.rs, as
+# this file has no references: the page's other things make room on Favorites room's spring
+# (ROOM_OMEGA) and a dropped thing lands on Row motion's (ROW_RESPONSE, ROW_DAMPING).
+rest = 0.3
+
 [shell.cast]
 # Ours, as Chrome's dialog has Chrome's look: the Cast card is the question's, and each device a
 # row in it, its glyph before its name over what it's doing. A page's device chooser has the same
