@@ -63,6 +63,7 @@
 #include "browser_core/search.h"
 #include "browser_core/session.h"
 #include "browser_core/site_controls.h"
+#include "browser_core/snooze.h"
 #include "browser_core/space.h"
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
@@ -1433,6 +1434,20 @@ bc_id bc_archive_clear(void) {
   return browser_core::RemoveAllArchived();
 }
 
+bool bc_tab_snooze(bc_id tab, double until) {
+  return until > 0 &&
+         browser_core::SnoozeTab(tab, base::Time::FromMillisecondsSinceUnixEpoch(until));
+}
+
+bool bc_archive_snooze(bc_id archived, double until) {
+  const base::Time at =
+      until > 0 ? base::Time::FromMillisecondsSinceUnixEpoch(until) : base::Time();
+  if (!at.is_null() && at <= base::Time::Now()) {
+    return false;
+  }
+  return browser_core::SnoozeArchived(archived, at);
+}
+
 bc_id bc_archive_remove(bc_id archived) {
   return browser_core::RemoveArchived(archived);
 }
@@ -2434,6 +2449,7 @@ void bc_tab_move_to_space(bc_id id, bc_id space) {
 }
 
 void bc_tab_close(bc_id id, bool split) {
+  browser_core::ForgetSnooze(id);
   browser_core::Space* space = browser_core::Space::Holding(id);
   if ((space && space->IsPinned(id)) || browser_core::Favorites::Has(id)) {
     browser_core::Window::Unload(id, split);

@@ -352,6 +352,8 @@ source_set("browser_core") {
     "sign_in_dialog.h",
     "site_controls.cc",
     "site_controls.h",
+    "snooze.cc",
+    "snooze.h",
     "space.cc",
     "space.h",
     "suggest.cc",

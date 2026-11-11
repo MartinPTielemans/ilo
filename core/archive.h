@@ -13,7 +13,8 @@
 namespace browser_core {
 
 // The archive: the Today tabs that closed, as Arc keeps them for its Library, newest first. It's
-// saved with the Spaces, and keeps a tab for 30 days, up to 500 of them.
+// saved with the Spaces, and keeps a tab for 30 days, up to 500 of them, but for a snoozed one,
+// which stays until it comes back (snooze.h).
 struct ArchivedTab {
   // Its own id, for the app.
   bc_id id = 0;
@@ -28,6 +29,8 @@ struct ArchivedTab {
   // that's still one of the user's Spaces. Invalid for a window's own Space, which has none, and
   // for one archived before the archive kept it.
   base::Uuid space;
+  // When it comes back by itself (snooze.h), or null.
+  base::Time snoozed_until;
 };
 
 // All of it, newest first.
@@ -37,12 +40,18 @@ const std::vector<ArchivedTab>& Archived();
 void LoadArchive(std::vector<ArchivedTab> archived);
 
 // Archives |tab|, a Today tab closing at |url| in the Space with the node |space|, or with |little|
-// a Little ilo window's tab. Then archive_changed.
+// a Little ilo window's tab, snoozed until |snoozed_until| unless that's null. Then
+// archive_changed.
 void Archive(bc_id tab,
              const GURL& url,
              const std::string& title,
              const base::Uuid& space,
-             bool little = false);
+             bool little = false,
+             base::Time snoozed_until = base::Time());
+
+// Has the archived tab |id| come back by itself at |until|, or with a null time stay, as a tab
+// closed now. Returns false if there's no such tab. Then archive_changed.
+bool SnoozeArchived(bc_id id, base::Time until);
 
 // Takes |tab|, a closed tab that has come back, out of the archive. Then archive_changed.
 void Unarchive(bc_id tab);

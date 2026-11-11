@@ -36,6 +36,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
 #include "browser_core/side_panel.h"
+#include "browser_core/snooze.h"
 #include "browser_core/space.h"
 #include "browser_core/suggest.h"
 #include "browser_core/sync.h"
@@ -233,8 +234,9 @@ std::vector<DeletedSpace>& DeletedSpaces() {
   return *deleted;
 }
 
-// Keeps |id|, a tab closing, for ReopenClosedTab, and archives it.
+// Keeps |id|, a tab closing, for ReopenClosedTab, and archives it, snoozed if it was.
 void KeepClosed(bc_id id) {
+  const base::Time snoozed_until = TakeSnooze(id);
   Tab* tab = Tab::Get(id);
   Space* space = Space::Holding(id);
   // One not in a Space never showed, a pinned tab closes only when its page closes itself, and a
@@ -256,7 +258,7 @@ void KeepClosed(bc_id id) {
     return;
   }
   Archive(id, saved.history[saved.current].virtual_url(), tab->Title(), space->node().id,
-          space->little());
+          space->little(), snoozed_until);
   const size_t index = std::ranges::find(space->today(), id) - space->today().begin();
   const std::vector<bc_id> panes = space->Panes(id);
   const size_t split_index = std::ranges::find(panes, id) - panes.begin();
@@ -286,6 +288,20 @@ std::optional<ClosedTab> TakeClosed(bc_id id) {
   ClosedTabs().erase(closed);
   Unarchive(id);
   return tab;
+}
+
+// What |archived| comes back as: with its history if it closed since the browser started, taken
+// from the closed tabs, else at its page.
+SavedTab Reopened(const ArchivedTab& archived) {
+  if (std::optional<ClosedTab> closed = TakeClosed(archived.tab)) {
+    return std::move(closed->saved);
+  }
+  SavedTab saved;
+  sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
+  page.set_virtual_url(archived.url);
+  page.set_original_request_url(archived.url);
+  page.set_title(base::UTF8ToUTF16(archived.title));
+  return saved;
 }
 
 // Gives the split |tab| is back in what it had when |closed| closed: stacked, a name, an icon.
@@ -2417,22 +2433,32 @@ bc_id Window::RestoreArchived(bc_id id) {
   if (!archived) {
     return 0;
   }
-  // One closed since the browser started comes back with its history, else at its page.
-  std::optional<ClosedTab> closed = TakeClosed(archived->tab);
-  SavedTab saved;
-  if (closed) {
-    saved = std::move(closed->saved);
-  } else {
-    sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
-    page.set_virtual_url(archived->url);
-    page.set_original_request_url(archived->url);
-    page.set_title(base::UTF8ToUTF16(archived->title));
-  }
+  const SavedTab saved = Reopened(*archived);
   // Back in the Space it closed in, as Arc's, while that's still one of the user's, which Select
   // then shows. Else in the one shown.
   const Space* closed_in = Space::WithNode(archived->space);
   const bc_id tab = Reopen(closed_in ? closed_in->id() : space_, 0, saved);
   Select(tab);
+  return tab;
+}
+
+// static
+bc_id Window::Unsnooze(bc_id id) {
+  const auto entry = std::ranges::find(Archived(), id, &ArchivedTab::id);
+  // Its own Space, in that Space's profile, which loaded with the Spaces and stays loaded.
+  Space* space = entry == Archived().end() ? nullptr : Space::WithNode(entry->space);
+  Profile* profile = space ? ProfileFor(space->profile()) : nullptr;
+  if (!space || !profile || space->agent() || space->off_the_record()) {
+    return 0;
+  }
+  std::optional<ArchivedTab> archived = TakeArchived(id);
+  SavedTab saved = Reopened(*archived);
+  // Seen as it comes back, so auto-archive counts from now rather than from when it left.
+  saved.last_seen = base::Time::Now();
+  const bc_id tab = Tab::Restore(profile, saved);
+  if (tab) {
+    space->AddAt(tab, 0);
+  }
   return tab;
 }
 

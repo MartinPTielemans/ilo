@@ -168,6 +168,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Closes the Today tabs below |tab| as the user does, bottom up, so ⇧⌘T reopens each at its
   // place. A window showing one shows |tab| first, so none shows or loads on the way out.
   static void CloseBelow(bc_id tab);
+  // Brings the snoozed archived tab |archived| back at the top of its own Space's Today tabs,
+  // unloaded and not shown, with its history if it closed since the browser started. Returns the
+  // tab, or 0, and leaves it in the archive, if its Space is gone or it has none.
+  static bc_id Unsnooze(bc_id archived);
   // Moves |tab| to |space|: a pinned tab to the bottom of its pinned tabs, still pinned at its
   // pinned URL, a Today tab to the top of its Today tabs. A window showing the tab goes with it, as
   // Chrome's active tab does to another window, and its old Space shows next what it would once the

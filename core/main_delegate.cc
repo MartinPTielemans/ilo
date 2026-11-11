@@ -50,6 +50,7 @@
 #include "browser_core/search.h"
 #include "browser_core/session.h"
 #include "browser_core/sign_in_dialog.h"
+#include "browser_core/snooze.h"
 #include "browser_core/sync.h"
 #include "browser_core/system_engine.h"
 #include "browser_core/tab.h"
@@ -276,6 +277,7 @@ class ExtraParts : public ChromeBrowserMainExtraParts,
         g_host.started(g_host.context);
       }
       crash_reports::Started();
+      SnoozesStarted();
     }));
   }
 
