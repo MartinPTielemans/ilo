@@ -63,7 +63,7 @@ constexpr char16_t kScript[] =
   // elements by the arrangement the core gives it, as data, without taking any out of where the
   // site's code keeps it, and while the mode is on it carries what the user drags. It wakes only
   // when the page changes its tree or size, or the core calls it, and sets no timer but the hold's
-  // one at load.
+  // one at load. It moves the page only for the user's carry, by Web Animations that end with it.
   const arg = json ? JSON.parse(json) : {};
   const R = (globalThis.__iloArrange ??= make());
   return R.run(op, arg);
@@ -237,6 +237,142 @@ constexpr char16_t kScript[] =
       set(el, 'top', '0px');
       const r = rect(el);
       return { x: r.left, y: r.top };
+    }
+
+    // ---- Motion: as the preview shows a drop the page's other elements make room on a critically
+    // damped spring, and a dropped element lands on a spring of its own, the app's (the look has
+    // both from tokens.toml). Each is a Web Animation adding a transform to what the page draws, so
+    // no style of ours is set for it and none is left once it ends. Reduced motion is at once.
+    const motion = new Set();
+    const FRAME = 1000 / 60;
+    const inRange = (v, low, high, d) => (v >= low && v <= high ? v : d);
+    // A spring's progress at each frame, 0 to 1, until it's within a thousandth of 1 for good.
+    function curve(at) {
+      const ps = [0];
+      for (let i = 1; i < 120; i++) {
+        const p = at((i * FRAME) / 1000);
+        if (p == null) break;
+        ps.push(p);
+      }
+      ps.push(1);
+      return ps;
+    }
+    function roomCurve() {
+      const w = inRange(Number(mode.look.room_omega), 5, 100, 25);
+      return curve((t) => {
+        const left = (1 + w * t) * Math.exp(-w * t);
+        return left > 0.001 ? 1 - left : null;
+      });
+    }
+    // SwiftUI's response and damping fraction, as the app's spring().
+    function landCurve() {
+      const r = inRange(Number(mode.look.land_response), 0.05, 1, 0.13);
+      const z = inRange(Number(mode.look.land_damping), 0.2, 0.99, 0.9);
+      const w = (2 * Math.PI) / r, wd = w * Math.sqrt(1 - z * z);
+      return curve((t) => {
+        const decay = Math.exp(-z * w * t);
+        if (decay < 0.001) return null;
+        return 1 - decay * (Math.cos(wd * t) + ((z * w) / wd) * Math.sin(wd * t));
+      });
+    }
+    function play(el, ps, frame) {
+      const a = el.animate(ps.map(frame), { duration: (ps.length - 1) * FRAME, composite: 'add' });
+      motion.add(a);
+      a.onfinish = a.oncancel = () => motion.delete(a);
+    }
+    // Ends the motion where it's going: a press, an undo or a load acts on the page at rest.
+    function halt() {
+      for (const a of [...motion]) a.cancel();
+      motion.clear();
+    }
+    // Runs |fn| measuring the page as it is at rest, with the motion going on after.
+    function still(fn) {
+      // Only what's running: play() would start a finished one over.
+      const paused = [...motion].filter((a) => a.playState === 'running')
+        .map((a) => [a, a.currentTime]);
+      for (const [a] of paused) {
+        a.pause();
+        a.currentTime = a.effect.getComputedTiming().endTime;
+      }
+      try {
+        return fn();
+      } finally {
+        for (const [a, t] of paused) {
+          a.currentTime = t;
+          a.play();
+        }
+      }
+    }
+    const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // A box in the document's coordinates, so a scroll a change makes isn't taken for motion.
+    function spot(el) {
+      const r = rect(el);
+      return { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height, r };
+    }
+    const seen = (r) => r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
+    // Runs |fn|, which changes the page, and moves what it moved from where it was: the elements
+    // around |roots| and the arrangement's make room, and |lands| lands. |skip| doesn't move.
+    function flip(fn, roots, lands, skip) {
+      if (!mode || reduced()) {
+        halt();
+        return fn();
+      }
+      const near = new Set();
+      const ends = [...roots, ...live.flatMap((s) => [s.el, s.ref])].filter(Boolean);
+      for (const e of ends) {
+        for (let p = e; p && p.parentElement && near.size < 400; p = p.parentElement) {
+          for (const k of p.parentElement.children) near.add(k);
+        }
+      }
+      // What holds the moving elements isn't moved itself: a transform there would carry the page's
+      // fixed elements with it. Its children are measured on their own.
+      const out = (e) => e === mode.marks.host || (lands && lands.contains(e)) ||
+        (skip && skip.contains(e)) || ends.some((x) => x !== e && e.contains(x));
+      const before = new Map();
+      for (const e of near) if (!out(e) && e.getClientRects().length) before.set(e, spot(e));
+      const from = lands && lands.getClientRects().length ? spot(lands) : null;
+      halt();
+      const result = fn();
+      const moved = new Map();
+      const inherited = (e) => {
+        let dx = 0, dy = 0;
+        for (let p = e.parentElement; p; p = p.parentElement) {
+          const m = moved.get(p);
+          if (m) { dx += m.dx; dy += m.dy; }
+        }
+        return { dx, dy };
+      };
+      const order = [...before.keys()]
+        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+      let room = null;
+      for (const e of order) {
+        if (!e.isConnected || !e.getClientRects().length) continue;
+        const b = before.get(e), n = spot(e), up = inherited(e);
+        const dx = b.x - n.x - up.dx, dy = b.y - n.y - up.dy;
+        if ((Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) || (!seen(b.r) && !seen(n.r))) continue;
+        moved.set(e, { dx, dy });
+        room ??= roomCurve();
+        play(e, room, (p) => ({
+          transform: `translate(${px(dx * (1 - p))}, ${px(dy * (1 - p))})`,
+        }));
+      }
+      if (from && lands.isConnected && lands.getClientRects().length) {
+        const n = spot(lands), up = inherited(lands);
+        const dx = from.x - n.x - up.dx, dy = from.y - n.y - up.dy;
+        const sx = from.w / Math.max(n.w, 1), sy = from.h / Math.max(n.h, 1);
+        const far = Math.abs(dx) >= 0.5 || Math.abs(dy) >= 0.5;
+        if (far || Math.abs(sx - 1) > 0.005 || Math.abs(sy - 1) > 0.005) {
+          // Scaled about the element's own origin, so its corner lands where it's drawn.
+          const [ox, oy] = getComputedStyle(lands).transformOrigin.split(' ')
+            .map((v) => parseFloat(v) || 0);
+          play(lands, landCurve(), (p) => {
+            const k = 1 - p, x = 1 + (sx - 1) * k, y = 1 + (sy - 1) * k;
+            const tx = px(dx * k - ox * (1 - x)), ty = px(dy * k - oy * (1 - y));
+            return { transform: `translate(${tx}, ${ty}) scale(${x}, ${y})` };
+          });
+        }
+      }
+      return result;
     }
 
     // The top layer, for settled and floated elements and the one carried, so no ancestor's
@@ -524,12 +660,16 @@ constexpr char16_t kScript[] =
       if (busy || !on) return;
       busy = true;
       try {
-        for (const s of live) {
-          if (carry && involves(s.c, carry.el)) continue;
-          resolve(s);
-          place(s);
-          for (const el of [s.el, s.ref]) if (el && !watched.has(el)) { watched.add(el); ro.observe(el); }
-        }
+        still(() => {
+          for (const s of live) {
+            if (carry && involves(s.c, carry.el)) continue;
+            resolve(s);
+            place(s);
+            for (const el of [s.el, s.ref]) {
+              if (el && !watched.has(el)) { watched.add(el); ro.observe(el); }
+            }
+          }
+        });
       } finally {
         mo.takeRecords();
         busy = false;
@@ -733,12 +873,15 @@ constexpr char16_t kScript[] =
     function preview() {
       if (!carry || !carry.drop || (carry.drop.change !== CHANGE.SETTLES && carry.drop.change !== CHANGE.TRADES)) return;
       const y0 = scrollY;
-      unghost();
-      const candidate = [...without(committed, carry.el), changeFor(carry.drop, carry.x, carry.y)];
       const keep = carry;
-      carry = null; // Placed as any change, not skipped as the carried one.
-      apply(candidate);
-      carry = keep;
+      let candidate = null;
+      flip(() => {
+        unghost();
+        candidate = [...without(committed, keep.el), changeFor(keep.drop, keep.x, keep.y)];
+        carry = null; // Placed as any change, not skipped as the carried one.
+        apply(candidate);
+        carry = keep;
+      }, [keep.el, keep.drop.ref], keep.el);
       const mine = live[live.length - 1];
       if (!mine.applied) {
         // It doesn't fit there: the page goes back, and the bar says why while it's still held.
@@ -752,7 +895,7 @@ constexpr char16_t kScript[] =
     function unpreview(y0) {
       const was = mode.previewing;
       mode.previewing = null;
-      apply(committed);
+      flip(() => apply(committed), carry ? [carry.el] : [], null, carry && carry.el);
       if (carry) {
         ghost(carry.x, carry.y);
         // The view goes back by what showing it scrolled, so it doesn't jump.
@@ -937,14 +1080,18 @@ constexpr char16_t kScript[] =
         const d = c.drop;
         const keep = mode.previewing;
         mode.previewing = null;
-        unghost();
-        carry = null;
-        if (d && (d.change === CHANGE.SETTLES || d.change === CHANGE.TRADES || d.change === CHANGE.FLOATS)) {
-          carry = c; // For changeFor's measures.
-          const change = changeFor(d, c.x, c.y);
+        // It lands from where it was carried, the drop's place or back in its own.
+        flip(() => {
+          unghost();
           carry = null;
-          saved = commit(keep || [...without(committed, c.el), change]);
-        } else apply(committed);
+          const lands = d && [CHANGE.SETTLES, CHANGE.TRADES, CHANGE.FLOATS].includes(d.change);
+          if (lands) {
+            carry = c; // For changeFor's measures.
+            const change = changeFor(d, c.x, c.y);
+            carry = null;
+            saved = commit(keep || [...without(committed, c.el), change]);
+          } else apply(committed);
+        }, [c.el, d && d.ref].filter(Boolean), c.el);
         mode.selected = c.el;
         mode.pointed = c.el;
         // ↑ and ↓ step from what the pointer was over; a carry ends that.
@@ -998,7 +1145,15 @@ constexpr char16_t kScript[] =
       scroll(a) { scrollingNow = !!a.scrolling; if (mode) draw(); return state(); },
       state() { if (mode) draw(); return state(); },
     };
-    return { run: (o, a) => (ops[o] ? ops[o](a) : null) };
+    // The user's carry moves the page; anything else acts on it at rest.
+    const moving = new Set(['move', 'rest', 'up', 'point', 'scroll', 'state', 'fits']);
+    return {
+      run: (o, a) => {
+        if (!ops[o]) return null;
+        if (!moving.has(o)) halt();
+        return ops[o](a);
+      },
+    };
   }
 }))js";
 
