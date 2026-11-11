@@ -92,6 +92,35 @@ pub fn buttons(shown: &Shown) -> Vec<(Press, &'static str, &'static str)> {
         .collect()
 }
 
+/// A made-up thing selected on `page`, a box at its right as the mock's, for the preview and the
+/// checks: "selected" with Hide and Put back, "float" adding the pin as the thing stays on screen,
+/// and "scrolls" with the pin as it scrolls with the page.
+pub fn sample(kind: &str, page: Bounds<Pixels>, accent: Hsla) -> Option<Shown> {
+    let pin = match kind {
+        "selected" => None,
+        "float" => Some(true),
+        "scrolls" => Some(false),
+        _ => return None,
+    };
+    // Whole points, so the box and the bar over it land on the pixel grid at 1x.
+    let (width, height) = (
+        (page.size.width * 0.28).round(),
+        (page.size.height * 0.2).round(),
+    );
+    let at = point(
+        (page.right() - width - page.size.width * 0.08).round(),
+        (page.top() + page.size.height * 0.36).round(),
+    );
+    Some(Shown {
+        tab: 0,
+        selection: Bounds::new(at, size(width, height)),
+        page,
+        pin,
+        put_back: true,
+        accent,
+    })
+}
+
 /// How wide some words are, in a size and weight of the UI's font.
 type Measure<'a> = &'a dyn Fn(&SharedString, f32, FontWeight) -> f32;
 
@@ -252,7 +281,6 @@ impl MiniBar {
         let Some(showing) = &self.showing else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: mini bar {} pressed", press.name());
         let (tab, on_press) = (showing.shown.tab, showing.on_press.clone());
         // After this update, as what it runs may show the bar again or hide it.

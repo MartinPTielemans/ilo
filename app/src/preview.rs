@@ -3017,8 +3017,8 @@ impl mini_bar::Host for PreviewMiniBar {
 }
 
 /// Shows Arrange's mini bar over a made-up thing selected on the page of the preview's `window` at
-/// `bounds`: a box at the page's right, as the mock's. The bar sizes its window to what it shows,
-/// so a hidden one lays it out first, as the host would place it.
+/// `bounds` (`mini_bar::sample`). The bar sizes its window to what it shows, so a hidden one lays it
+/// out first, as the host would place it.
 fn preview_mini_bar(
     kind: &str,
     window: gpui::WindowHandle<Shell>,
@@ -3030,23 +3030,10 @@ fn preview_mini_bar(
     }) else {
         return;
     };
-    let pin = match kind {
-        "float" => Some(true),
-        "scrolls" => Some(false),
-        _ => None,
+    let Some(shown) = mini_bar::sample(kind, page, palette.accent.into()) else {
+        return;
     };
-    let selection = Bounds::new(
-        page.origin + point(page.size.width - px(360.), px(260.)),
-        size(px(280.), px(140.)),
-    );
-    let shown = mini_bar::Shown {
-        tab: 0,
-        selection,
-        page,
-        pin,
-        put_back: true,
-        accent: palette.accent.into(),
-    };
+    let selection = shown.selection;
     let on_press: mini_bar::OnPress =
         Rc::new(|_, press, _| log!("preview: mini bar {} pressed", press.name()));
     let hidden = Bounds::new(bounds.origin, size(px(1.), px(1.)));
