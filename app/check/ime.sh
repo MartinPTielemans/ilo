@@ -278,13 +278,14 @@ for mode in $modes; do
     "$out/$mode.png" 'browser: loaded' "$home/run.sh" "$mode" build/Browser/chrome \
     > "$out/$mode-run.log" 2>&1 || true
   # Any of the leg's browser's processes still there now that the leg is over, by the PIDs it
-  # tracked, with how long each has run.
+  # tracked, with how long each has run. One that has exited and waits only to be reaped (Z) can
+  # write nothing, so it isn't named.
   if [ -s "$out/$mode.pids" ]; then
     sort -u "$out/$mode.pids" | while read -r p start; do
       [ "$(started "$p")" = "$p $start" ] || continue
-      ps -o pid=,ppid=,sid=,etimes=,args= -p "$p" | awk -v m="$mode" '{
-        printf "still running after the %s leg: pid %s, parent %s, session %s, up %s s: ", m, $1, $2, $3, $4
-        $1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print substr($0, 1, 300) }' || true
+      ps -o stat=,pid=,ppid=,sid=,etimes=,args= -p "$p" | awk -v m="$mode" '$1 !~ /^Z/ {
+        printf "still running after the %s leg: pid %s, parent %s, session %s, up %s s: ", m, $2, $3, $4, $5
+        $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); print substr($0, 1, 300) }' || true
     done | tee "$out/$mode.alive"
   fi
   if [ ! -f "$out/$mode.passed" ]; then
