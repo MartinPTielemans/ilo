@@ -96,8 +96,16 @@ sign_in() {
 # Once the sign-in window has closed, Settings has the keyboard again: on Linux as the window
 # manager would give it, from xdotool or sway, as Settings' window is titled by its tab; the Mac's
 # AppKit gives it. On Windows and under Wayland the device's Settings takes the keyboard from
-# another copy's window, as a click on it would (#2114).
+# another copy's window, as a click on it would (#2114). On the Mac, with other copies running, the
+# device's copy is made the active app, and Settings… brings its Settings, GPUI's window, in front
+# of its browser window.
 settings_keyboard() {
+  if [ "$(uname)" = Darwin ]; then
+    [ -n "${others:-}" ] || return 0
+    take_activation
+    case $done in *" key GPUIWindow,"*) ;; *) send menu Settings… ;; esac
+    return 0
+  fi
   if windows; then
     python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
       fail "Settings couldn't have the keyboard again"
@@ -117,17 +125,18 @@ settings_keyboard() {
 
 # Sets clipped to what the clipboard holds, the X server's, the Wayland session's or Windows': its
 # text, or with formats the formats it holds. On the Mac the driver gives each copy a pasteboard of
-# its own in its place, which nothing else reads, so it's the device's text, as its driver logs it
-# (not the formats). A variable, not output, since the Mac's asks the driver, whose steps a
-# subshell would lose count of.
+# its own in its place, which nothing else reads, so it's the device's, as its driver logs it. A
+# variable, not output, since the Mac's asks the driver, whose steps a subshell would lose count of.
 clipboard() {
   if windows; then
     clipped=$(python3 -I check/clipboard-windows.py "${1:-text}" 2>/dev/null || true)
   elif [ "$(uname)" = Darwin ]; then
-    clipped=
-    [ -n "${1:-}" ] && return 0
     send pasteboard
-    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: pasteboard text //p' | tail -1)
+    held=text
+    [ -z "${1:-}" ] || held=types
+    clipped=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      sed -n "s/^browser: pasteboard $held //p" | tail -1)
+    [ "$held" = text ] || clipped=$(echo "$clipped" | tr ' ' '\n')
   elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
     clipped=$(timeout 5 wl-paste -n ${1:+-l} 2>/dev/null || true)
   else
@@ -137,14 +146,36 @@ clipboard() {
 # The device's first browser window in front with the keyboard, as a click on it gives it. On
 # Windows the driver's window activates a window within its own copy alone, so the copy's window
 # takes the foreground from the others' too. Under Wayland a window comes forward only for the
-# copy sway has focused, so the copy is focused first, as a click in it would.
+# copy sway has focused, so the copy is focused first, as a click in it would. On the Mac each copy
+# activates itself only as it starts, and no background process can make one active, so the
+# active copy hands its activation over, as a click in the other's window would take it.
 forward() {
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
     swaymsg "[pid=$pid] focus" > /dev/null || fail "sway couldn't focus $on's window"
   fi
+  [ "$(uname)" != Darwin ] || take_activation
   send window 1
   ! windows || python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" > /dev/null ||
     fail "$on's window couldn't take the foreground"
+}
+# On the Mac, the device's copy made the active app: each other running copy yields to it, as only
+# the active one can, and the device waits up to 5 s to be active.
+take_activation() {
+  to=$on
+  to_pid=$pid
+  for d in a b c; do
+    eval "d_pid=\${${d}_pid:-}"
+    [ "$d" != "$to" ] && [ -n "$d_pid" ] && kill -0 "$d_pid" 2>/dev/null || continue
+    device "$d"
+    send yield "$to_pid"
+  done
+  device "$to"
+  for _ in $(seq 50); do
+    send state
+    [ "$active" = 1 ] && return 0
+    sleep 0.1
+  done
+  fail "$to didn't become the active app as the others yielded to it"
 }
 
 # The runs with several devices, each a copy of the app with a profile of its own: a, b and c, on
