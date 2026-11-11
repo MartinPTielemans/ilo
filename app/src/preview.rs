@@ -236,6 +236,9 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
+    /// The tab each Space showed as it was left, which it shows again, and its page beside shows
+    /// while it pages, as the core keeps them.
+    shows: Rc<RefCell<HashMap<u64, u64>>>,
 }
 
 /// The tab the shown Space opens on, where the site names none: its first Today tab, the page in
@@ -739,16 +742,21 @@ impl Browser for Fake {
 
     fn show_space(&self, space: u64, cx: &mut App) {
         let named = self.opens_on.borrow().get(&space).copied();
+        let shows = self.shows.clone();
         self.later(cx, move |shell, cx| {
+            shows.borrow_mut().insert(shell.space(), shell.selected());
             shell.set_space(space, cx);
-            let tab = named.unwrap_or_else(|| opening_tab(shell));
+            let held = |tab: &u64| shell.today().contains(tab) || shell.pinned().contains(tab);
+            let last = shows.borrow().get(&space).copied().filter(held);
+            let tab = last.or(named).unwrap_or_else(|| opening_tab(shell));
+            shows.borrow_mut().insert(space, tab);
             shell.set_selected(tab, cx);
         });
     }
 
-    // The made-up Spaces' pages slide in without a selected row.
-    fn space_tab(&self, _: u64) -> u64 {
-        0
+    fn space_tab(&self, space: u64) -> u64 {
+        let last = self.shows.borrow().get(&space).copied();
+        last.or_else(|| self.opens_on.borrow().get(&space).copied()).unwrap_or(0)
     }
 
     fn create_space(&self, name: &str, profile: u64, cx: &mut App) -> u64 {
@@ -1235,6 +1243,7 @@ fn main() {
                     archive: RefCell::new(archive),
                     downloads: RefCell::new(downloads),
                     opens_on: RefCell::default(),
+                    shows: Rc::default(),
                 });
                 browser.report_archive(cx);
                 browser.report_downloads(cx);
@@ -1826,6 +1835,7 @@ mod web {
             archive: RefCell::new(Vec::new()),
             downloads: RefCell::new(Vec::new()),
             opens_on: RefCell::default(),
+            shows: Rc::default(),
         });
         let mut shell = Shell::new(browser.clone(), cx);
         shell.set_profiles(vec![(0, "Default".into())], cx);
@@ -2198,5 +2208,57 @@ mod web {
         fn commands(&self, text: &str, cx: &App) -> Vec<shell::BarCommand> {
             shell::bar_commands(text, cx)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use browser::shell::{Browser, Folders, Shell};
+    use gpui::TestAppContext;
+
+    use super::Fake;
+
+    /// A Space left keeps the tab it showed: its page beside, sliding out once the next Space is
+    /// shown, draws that tab's URL field, not an empty one's, and the Space shows it again on its
+    /// return, as the core's do.
+    #[gpui::test]
+    fn a_space_left_keeps_the_tab_it_showed(cx: &mut TestAppContext) {
+        let fake: Rc<RefCell<Option<Rc<Fake>>>> = Rc::default();
+        let made = fake.clone();
+        let (shell, cx) = cx.add_window_view(|_, cx| {
+            let browser = Rc::new(Fake {
+                shell: cx.weak_entity(),
+                next_id: Default::default(),
+                spaces: Default::default(),
+                archive: Default::default(),
+                downloads: Default::default(),
+                opens_on: Default::default(),
+                shows: Default::default(),
+            });
+            *made.borrow_mut() = Some(browser.clone());
+            let mut shell = Shell::new(browser, cx);
+            let space = |id: u64| (id, "".into(), None, 0, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space(1), space(2)], cx);
+            for (space, today) in [(1, vec![11, 12]), (2, vec![21, 22])] {
+                shell.set_tabs(space, Vec::new(), today, Vec::new(), Folders::default(), cx);
+            }
+            shell.set_space(1, cx);
+            shell.set_selected(12, cx);
+            shell
+        });
+        let fake = fake.borrow().clone().unwrap();
+        cx.update(|_, cx| fake.show_space(2, cx));
+        cx.run_until_parked();
+        assert_eq!(fake.space_tab(1), 12, "the Space left forgot its tab");
+        assert_eq!(shell.read_with(cx, |shell, _| shell.selected()), 21);
+
+        cx.update(|_, cx| fake.select(22, cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| fake.show_space(1, cx));
+        cx.run_until_parked();
+        assert_eq!(fake.space_tab(2), 22, "the Space left forgot its tab");
+        assert_eq!(shell.read_with(cx, |shell, _| shell.selected()), 12, "back on another tab");
     }
 }
