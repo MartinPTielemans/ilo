@@ -3076,6 +3076,11 @@ void host_set_overlay_height(int index, double height) {
     [overlay->window
         setFrame:NSMakeRect(NSMinX(frame), NSMaxY(frame) - height, NSWidth(frame), height)
          display:NO];
+    // A shaped overlay's mask is drawn at the window's size, so a taller one, such as the Boost
+    // editor's with Advanced open, would stretch the old one over it.
+    if (!overlay->corners.empty()) {
+      MaskOverlayBlur(*overlay);
+    }
     [overlay->view.layer setNeedsDisplay];
     [overlay->view.layer displayIfNeeded];
     PlaceOverlayShadow(*overlay);

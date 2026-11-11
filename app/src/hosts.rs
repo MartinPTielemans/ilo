@@ -227,6 +227,18 @@ impl site_controls::Host for SiteControlsHost {
                     .update(cx, |shell, cx| shell.run_extension_from(&id, tile, cx))
                     .ok();
             }
+            site_controls::Run::OpenInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.open_in_profile(tab, profile, cx))
+                    .ok();
+            }
+            site_controls::Run::NewSpaceInProfile(profile) => {
+                window
+                    .shell
+                    .update(cx, |shell, cx| shell.new_space_in_profile(profile, cx))
+                    .ok();
+            }
             site_controls::Run::Certificate => unsafe { bc::bc_tab_show_certificate(tab) },
             site_controls::Run::RemoveLogin(login) => {
                 let profile = unsafe { bc::bc_tab_profile(tab) };
@@ -576,6 +588,17 @@ impl boost_editor::Host for BoostEditorHost {
             platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
             platform::host_set_overlay_growth(BOOST_EDITOR, x.into(), y.into());
             platform::host_show_overlay(BOOST_EDITOR, view, false, left, top, width);
+        }
+    }
+
+    fn resize(&self, height: f32, corners: &[(f32, f32, f32)]) {
+        let shape: Vec<f64> = corners
+            .iter()
+            .flat_map(|&(x, y, radius)| [x, y, radius].map(f64::from))
+            .collect();
+        unsafe {
+            platform::host_set_overlay_shape(BOOST_EDITOR, shape.as_ptr(), shape.len() / 3);
+            platform::host_set_overlay_height(BOOST_EDITOR, height.into());
         }
     }
 

@@ -37,7 +37,8 @@ mod tiles;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     App, Context, EventEmitter, FocusHandle, KeyDownEvent, SharedString, Task, div, prelude::*, px,
@@ -3118,7 +3119,13 @@ fn stopped(made: usize) -> SharedString {
 /// "on 3 November".
 fn imported_when(at: SystemTime, now: SystemTime) -> String {
     use chrono::{DateTime, Local};
-    let (at, now): (DateTime<Local>, DateTime<Local>) = (at.into(), now.into());
+    // Through the epoch, as chrono takes std's time and not the web's.
+    let local = |time: SystemTime| {
+        let since = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let utc = DateTime::from_timestamp(since.as_secs() as i64, since.subsec_nanos());
+        utc.unwrap_or_default().with_timezone(&Local)
+    };
+    let (at, now) = (local(at), local(now));
     let days = now
         .date_naive()
         .signed_duration_since(at.date_naive())

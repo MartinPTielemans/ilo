@@ -2,7 +2,7 @@
 //! page: once the window's first frame is on screen, and with the window it came from full screen,
 //! once it's full screen too (docs/ux-spec.md › Window › New window).
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{Context, Window};
 

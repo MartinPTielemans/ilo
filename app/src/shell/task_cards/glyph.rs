@@ -5,7 +5,7 @@
 //! circles on from where it stopped. With motion reduced each change is a crossfade and the dot
 //! holds still on the ring.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{
     BorderStyle, Bounds, Hsla, PathBuilder, Pixels, Point, Window, fill, point, px, quad,
