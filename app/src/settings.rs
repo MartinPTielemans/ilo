@@ -317,6 +317,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Close this Split Pane", Keys::Of(Command::CloseSplitPane)),
             ("Next Pane", Keys::Of(Command::NextPane)),
             ("Previous Pane", Keys::Of(Command::PreviousPane)),
+            ("Go to Pane 1", Keys::Of(Command::FocusPane(0))),
+            ("Go to Pane 2", Keys::Of(Command::FocusPane(1))),
+            ("Go to Pane 3", Keys::Of(Command::FocusPane(2))),
+            ("Go to Pane 4", Keys::Of(Command::FocusPane(3))),
             (
                 "Separate Page from Split View",
                 Keys::Of(Command::SeparatePane),
@@ -415,6 +419,8 @@ enum Popup {
     Appearance,
     /// General's Page zoom.
     PageZoom,
+    /// Tabs & Sidebar's Sidebar position.
+    SidebarPosition,
 }
 
 impl Popup {
@@ -431,6 +437,7 @@ impl Popup {
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
+            Popup::SidebarPosition => "Sidebar position".into(),
         }
     }
 }
@@ -1949,8 +1956,7 @@ impl Settings {
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, and
-    /// how the hidden sidebar comes.
+    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
@@ -2058,6 +2064,27 @@ impl Settings {
             ),
             Block::Rows(vec![favorites]),
         ];
+        let right = shell::sidebar_right(cx);
+        let position = self.popup(
+            Popup::SidebarPosition,
+            side_title(right).into(),
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_sidebar_position(right, window, cx)
+            }),
+        );
+        let position = setting(
+            look,
+            "Sidebar position",
+            Some("The side of the window the sidebar and the window's buttons are on.".into()),
+            vec![
+                position
+                    .child(self.drawn("sidebar position".into()))
+                    // Drawn again once the side changes, which check.sh waits for.
+                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
+                    .into_any_element(),
+            ],
+        );
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2067,15 +2094,21 @@ impl Settings {
             cx,
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
-        let mut hidden = vec![setting(
-            look,
-            "Show the hidden sidebar at the window's edge",
-            Some(
-                format!("Move the pointer along the left edge. {toggle_keys} shows it either way.")
+        let side = if right { "right" } else { "left" };
+        let mut hidden = vec![
+            position,
+            setting(
+                look,
+                "Show the hidden sidebar at the window's edge",
+                Some(
+                    format!(
+                        "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
+                    )
                     .into(),
+                ),
+                vec![edge],
             ),
-            vec![edge],
-        )];
+        ];
         // Where the host watches for it (host_watch_option_taps), or on Windows the core.
         if cfg!(any(
             target_os = "macos",
@@ -2107,7 +2140,7 @@ impl Settings {
             };
             hidden.push(setting(look, name, Some(line.into()), vec![option]));
         }
-        blocks.push(Block::Heading("The hidden sidebar".into()));
+        blocks.push(Block::Heading("The sidebar".into()));
         blocks.push(Block::Rows(hidden));
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
@@ -2865,6 +2898,26 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
+    }
+
+    /// Sidebar position's pop-up menu, Left or Right, over its button.
+    fn choose_sidebar_position(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
+        let items: Vec<MenuEntry> = [false, true]
+            .iter()
+            .map(|&each| MenuEntry {
+                checked: each == right,
+                over: each == right,
+                ..MenuEntry::new(side_title(each), true)
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(index) = picked {
+                set_sidebar_right(index == 1, cx);
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::SidebarPosition, items, picked, window, cx);
     }
 
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
@@ -4620,6 +4673,9 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
 const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+/// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
+/// never synced.
+const SIDEBAR_RIGHT: &str = "sidebar-right";
 
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
@@ -4636,7 +4692,26 @@ fn set_off(name: &str, is_off: bool) {
 /// Hands the app's switches to what they change, at launch.
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
+    cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+}
+
+/// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
+pub fn sidebar_right_kept() -> bool {
+    off(SIDEBAR_RIGHT)
+}
+
+/// Sidebar position's names.
+fn side_title(right: bool) -> &'static str {
+    if right { "Right" } else { "Left" }
+}
+
+/// Moves the sidebar to the window's right, or back to its left: kept on this device, and every
+/// window follows at once, as each reads the side as it draws.
+pub fn set_sidebar_right(right: bool, cx: &mut App) {
+    set_off(SIDEBAR_RIGHT, right);
+    cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
 }
 
 fn set_edge_reveals(reveals: bool, cx: &mut App) {

@@ -4,8 +4,8 @@
 # GitHub's hosted Mac (#1438). A burst of the window's pictures (tools/window-frames.sh) looks at
 # the page area in each: one flat colour is no page. Its pages are never flat, the first striped and
 # the others example.com's and example.org's text on their backgrounds.
-# The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb on Linux, or a CI runner's screen on
-# Windows; elsewhere the run says it can't take them.
+# The pictures need the Mac's ScreenCaptureKit, check.sh's Xvfb or tools/headless.sh's sway session
+# on Linux, or a CI runner's screen on Windows; elsewhere the run says it can't take them.
 page="data:text/html,<title>ready</title><body style=\"margin:0;height:100vh;background:repeating-linear-gradient(45deg,%23cc3333 0 24px,%23ffffff 24px 48px)\">"
 log="$out/switch-frames.log"
 frames="$out/switch-frames.txt"
