@@ -23,6 +23,7 @@
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
+#include "browser_core/arrangement.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
 #include "browser_core/boosts.h"
@@ -2215,6 +2216,15 @@ bool bc_tab_arrange(bc_id id, bool on, const bc_arrange_look* look) {
       .radius = look->radius,
       .other = look->other ? look->other : "",
   };
+  // The app fills how it moves from its tokens; a value it left out keeps the default.
+  const browser_core::Arrange::Look defaults;
+  marks.rest = browser_core::arrangement::Within(look->rest, 0.05, 1, defaults.rest);
+  marks.room_omega =
+      browser_core::arrangement::Within(look->room_omega, 5, 100, defaults.room_omega);
+  marks.land_response =
+      browser_core::arrangement::Within(look->land_response, 0.05, 1, defaults.land_response);
+  marks.land_damping =
+      browser_core::arrangement::Within(look->land_damping, 0.2, 0.99, defaults.land_damping);
   for (size_t i = 0; look->kinds && i < look->count; ++i) {
     if (look->kinds[i].kind && look->kinds[i].word) {
       marks.kinds.emplace_back(look->kinds[i].kind, look->kinds[i].word);

@@ -1,5 +1,6 @@
 #include "browser_core/arrangement.h"
 
+#include <limits>
 #include <string>
 
 #include "base/strings/string_util.h"
@@ -167,6 +168,18 @@ TEST_F(ArrangementRecordTest, ASiteThatIsntOneHasNoRecord) {
     EXPECT_FALSE(TurnOn(prefs_, site, kFile)) << site;
     EXPECT_EQ(Check(prefs_, site, kFile), State::kNew) << site;
   }
+}
+
+TEST(ArrangementTest, AMotionValueOutsideItsRangeTakesTheDefault) {
+  EXPECT_EQ(Within(0.2, 0.05, 1, 0.3), 0.2);
+  EXPECT_EQ(Within(0.05, 0.05, 1, 0.3), 0.05);
+  EXPECT_EQ(Within(1, 0.05, 1, 0.3), 1);
+  // A zeroed struct, a value past either end, and NaN.
+  EXPECT_EQ(Within(0, 0.05, 1, 0.3), 0.3);
+  EXPECT_EQ(Within(1.01, 0.05, 1, 0.3), 0.3);
+  EXPECT_EQ(Within(-1, 0.05, 1, 0.3), 0.3);
+  EXPECT_EQ(Within(std::numeric_limits<double>::quiet_NaN(), 0.05, 1, 0.3), 0.3);
+  EXPECT_EQ(Within(std::numeric_limits<double>::infinity(), 5, 100, 25), 25);
 }
 
 }  // namespace

@@ -66,6 +66,11 @@ bool TurnOn(PrefService& prefs, std::string_view site, std::string_view bytes);
 // Takes |site|'s record away, as Reset does once nothing is left: a file there later is new.
 void Forget(PrefService& prefs, std::string_view site);
 
+// |value| if it's from |low| to |high|, else |fallback|: how a look moves, from the app's tokens,
+// keeps to what reads as motion, and a value left out, 0 in a zeroed struct, or NaN takes the
+// default.
+double Within(double value, double low, double high, double fallback);
+
 }  // namespace browser_core::arrangement
 
 #endif  // BROWSER_CORE_ARRANGEMENT_H_

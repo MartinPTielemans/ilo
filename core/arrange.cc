@@ -41,9 +41,6 @@ using Type = blink::WebInputEvent::Type;
 // Chrome's world for its own features, as Zap's: the page's scripts can't see what runs there.
 constexpr int kWorld = ISOLATED_WORLD_ID_CHROME_INTERNAL;
 
-// A carry that rests this long shows the page with the drop made (ux-principles: a preview that
-// waits for intent, so passing over the page doesn't reflow it).
-constexpr base::TimeDelta kRest = base::Milliseconds(300);
 // A scroll or a key that may have scrolled is over once nothing has come for this long.
 constexpr base::TimeDelta kSettle = base::Milliseconds(300);
 // The runtime holds a settle or trade whose neighbour hasn't come for 1.5 s; the core asks which
@@ -1089,7 +1086,10 @@ base::DictValue LookOf(const Arrange::Look& look) {
       .Set("line_width", look.line_width)
       .Set("radius", look.radius)
       .Set("kinds", std::move(kinds))
-      .Set("other", look.other);
+      .Set("other", look.other)
+      .Set("room_omega", look.room_omega)
+      .Set("land_response", look.land_response)
+      .Set("land_damping", look.land_damping);
 }
 
 // The site's tabs in |profile| other than |except| place its arrangement again.
@@ -1228,6 +1228,9 @@ bool Arrange::Start(const Look& look) {
   }
   on_ = true;
   told_.reset();
+  // A carry that rests this long shows the page with the drop made (ux-principles: a preview that
+  // waits for intent, so passing over the page doesn't reflow it).
+  rest_after_ = base::Seconds(look.rest);
   contents->ForEachRenderFrameHost(
       [this](content::RenderFrameHost* frame) { Hook(frame->GetRenderWidgetHost()); });
   Run("on", base::DictValue().Set("look", LookOf(look)),
@@ -1455,7 +1458,7 @@ bool Arrange::OnMouse(content::RenderWidgetHost* widget, const blink::WebMouseEv
         Move();
       }
       if (pressed_) {
-        rest_.Start(FROM_HERE, kRest, base::BindOnce(&Arrange::Rest, base::Unretained(this)));
+        rest_.Start(FROM_HERE, rest_after_, base::BindOnce(&Arrange::Rest, base::Unretained(this)));
       }
       return pressed_;
     case Type::kMouseUp:

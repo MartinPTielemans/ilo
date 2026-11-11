@@ -293,4 +293,8 @@ void Forget(PrefService& prefs, std::string_view site) {
   ScopedDictPrefUpdate(&prefs, kRecords)->Remove(site);
 }
 
+double Within(double value, double low, double high, double fallback) {
+  return value >= low && value <= high ? value : fallback;
+}
+
 }  // namespace browser_core::arrangement

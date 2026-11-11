@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_multi_source_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "browser_core/public/browser_core.h"
@@ -47,6 +48,12 @@ class Arrange : public content::WebContentsObserver,
     double radius = 0;
     std::vector<std::pair<std::string, std::string>> kinds;
     std::string other;
+    // How it moves, in seconds and per second, as bc_arrange_look has them; these are the defaults
+    // a value outside its range takes.
+    double rest = 0.3;
+    double room_omega = 25;
+    double land_response = 0.13;
+    double land_damping = 0.9;
   };
 
   ~Arrange() override;
@@ -127,6 +134,8 @@ class Arrange : public content::WebContentsObserver,
   std::optional<base::DictValue> move_;
   // The last state told, so the app hears each change once.
   std::optional<base::DictValue> told_;
+  // How long a carry holds still before the page shows the drop made: the look's |rest|.
+  base::TimeDelta rest_after_ = base::Seconds(Look().rest);
   base::OneShotTimer rest_;
   base::OneShotTimer settle_;
   base::OneShotTimer hold_;
