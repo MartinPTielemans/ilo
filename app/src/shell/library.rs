@@ -25,7 +25,7 @@ use super::{
     SECONDARY, SEGMENT_FAVICON_X, SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space,
     UNSELECTED_TITLE, URL_BUTTON_GLYPH, URL_BUTTON_SIZE, What,
     access::Accessible,
-    clean_link, dashed_square,
+    dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
@@ -1322,7 +1322,12 @@ impl Shell {
 
     /// The menu a right-click on an archived tab's row shows: reopen it, copy its URL, or take it
     /// out of the archive.
-    fn archived_menu(&mut self, id: u64, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn archived_menu(
+        &mut self,
+        id: u64,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(url) = self
             .archive
             .iter()
@@ -1347,7 +1352,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.restore_archived(id, cx),
-                        Some(1) => shell.copy(&clean_link(&url), "Copied URL", cx),
+                        Some(1) => {
+                            let link = shell.copied_link(&url);
+                            shell.copy(&link, "Copied URL", cx)
+                        }
                         Some(3) => {
                             // check.sh waits for this line.
                             log!("browser: remove archived {id}");
@@ -1528,7 +1536,7 @@ impl Shell {
             .child(back)
             // Where the window's own sit, so they slide in with the panel, and stay put on the
             // column when fingers take it past its end.
-            .children(buttons.then(|| self.window_buttons(cx)));
+            .children(buttons.then(|| self.window_buttons(None, cx)));
         let edge = div()
             .absolute()
             .left(px(COLUMN_WIDTH))
@@ -1790,7 +1798,15 @@ impl Shell {
                 let panes = space.panes(tab);
                 if panes.len() == 1 {
                     let label = title(&palette, self.title(tab), false).pr(px(PLATE_INSET));
-                    let plate = plate(self.tab_icon_in(&palette, tab), label);
+                    let icon = self.with_return_mark(
+                        &palette,
+                        tab,
+                        FAVICON_SIZE,
+                        self.tab_bitmap_in(&palette, tab),
+                        || self.tab_icon_in(&palette, tab),
+                        cx,
+                    );
+                    let plate = plate(icon, label);
                     let dragged = CardTab {
                         tab,
                         space: id,
@@ -1811,13 +1827,13 @@ impl Shell {
                 let plate = CARD_WIDTH - 2. * PLATE_INSET - depth as f32 * FOLDER_INDENT;
                 let plate = plate - (FAVICON_X - PLATE_INSET - SEGMENT_FAVICON_X);
                 let width = plate / panes.len() as f32;
-                let segments = panes
-                    .iter()
-                    .enumerate()
-                    .map(|(index, &pane)| self.segment(&palette, pane, width, index == 0, false));
+                let segments = panes.iter().enumerate().map(|(index, &pane)| {
+                    self.segment(&palette, pane, width, index == 0, false, cx)
+                });
                 card_row(depth, split_plate(segments))
             }
         });
+        let rows: Vec<_> = rows.collect();
         let field = self.card_field(space, &palette, window_at(0.), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
@@ -2835,7 +2851,12 @@ impl Shell {
     }
 
     /// A Boost's menu in Library › Boosts.
-    fn boost_menu(&mut self, site: SharedString, position: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn boost_menu(
+        &mut self,
+        site: SharedString,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(profile) = self.learning_profile() else {
             return;
         };
@@ -2850,6 +2871,7 @@ impl Shell {
         };
         let entries = vec![
             MenuEntry::new("Edit CSS…", true),
+            MenuEntry::new("Edit Script…", true),
             MenuEntry::new(if on { "Turn Off" } else { "Turn On" }, true),
             MenuEntry::new(show, true),
             MenuEntry::line(),
@@ -2868,9 +2890,10 @@ impl Shell {
                 shell
                     .update(cx, |shell, cx| match chosen {
                         Some(0) => shell.edit_boost_file(profile, &site, cx),
-                        Some(1) => shell.set_boost_on(profile, &site, !on, cx),
-                        Some(2) => shell.show_boost_file(profile, &site, cx),
-                        Some(4) => shell.delete_boost(profile, &site, cx),
+                        Some(1) => shell.edit_boost_script_file(profile, &site, cx),
+                        Some(2) => shell.set_boost_on(profile, &site, !on, cx),
+                        Some(3) => shell.show_boost_file(profile, &site, cx),
+                        Some(5) => shell.delete_boost(profile, &site, cx),
                         _ => {}
                     })
                     .ok();

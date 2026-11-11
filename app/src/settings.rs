@@ -317,6 +317,10 @@ const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             ("Close this Split Pane", Keys::Of(Command::CloseSplitPane)),
             ("Next Pane", Keys::Of(Command::NextPane)),
             ("Previous Pane", Keys::Of(Command::PreviousPane)),
+            ("Go to Pane 1", Keys::Of(Command::FocusPane(0))),
+            ("Go to Pane 2", Keys::Of(Command::FocusPane(1))),
+            ("Go to Pane 3", Keys::Of(Command::FocusPane(2))),
+            ("Go to Pane 4", Keys::Of(Command::FocusPane(3))),
             (
                 "Separate Page from Split View",
                 Keys::Of(Command::SeparatePane),
@@ -415,6 +419,8 @@ enum Popup {
     Appearance,
     /// General's Page zoom.
     PageZoom,
+    /// Tabs & Sidebar's Sidebar position.
+    SidebarPosition,
 }
 
 impl Popup {
@@ -431,6 +437,7 @@ impl Popup {
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
+            Popup::SidebarPosition => "Sidebar position".into(),
         }
     }
 }
@@ -1949,8 +1956,7 @@ impl Settings {
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, and
-    /// how the hidden sidebar comes.
+    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
@@ -2058,6 +2064,27 @@ impl Settings {
             ),
             Block::Rows(vec![favorites]),
         ];
+        let right = shell::sidebar_right(cx);
+        let position = self.popup(
+            Popup::SidebarPosition,
+            side_title(right).into(),
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_sidebar_position(right, window, cx)
+            }),
+        );
+        let position = setting(
+            look,
+            "Sidebar position",
+            Some("The side of the window the sidebar and the window's buttons are on.".into()),
+            vec![
+                position
+                    .child(self.drawn("sidebar position".into()))
+                    // Drawn again once the side changes, which check.sh waits for.
+                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
+                    .into_any_element(),
+            ],
+        );
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2067,15 +2094,21 @@ impl Settings {
             cx,
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
-        let mut hidden = vec![setting(
-            look,
-            "Show the hidden sidebar at the window's edge",
-            Some(
-                format!("Move the pointer along the left edge. {toggle_keys} shows it either way.")
+        let side = if right { "right" } else { "left" };
+        let mut hidden = vec![
+            position,
+            setting(
+                look,
+                "Show the hidden sidebar at the window's edge",
+                Some(
+                    format!(
+                        "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
+                    )
                     .into(),
+                ),
+                vec![edge],
             ),
-            vec![edge],
-        )];
+        ];
         // Where the host watches for it (host_watch_option_taps), or on Windows the core.
         if cfg!(any(
             target_os = "macos",
@@ -2107,7 +2140,7 @@ impl Settings {
             };
             hidden.push(setting(look, name, Some(line.into()), vec![option]));
         }
-        blocks.push(Block::Heading("The hidden sidebar".into()));
+        blocks.push(Block::Heading("The sidebar".into()));
         blocks.push(Block::Rows(hidden));
         // The trackpad's, which the Mac alone has a host for.
         if cfg!(target_os = "macos") {
@@ -2270,19 +2303,40 @@ impl Settings {
             Some("A playing video or call floats over your work when you leave its tab.".into()),
             vec![mini_player],
         );
+        let note_on = new_note_on(cx);
+        let note_switch = self.toggle("new note", "New Note", note_on, set_new_note, accent, cx);
         let note_keys = shell::user_keys(cx).label(Command::NewNote);
-        let note_line: SharedString = match note_keys {
-            Some(keys) => format!("{keys} opens a new document in the service you pick.").into(),
-            None => "New Note opens a new document in the service you pick.".into(),
+        // Off, the line is the receipt, as Little ilo's is.
+        let note_line: SharedString = match (note_on, note_keys) {
+            (true, Some(keys)) => {
+                format!("{keys} opens a new document in the service you pick.").into()
+            }
+            (true, None) => "New Note opens a new document in the service you pick.".into(),
+            (false, Some(keys)) => format!(
+                "Off: {keys} does nothing, and the + menu and the command bar have no New Note. \
+                 The documents it opened stay."
+            )
+            .into(),
+            (false, None) => "Off: the + menu and the command bar have no New Note. The \
+                              documents it opened stay."
+                .into(),
         };
-        // One profile's service on the feature's row, else each profile's under it.
+        // One profile's service on the feature's row, else each profile's under it, and its
+        // services only while it's on.
         let note = match profiles {
+            _ if !note_on => vec![feature(
+                look,
+                "icons/pencil.svg",
+                "New Note",
+                Some(note_line),
+                vec![note_switch],
+            )],
             [profile] => vec![feature(
                 look,
                 "icons/pencil.svg",
                 "New Note",
                 Some(note_line),
-                vec![self.notes_popup(profile.id, cx)],
+                vec![self.notes_popup(profile.id, cx), note_switch],
             )],
             _ => {
                 let services = profiles.iter().map(|profile| {
@@ -2298,7 +2352,7 @@ impl Settings {
                     "icons/pencil.svg",
                     "New Note",
                     Some(note_line),
-                    Vec::new(),
+                    vec![note_switch],
                 );
                 [head].into_iter().chain(services).collect()
             }
@@ -2368,7 +2422,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// Privacy: ad blocking and the sites it's off on, whether copied links leave out trackers,
+    /// whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
     fn privacy(
@@ -2394,6 +2449,24 @@ impl Settings {
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
+        let clean_links = self.toggle(
+            "clean links",
+            "Copy links without tracking",
+            clean_links_on(cx),
+            set_clean_links,
+            accent,
+            cx,
+        );
+        let line = concat!(
+            "Copied and shared links leave out what only tells a site where a click came from. ",
+            "A video's time stays. The URL field's own text copies whole."
+        );
+        let clean_links = setting(
+            look,
+            "Copy links without tracking",
+            Some(line.into()),
+            vec![clean_links],
+        );
         let prompts = unsafe { bc::bc_notification_prompts() };
         let prompts_switch = self.toggle(
             "notification prompts",
@@ -2413,7 +2486,11 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
+        let mut blocks = vec![
+            Block::Rows(vec![ad_blocking]),
+            Block::Rows(vec![clean_links]),
+            Block::Rows(vec![prompts]),
+        ];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -2821,6 +2898,26 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
+    }
+
+    /// Sidebar position's pop-up menu, Left or Right, over its button.
+    fn choose_sidebar_position(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
+        let items: Vec<MenuEntry> = [false, true]
+            .iter()
+            .map(|&each| MenuEntry {
+                checked: each == right,
+                over: each == right,
+                ..MenuEntry::new(side_title(each), true)
+            })
+            .collect();
+        let settings = cx.weak_entity();
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(index) = picked {
+                set_sidebar_right(index == 1, cx);
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::SidebarPosition, items, picked, window, cx);
     }
 
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
@@ -4025,17 +4122,16 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
-        // Little ilo's commands have no row while it's off.
+        // Little ilo's commands and New Note's have no row while it's off.
         let little = unsafe { bc::bc_little_windows() };
+        let note = new_note_on(cx);
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
-                .filter(|(_, keys)| {
-                    little
-                        || !matches!(
-                            keys,
-                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
-                        )
+                .filter(|(_, keys)| match keys {
+                    Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow) => little,
+                    Keys::Of(Command::NewNote | Command::NewNoteSplit) => note,
+                    _ => true,
                 })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
@@ -4458,6 +4554,60 @@ fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
 }
 
+/// Where New Note's switch is kept: there while it's off. The app's, not a profile's, as its keys
+/// and the command bar are.
+fn new_note_off_path() -> String {
+    format!("{}/new-note-off", crate::profile_dir())
+}
+
+/// Reads New Note's switch, before the windows open and read it.
+pub fn read_new_note(cx: &mut App) {
+    let on = !std::path::Path::new(&new_note_off_path()).exists();
+    cx.set_global(shell::NewNoteOn(on));
+}
+
+fn new_note_on(cx: &App) -> bool {
+    cx.try_global::<shell::NewNoteOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once; the tabs New Note opened stay.
+fn set_new_note(on: bool, cx: &mut App) {
+    let path = new_note_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::NewNoteOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
+}
+
+/// Where Copy links without tracking is kept: there while it's off (#2351). The app's, not a
+/// profile's, as its copy paths are.
+fn clean_links_off_path() -> String {
+    format!("{}/copy-links-as-is", crate::profile_dir())
+}
+
+/// Reads Copy links without tracking, before the windows open and read it.
+pub fn read_clean_links(cx: &mut App) {
+    let on = !std::path::Path::new(&clean_links_off_path()).exists();
+    cx.set_global(shell::CleanLinksOn(on));
+}
+
+fn clean_links_on(cx: &App) -> bool {
+    cx.try_global::<shell::CleanLinksOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once.
+fn set_clean_links(on: bool, cx: &mut App) {
+    let path = clean_links_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::CleanLinksOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_clean_links(on, cx));
+}
+
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
     unsafe { bc::bc_set_unload_idle_tabs(unload) };
 }
@@ -4523,6 +4673,9 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
 const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
+/// Sidebar position, there while it's Right (#2375): this device's, as the other switches are, and
+/// never synced.
+const SIDEBAR_RIGHT: &str = "sidebar-right";
 
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
@@ -4539,7 +4692,26 @@ fn set_off(name: &str, is_off: bool) {
 /// Hands the app's switches to what they change, at launch.
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
+    cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
+}
+
+/// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
+pub fn sidebar_right_kept() -> bool {
+    off(SIDEBAR_RIGHT)
+}
+
+/// Sidebar position's names.
+fn side_title(right: bool) -> &'static str {
+    if right { "Right" } else { "Left" }
+}
+
+/// Moves the sidebar to the window's right, or back to its left: kept on this device, and every
+/// window follows at once, as each reads the side as it draws.
+pub fn set_sidebar_right(right: bool, cx: &mut App) {
+    set_off(SIDEBAR_RIGHT, right);
+    cx.set_global(shell::SidebarRight(right));
+    cx.refresh_windows();
 }
 
 fn set_edge_reveals(reveals: bool, cx: &mut App) {

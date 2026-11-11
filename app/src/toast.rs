@@ -431,6 +431,7 @@ fn present(
     held: Option<u64>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Toast>(cx);
     let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
         return;
     };
