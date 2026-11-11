@@ -63,6 +63,17 @@ source_set("search_default") {
   ]
 }
 
+# The profile prefs that keep the sites the user turned ad blocking off on, and their carry-over
+# from uBlock Origin's extension prefs, apart so browser_core_unittests tests it alone.
+source_set("ad_block_off_sites") {
+  sources = [
+    "ad_block_off_sites.cc",
+    "ad_block_off_sites.h",
+  ]
+  deps = [ "//components/prefs" ]
+  public_deps = [ "//base" ]
+}
+
 # The site searches a new profile has, and the one a word typed starts (#1397).
 source_set("site_searches") {
   sources = [
@@ -511,6 +522,7 @@ source_set("browser_core") {
   ]
 
   deps = [
+    ":ad_block_off_sites",
     ":ad_block_page",
     ":archive_rule",
     ":arrange_rule",
@@ -810,6 +822,7 @@ source_set("browser_core") {
 # engine's run runs them.
 test("browser_core_unittests") {
   sources = [
+    "ad_block_off_sites_unittest.cc",
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
     "arrangement_unittest.cc",
@@ -845,6 +858,7 @@ test("browser_core_unittests") {
     "withheld_fields_unittest.cc",
   ]
   deps = [
+    ":ad_block_off_sites",
     ":archive_rule",
     ":arrange_rule",
     ":arrangement",
@@ -873,6 +887,8 @@ test("browser_core_unittests") {
     "//components/history/core/test",
     "//components/omnibox/browser",
     "//components/omnibox/browser:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
     "//components/search_engines",
     "//components/sessions",
     "//components/download/public/common:test_support",

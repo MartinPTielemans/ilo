@@ -37,6 +37,10 @@ namespace browser_core {
 // platform's, and turns it off everywhere or for a site as the user says. None of it is the
 // agents': they get no call that changes it.
 
+// Registers the profile prefs that keep the sites the user turned it off on, before the first
+// profile is made.
+void RegisterAdBlockPrefs();
+
 // Sets the hooks that load it into each profile and give it its settings, before Chrome starts.
 void SetUpAdBlock();
 
