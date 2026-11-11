@@ -513,21 +513,20 @@ impl Shell {
         }
         let speed = self.library_step().map_or(0., |(_, speed)| speed);
         let opacity = Some(self.sidebar_opacity());
-        self.move_library(open, self.library_out(), speed, opacity, Instant::now(), cx);
+        self.move_library(open, self.library_out(), speed, opacity, cx);
     }
 
-    /// Sends the Library open or closed from `out` (`library_out`) at `now`, going at `speed` a
-    /// second, and the sidebar under it fading from `opacity`, or receding with the card without
-    /// one. A swipe's lift found late in the site's demo started it some frames back.
+    /// Sends the Library open or closed from `out` (`library_out`), going at `speed` a second, and
+    /// the sidebar under it fading from `opacity`, or receding with the card without one.
     pub(super) fn move_library(
         &mut self,
         open: bool,
         out: f32,
         speed: f32,
         opacity: Option<f32>,
-        now: Instant,
         cx: &mut Context<Self>,
     ) {
+        let now = Instant::now();
         self.library_motion = Some((out, speed, now));
         self.sidebar_fade = opacity.map(|opacity| (opacity, now));
         self.library_open = open;

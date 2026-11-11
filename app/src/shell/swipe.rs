@@ -259,7 +259,7 @@ impl Shell {
             if !open {
                 self.show_first_space(cx);
             }
-            self.move_library(open, out, velocity / self.library_width(), None, now, cx);
+            self.move_library(open, out, velocity / self.library_width(), None, cx);
             return true;
         }
         if swipe.ready {
