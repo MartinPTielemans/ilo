@@ -94,6 +94,9 @@ pub fn log_handover(stage: &str, detail: &str) {
 pub mod account;
 pub mod agent_history;
 pub mod agents;
+pub mod boost_editor;
+pub mod boost_style;
+pub mod boosts;
 pub mod build_info;
 pub mod capture;
 pub mod child;

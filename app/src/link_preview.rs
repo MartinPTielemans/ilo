@@ -71,10 +71,12 @@ pub trait Host {
     fn hide(&self);
     /// Closes the preview's page, whose tab is `tab`.
     fn close(&self, tab: u64);
-    /// Makes `tab` a Today tab of the Space `window` shows, and shows it there, as it is.
-    fn keep(&self, window: u64, tab: u64);
-    /// The kept preview was of the archived tab `archived`, which is the window's tab now and
-    /// leaves the archive, as a tab restored from it does.
+    /// Makes `tab` a Today tab of the Space `window` shows, and shows it there, as it is. A preview
+    /// of the archived tab `archived` goes to the Space that tab closed in, as a restore does, and
+    /// takes it out of the archive.
+    fn keep(&self, window: u64, tab: u64, archived: Option<u64>);
+    /// The kept preview was of the archived tab `archived`, which is the window's tab now, as a tab
+    /// restored from it is.
     fn kept_archived(&self, _window: u64, _archived: u64, _cx: &mut App) {}
     /// The user closed the preview over the browser window `window`, for ⌘Z and ⇧⌘T to open
     /// again; `undone` if Redo closed it, as that history has it already.
@@ -821,7 +823,7 @@ impl LinkPreview {
         };
         match shown.leaving {
             Some((_, Leave::Keep, _)) => {
-                self.host.keep(shown.window, shown.tab);
+                self.host.keep(shown.window, shown.tab, shown.archived);
                 // check.sh reads this line.
                 log!("browser: link preview kept {}", shown.tab);
                 self.host.hide();

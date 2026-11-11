@@ -11,6 +11,64 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[boost-editor]
+# A Boost's editor without code (#695, ours as the owner approved it on 2026-11-10): the theme
+# picker's card, as wide and with its arrow, radius and field's look (`theme-picker`), over a
+# header, the field of two dots, and lines for Invert lightness, the faces, the size and the case.
+# Points from the card's top left, the arrow left of it.
+height = 496.0
+header = 48.0
+# The name's and the lines' left edge, and the controls' right one.
+inset = 16.0
+# The site's icon at the inset, `gap` before the name, as the mock drew it.
+site-icon = 16.0
+# Between the header's controls, and between a line's label and its control.
+gap = 8.0
+# The switch's right edge from the card's.
+switch-right = 10.0
+# A button's height: Shuffle's, a chip's and the size's − and +.
+button = 28.0
+chip-padding = 10.0
+field-top = 48.0
+field-height = 176.0
+# The hint in the field, at its top right, until the Boost's first drag.
+hint-right = 12.0
+hint-top = 9.0
+# The lines' middles.
+invert-y = 244.0
+font-y = 291.0
+size-y = 383.0
+case-y = 423.0
+footer-y = 470.0
+# The rules over the faces and the footer, 1 pt, the plate at this much.
+rules = [270.0, 449.0]
+rule = 0.12
+label-width = 52.0
+# The labels' and the hint's ink, raised to the overlay's text floor where it needs more.
+dim = 0.6
+# The chips' widths, fixed so a press lands by where they lie: Invert lightness, Edit CSS… and Zap.
+invert-width = 140.0
+edit-width = 84.0
+zap-width = 56.0
+# The face tiles, as many as the computer has, sharing the line.
+tiles-top = 305.0
+tile-height = 52.0
+tile-gap = 6.0
+tile-text = 18.0
+# The chosen tile's ring, in the accent.
+tile-ring = 2.0
+# Plates: a control's, under the pointer, and chosen.
+plate = 0.08
+plate-hovered = 0.13
+plate-chosen = 0.2
+stepper-value = 48.0
+segment = 40.0
+segment-height = 24.0
+segment-padding = 2.0
+# The name's menu, under the name.
+menu-left = 14.0
+menu-top = 44.0
+
 [capture]
 # Arc's layout, measured at 1× (docs/ux-spec.md › Capture): the ring around what's chosen and the
 # pill that says how. Their look is ilo's: the ring in the Space's accent, and the pill and the
@@ -949,6 +1007,12 @@ media-title = 12.0
 media-button = 24.0
 media-control = 28.0
 media-glyph = 14.0
+# Arc 1.171's Adjust Tab Volume opens a drawer that grows the card media-drawer, its bottom staying
+# put, with a slider. Ours: the drawer sits between the title row and the controls, so they stay
+# under the pointer; the slider's track and knob.
+media-drawer = 33.0
+media-slider-track = 4.0
+media-slider-knob = 12.0
 # Favorites taller than this much of the window scroll with the list instead of staying put
 # (Ardia), so they never leave the rows too little room.
 tall-favorites = 0.4
@@ -1788,10 +1852,12 @@ check-stroke = 2.25
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
 # rested on it `wait` (ours, as the sidebar's reveal waits), and a card put away folds and fades
-# over `fold` as the ones above close up (ours).
+# over `fold` as the ones above close up (ours). A card's volume drawer opens and closes over
+# `drawer` (ours: Arc's isn't timed).
 open = 0.2
 wait = 0.1
 fold = 0.2
+drawer = 0.2
 
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media

@@ -3,7 +3,7 @@
 // left. A scroll moves it, a pinch or a scroll with ⌘ (Ctrl off the Mac) sizes it about its middle,
 // keeping its shape, and a double-click goes back to its tab, as Chrome's back-to-tab button does.
 // It stays on the display it's on. Its controls keep their clicks. Coming back to its tab's window
-// takes it back to the tab.
+// takes it back to the tab. It looks as Dia's does: its corners, rim, scrim and top buttons.
 #ifndef BROWSER_CORE_MINI_PLAYER_H_
 #define BROWSER_CORE_MINI_PLAYER_H_
 
@@ -16,6 +16,10 @@ void SetUpMiniPlayer();
 
 // Whether the Mini Player has the keyboard, as after a click on it.
 bool MiniPlayerHasKeyboard();
+
+// How often a video's Mini Player has shown, which Chrome does with the same window each time the
+// tab floats a video again.
+int MiniPlayerShows();
 
 // The user came back to |window|, which is key again: a video's Mini Player whose tab it shows
 // closes, its video playing on in the page, as Arc's does, one the page floated itself too. A call's

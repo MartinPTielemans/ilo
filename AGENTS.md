@@ -7,7 +7,7 @@ An open-source, Arc-style browser: ungoogled-chromium underneath, a GPUI (Rust) 
 1. **Speed is the product.** The performance gate in `docs/roadmap.md` is the bar for every hot path: tab switch, new tab, command bar, launch. It's broken by hot-path UI running in a JavaScript runtime (Ardia's React Native UI costs 40 ms per tab switch against Chrome's 8), by rendering pages off-screen instead of in Chromium's native views, by timers and polling that wake an idle browser, and by per-tab work that could be done once.
 2. **The browser can't be taken away.** Everything ilo ships is GPL. The client has no license or entitlement checks, no paid features, no ads and no data selling. Services that hold user data are self-hostable. Official builds differ from forks only in branding, signing keys and default service URLs.
 3. **Agents get sessions, never secrets.** An agent acts inside the user's logged-in sessions and never reads passwords, cookies or autofill data. That's why agents get no tool that runs their own JavaScript in a page and no pages outside http(s): either would read them. The browser enforces the rules itself, in the client, so a new agent capability ships with its permission check, confirmation UI and activity-log entry in the same change.
-4. **Arc's feel, ilo's look.** Arc's structure, behavior, layout and timings, with Dia's command bar and motion, are the spec (decision 6). Match their measured values for those. The look (colour, material, radii, type, icons, shadows) is ilo's own, built from the brand, so an Arc user feels at home without it reading as a clone. [docs/ux-principles.md](docs/ux-principles.md) says why they work: what Arc wasn't recorded doing and what it never had follow it, and a recording that teaches something new adds to it. Their icons, fonts, sounds, images and names never come in.
+4. **Arc's feel, ilo's look.** Arc's structure, behavior, layout and timings, with Dia's command bar and motion, are where every surface starts (decision 6): their measured values hold unless a change is better in every way, and its PR says why for each difference, for the owner's review. The look (colour, material, radii, type, icons, shadows) is ilo's own. [docs/ux-principles.md](docs/ux-principles.md) says why they work: what Arc wasn't recorded doing and what it never had follow it, and a recording that teaches something new adds to it. Their icons, fonts, sounds, images and names never come in.
 
 ## A note on taste
 
@@ -45,7 +45,7 @@ The most common defect is a change that works on the path you tested and is miss
 - **Platforms.** Mac ships first, but the core compiles on Linux (`engine/check-linux.sh`) and per-OS code stays in the platform layer. A PR touching it (`app/platform/`, `host.h`) or what the OS draws (window material, overlay corners and shadows, window controls, key routing, IME, scaling) shows before and after on each OS.
 - **Hot paths.** A change to tab switch, new tab, the command bar or launch comes with before-and-after numbers against the performance gate.
 - **The look.** A visual change goes through `app/design/tokens.toml`, and the design file follows with `tools/design-sync.md`.
-- **Docs.** A changed decision means rewriting its entry in `docs/decisions.md`. A phase that changes state updates `docs/roadmap.md`.
+- **Docs.** A changed decision rewrites `docs/decisions.md`. Parity and roadmap ticks go in a daily ticks PR; name rows on `Parity:`.
 - **Reverse states.** If you added a way in, add the way out and the way to see it. A one-way door is a bug: a permission an agent can be granted needs a revoke and a place where it's listed.
 
 ## Dev
@@ -62,7 +62,7 @@ The most common defect is a change that works on the path you tested and is miss
 - `cargo test --release --lib` in `app/` runs the UI's tests in under a second, without the engine. A test drives a GPUI view as the user does, on a host recording what it asks of the core, so logic the UI decides, such as the command bar's keys, is tested there, and `check.sh` keeps what needs the engine: pages, focus, windows, the core's answers.
 - Name the exact checks you ran. For the app that's `./build.sh && ./check.sh`, naming the runs if not all, then a look at the captures.
 - For UI, the proof is the running app. Launch it, wait for the event that marks the milestone (a check that needs a fixed sleep to pass is wrong), capture the window with `tools/window-screenshot.sh`, and look at the image before saying it works. The owner is often away from the Mac, so your capture is the proof they get.
-- Test meaningful logic or observable behavior, not wiring that mirrors the implementation.
+- Test behavior and relations, not wiring, pixels or copy; spec values come from tokens.
 
 ## Commits and pull requests
 

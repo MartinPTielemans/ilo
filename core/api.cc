@@ -24,6 +24,7 @@
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
+#include "browser_core/boosts.h"
 #include "browser_core/autofill_data.h"
 #include "browser_core/autofill_offer.h"
 #include "browser_core/autofill_menu.h"
@@ -95,7 +96,6 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "url/gurl.h"
@@ -1485,13 +1485,26 @@ void bc_set_haptics(bool haptics) {
   browser_core::SessionChanged();
 }
 
+int bc_appearance(void) {
+  return browser_core::UserSettings().appearance;
+}
+
 void bc_set_appearance(int appearance) {
-  // Chromium's own override of the system's scheme, which every page's color provider follows.
-  using Scheme = ui::NativeTheme::PreferredColorScheme;
-  ui::NativeTheme::SetPreferredColorSchemeOverride(
-      appearance == 1   ? std::optional(Scheme::kLight)
-      : appearance == 2 ? std::optional(Scheme::kDark)
-                        : std::nullopt);
+  if (appearance < 0 || appearance > 2 || appearance == browser_core::UserSettings().appearance) {
+    return;
+  }
+  browser_core::UserSettings().appearance = appearance;
+  browser_core::ApplyAppearance();
+  browser_core::SessionChanged();
+}
+
+bool bc_space_header(void) {
+  return browser_core::UserSettings().space_header;
+}
+
+void bc_set_space_header(bool shown) {
+  browser_core::UserSettings().space_header = shown;
+  browser_core::SessionChanged();
 }
 
 bool bc_link_previews(void) {
@@ -1786,6 +1799,32 @@ void bc_window_keep_preview(bc_id window_id, bc_id id) {
       browser_core::Favorites::Has(id)) {
     return;
   }
+  space->Add(id, /*opener=*/0, /*foreground=*/true);
+  window->Select(id);
+}
+
+void bc_window_keep_archived_preview(bc_id window_id, bc_id id, bc_id archived) {
+  browser_core::Window* window = browser_core::Window::FromId(window_id);
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (!window || !contents) {
+    return;
+  }
+  const auto& all = browser_core::Archived();
+  auto entry = std::ranges::find(all, archived, &browser_core::ArchivedTab::id);
+  // Back in the Space it closed in, as a restore goes, while that's one of the user's in the
+  // preview's profile, as a page can't change profiles. Select then shows it.
+  browser_core::Space* closed_in =
+      entry == all.end() || window->own_space() ? nullptr
+                                                : browser_core::Space::WithNode(entry->space);
+  if (closed_in && closed_in->profile() != browser_core::DirOf(contents)) {
+    closed_in = nullptr;
+  }
+  browser_core::Space* space =
+      closed_in ? closed_in : browser_core::Space::FromId(window->space());
+  if (!space || browser_core::Space::Holding(id) || browser_core::Favorites::Has(id)) {
+    return;
+  }
+  browser_core::TakeArchived(archived);
   space->Add(id, /*opener=*/0, /*foreground=*/true);
   window->Select(id);
 }
@@ -2131,6 +2170,18 @@ void bc_tab_set_developer_mode(bc_id id, bool on) {
   }
 }
 
+void bc_profile_set_boost(bc_id profile, const char* site, const char* css) {
+  browser_core::Boosts::Set(profile, site ? site : "", css ? css : "");
+}
+
+void bc_tab_boost_zap(bc_id id, bool on) {
+  content::WebContents* contents = browser_core::Tab::FromId(id);
+  if (browser_core::Boosts* boosts =
+          contents ? browser_core::Boosts::FromWebContents(contents) : nullptr) {
+    boosts->Zap(on);
+  }
+}
+
 void bc_tab_picture_in_picture(bc_id id) {
   browser_core::SiteControls::PictureInPicture(id);
 }
@@ -2347,6 +2398,12 @@ void bc_tab_set_icon(bc_id id, const char* icon) {
 void bc_tab_set_muted(bc_id id, bool muted) {
   if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
     tab->SetMuted(muted);
+  }
+}
+
+void bc_tab_set_volume(bc_id id, double volume) {
+  if (browser_core::Tab* tab = browser_core::Tab::Get(id)) {
+    tab->SetVolume(volume);
   }
 }
 

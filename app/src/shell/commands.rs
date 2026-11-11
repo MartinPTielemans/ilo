@@ -16,7 +16,7 @@ use crate::theme::Appearance;
 use crate::usage::{self, Usage};
 
 use super::{
-    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar,
+    COPIED_TIME, Edit, Section, Shell, Space, Swapped, UserKeys, What, agent_bar, boost,
     browser::WindowButton,
     clean_link,
     drag::dropped_urls,
@@ -217,6 +217,12 @@ pub enum Command {
     ViewMedia,
     /// Opens the Library on its agents' past tasks, or closes it there.
     ViewAgents,
+    /// Opens the card for a Boost of the site of the page shown, which has none yet (#695).
+    NewBoost,
+    /// Opens the card of the Boost of the site of the page shown.
+    EditBoost,
+    /// Opens the Library on the profile's Boosts, or closes it there.
+    ViewBoosts,
     /// Opens the command bar over a new pane beside the pages shown, for a split view.
     AddSplit,
     /// Opens a new document in the notes service the Space's profile picks (`crate::notes`), in a
@@ -305,6 +311,12 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     ("cmd-,", Command::Settings, false),
     ("alt-cmd-down", Command::NextTab, true),
     ("alt-cmd-up", Command::PreviousTab, true),
+    // Arc's ⌘} and ⌘{, Chrome's too. GPUI names them by their character and a page by the key with
+    // shift, as ⌃⇧] below.
+    ("shift-cmd-]", Command::NextTab, true),
+    ("shift-cmd-}", Command::NextTab, true),
+    ("shift-cmd-[", Command::PreviousTab, true),
+    ("shift-cmd-{", Command::PreviousTab, true),
     ("ctrl-tab", Command::RecentTab, true),
     ("ctrl-shift-tab", Command::RecentTabBack, true),
     ("alt-cmd-right", Command::NextSpace, true),
@@ -701,6 +713,13 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
         Command::ViewAgents,
         &["agent history", "past tasks"],
     ),
+    ("New Boost", Command::NewBoost, &["zap", "css", "style"]),
+    ("Edit Boost", Command::EditBoost, &["zap", "css", "style"]),
+    (
+        "View Boosts…",
+        Command::ViewBoosts,
+        &["zap", "css", "style"],
+    ),
     ("View History", Command::ViewHistory, &[]),
     (
         "Site Search Settings",
@@ -1088,15 +1107,17 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 /// ⇧⌘C in the link preview copies its page's address, not the tab's under it, as Arc's Peek
 /// does, with the toast ⇧⌘C shows.
 pub fn copy_url_of_preview(url: &str, cx: &mut App) {
-    let url = clean_link(url);
     let Some(shell) = key_shell(cx) else {
         return;
     };
-    if !url.is_empty() {
-        shell
-            .update(cx, |shell, cx| shell.copy(&url, "Copied Current URL", cx))
-            .ok();
-    }
+    shell
+        .update(cx, |shell, cx| {
+            let url = shell.copied_link(url);
+            if !url.is_empty() {
+                shell.copy(&url, "Copied Current URL", cx);
+            }
+        })
+        .ok();
 }
 
 /// Runs `command`, whose row in the command bar was chosen, once the bar has gone.
@@ -1236,6 +1257,9 @@ impl Command {
             Command::ViewDownloads => "view-downloads",
             Command::ViewMedia => "view-media",
             Command::ViewAgents => "view-agents",
+            Command::NewBoost => "new-boost",
+            Command::EditBoost => "edit-boost",
+            Command::ViewBoosts => "view-boosts",
             Command::AddSplit => "add-split",
             Command::NewNote => "new-note",
             Command::NewNoteSplit => "new-note-split",
@@ -1361,6 +1385,7 @@ pub fn bind_keys(cx: &mut App) {
     agent_bar::bind(cx);
     drm_note::bind(cx);
     translate::bind(cx);
+    boost::bind(cx);
     sidebar_keys::bind(cx);
 }
 
@@ -1530,6 +1555,8 @@ impl Shell {
             Command::NewPrivateWindow => return self.browser.new_private_window(cx),
             // Off in Settings › Features, ⌥⌘N does nothing.
             Command::NewLittleWindow if !self.little_windows => return,
+            // And ⌃⇧N, or the keys the user gave either.
+            Command::NewNote | Command::NewNoteSplit if !self.new_note => return,
             Command::NewBlankWindow => return self.browser.new_blank_window(cx),
             Command::NewLittleWindow => {
                 let home = self.little().unwrap_or(self.space);
@@ -1733,6 +1760,8 @@ impl Shell {
             Command::ViewDownloads => return self.view_section(Section::Downloads, cx),
             Command::ViewMedia => return self.view_section(Section::Media, cx),
             Command::ViewAgents => return self.view_section(Section::Agents, cx),
+            Command::NewBoost | Command::EditBoost => return self.open_boost(cx),
+            Command::ViewBoosts => return self.view_section(Section::Boosts, cx),
             Command::ClearArchive => return self.clear_archive(cx),
             Command::NewSpace => return self.new_space(cx),
             Command::RenameSpace => return self.rename_space(self.space, cx),
@@ -1950,7 +1979,7 @@ impl Shell {
     /// File › Share… and the command bar's Share…: the system's share sheet for the page shown,
     /// as Site Controls' Share tile opens it, hanging from the URL field, else from the page's top.
     fn share_page(&mut self, cx: &mut Context<Self>) {
-        let link = clean_link(&self.url(self.selected));
+        let link = self.copied_link(&self.url(self.selected));
         if link.is_empty() || !self.browser.has_share_sheet() {
             return;
         }
@@ -1968,7 +1997,7 @@ impl Shell {
 
     /// `tab`'s link to copy, as a Markdown link if `markdown`, and the toast to say so with.
     pub(super) fn link_to_copy(&self, tab: u64, markdown: bool) -> Option<(String, &'static str)> {
-        let url = clean_link(&self.url(tab));
+        let url = self.copied_link(&self.url(tab));
         if url.is_empty() {
             return None;
         }
@@ -2129,6 +2158,32 @@ impl Shell {
         (tab != 0 && web && !self.private).then_some(page.developer_mode)
     }
 
+    /// Settings › Features' New Note switch: off, the + menu, the command bar and its keys offer
+    /// neither New Note nor New Note Split. The tabs it opened stay.
+    pub fn set_new_note(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.new_note == on {
+            return;
+        }
+        self.new_note = on;
+        self.update_menus(cx);
+        cx.notify();
+    }
+
+    /// Settings › Privacy's Copy links without tracking: off, every copy path, and the share sheet,
+    /// gives the address as it is (#2351).
+    pub fn set_clean_links(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.clean_links = on;
+        cx.notify();
+    }
+
+    /// `url` as the copy paths give it: without its trackers, unless the user turned that off.
+    pub(super) fn copied_link(&self, url: &str) -> String {
+        match self.clean_links {
+            true => clean_link(url),
+            false => url.to_string(),
+        }
+    }
+
     /// Whether `command` would do something now, for the command bar to offer it.
     pub(super) fn offers(&self, command: Command) -> bool {
         if self.one_space() && !private_runs(command) {
@@ -2188,9 +2243,7 @@ impl Shell {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
             }
-            Command::Share => {
-                self.browser.has_share_sheet() && !clean_link(&self.url(self.selected)).is_empty()
-            }
+            Command::Share => self.browser.has_share_sheet() && !self.url(self.selected).is_empty(),
             // A favorite's menu has no Rename, and the field is in the tab's row in the sidebar.
             Command::RenameTab => {
                 let favorite = self.favorites.contains(&self.selected);
@@ -2199,6 +2252,9 @@ impl Shell {
             Command::NextSpace => space.is_some_and(|index| index + 1 < self.spaces.len()),
             Command::TurnOffBatterySaver => self.battery_saver.is_some(),
             Command::TranslatePage | Command::UseOriginal => self.offers_translation(command),
+            Command::NewBoost | Command::EditBoost | Command::ViewBoosts => {
+                self.offers_boost(command)
+            }
             Command::MuteAll(muted) => self.tabs.values().any(|tab| tab.page.muted != muted),
             // As the menus' New Profile: only an empty Space changes profile.
             Command::ChangeProfile(None) => {
@@ -2213,6 +2269,8 @@ impl Shell {
             Command::NextTab | Command::PreviousTab => self.sidebar_rows().len() > 1,
             Command::OpenInMainWindow => self.little.is_some() && self.selected != 0,
             Command::NewLittleWindow => self.little_windows,
+            Command::NewNote => self.new_note,
+            Command::NewNoteSplit => self.new_note && self.selected != 0,
             Command::NewFolder
             | Command::PasteUrlAsTab
             | Command::SearchTabs
@@ -2235,7 +2293,6 @@ impl Shell {
             | Command::ManageExtensions
             | Command::AddExtension
             | Command::ViewHistory
-            | Command::NewNote
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData
             | Command::KeyboardShortcuts
@@ -2448,6 +2505,10 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::ViewArchive
             | Command::ClearArchive
             | Command::ViewAgents
+            // It keeps nothing, so it makes no Boost, though it shows its profile's.
+            | Command::NewBoost
+            | Command::EditBoost
+            | Command::ViewBoosts
             | Command::ViewHistory
             | Command::SiteSearchSettings
             | Command::ClearBrowsingData
@@ -3041,6 +3102,52 @@ mod tests {
             host.notes.borrow().len(),
             2,
             "a private window opened a note"
+        );
+    }
+
+    /// Off in Settings › Features, nothing offers or runs New Note or New Note Split: not the +
+    /// menu, the command bar or ⌃⇧N. On again, ⌃⇧N opens one.
+    #[gpui::test]
+    fn new_note_off_is_in_no_menu_bar_or_key(cx: &mut gpui::TestAppContext) {
+        use gpui::{point, px};
+
+        let (shell, host) = shell_with_today(cx, vec![10]);
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(10, cx);
+            shell.set_new_note(false, cx);
+            shell.plus_menu(point(px(100.), px(700.)), cx);
+        });
+        let titles: Vec<String> = host
+            .menus
+            .borrow()
+            .last()
+            .unwrap()
+            .iter()
+            .map(|(title, _)| title.to_string())
+            .collect();
+        assert!(titles.contains(&"New Split View".to_string()), "{titles:?}");
+        assert!(!titles.contains(&"New Note".to_string()), "{titles:?}");
+        shell.read_with(cx, |shell, cx| {
+            assert!(!shell.offers(Command::NewNote));
+            assert!(!shell.offers(Command::NewNoteSplit));
+            assert_eq!(shell.bar_name("New Note", Command::NewNote, cx), None);
+        });
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::NewNote, "keys", cx);
+            shell.run(Command::NewNoteSplit, "command bar", cx);
+        });
+        assert!(
+            host.notes.borrow().is_empty(),
+            "New Note ran while it's off"
+        );
+        shell.update(cx, |shell, cx| {
+            shell.set_new_note(true, cx);
+            shell.run(Command::NewNote, "keys", cx);
+        });
+        assert_eq!(
+            host.notes.borrow().len(),
+            1,
+            "New Note didn't run once on again"
         );
     }
 

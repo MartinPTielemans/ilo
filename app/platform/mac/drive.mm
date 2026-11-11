@@ -10,6 +10,7 @@
 //   doubleclick <x> <y>                   two left clicks, the second with a click count of 2
 //   rightclick <x> <y>                    a right click
 //   middleclick <x> <y>                   a click of the middle button, a mouse's wheel
+//   sideclick <x> <y> back|forward        a click of a mouse's back or forward side button
 //   clickkey <x> <y>                      a left click in the key window, such as the command bar
 //   doubleclickkey <x> <y>                two left clicks in the key window, as doubleclick
 //   rightclickkey <x> <y>                 a right click in the key window
@@ -70,6 +71,11 @@
 //                                         once AppKit's screens no longer have it
 //   minimize                              minimizes the window to the Dock, or brings it back
 //   hide                                  hides the app, as ⌘H does, or brings it back
+//   active                                posts the app's became-active notification, as coming
+//                                         back to it from another app does, such as from System
+//                                         Settings, which a run can't do: macOS lets no background
+//                                         process make an app active, and a hidden app on a runner
+//                                         with nothing else in front stays the active one
 //   place <x> <y> <width> <height>        moves and resizes the window to that frame, in points
 //                                         from the main display's top-left corner
 //   screen                                logs the screen the app opens windows on, the main
@@ -83,6 +89,9 @@
 //                                         them, the driven one too, after each one's frame, as
 //                                         "browser: frame window <n> <x> <y> <width> <height>"
 //                                         in place's terms
+//   desktop                               logs the browser windows on the desktop shown, as
+//                                         "browser: desktop shown window <n> window <m> …",
+//                                         numbered as order numbers them
 //   layout                                logs the frames of the window's views and child
 //                                         windows, the centres of its close, minimize and
 //                                         zoom buttons, the frame of the page that has the
@@ -143,6 +152,9 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
+//   dockicon <path>                       draws the Dock's icon, as the app last set it, to a 1024
+//                                         px PNG at <path> and logs the color of its dot, as
+//                                         "browser: dock icon <r> <g> <b>" in sRGB
 //   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
 //                                         "browser: status item shown" or "none", or clicks it,
 //                                         or draws it to a PNG at <path>, logged as "browser:
@@ -311,7 +323,8 @@ const std::map<std::string, unsigned short> kKeyCodes = {
     {"0", 29}, {"-", 27}, {"+", 27}, {"[", 33}, {"]", 30}, {"up", 126}, {"down", 125},
     {"left", 123}, {"right", 124}, {"backspace", 51}, {",", 43}, {"delete", 117},
     {"pageup", 116}, {"pagedown", 121}, {"/", 44}, {"?", 44}, {"=", 24}, {"&", 26}, {"_", 27},
-    {":", 41}, {"@", 19}, {"!", 18}, {"f12", 111}, {"f10", 109}, {"f6", 97},
+    {":", 41}, {"@", 19}, {"!", 18}, {"(", 25}, {")", 29}, {"f12", 111}, {"f10", 109},
+    {"f6", 97},
 };
 // AppKit's characters for the arrows are NSUpArrowFunctionKey to NSRightArrowFunctionKey, and for
 // the others NSDeleteFunctionKey, NSPageUpFunctionKey, NSPageDownFunctionKey, NSF12FunctionKey,
@@ -502,7 +515,8 @@ void PostMouse(NSWindow* window,
                double x,
                double y,
                int count,
-               NSEventModifierFlags flags = 0) {
+               NSEventModifierFlags flags = 0,
+               CGMouseButton other = kCGMouseButtonCenter) {
   Pointed(window, NSMakePoint(x, NSHeight(window.frame) - y));
   NSEvent* event = [NSEvent mouseEventWithType:type
                                       location:NSMakePoint(x, NSHeight(window.frame) - y)
@@ -518,7 +532,7 @@ void PostMouse(NSWindow* window,
   if (right || type == NSEventTypeOtherMouseDown || type == NSEventTypeOtherMouseUp) {
     CGEventRef numbered = CGEventCreateCopy(event.CGEvent);
     CGEventSetIntegerValueField(numbered, kCGMouseEventButtonNumber,
-                                right ? kCGMouseButtonRight : kCGMouseButtonCenter);
+                                right ? kCGMouseButtonRight : other);
     event = [NSEvent eventWithCGEvent:numbered];
     CFRelease(numbered);
   }
@@ -1047,6 +1061,10 @@ void AppendViews(NSMutableString* line, NSView* content, NSView* parent) {
                        NSMinX(frame), NSMinY(frame), NSWidth(frame), NSHeight(frame)];
     if (view.layer.masksToBounds && view.layer.cornerRadius > 0) {
       [line appendFormat:@" radius %.0f", view.layer.cornerRadius];
+      // The core's engine rounds pages on the continuous curve the window's corner has.
+      if ([view.layer.cornerCurve isEqual:kCACornerCurveContinuous]) {
+        [line appendString:@" continuous"];
+      }
     }
   }
 }
@@ -1250,6 +1268,13 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "active") {
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:NSApplicationDidBecomeActiveNotification
+                      object:NSApp];
+    done();
+    return true;
+  }
   if (action == "hide") {
     if (NSApp.hidden) {
       [NSApp unhide:nil];
@@ -1346,6 +1371,22 @@ bool Run(const std::string& line, void (^done)(void)) {
     Convert(window, target, &x, &y);
     PostMouse(target, NSEventTypeRightMouseDown, x, y, 1);
     PostMouse(target, NSEventTypeRightMouseUp, x, y, 1);
+    done();
+    return true;
+  }
+  // A mouse's side buttons are the window server's buttons 3 and 4, which AppKit and GPUI read as
+  // back and forward.
+  if (action == "sideclick") {
+    double x, y;
+    std::string way;
+    if (!(words >> x >> y >> way) || (way != "back" && way != "forward")) {
+      return false;
+    }
+    NSWindow* target = WindowAt(window, x, y);
+    Convert(window, target, &x, &y);
+    const CGMouseButton button = static_cast<CGMouseButton>(way == "back" ? 3 : 4);
+    PostMouse(target, NSEventTypeOtherMouseDown, x, y, 1, 0, button);
+    PostMouse(target, NSEventTypeOtherMouseUp, x, y, 1, 0, button);
     done();
     return true;
   }
@@ -1632,6 +1673,18 @@ bool Run(const std::string& line, void (^done)(void)) {
     done();
     return true;
   }
+  if (action == "desktop") {
+    NSMutableString* shown = [NSMutableString string];
+    for (size_t index = 0; index < 64; index++) {
+      NSWindow* each = (__bridge NSWindow*)host_browser_window(index);
+      if (each && each.visible && each.onActiveSpace) {
+        [shown appendFormat:@" window %zu", index + 1];
+      }
+    }
+    fprintf(stderr, "browser: desktop shown%s\n", shown.UTF8String);
+    done();
+    return true;
+  }
   if (action == "layout") {
     Layout(window);
     done();
@@ -1888,6 +1941,41 @@ bool Run(const std::string& line, void (^done)(void)) {
       }
       fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
     }
+    done();
+    return true;
+  }
+  if (action == "dockicon") {
+    // The image the app gave the Dock, which is what the Dock draws: a capture of the Dock itself
+    // would need the screen, with other apps' icons. Drawn as dock.mm draws macOS's, with the dot
+    // at (512, 328) from the top left.
+    std::string path;
+    std::getline(words >> std::ws, path);
+    if (path.empty()) {
+      return false;
+    }
+    NSBitmapImageRep* picture =
+        [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
+                                                pixelsWide:1024
+                                                pixelsHigh:1024
+                                             bitsPerSample:8
+                                           samplesPerPixel:4
+                                                  hasAlpha:YES
+                                                  isPlanar:NO
+                                            colorSpaceName:NSDeviceRGBColorSpace
+                                               bytesPerRow:0
+                                              bitsPerPixel:0];
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:picture];
+    [NSApp.applicationIconImage drawInRect:NSMakeRect(0, 0, 1024, 1024)];
+    [NSGraphicsContext restoreGraphicsState];
+    NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    NSColor* dot =
+        [[picture colorAtX:512 y:328] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    if (!dot || ![png writeToFile:@(path.c_str()) atomically:YES]) {
+      return false;
+    }
+    fprintf(stderr, "browser: dock icon %.0f %.0f %.0f\n", dot.redComponent * 255,
+            dot.greenComponent * 255, dot.blueComponent * 255);
     done();
     return true;
   }

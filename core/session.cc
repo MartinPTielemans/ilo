@@ -58,6 +58,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -329,8 +330,8 @@ SavedSpace SaveSpace(const Space& space, bc_id shown, std::vector<bc_id>* today)
       tab.pinned_url = space.PinnedUrl(id);
       if (tabs == &to.pinned) {
         tab.folder = folder_of(id);
-        tab.node = node_of(id);
       }
+      tab.node = node_of(id);
       if (tabs == &to.today) {
         tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
         if (today) {
@@ -473,8 +474,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       }
       if (folders) {
         write_folder(*folders, tab.folder, dict);
-        WriteNode(tab.node, dict);
       }
+      // A pinned or Today tab's, which a favorite has none of.
+      WriteNode(tab.node, dict);
       if (!tab.profile.empty()) {
         dict.Set("profile", tab.profile);
       }
@@ -603,7 +605,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
                            .Set("widevine", saved.settings.widevine)
                            .Set("ask_where_to_save", saved.settings.ask_where_to_save)
                            .Set("page_zoom", saved.settings.page_zoom)
-                           .Set("notification_prompts", saved.settings.notification_prompts));
+                           .Set("notification_prompts", saved.settings.notification_prompts)
+                           .Set("appearance", saved.settings.appearance)
+                           .Set("space_header", saved.settings.space_header));
   return base::WriteJson(root);
 }
 
@@ -785,6 +789,8 @@ std::optional<Saved> Read(const base::FilePath& path) {
         }
         if (tab && tabs == &to.pinned) {
           tab->folder = folder_of(*dict);
+        }
+        if (tab) {
           tab->node = ReadNode(*dict);
         }
         if (tab) {
@@ -882,6 +888,9 @@ std::optional<Saved> Read(const base::FilePath& path) {
     saved.settings.page_zoom = page_zoom > 0 ? page_zoom : 1;
     saved.settings.notification_prompts =
         settings->FindBool("notification_prompts").value_or(true);
+    const int appearance = settings->FindInt("appearance").value_or(0);
+    saved.settings.appearance = appearance >= 0 && appearance <= 2 ? appearance : 0;
+    saved.settings.space_header = settings->FindBool("space_header").value_or(false);
   }
   return saved;
 }
@@ -1236,6 +1245,7 @@ class Saver : public base::ImportantFileWriter::BackgroundDataSerializer {
     ApplyAdBlocking();
     ApplyAutoPictureInPicture(/*changed=*/false);
     ApplyWebRtc();
+    ApplyAppearance();
     ArchiveDefaultRead();
     sync_settings::Read();
     // The profiles the Spaces and favorites are in load before they come back.
@@ -1302,6 +1312,17 @@ bool SessionKept() {
 Settings& UserSettings() {
   static Settings settings;
   return settings;
+}
+
+void ApplyAppearance() {
+#if !BUILDFLAG(IS_MAC)
+  // Chromium's own override of the system's scheme, which every page's color provider follows.
+  using Scheme = ui::NativeTheme::PreferredColorScheme;
+  const int appearance = UserSettings().appearance;
+  ui::NativeTheme::SetPreferredColorSchemeOverride(appearance == 1   ? std::optional(Scheme::kLight)
+                                                   : appearance == 2 ? std::optional(Scheme::kDark)
+                                                                     : std::nullopt);
+#endif
 }
 
 double SavedSidebarWidth() {
@@ -1441,6 +1462,16 @@ Space* RestoreSpace(Window& window,
     if (bc_id tab = today_ids[j] = restore(saved_space.today[j], pinned + static_cast<int>(j))) {
       space->Add(tab, /*opener=*/0, /*foreground=*/false);
     }
+  }
+  // The Today tabs' nodes, which sync knows them by.
+  std::map<bc_id, Space::Node> today_nodes;
+  for (size_t j = 0; j < today_ids.size(); ++j) {
+    if (today_ids[j]) {
+      today_nodes[today_ids[j]] = saved_space.today[j].node;
+    }
+  }
+  if (!today_nodes.empty()) {
+    space->RestoreNodes(saved_space.node, today_nodes);
   }
   for (auto [tabs, ids] : {std::pair(&saved_space.pinned, &pinned_ids),
                            std::pair(&saved_space.today, &today_ids)}) {

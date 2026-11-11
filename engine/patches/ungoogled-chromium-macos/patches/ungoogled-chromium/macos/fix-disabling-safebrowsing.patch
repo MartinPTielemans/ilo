@@ -1,0 +1,112 @@
+# Fix GN safe_browsing and building with safebrowsing disabled on macOS
+#
+# ungoogled-chromium-macos's fix-disabling-safebrowsing.patch at 31f01756a43d (its 156.0.8078.79
+# tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from upstream's:
+# - chrome/browser/ui/BUILD.gn's static_library("ui") and chrome/test/BUILD.gn's Mac unit_tests no
+#   longer list the deps upstream's removes (157 folds ui's deps into //chrome/browser, and moves
+#   archive_analyzer_results under safe_browsing_mode > 0), so those two hunks are gone.
+# - 157 drops the ENTERPRISE_CLIENT_CERTIFICATES flag, so the two policy entries upstream's removes
+#   are unguarded, ForBrowser under !IS_CHROMEOS; they're removed in that form. 157's
+#   ManagedClientCertificateFor*Config entries, which upstream's predates, are left in.
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -8654,33 +8654,6 @@ bool ChromeContentBrowserClient::SetupEmbedderSandboxParameters(
+     CHECK(!soda_language_pack_path.empty());
+     CHECK(serializer->SetParameter(sandbox::policy::kParamSodaLanguagePackPath,
+                                    soda_language_pack_path.value()));
+-    return true;
+-  }
+-  if (sandbox_type == sandbox::mojom::Sandbox::kScreenAI) {
+-    // ScreenAI service needs read access to ScreenAI component binary path to
+-    // load it.
+-    base::FilePath screen_ai_binary_path =
+-        screen_ai::ScreenAIInstallState::GetInstance()
+-            ->get_component_binary_path();
+-    if (screen_ai_binary_path.empty()) {
+-      VLOG(1) << "Screen AI component not found.";
+-      return false;
+-    }
+-    return serializer->SetParameter(
+-        sandbox::policy::kParamScreenAiComponentPath,
+-        screen_ai_binary_path.value());
+-  }
+-  if (sandbox_type == sandbox::mojom::Sandbox::kOnDeviceTranslation) {
+-    auto translatekit_binary_path =
+-        on_device_translation::ComponentManager::GetInstance()
+-            .GetTranslateKitComponentPath();
+-    if (translatekit_binary_path.empty()) {
+-      VLOG(1) << "TranslationKit component not found.";
+-      return false;
+-    }
+-    return serializer->SetParameter(
+-        sandbox::policy::kParamTranslatekitComponentPath,
+-        translatekit_binary_path.value());
+   }
+ 
+   return false;
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -899,9 +899,6 @@ source_set("extensions") {
+       # TODO(crbug.com/346472679): Remove this circular dependency.
+       "//chrome/browser/web_applications/extensions",
+ 
+-      # TODO(crbug.com/41437292): Remove this circular dependency.
+-      "//chrome/browser/safe_browsing",
+-
+       # TODO(crbug.com/343037853): Remove this circular dependency.
+       "//chrome/browser/themes",
+ 
+@@ -928,7 +925,6 @@ source_set("extensions") {
+       "//chrome/common",
+       "//chrome/common/extensions/api",
+       "//components/omnibox/browser",
+-      "//components/safe_browsing/core/common/proto:csd_proto",
+       "//components/safe_browsing/core/common/proto:realtimeapi_proto",
+       "//components/translate/content/browser",
+       "//content/public/browser",
+--- a/chrome/browser/policy/configuration_policy_handler_list_factory.cc
++++ b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
+@@ -2455,20 +2455,6 @@ const PolicyToPreferenceMapEntry kSimplePolicyMap[] = {
+     base::Value::Type::BOOLEAN },
+ #endif
+ 
+-// The per-user policy is available on ChromeOS (declared `future_on:
+-// chrome_os`), but the per-browser policy is not (it is `chrome.*`, i.e.
+-// win/mac/linux only). As a result the per-browser `key::` constant is only
+-// generated in non-ChromeOS builds, so its entry must be guarded accordingly.
+-  { key::kProvisionManagedClientCertificateForUser,
+-    client_certificates::prefs::kProvisionManagedClientCertificateForUserPrefs,
+-    base::Value::Type::INTEGER },
+-
+-#if !BUILDFLAG(IS_CHROMEOS)
+-  { key::kProvisionManagedClientCertificateForBrowser,
+-    client_certificates::prefs::kProvisionManagedClientCertificateForBrowserPrefs,
+-    base::Value::Type::INTEGER },
+-#endif  // !BUILDFLAG(IS_CHROMEOS)
+-
+ #if BUILDFLAG(IS_CHROMEOS)
+   { key::kDeviceAuthenticationFlowAutoReloadInterval,
+     ash::prefs::kAuthenticationFlowAutoReloadInterval,
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -1638,7 +1638,6 @@ group("ui_public_dependencies") {
+     "//components/dom_distiller/core",
+     "//components/enterprise/buildflags",
+     "//components/paint_preview/buildflags",
+-    "//components/safe_browsing:buildflags",
+     "//components/segmentation_platform/public",
+     "//components/sync",
+     "//components/sync_user_events",
+--- a/chrome/services/file_util/BUILD.gn
++++ b/chrome/services/file_util/BUILD.gn
+@@ -47,10 +47,6 @@ source_set("file_util") {
+     deps += [ "//components/services/filesystem/public/mojom" ]
+   }
+ 
+-  if (is_mac) {
+-    deps += [ "//chrome/utility/safe_browsing" ]
+-  }
+-
+   if (safe_browsing_mode == 1) {
+     sources += [
+       "obfuscated_archive_analysis_delegate.cc",

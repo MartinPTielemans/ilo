@@ -137,8 +137,8 @@ send type nihongo
 send key space
 [ "$marked" = 8,3 ] || fail "the form's field didn't take the conversion: marked $marked"
 ../tools/window-screenshot.sh "$pid" "$out/space-form-ime.png" || fail "no window to capture"
+committed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return while composing named the Space"
 [ "$marked" = none ] || fail "return didn't commit the composition: marked $marked"
 send ime off
 # The form's Choose a Theme row opens the theme picker beside it, a child window with the
@@ -148,6 +148,7 @@ send click 100 299
 expect "^browser: theme picker for $second\$" "the form's Choose a Theme row didn't open the picker"
 expect '^browser: theme picker shown$' "the theme picker didn't show"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
+none_since '^browser: create space' "$committed" || fail "return while composing named the Space"
 at=$(grep '^browser: theme picker at' "$log" | tail -1 | cut -d' ' -f5-)
 [ "$(echo "$at" | awk '{ print $3, $4 }')" = "370 509" ] ||
   fail "the theme picker opened at $at, not 370 by 509"
@@ -277,9 +278,12 @@ expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back afte
 # But for the frames its hover card's picture draws. The tabs a switch hides are pictured once the
 # switches have been quiet for 0.4 s (shell/hover_cards.rs), and the core has a hidden page draw,
 # still hidden to it, until the copy answers (capture.cc), as Chrome does a background tab's
-# preview. That's one run of frames, 0.1 s at most, once the app asks for the tab's picture,
-# which may answer only after the tab is shown again, so a step that keeps it hidden past 0.4 s
-# sees one. Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
+# preview. That's one run of frames once the app asks for the tab's picture, which may answer
+# only after the tab is shown again, so a step that keeps it hidden past 0.4 s sees one. On runners
+# it has lasted 0.25 s in these steps and 0.41 s once in an earlier one (#2239), so frames over less
+# than 0.35 s pass: a page that went on running would run from its hiding through the 0.4 s before
+# any picture, over 0.38 s at least. A picture as slow as that one still fails here (#2239).
+# Any other frame while hidden fails. The hidden stretch starts at whichever comes first,
 # the core showing another tab or the page's "hidden", which can reach the log after the picture
 # (#1678), so a picture between the two counts and one from before them doesn't.
 ran_hidden() {
@@ -293,7 +297,8 @@ ran_hidden() {
     END { print was + 0, title }' "$log")
   case $seen in
   *" visible 0") ;;
-  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9]) ;;
+  "1 visible "*" in "[0-9] | "1 visible "*" in "[0-9][0-9] | "1 visible "*" in "[12][0-9][0-9]) ;;
+  "1 visible "*" in "3[0-4][0-9]) ;;
   *) fail "$1: $seen" ;;
   esac
 }
@@ -330,7 +335,7 @@ send dragto 110 $(row 0 | cut -d' ' -f2)
 send dragto 220 $(row 0 | cut -d' ' -f2)
 send dragto $page_point
 expect "^browser: drop targets for $a\$" "a row dragged over the page didn't bring the targets"
-sleep 1
+sleep 1 # the row held over the page past a Space edge's paging delay
 none_since '^browser: drag paged to space' || fail "a row held over the page paged to the next Space"
 send dragto $(row 0)
 expect '^browser: drop targets gone$' "the targets stayed with the row back over the sidebar"
@@ -411,6 +416,20 @@ expect '^browser: command select-space via wheel$' "a wheel's tick across the si
 expect "^browser: space $first in " "a wheel's tick across the sidebar didn't show the first Space"
 expect_tabs "$a" "$a" "after a wheel's tick showed the first Space"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
+# A mouse's side buttons over the sidebar show the next Space and the previous, as Arc's (#688).
+# Windows' driver can't press them yet (drive.cc).
+if windows; then
+  echo "skip: side buttons over the sidebar: the Windows driver can't press them yet."
+else
+  send sideclick $swipe_point forward
+  expect '^browser: command select-space via mouse$' "the forward side button over the sidebar didn't page"
+  expect "^browser: space $second in " "the forward side button over the sidebar didn't show the second Space"
+  send sideclick $swipe_point back
+  expect '^browser: command select-space via mouse$' "the back side button over the sidebar didn't page"
+  expect "^browser: space $first in " "the back side button over the sidebar didn't show the first Space"
+  expect_tabs "$a" "$a" "after the back side button showed the first Space"
+  expect "^browser: settled space $first\$" "the first Space's page didn't settle after the side buttons"
+fi
 # Past the first Space is the Library. Held partway it shows beside the page, and let go short of
 # halfway it goes back. A flick brings it out and one the other way puts it back, and so do a
 # wheel's ticks.
@@ -456,9 +475,9 @@ library_to "swipe $swipe_point -12 0 10" swipe hidden
 fi
 library_to "wheel $swipe_point 1" wheel shown
 # Its Spaces section is as wide as its two cards, 216 + 264 a Space as Arc's, unless that would
-# leave the page less than 56, as Arc 1.171's. The section's button is the third of five, with
-# Agents (#1080) last, 100 apart and centred 5 above the window's middle, 56 in.
-send click 56 $((${content#*x} / 2 - 5))
+# leave the page less than 56, as Arc 1.171's. The section's button is the third of six, with
+# Agents (#1080) and Boosts (#695) last, 100 apart and centred 5 above the window's middle, 56 in.
+send click 56 $((${content#*x} / 2 - 55))
 expect '^browser: library section spaces$' "a click on Spaces didn't show the Library's Spaces"
 spaces_wide=$((216 + 264 * 2))
 [ $spaces_wide -gt $((${content%x*} - 56)) ] && spaces_wide=$((${content%x*} - 56))
@@ -513,7 +532,8 @@ send dismiss
 # stays open (#1074), where the second gets its light and its dark appearance in turn, and then
 # automatic again. The capture comes while it's dark, the card taking the theme as it's made and
 # the window only the look of the Space it shows, the first. $1 is the appearance and $2 its
-# button's x in the picker's window, which holds the 13 wide arrow left of the card.
+# button's x in the picker's window, which holds the 13 wide arrow left of the card. With open as
+# $3 the picker stays open.
 appear() {
   send click $brush_x $card_y
   expect "^browser: theme picker for $second\$" "the second card's brush didn't open the theme picker"
@@ -525,6 +545,7 @@ appear() {
     ../tools/window-screenshot.sh "$pid" "$out/library-theme-picker.png" ||
       fail "no window to capture"
   fi
+  [ "${3:-}" != open ] || return 0
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't hide the brush's theme picker"
   none_since '^browser: library hidden$' || fail "escape in the card's theme picker closed the Library"
@@ -545,7 +566,11 @@ rename_card() {
   none_since '^browser: library hidden$' || fail "escape in a card's name closed the Library"
 }
 appear light 191.3
-appear dark 231.7
+appear dark 231.7 open
+# Escape, and the brush straight after it, as the picker fades out: it shows again and stays, and
+# takes a click, as a press while it fades leaves the showing that goes, not the next (#2237).
+post key escape
+appear light 191.3
 rename_card library-rename.png
 appear automatic 150.9
 # The second card's slot hangs the icon picker from itself over the Library, which stays open,
@@ -787,9 +812,10 @@ else
 fi
 third=$(grep '^browser: spaces' "$log" | tail -1 | cut -d' ' -f5)
 expect "^browser: space $third in " "the window didn't show the third Space"
+unnamed=$((step + 1))
 send key return
-none_since '^browser: create space' || fail "return with no name named the Space"
 show_space "key 1 ctrl" select-space ui "$first" "$a"
+none_since '^browser: create space' "$unnamed" || fail "return with no name named the Space"
 # The footer's + offers New Space…, New Folder…, New Split View and New Note, then what adds
 # from the desktop, 8 in from the sidebar's edge.
 post click 204 $((${content#*x} - 25))

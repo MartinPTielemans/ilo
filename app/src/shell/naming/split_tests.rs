@@ -14,6 +14,7 @@ use crate::{
     shell::{
         Command, Folders, Naming, Pending, ROW_HEIGHT, Shell, Slot, Split,
         commands::bind_keys,
+        fields_opened,
         recorder::Recorder,
         undo::{Prop, Value},
     },
@@ -161,7 +162,9 @@ fn an_empty_name_is_taken_off_only_by_return(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.rename_tab(4, cx));
     cx.run_until_parked();
     cx.simulate_keystrokes("backspace");
-    shell.update_in(cx, |shell, window, cx| shell.keyboard_left(window, cx));
+    shell.update_in(cx, |shell, window, cx| {
+        shell.keyboard_left(fields_opened(), window, cx)
+    });
     cx.run_until_parked();
     assert!(!naming(&shell, cx), "the field stayed");
     assert!(

@@ -178,6 +178,8 @@ pub struct TalkView {
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
+    /// What each picture's status line said when that was logged last.
+    said_logged: RefCell<HashMap<u64, SharedString>>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where Pages N was drawn when that was logged last.
@@ -303,6 +305,7 @@ impl Shell {
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
+                    said_logged: RefCell::default(),
                     stop_logged: Rc::default(),
                     pages_logged: Rc::default(),
                     stale: false,
@@ -424,7 +427,6 @@ impl Shell {
         let Some(agent) = self.talk_agent() else {
             return false;
         };
-        // check.sh reads this line.
         log!("browser: command dismiss-task via conversation");
         let finished = self
             .task_cards
@@ -1002,7 +1004,8 @@ impl TalkView {
     }
 
     /// Pages: its pages' pictures in a grid, up to three across as the area holds them, each over
-    /// its site, the agent's page ringed Signal while it works, with its step. A pick zooms the
+    /// its site, the agent's page ringed Signal while it works, with its step, and one the user
+    /// holds from the agent with why: "You're driving", or "Needs you · Sign in" (#1080). A pick zooms the
     /// page out of its picture. The pictures are taken when the agent acts (`set_conversation`).
     fn grid(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         self.drawn.borrow_mut().clear();
@@ -1139,6 +1142,24 @@ impl TalkView {
                     .items_center()
                     .children(sound)
                     .child(line(site.clone(), look.palette.text(TITLE)));
+                // A page the user holds says why under its site, in the title's ink, where the
+                // agent's page has its step: the bar over the page says the same.
+                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
+                let status = picture_status(held.as_ref(), step.clone().filter(|_| working));
+                if let Some(words) = &status {
+                    let mut said = self.said_logged.borrow_mut();
+                    if said.get(&tab) != Some(words) {
+                        // check.sh reads this line.
+                        log!("browser: task picture {tab} says {words}");
+                        said.insert(tab, words.clone());
+                    }
+                }
+                let status = status.map(|words| match held {
+                    Some(_) => {
+                        line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
+                    }
+                    None => line(words, rgb(SIGNAL).into()),
+                });
                 div()
                     .id(("conversation-page", tab))
                     .flex_none()
@@ -1149,11 +1170,7 @@ impl TalkView {
                     .cursor_pointer()
                     .child(picture)
                     .child(caption)
-                    .children(
-                        step.clone()
-                            .filter(|_| working)
-                            .map(|step| line(step, rgb(SIGNAL).into())),
-                    )
+                    .children(status)
                     .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
             })
             .collect();
@@ -2308,6 +2325,20 @@ impl Render for TalkView {
             )
             .children(self.ghost(&look))
             .into_any_element()
+    }
+}
+
+/// What a page's picture says under its site: why the user holds it from the agent, `held`, as
+/// "You're driving" when they took it over or "Needs you · Sign in" when the agent asked them,
+/// else the agent's step while it works there.
+pub(super) fn picture_status(
+    held: Option<&SharedString>,
+    step: Option<SharedString>,
+) -> Option<SharedString> {
+    match held {
+        Some(why) if why.is_empty() => Some("You're driving".into()),
+        Some(why) => Some(format!("Needs you · {why}").into()),
+        None => step,
     }
 }
 

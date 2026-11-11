@@ -84,6 +84,8 @@ typedef struct bc_tab_state {
   bool audible;
   // The tab's sound is muted, by bc_tab_set_muted or an extension.
   bool muted;
+  // The tab's volume, from 0 to 1, as bc_tab_set_volume left it: 1 until it's set.
+  double volume;
   // The emoji bc_tab_set_icon gave the tab to show in place of its page's favicon, UTF-8, or empty.
   const char* icon;
   // What's wrong with the page: a BC_PAGE_ value. The UI and agents read the same one.
@@ -104,12 +106,13 @@ typedef struct bc_tab_state {
   bool share_instead;
   // The page's media, as Chrome's media controls show it: whether it has a session the browser
   // can play, pause and skip (bc_tab_media), whether that's playing, its title and artist, each
-  // empty without one, whether it has a next track, and whether it can float in Picture in Picture
-  // while nothing of the page floats.
+  // empty without one, whether it has a previous and a next track, and whether it can float in
+  // Picture in Picture while nothing of the page floats.
   bool media;
   bool media_playing;
   const char* media_title;
   const char* media_artist;
+  bool media_previous;
   bool media_next;
   bool media_picture_in_picture;
   // The tab shows its page in Developer Mode (bc_tab_set_developer_mode): the user turned it on for
@@ -750,6 +753,10 @@ typedef struct bc_sync_device {
 #define BC_SYNC_TROUBLE_THROTTLED 2
 // Sync stopped after an error it doesn't recover from while the browser runs.
 #define BC_SYNC_TROUBLE_STOPPED 3
+// A newer version of the browser on another of the account's devices wrote the Spaces in a form
+// this one can't read whole, so this device stopped syncing them, rather than write over what it
+// can't read, until it's updated. The rest still syncs.
+#define BC_SYNC_TROUBLE_UPDATE 4
 
 // How sync is keeping up with the server, as Settings › Sync says while it shows.
 typedef struct bc_sync_activity {
@@ -870,6 +877,11 @@ typedef struct bc_host {
   // The press taken ended, at |x|,|y|. Return false to hand it back: the page gets the press and
   // its release, as a click, such as ⇧⌘'s on a link.
   bool (*tab_press_released)(void* context, bc_id tab, double x, double y);
+  // Zap (bc_tab_boost_zap) took a left press on the tab's page: |selector| is a CSS selector for
+  // what was under it, for the app to add to the site's Boost, or null for the body or nothing.
+  void (*tab_boost_zapped)(void* context, bc_id tab, const char* selector);
+  // Zap ended on the tab without the app asking: the page changed, or it isn't http(s).
+  void (*tab_boost_zap_ended)(void* context, bc_id tab);
   // No field of the app's opens for the key the keys typed after it are held for (bc_hold_keys):
   // the page kept it, neither the page nor the app used it, or it got no answer in a second. A host
   // that holds them itself gives them to the page now.
@@ -2201,10 +2213,16 @@ BC_EXPORT void bc_dismiss_archive_note(void);
 // Spaces.
 BC_EXPORT bool bc_haptics(void);
 BC_EXPORT void bc_set_haptics(bool haptics);
-// View › Appearance's choice, which pages' prefers-color-scheme follows: 0 the system's, 1 light,
-// 2 dark. The app gives it at launch and when it changes, except on the Mac, where pages follow
-// the app's NSAppearance instead.
+// View › Appearance's choice: 0 the system's, 1 light, 2 dark. The core keeps it with the Spaces,
+// and settings_synced says when it came from the account. Off the Mac, pages' prefers-color-scheme
+// follows it; on the Mac they follow the app's NSAppearance instead, which the app sets from it.
+BC_EXPORT int bc_appearance(void);
 BC_EXPORT void bc_set_appearance(int appearance);
+// Whether Show Space Header keeps a lone unnamed Space's name row, as the user chose: off by
+// default. The core keeps it with the Spaces, and settings_synced says when it came from the
+// account.
+BC_EXPORT bool bc_space_header(void);
+BC_EXPORT void bc_set_space_header(bool shown);
 // Whether the app asks before the user's Quit quits, as the user chose. The core keeps it with the
 // Spaces.
 BC_EXPORT bool bc_warn_before_quitting(void);
@@ -2266,6 +2284,13 @@ BC_EXPORT void bc_battery_for_testing(int percent, bool plugged);
 // The user's: agents get none, as it keeps trackers off the user's pages.
 BC_EXPORT bool bc_ad_blocking(void);
 BC_EXPORT void bc_set_ad_blocking(bool on);
+// Whether the ad blocker also hides cookie notices, with the cookie-notice lists uBlock Origin
+// comes with and leaves off (EasyList's and its own): on unless the user turned it off. It goes
+// with ad blocking, so it's off wherever that is, a site the user turned blocking off on too. A
+// change has uBlock Origin in each profile read its lists again, the first turn on fetching the
+// two from their sites. The core keeps it with the Spaces. The user's, as bc_set_ad_blocking is.
+BC_EXPORT bool bc_cookie_notices_hidden(void);
+BC_EXPORT void bc_set_cookie_notices_hidden(bool on);
 
 // Chromium's everyday settings, as Settings shows them, browser-wide: the core writes each into
 // every profile, and into each as it loads, as Chrome's own settings page would (#1636). Each that
@@ -2440,6 +2465,13 @@ BC_EXPORT void bc_tab_show_in(bc_id tab, void* view, bc_rect frame, double corne
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);
+
+// As bc_window_keep_preview, for |tab| previewing the archived tab |archived|, which leaves the
+// archive: |tab| goes to the top of the Today tabs of the Space that tab closed in, which the window
+// shows with it, as bc_window_restore_archived's does, while that's one of the user's Spaces in
+// |tab|'s profile. Else to the Space the window shows. Then space_changed, archive_changed and
+// window_selected.
+BC_EXPORT void bc_window_keep_archived_preview(bc_id window, bc_id tab, bc_id archived);
 
 // Shows the tab's page at |frame| in its window, in place of the page the window showed. It keeps
 // its distance from the window's edges as the window resizes, and takes the keyboard if that page
@@ -2671,6 +2703,11 @@ BC_EXPORT void bc_tab_capture_end(bc_id tab);
 // change. Then tab_permission_asked. The user's: agents get none, as an answer can give a site the
 // camera or where the user is.
 BC_EXPORT void bc_tab_answer_permission(bc_id tab, int answer);
+// Whether the tab's page's question, as tab_permission_asked last put it, asks only to show
+// notifications, with no click or key of the user's in the page behind it, as Chromium's request
+// says. The app holds that one quietly, a bell in the URL field, rather than as a card. False with
+// no question, or where the request doesn't say.
+BC_EXPORT bool bc_tab_permission_quiet(bc_id tab);
 
 // Answers the dialog tab_dialog put, if it's still asked: |accept| for its accept button, else its
 // cancel, with the text of its first field in |text| and of its password field in |password|,
@@ -2776,6 +2813,47 @@ BC_EXPORT void bc_ad_blocking_turn_on_site(bc_id profile, const char* site);
 // bc_tab_site_controls is watching one. The user's: agents get none, as
 // it's how the user sees their tabs.
 BC_EXPORT void bc_tab_set_developer_mode(bc_id tab, bool on);
+
+// Boosts (docs/ux-spec.md › Boosts). Gives |site|, a host without "www." such as
+// "news.ycombinator.com", |css| in |profile|, which its pages and frames there take as they
+// commit, and those open now at once, as a style sheet the page's scripts can't reach. Empty or
+// null |css| takes it away. A private window's pages take their profile's. The app keeps the
+// Boosts, as plain files, and hands each over at launch and as it changes. The user's: agents get
+// none, as a Boost changes what the user sees.
+BC_EXPORT void bc_profile_set_boost(bc_id profile, const char* site, const char* css);
+// Turns Zap on or off on the tab's page. While on, a left press on the page goes to Zap instead,
+// tab_boost_zapped says what was under it, and an outline follows the pointer over what a press
+// would take. A new page ends it, with tab_boost_zap_ended. The user's, as bc_profile_set_boost.
+BC_EXPORT void bc_tab_boost_zap(bc_id tab, bool on);
+
+// A Boost's script, Boosts/<site>.js (#2297). It runs in the site's pages, in a world of their own,
+// from their next load, and only while its bytes are the ones the user turned on in this profile on
+// this computer: any change to the file turns it off. These say what the core makes of the bytes.
+#define BC_BOOST_SCRIPT_ON 0
+#define BC_BOOST_SCRIPT_NEW 1
+#define BC_BOOST_SCRIPT_CHANGED 2
+#define BC_BOOST_SCRIPT_TOO_LARGE 3
+// The largest script that runs, which the app names: "Script over 256 KB, off".
+#define BC_BOOST_SCRIPT_MAX_BYTES 262144
+
+// Gives |site| in |profile| the script the app read from its file, |size| bytes, or takes it away
+// with null |script|. Returns its BC_BOOST_SCRIPT_ state: the site's pages run it from their next
+// load only while it's BC_BOOST_SCRIPT_ON. The user's, as bc_profile_set_boost.
+BC_EXPORT int bc_profile_set_boost_script(bc_id profile, const char* site, const char* script,
+                                          size_t size);
+// The BC_BOOST_SCRIPT_ state of |script| for |site|, without giving it to the site's pages. The
+// app's copy of the text turned on, for the turn-on dialog's diff, is that text only while this
+// says BC_BOOST_SCRIPT_ON.
+BC_EXPORT int bc_profile_boost_script_state(bc_id profile, const char* site, const char* script,
+                                            size_t size);
+// Turn On, in the browser's own turn-on dialog, which only the user's click on Turn On Script…
+// opens: records |script|, the |size| bytes the dialog showed, as the script turned on for |site|,
+// and gives it to the site's pages from their next load. False for one over
+// BC_BOOST_SCRIPT_MAX_BYTES. The user's alone: no agent, page, sync, link or import calls it.
+BC_EXPORT bool bc_profile_turn_on_boost_script(bc_id profile, const char* site, const char* script,
+                                               size_t size);
+// Turn Off and Delete…: forgets the script turned on for |site|, which is then new, and off.
+BC_EXPORT void bc_profile_forget_boost_script(bc_id profile, const char* site);
 
 // Takes the tab's playing video into Picture in Picture, or brings it back, as
 // bc_site_controls' picture_in_picture says it can. Then tab_site_controls.
@@ -2930,6 +3008,13 @@ BC_EXPORT void bc_tab_set_icon(bc_id tab, const char* icon);
 // doesn't. Then tab_state_changed.
 BC_EXPORT void bc_tab_set_muted(bc_id tab, bool muted);
 
+// Sets the tab's volume, from 0 to 1, as Arc's Adjust Tab Volume: the sound of the page's audio and
+// video elements, those its media session plays, is scaled by it, under the page's own volume and
+// the tab's mute. Web Audio, calls and Safari's engine's pages play as they would. It stays with
+// the tab whatever page it's at; a quit, a duplicate and ⇧⌘T don't keep it. Then
+// tab_state_changed. Agents have no tool for it: an agent's tab is muted, and plays in the page.
+BC_EXPORT void bc_tab_set_volume(bc_id tab, double volume);
+
 // While a page shares a tab and the tab's state has share_instead, has the page share this tab's
 // page in its place, as Chrome's Share this tab instead does. The user's: agents get none, as it
 // would show a page to whoever the call reaches. Then tab_state_changed, for both tabs.
@@ -2940,10 +3025,11 @@ BC_EXPORT void bc_tab_share_instead(bc_id tab);
 #define BC_MEDIA_PAUSE 1
 #define BC_MEDIA_NEXT 2
 #define BC_MEDIA_PICTURE_IN_PICTURE 3
+#define BC_MEDIA_PREVIOUS 4
 
-// Plays, pauses, skips or floats the page's media in Picture in Picture, one of BC_MEDIA_, while
-// its state has media, and media_picture_in_picture for the last. Then tab_state_changed. The
-// user's: agents act in the page instead.
+// Plays, pauses, skips on or back or floats the page's media in Picture in Picture, one of
+// BC_MEDIA_, while its state has media, and media_picture_in_picture or media_previous for those.
+// Then tab_state_changed. The user's: agents act in the page instead.
 BC_EXPORT void bc_tab_media(bc_id tab, int action);
 
 // Closes the Today tabs below the tab, each as bc_tab_close does, bottom up. A window showing one
@@ -3007,6 +3093,14 @@ BC_EXPORT void bc_trace_stop(void);
 // the ✕ on its row does: a pinned split stays a split. Then tab_state_changed, and
 // window_selected.
 BC_EXPORT void bc_tab_close(bc_id tab, bool split);
+
+// Whether the tab's page may close it with window.close(), as a sign-in's "you can close this tab"
+// page tries to once it's done. Chromium lets a page close only a tab its own script opened, or one
+// with a single history entry. The UI sets it for a Little ilo window's tab another app's link
+// opened, and clears it as the tab moves to the user's Space; the core clears it on any move to a
+// Space too. A close the page asks for then closes the tab as the user's would, and tab_closed
+// follows. The user's alone: an agent's tab never has it.
+BC_EXPORT void bc_tab_set_page_may_close(bc_id tab, bool may);
 
 // Windows. Every window shows the same Spaces, and a tab's page is live in one window at a time:
 // the one that showed it last. The reads are for the UI and agents alike.

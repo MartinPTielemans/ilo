@@ -1224,7 +1224,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         format!(
             "Clicked combobox “Size”.\n\n{head}{since}New:\n\
              - listbox \"Size\" [e6]\n  - option \"S\" [e7]\n  - option \"M\" [e8]\n\n\
-             Changed:\n- combobox \"Size\" [e4] (expanded)"
+             Changed:\n- combobox \"Size\" [e4] (expanded): now expanded"
         )
     );
 
@@ -1241,7 +1241,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
         cx,
     );
     assert!(
-        scrolled.contains("Changed:\n- combobox \"Size\" [e4]\n\nGone:\n- listbox"),
+        scrolled.contains("Changed:\n- combobox \"Size\" [e4]: now collapsed\n\nGone:\n- listbox"),
         "{scrolled}"
     );
     let again = act(
@@ -1686,6 +1686,68 @@ fn an_order_asks_the_user_first(cx: &mut TestAppContext) {
     let grants = later.read_with(cx, |agents, _| agents.grants.clone());
     assert_eq!(grants["claude-code"]["example.com"], true);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A question the user leaves for 5 minutes is refused this once, as the × refuses it: the agent's
+/// call answers, the card clears, and the log says why. Nothing is kept for the site.
+#[gpui::test]
+fn a_question_left_unanswered_is_refused_after_5_minutes(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let pages = browser.pages.borrow().len();
+    let order = json!({ "tab": 20, "ref": "e3" });
+    let answer = call(&agents, "claude-code", "click", order, cx);
+    assert!(browser.asked.borrow().is_some(), "the order didn't ask");
+
+    cx.executor()
+        .advance_clock(ASK_WAIT - Duration::from_secs(1));
+    assert!(answer.try_recv().is_err(), "it gave up before 5 minutes");
+    assert!(browser.asked.borrow().is_some());
+    cx.executor().advance_clock(Duration::from_secs(1));
+    let refused = answer.recv().unwrap();
+    assert!(refused.error);
+    assert!(
+        refused
+            .text
+            .starts_with("The user didn't answer in 5 minutes")
+    );
+    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(browser.pages.borrow().len(), pages, "it clicked unanswered");
+    assert_eq!(log(&agents, "claude-code", cx)[0].2, NO_ANSWER);
+    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
+    assert!(grants.is_empty());
+}
+
+/// A handoff not handed back in 15 minutes answers the agent's call, so it isn't left waiting.
+/// The tab stays the user's, and Hand Back still gives it back.
+#[gpui::test]
+fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+
+    cx.executor()
+        .advance_clock(HANDOFF_WAIT - Duration::from_secs(1));
+    assert!(handed.try_recv().is_err(), "it gave up before 15 minutes");
+    cx.executor().advance_clock(Duration::from_secs(1));
+    let answer = handed.recv().unwrap();
+    assert!(answer.error);
+    assert!(
+        answer
+            .text
+            .starts_with("The user hasn't handed tab 20 back in 15 minutes.")
+    );
+    assert_eq!(*browser.asked.borrow(), None);
+    assert!(browser.held.borrow().contains(&20), "the tab left the user");
+    let status = agents.read_with(cx, |agents, _| agents.status());
+    assert_eq!(status[0].held, [(20, "Sign in to example.com".into())]);
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "not handed back");
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    assert!(browser.held.borrow().is_empty());
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
 /// What the user answered for good is listed, by site, and once revoked, one site or all, what
@@ -5287,18 +5349,22 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
-    /// At launch the tasks' Spaces a run before left go, and an outside agent's, which a run
-    /// before #1080 showed as a Space of the user's, gives its tabs to the user's Space first.
+    /// At launch the Spaces a crash left, of tasks and of an outside agent, which a run before
+    /// #1080 showed as a Space of the user's, give their tabs to the user's Space, then go (#1080).
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         browser.task_spaces.borrow_mut().extend([100, 101]);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "https://flights.example/", "Flights"));
         agents.update(cx, |agents, cx| agents.end_old_tasks(cx));
         assert_eq!(*browser.deleted.borrow(), vec![100, 101, 2]);
         let spaces: Vec<_> = (browser.tabs.borrow().iter())
             .map(|each| (each.0, each.1))
             .collect();
-        assert_eq!(spaces, [(20, 1), (10, 1)]);
+        assert_eq!(spaces, [(20, 1), (30, 1), (10, 1)]);
     }
 
     #[gpui::test]
@@ -5656,6 +5722,22 @@ mod sessions {
             ("Claude Code", 1, 0, 1)
         );
         assert!(past.ended >= past.started);
+        // With its activity log, for its page there: what it did and where, and the order it was
+        // refused, under its client's answers for good, which its page's Revoke takes (#1080).
+        assert_eq!(past.answers, "claude-code");
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert!(actions.contains(&"snapshot"), "{actions:?}");
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && step.refused.is_empty()),
+            "{:?}",
+            past.steps
+        );
+        assert!(
+            (past.steps.iter()).any(|step| step.action == "click" && !step.refused.is_empty()),
+            "the refused order isn't in its log: {:?}",
+            past.steps
+        );
+        assert!((past.steps.iter()).all(|step| step.at >= past.started && step.at <= past.ended));
         assert!(
             agents
                 .update(cx, |agents, cx| agents.take_ended(cx))

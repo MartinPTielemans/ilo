@@ -121,6 +121,30 @@ gone() {
   wait "$pid" 2>/dev/null && ended=0 || ended=$?
   fail "the app exited with status $ended"
 }
+# A prod build or a released package sends its daily count to ilo's hosted server 30 s in, which
+# counted each check's launch on a fresh profile as a new user (#2303). Each such launch starts on
+# the profile $1 with the count off, as Settings › Privacy leaves it, which every release since
+# 0.1.10 honours, so its log says "daily count not sent: off" and nothing leaves. count.sh alone
+# sends counts, to a server of its own.
+count_off() {
+  mkdir -p "$1"
+  : > "$1/no-daily-count"
+}
+# The logs of launches that named a count server of the run's own, as count.sh's do.
+own_count_logs=
+# Fails the check if a launch's log says a count was sent and it named no server of the run's own:
+# that count reached the hosted server. check.sh asks after each run.
+counted_nowhere() {
+  for counted in $(grep -rlx --include='*.log' 'browser: daily count sent' "$out" || true); do
+    case " $own_count_logs " in
+      *" $counted "*) ;;
+      *)
+        log=$counted
+        fail "$counted says a daily count was sent with no server of the run's own: the launch needs count_off"
+        ;;
+    esac
+  done
+}
 # Whether the prebuilt engine was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so.
 engine_has() {
@@ -136,14 +160,16 @@ await() {
   done
   return 1
 }
-# Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the app
-# keeps for its next launch (settings.rs), which a run that picks Light or Dark and fails before
-# Automatic leaves for the runs after (#1791). The app reads it only as it launches and writes it
-# only when the user picks, so this goes before a launch. On every OS, and it fails if it stays.
+# Puts View › Appearance back to Automatic, the profile's first, by taking away the choice the core
+# keeps with the Spaces, and the file an older app kept it in, which a run that picks Light or Dark
+# and fails before Automatic leaves for the runs after (#1791). The core reads it only as it
+# launches, so this goes before a launch. On every OS, and it fails if it stays.
 forget_appearance() {
   rm -f "$profile_dir/Appearance"
-  [ ! -e "$profile_dir/Appearance" ] ||
-    fail "the profile kept its saved appearance, $(cat "$profile_dir/Appearance")"
+  [ -e "$saved" ] || return 0
+  sed 's/"appearance":[0-9]*/"appearance":0/' "$saved" > "$saved.forget" && mv "$saved.forget" "$saved"
+  ! grep -q '"appearance":[12]' "$saved" ||
+    fail "the profile kept its saved appearance, $(grep -o '"appearance":[0-9]*' "$saved")"
 }
 # The app logs "browser: loaded" when the main frame has loaded.
 await_load() {
@@ -448,9 +474,15 @@ new_window_bar() {
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
 }
-# Nothing logged since the last command was sent matches $1.
+# What the app logged since the last command was sent, or since command $1.
+since() {
+  sed -n "/^browser: drive ${1:-$step}: /,\$p" "$log"
+}
+# Nothing logged since the last command was sent, or since command $2, matches $1. Straight after
+# a send of input it can pass before the app has got to it: the app handles input in the order it
+# comes, so a later step's expect is what says it has.
 none_since() {
-  ! sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q "$1"
+  ! since "${2:-}" | grep -q "$1"
 }
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
@@ -548,7 +580,9 @@ recorded() {
   [ -n "$recording" ] || return 0
   wait "$recorder" && return 0
   unrecorded && return 0
-  said=$(tail -1 "${recording%.mp4}-record.log")
+  # A stream that ended by itself says why when it does, before the failure it leads to (#2280).
+  said=$(grep '^the stream ended by itself' "${recording%.mp4}-record.log" | tail -1)
+  [ -n "$said" ] || said=$(tail -1 "${recording%.mp4}-record.log")
   case "$said" in
   *Code=-5814*) fail "the window's recording ended early, as a still taken while it records ends it: $said" ;;
   esac
@@ -615,18 +649,24 @@ row() {
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
+# cpu <not> leaves out the processes whose command line holds <not>.
 cpu() {
   if windows; then
+    local not=
+    [ -z "${1:-}" ] || not=" -and \$_.CommandLine -notlike '*$1*'"
     powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
-      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' } |
+      -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*'$not } |
       ForEach-Object -Begin { \$n = 0; \$t = 0 } -Process { \$n++; \$t += \$_.UserModeTime + \$_.KernelModeTime } \
       -End { '{0:F2} {1}' -f (\$t / 1e7), \$n }" | tr -d '\r'
   elif [ -d /proc ]; then
     for p in $(pgrep -f -- "$procs"); do
+      # Chromium writes its processes' command lines over with spaces, others keep their NULs.
+      [ -z "${1:-}" ] || ! tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null | grep -qF -e "$1" || continue
       sed 's/^.*) //' "/proc/$p/stat" 2> /dev/null
     done | awk -v hz="$(getconf CLK_TCK)" '{ n++; t += $12 + $13 } END { printf "%.2f %d\n", t / hz, n }'
   else
-    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' | awk '{
+    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' |
+      awk -v not="${1:-}" 'not == "" || !index($0, not)' | awk '{
       n++; s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]; t += s }
       END { printf "%.2f %d\n", t, n }'
   fi
@@ -891,4 +931,48 @@ dark() {
 brighter() {
   set -- $1 $2
   [ "$1" -ge $(($4 + 8)) ] && [ "$2" -ge $(($5 + 8)) ] && [ "$3" -ge $(($6 + 8)) ]
+}
+# Under Wayland: in $other_app_token, an activation token for a click in another app's window,
+# check/drag's, as an app hands on the one it got for the user's click in it with the link they
+# clicked, or a desktop with a click on a notification. sway brings an open window forward for it,
+# where before sway 1.10 one from its own exec, as a launch gets, only marks the window urgent. The
+# window, the click's, holds the keyboard until other_app_closes.
+other_app_click() {
+  if [ -z "${other_app:-}" ]; then
+    cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
+      fail "check/drag didn't build"
+    rm -f "$out/other-app-in"
+    : > "$out/other-app.log"
+    mkfifo "$out/other-app-in"
+    target/release/drag 1280x800 window < "$out/other-app-in" > "$out/other-app.log" 2>&1 &
+    other_app=$!
+    exec 4> "$out/other-app-in"
+    other_app_says 0 '^drag: ready$' "check/drag's window didn't show"
+    swaymsg '[app_id=ilo-drag] move absolute position 1220 740' > /dev/null
+  fi
+  # In front again, as a window that came forward since is over it.
+  swaymsg '[app_id=ilo-drag] focus' > /dev/null
+  set -- "$(wc -l < "$out/other-app.log")"
+  printf '%s\n' 'move 1244 764' press release >&4
+  other_app_says "$1" '^drag: pressed$' "the click in check/drag's window didn't reach it"
+  set -- "$(wc -l < "$out/other-app.log")"
+  echo token >&4
+  other_app_says "$1" '^drag: token ' "check/drag got no activation token for its click"
+  other_app_token=$(tail -n "+$(($1 + 1))" "$out/other-app.log" | sed -n 's/^drag: token //p')
+}
+# Waits for check/drag's line $2 after its first $1, failing with $3.
+other_app_says() {
+  for _ in $(seq 100); do
+    tail -n "+$(($1 + 1))" "$out/other-app.log" | grep -q "$2" && return 0
+    sleep 0.05
+  done
+  fail "$3: $(tr '\n' ' ' < "$out/other-app.log")"
+}
+# Closes check/drag's window other_app_click opened.
+other_app_closes() {
+  [ -n "${other_app:-}" ] || return 0
+  exec 4>&-
+  wait "$other_app" || true
+  other_app=
+  other_app_token=
 }

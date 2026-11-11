@@ -603,6 +603,7 @@ impl account::Host for CoreAccount {
             bc::BC_SYNC_TROUBLE_UNREACHABLE => Some(account::Trouble::Unreachable),
             bc::BC_SYNC_TROUBLE_THROTTLED => Some(account::Trouble::Throttled),
             bc::BC_SYNC_TROUBLE_STOPPED => Some(account::Trouble::Stopped),
+            bc::BC_SYNC_TROUBLE_UPDATE => Some(account::Trouble::Update),
             _ => None,
         };
         // check.sh waits for this line.
@@ -1484,13 +1485,15 @@ impl Settings {
     /// ⌘Z: on Links, the last rule its trash took comes back. The other sections' changes show
     /// as they're made and are made back the same way.
     fn undo(&mut self, cx: &mut Context<Self>) {
-        if let Some(links) = self
-            .links
-            .as_ref()
-            .filter(|_| self.section == Section::Links)
-        {
-            links.update(cx, |links, cx| links.undo(cx));
-        }
+        let links = (self.links.as_ref()).filter(|_| self.section == Section::Links);
+        let undone = links.is_some_and(|links| links.update(cx, |links, cx| links.undo(cx)));
+        let what = if undone {
+            "brought a rule back"
+        } else {
+            "had nothing"
+        };
+        // check.sh reads this line.
+        log!("browser: settings undo {what}");
     }
 
     fn forget_undo(&mut self, cx: &mut Context<Self>) {
@@ -1746,7 +1749,6 @@ impl Settings {
         };
         let make = default.offers().then(|| {
             let make = cx.listener(|settings: &mut Self, _, _, cx| {
-                // check.sh waits for this line.
                 log!("browser: make default browser");
                 settings.default_browser.read(cx).make_default();
             });
@@ -2268,19 +2270,40 @@ impl Settings {
             Some("A playing video or call floats over your work when you leave its tab.".into()),
             vec![mini_player],
         );
+        let note_on = new_note_on(cx);
+        let note_switch = self.toggle("new note", "New Note", note_on, set_new_note, accent, cx);
         let note_keys = shell::user_keys(cx).label(Command::NewNote);
-        let note_line: SharedString = match note_keys {
-            Some(keys) => format!("{keys} opens a new document in the service you pick.").into(),
-            None => "New Note opens a new document in the service you pick.".into(),
+        // Off, the line is the receipt, as Little ilo's is.
+        let note_line: SharedString = match (note_on, note_keys) {
+            (true, Some(keys)) => {
+                format!("{keys} opens a new document in the service you pick.").into()
+            }
+            (true, None) => "New Note opens a new document in the service you pick.".into(),
+            (false, Some(keys)) => format!(
+                "Off: {keys} does nothing, and the + menu and the command bar have no New Note. \
+                 The documents it opened stay."
+            )
+            .into(),
+            (false, None) => "Off: the + menu and the command bar have no New Note. The \
+                              documents it opened stay."
+                .into(),
         };
-        // One profile's service on the feature's row, else each profile's under it.
+        // One profile's service on the feature's row, else each profile's under it, and its
+        // services only while it's on.
         let note = match profiles {
+            _ if !note_on => vec![feature(
+                look,
+                "icons/pencil.svg",
+                "New Note",
+                Some(note_line),
+                vec![note_switch],
+            )],
             [profile] => vec![feature(
                 look,
                 "icons/pencil.svg",
                 "New Note",
                 Some(note_line),
-                vec![self.notes_popup(profile.id, cx)],
+                vec![self.notes_popup(profile.id, cx), note_switch],
             )],
             _ => {
                 let services = profiles.iter().map(|profile| {
@@ -2296,15 +2319,39 @@ impl Settings {
                     "icons/pencil.svg",
                     "New Note",
                     Some(note_line),
-                    Vec::new(),
+                    vec![note_switch],
                 );
                 [head].into_iter().chain(services).collect()
             }
         };
+        let boosts_on = !crate::boosts_host::all_off();
+        let boosts = self.toggle(
+            "boosts",
+            "Boosts",
+            boosts_on,
+            crate::boosts_host::set_all_on,
+            accent,
+            cx,
+        );
+        // Off, the line is the receipt, as Little ilo's is.
+        let boosts_line = match boosts_on {
+            true => {
+                "Your CSS and Zap on the sites you boost. New Boost in the command bar makes one."
+            }
+            false => "Off: no site shows its Boost. They stay in each profile's Boosts folder.",
+        };
+        let boosts = feature(
+            look,
+            "icons/paintbrush.svg",
+            "Boosts",
+            Some(boosts_line.into()),
+            vec![boosts],
+        );
         let mut blocks = vec![
             Block::Rows(little),
             Block::Rows(vec![peek]),
             Block::Rows(vec![mini_player]),
+            Block::Rows(vec![boosts]),
             Block::Rows(note),
         ];
         if self.widevine.read(cx).shown() {
@@ -2342,7 +2389,8 @@ impl Settings {
             .into_any_element()
     }
 
-    /// Privacy: ad blocking and the sites it's off on, whether calls are only relayed, each
+    /// Privacy: ad blocking and the sites it's off on, whether copied links leave out trackers,
+    /// whether calls are only relayed, each
     /// profile's browsing data, crash reports where the build names a collector, and the daily
     /// usage count where it names a server.
     fn privacy(
@@ -2368,6 +2416,24 @@ impl Settings {
             Some("uBlock Origin, built in. A site's Site Controls turn it off there.".into()),
             vec![ad_blocking],
         );
+        let clean_links = self.toggle(
+            "clean links",
+            "Copy links without tracking",
+            clean_links_on(cx),
+            set_clean_links,
+            accent,
+            cx,
+        );
+        let line = concat!(
+            "Copied and shared links leave out what only tells a site where a click came from. ",
+            "A video's time stays. The URL field's own text copies whole."
+        );
+        let clean_links = setting(
+            look,
+            "Copy links without tracking",
+            Some(line.into()),
+            vec![clean_links],
+        );
         let prompts = unsafe { bc::bc_notification_prompts() };
         let prompts_switch = self.toggle(
             "notification prompts",
@@ -2387,7 +2453,11 @@ impl Settings {
             Some(prompts_line.into()),
             vec![prompts_switch],
         );
-        let mut blocks = vec![Block::Rows(vec![ad_blocking]), Block::Rows(vec![prompts])];
+        let mut blocks = vec![
+            Block::Rows(vec![ad_blocking]),
+            Block::Rows(vec![clean_links]),
+            Block::Rows(vec![prompts]),
+        ];
         if !off_sites.is_empty() {
             blocks.push(Block::Heading("Ads are shown on".into()));
             blocks.push(Block::Group(self.off_sites(off_sites, cx)));
@@ -2725,7 +2795,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some((title, seconds)) = picked.map(|index| LITTLE_ARCHIVE_AFTER[index]) {
-                // check.sh waits for this line.
                 log!("browser: little windows archive after {title}");
                 unsafe { bc::bc_set_little_archive_after(seconds) };
             }
@@ -3006,7 +3075,6 @@ impl Settings {
         let settings = cx.weak_entity();
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&(name, title, _)) = picked.and_then(|index| notes::SERVICES.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: notes service {profile} {title}");
                 let name = CString::new(name).unwrap_or_default();
                 unsafe { bc::bc_profile_set_notes_service(profile, name.as_ptr()) };
@@ -3689,7 +3757,6 @@ impl Settings {
             let copy = self
                 .button(("copy-task-command", cli as usize), "Copy")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: task command copied {command}");
                     cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
                 });
@@ -3750,7 +3817,6 @@ impl Settings {
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
             if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
-                // check.sh waits for this line.
                 log!("browser: tasks run on {}", cli.id());
                 agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
             }
@@ -3912,7 +3978,6 @@ impl Settings {
         let copy = setup.map(|setup| {
             self.button(("copy-agent-setup", index), "Copy Setup")
                 .on_click(move |_, _, cx| {
-                    // check.sh reads this line.
                     log!("browser: agent setup copied");
                     cx.write_to_clipboard(ClipboardItem::new_string(setup.clone()));
                 })
@@ -4004,17 +4069,16 @@ impl Settings {
     /// command, with the favorites numbered and ⌘9 the last tab.
     fn shortcuts(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
         let mut blocks = Vec::new();
-        // Little ilo's commands have no row while it's off.
+        // Little ilo's commands and New Note's have no row while it's off.
         let little = unsafe { bc::bc_little_windows() };
+        let note = new_note_on(cx);
         for (section, rows) in SHORTCUTS {
             let rows: Vec<Row> = rows
                 .iter()
-                .filter(|(_, keys)| {
-                    little
-                        || !matches!(
-                            keys,
-                            Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow)
-                        )
+                .filter(|(_, keys)| match keys {
+                    Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow) => little,
+                    Keys::Of(Command::NewNote | Command::NewNoteSplit) => note,
+                    _ => true,
                 })
                 .map(|(name, keys)| {
                     let control = match (keys, keys.fixed()) {
@@ -4274,7 +4338,7 @@ impl Settings {
         // The Mac's and Windows' own updater's: a Flatpak's updates are the system's, and the
         // Store's are the Store's.
         let checks = (cfg!(not(target_os = "linux")) && updates::own_updater(cx)).then(|| {
-            let on = automatic_update_checks();
+            let on = automatic_update_checks(cx);
             let switch = self.toggle(
                 "automatic update checks",
                 "Check for updates automatically",
@@ -4377,7 +4441,6 @@ impl Settings {
         let plain = !keystroke.modifiers.modified();
         let keys = match keystroke.key.as_str() {
             "escape" if plain => {
-                // check.sh waits for this line.
                 log!("browser: shortcut recording stopped");
                 self.recording = None;
                 self.refused = None;
@@ -4395,7 +4458,6 @@ impl Settings {
             }
             Err(refused) => {
                 let why = refusal(refused);
-                // check.sh waits for this line.
                 log!("browser: shortcut refused {why}");
                 self.refused = Some((command, why.into()));
             }
@@ -4437,6 +4499,60 @@ fn set_little_in_menu_bar(on: bool, _: &mut App) {
 
 fn set_little_windows(on: bool, cx: &mut App) {
     crate::set_little_windows(on, cx);
+}
+
+/// Where New Note's switch is kept: there while it's off. The app's, not a profile's, as its keys
+/// and the command bar are.
+fn new_note_off_path() -> String {
+    format!("{}/new-note-off", crate::profile_dir())
+}
+
+/// Reads New Note's switch, before the windows open and read it.
+pub fn read_new_note(cx: &mut App) {
+    let on = !std::path::Path::new(&new_note_off_path()).exists();
+    cx.set_global(shell::NewNoteOn(on));
+}
+
+fn new_note_on(cx: &App) -> bool {
+    cx.try_global::<shell::NewNoteOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once; the tabs New Note opened stay.
+fn set_new_note(on: bool, cx: &mut App) {
+    let path = new_note_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::NewNoteOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_new_note(on, cx));
+}
+
+/// Where Copy links without tracking is kept: there while it's off (#2351). The app's, not a
+/// profile's, as its copy paths are.
+fn clean_links_off_path() -> String {
+    format!("{}/copy-links-as-is", crate::profile_dir())
+}
+
+/// Reads Copy links without tracking, before the windows open and read it.
+pub fn read_clean_links(cx: &mut App) {
+    let on = !std::path::Path::new(&clean_links_off_path()).exists();
+    cx.set_global(shell::CleanLinksOn(on));
+}
+
+fn clean_links_on(cx: &App) -> bool {
+    cx.try_global::<shell::CleanLinksOn>().is_none_or(|on| on.0)
+}
+
+/// Every window follows at once.
+fn set_clean_links(on: bool, cx: &mut App) {
+    let path = clean_links_off_path();
+    _ = match on {
+        true => std::fs::remove_file(path),
+        false => std::fs::write(path, ""),
+    };
+    cx.set_global(shell::CleanLinksOn(on));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| shell.set_clean_links(on, cx));
 }
 
 fn set_unload_idle_tabs(unload: bool, _: &mut App) {
@@ -4533,19 +4649,21 @@ fn set_dock_icon_color(colored: bool, cx: &mut App) {
     browser::dock_dot::set_plain(!colored, cx);
 }
 
-/// About's "Check for updates automatically", which only the Mac and Windows show.
-fn automatic_update_checks() -> bool {
+/// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
+/// updates' own state first, so it shows what the update banner's Update Automatically set.
+fn automatic_update_checks(cx: &App) -> bool {
+    if let Some(on) = updates::automatic(cx) {
+        return on;
+    }
     #[cfg(not(target_os = "linux"))]
     return crate::updates_host::automatic_checks();
     #[cfg(target_os = "linux")]
     true
 }
 
-fn set_automatic_update_checks(on: bool, _: &mut App) {
-    #[cfg(not(target_os = "linux"))]
-    crate::updates_host::set_automatic_checks(on);
-    #[cfg(target_os = "linux")]
-    let _ = on;
+// Through the updates' own state, as the update banner reads it.
+fn set_automatic_update_checks(on: bool, cx: &mut App) {
+    updates::set_automatic(on, cx);
 }
 
 fn set_whats_new(shown: bool, _: &mut App) {
@@ -4586,7 +4704,6 @@ fn restore_earlier_sidebar(cx: &mut App) {
     let Some(shell) = front_shell() else {
         return;
     };
-    // check.sh waits for this line.
     log!("browser: settings restore sidebar");
     hide(cx);
     shell.update(cx, |shell, cx| {
@@ -4821,8 +4938,8 @@ fn shown(name: &str) -> String {
     name.replace("⌘1–⌘8", &tabs)
 }
 
-/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as the
-/// core keeps no settings of the app's own.
+/// Where the user's keys are kept: in the profile directory, beside Chromium's profiles, as they
+/// stay with the computer (docs/ux-spec.md, Sync).
 fn shortcuts_path() -> String {
     format!("{}/Shortcuts", crate::profile_dir())
 }
@@ -4833,40 +4950,35 @@ pub fn read_shortcuts(cx: &mut App) {
     cx.set_global(UserKeys::parse(&text));
 }
 
-/// Where View › Appearance's choice is kept, beside the keys.
+/// Where View › Appearance's choice was kept before the core kept it, beside the keys.
 fn appearance_path() -> String {
     format!("{}/Appearance", crate::profile_dir())
 }
 
-/// Reads View › Appearance's choice, automatic if there's none.
-pub fn read_appearance(cx: &mut App) {
-    let text = std::fs::read_to_string(appearance_path()).unwrap_or_default();
-    cx.set_global(shell::AppAppearance(
-        Appearance::named(text.trim()).unwrap_or_default(),
-    ));
-}
-
-/// Where Show Space Header's choice is kept, beside View › Appearance's.
+/// Where Show Space Header's choice was kept before the core kept it.
 fn lone_header_path() -> String {
     format!("{}/Space Header", crate::profile_dir())
 }
 
-/// Reads whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at
-/// first. check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
-pub fn read_lone_header(cx: &mut App) {
-    let text = std::fs::read_to_string(lone_header_path())
-        .or_else(|_| std::env::var("BROWSER_SPACE_HEADER"))
-        .unwrap_or_default();
-    cx.set_global(shell::LoneSpaceHeader(text.trim() == "shown"));
+/// What an older version kept at `path`, which the core keeps from now on, so it goes.
+fn take_old(path: String) -> Option<String> {
+    let text = std::fs::read_to_string(&path).ok()?;
+    if let Err(error) = std::fs::remove_file(&path) {
+        log!("couldn't remove {path}: {error}");
+    }
+    Some(text)
 }
 
-pub fn save_lone_header(kept: bool) {
-    if let Err(error) = std::fs::write(lone_header_path(), if kept { "shown" } else { "hidden" }) {
-        log!("couldn't save the space header: {error}");
+/// View › Appearance's choice as the core keeps it.
+fn core_appearance() -> Appearance {
+    match unsafe { bc::bc_appearance() } {
+        1 => Appearance::Light,
+        2 => Appearance::Dark,
+        _ => Appearance::Automatic,
     }
 }
 
-/// Where Portrait Mode's background is kept, beside View › Appearance's choice.
+/// Where Portrait Mode's background is kept, in the profile.
 fn portrait_background_path() -> String {
     format!("{}/Portrait Background", crate::profile_dir())
 }
@@ -4885,10 +4997,43 @@ pub fn save_portrait_background(background: crate::capture::portrait::Background
     }
 }
 
-pub fn save_appearance(appearance: Appearance) {
-    if let Err(error) = std::fs::write(appearance_path(), appearance.name()) {
-        log!("couldn't save the appearance: {error}");
+/// Whether Show Space Header keeps a lone unnamed Space's name row, which it doesn't at first.
+/// check.sh's runs keep it with BROWSER_SPACE_HEADER, as they place their clicks under it.
+fn lone_header_kept() -> bool {
+    let kept = unsafe { bc::bc_space_header() };
+    kept || std::env::var("BROWSER_SPACE_HEADER").is_ok_and(|env| env.trim() == "shown")
+}
+
+/// Reads View › Appearance's choice and Show Space Header's, which the core keeps, as they follow
+/// the account. Those an older version kept in files go to the core first.
+pub fn read_look(cx: &mut App) {
+    let old = take_old(appearance_path()).and_then(|text| Appearance::named(text.trim()));
+    if let Some(appearance) = old {
+        unsafe { bc::bc_set_appearance(crate::menu_bar::appearance_code(appearance)) };
     }
+    if let Some(text) = take_old(lone_header_path()) {
+        unsafe { bc::bc_set_space_header(text.trim() == "shown") };
+    }
+    cx.set_global(shell::AppAppearance(core_appearance()));
+    cx.set_global(shell::LoneSpaceHeader(lone_header_kept()));
+}
+
+/// View › Appearance's choice or Show Space Header's may have come from the account
+/// (settings_synced): every window and the host take them.
+pub fn look_followed(cx: &mut App) {
+    let appearance = core_appearance();
+    if appearance != shell::app_appearance(cx) {
+        // check.sh waits for this line.
+        log!("browser: appearance followed {}", appearance.name());
+        crate::menu_bar::give_host_appearance(appearance);
+    }
+    let header = lone_header_kept();
+    cx.set_global(shell::AppAppearance(appearance));
+    cx.set_global(shell::LoneSpaceHeader(header));
+    crate::browser_windows::update_shells_in(cx, |shell, cx| {
+        shell.look_followed(appearance, header, cx)
+    });
+    refresh(cx);
 }
 
 /// Include Favorites in ⌘1–⌘8, kept with the user's keys.
@@ -5283,7 +5428,6 @@ impl Settings {
                     .and_then(|import| import.read(cx).focus())
             })
             .flatten();
-        // check.sh reads this line.
         log!(
             "browser: settings keyboard back to {}",
             if import.is_some() {

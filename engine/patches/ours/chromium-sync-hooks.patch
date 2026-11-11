@@ -18,7 +18,9 @@ wait to commit, so nothing of a type Chromium can encrypt goes up until the acco
 encrypts it, which the server doesn't hold, and not the keystore key it does; and once the
 passphrase's types are encrypted it nudges, since the passphrase's other changes came first. It
 gives each commit to g_browser_core_sync_commit as it leaves, for the core to trim what the server
-needn't see, such as the device's name, and to stop a commit that isn't ciphertext only.
+needn't see, such as the device's name, and to stop a commit that isn't ciphertext only. It
+gives each update the server sends to g_browser_core_sync_keep_update first, which drops one of an
+encrypted type that isn't ciphertext, since the account's devices never write one.
 GetClientTag gives a password's client tag, its site and username, to
 g_browser_core_sync_password_tag, so the hash the server sees is keyed with the account's secret.
 
@@ -222,22 +224,26 @@ g_browser_core_sync_password_tag, so the hash the server sees is keyed with the 
                      create_http_post_provider_factory_),
 --- a/components/sync/engine/data_type_worker.cc
 +++ b/components/sync/engine/data_type_worker.cc
-@@ -48,6 +48,14 @@
+@@ -48,6 +48,18 @@
  #include "components/sync/protocol/proto_memory_estimations.h"
  #include "components/sync/protocol/sync_entity.pb.h"
  
-+// browser_core: whether a type's changes wait to commit, and a last look at each commit before
-+// it goes, which may trim it (//browser_core/hooks.h).
++// browser_core: whether a type's changes wait to commit, a last look at each commit before it
++// goes, which may trim it, and a first look at each update (//browser_core/hooks.h).
 +bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
 +                                        bool encrypted,
 +                                        syncer::PassphraseType passphrase) = nullptr;
 +void (*g_browser_core_sync_commit)(syncer::DataType type,
 +                                   syncer::CommitRequestDataList& commit) = nullptr;
++// browser_core: whether to take an update the server sent, given whether its type is encrypted.
++bool (*g_browser_core_sync_keep_update)(syncer::DataType type,
++                                        bool encrypted,
++                                        const sync_pb::SyncEntity& update) = nullptr;
 +
  namespace syncer {
  
  namespace {
-@@ -441,6 +449,8 @@
+@@ -441,6 +453,8 @@
      // Push the new key name to the processor.
      SendPendingUpdatesToProcessorIfReady();
    }
@@ -246,7 +252,20 @@ g_browser_core_sync_password_tag, so the hash the server sees is keyed with the 
  }
  
  void DataTypeWorker::OnCryptographerChange() {
-@@ -965,6 +975,10 @@
+@@ -552,6 +566,12 @@
+       continue;
+     }
+ 
++    // browser_core: an update the account's devices couldn't have written is dropped.
++    if (g_browser_core_sync_keep_update &&
++        !g_browser_core_sync_keep_update(type_, encryption_enabled_, *update_entity)) {
++      continue;
++    }
++
+     static_assert(kUncommittedVersion < 0,
+                   "kUncommittedVersion must be negative");
+     CHECK_NE(update_entity->version(), kUncommittedVersion);
+@@ -965,6 +985,10 @@
           (data_type_state_.encryption_key_name() ==
            cryptographer_->GetDefaultEncryptionKeyName()));
  
@@ -257,7 +276,7 @@ g_browser_core_sync_password_tag, so the hash the server sees is keyed with the 
    return std::make_unique<CommitContributionImpl>(
        type_, data_type_state_.type_context(), std::move(response),
        base::BindOnce(&DataTypeWorker::OnCommitResponse,
-@@ -1011,6 +1025,10 @@
+@@ -1011,6 +1035,10 @@
  }
  
  bool DataTypeWorker::CanCommitItems() const {

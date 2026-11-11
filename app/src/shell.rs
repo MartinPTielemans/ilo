@@ -6,16 +6,19 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    FontWeight, HitboxBehavior, Hsla, Image, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Role,
-    ScrollHandle, SharedString, Size, Subscription, Task, Window, WindowTextSystem, canvas, div,
-    img, point, prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, DispatchPhase, Entity,
+    FocusHandle, Focusable, FontWeight, Global, HitboxBehavior, Hsla, Image, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels,
+    Point, Rgba, Role, ScrollHandle, SharedString, Size, Subscription, Task, Window,
+    WindowTextSystem, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
@@ -43,6 +46,7 @@ mod battery;
 mod beside;
 #[cfg(test)]
 mod blank_tests;
+mod boost;
 mod browser;
 mod card_strip;
 mod cast;
@@ -53,6 +57,8 @@ mod clean_link;
 mod close_tab;
 mod commands;
 mod conversation;
+#[cfg(test)]
+mod copy_tests;
 #[cfg(test)]
 mod corner_tests;
 mod display_face;
@@ -140,7 +146,7 @@ pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -604,6 +610,21 @@ use crate::tokens::shell::WINDOWS_BUTTON_PLATE;
 use crate::tokens::shell::WINDOWS_CLOSE_HOVERED;
 use crate::tokens::text;
 
+/// Whether New Note is on, as Settings › Features keeps it for the app: on until the user turns
+/// it off. A window opened reads it, and `Shell::set_new_note` tells the open ones.
+#[derive(Clone, Copy)]
+pub struct NewNoteOn(pub bool);
+
+impl Global for NewNoteOn {}
+
+/// Whether links are copied without tracking, as Settings › Privacy keeps it for the app: on until
+/// the user turns it off (#2351). A window opened reads it, and `Shell::set_clean_links` tells the
+/// open ones.
+#[derive(Clone, Copy)]
+pub struct CleanLinksOn(pub bool);
+
+impl Global for CleanLinksOn {}
+
 #[derive(Clone, Default)]
 struct Tab {
     title: SharedString,
@@ -908,10 +929,28 @@ impl Naming {
     }
 }
 
+/// How many name fields have opened. The host says the page took the keyboard as the press comes,
+/// but a field hears it only after the events queued behind that press, a double-click's second
+/// press among them, which may have opened a field since (#2260). So the host's word counts the
+/// fields as the press comes (`fields_opened`), and a field opened after it stays.
+static FIELDS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// How many name fields have opened so far.
+pub fn fields_opened() -> u64 {
+    FIELDS_OPENED.load(Ordering::Relaxed)
+}
+
+/// Counts a field opening, giving its place among them.
+fn field_opens() -> u64 {
+    FIELDS_OPENED.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 /// The field a Space's name, a tab's title or a folder's name turns into for renaming it.
 struct Renaming {
     naming: Naming,
     name: Entity<TextInput>,
+    /// Its place among the fields opened (`fields_opened`).
+    opened: u64,
     /// Whether the field is in the Space's card in the Library rather than in the sidebar.
     in_library: bool,
     /// End the field once it loses the keyboard, to elsewhere in the window or to another window.
@@ -1164,6 +1203,9 @@ struct Settle {
     from: f32,
     velocity: f32,
     start: Instant,
+    /// GPUI's: the real one in the app, and in a test one only the test moves, so a time into the
+    /// slide holds on a slow runner (#2265).
+    clock: BackgroundExecutor,
     /// A switch to the Space next to the one before, whose colour changes ahead of the slide.
     next_door: bool,
 }
@@ -1180,19 +1222,26 @@ struct FullScreenTiming {
 impl Settle {
     /// How much of the Space before's colour is left, for a switch next door.
     fn color_left(&self) -> Option<f32> {
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         self.next_door.then(|| (-t / SPACE_COLOR_TAU).exp())
     }
 
     /// How far the page is from its place, or None once it's there.
     fn offset(&self) -> Option<f32> {
         let omega = std::f32::consts::TAU / SPACE_SETTLE;
-        let t = self.start.elapsed().as_secs_f32();
+        let t = self.elapsed();
         let decay = (-omega * t).exp();
         let rise = self.velocity + omega * self.from;
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
+    }
+
+    fn elapsed(&self) -> f32 {
+        self.clock
+            .now()
+            .saturating_duration_since(self.start)
+            .as_secs_f32()
     }
 }
 
@@ -1712,10 +1761,13 @@ pub struct Shell {
     update_banner: Option<update_banner::Waiting>,
     update_open: bool,
     update_restarting: bool,
+    /// The updater's checks are off, so the open banner offers to turn them on.
+    update_offer: bool,
     update_motion: Option<(f32, Instant)>,
     update_said: Option<&'static str>,
     /// Where the banner is drawn, and the watch on the updater.
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
     /// The protected-media key system each tab's page asked for that ilo can't play, until the tab
     /// goes to another site.
@@ -1731,6 +1783,15 @@ pub struct Shell {
     translate_card: Option<u64>,
     translate_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     translate_mark_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The tab whose Boost card is open, the tab whose page Zap is on, and where the card was drawn
+    /// last, which the log says when it changes (boost.rs).
+    boost_card: Option<u64>,
+    /// The tab whose row's menu asked for its Boost's card, which opens once the tab shows.
+    boost_pending: Option<u64>,
+    zapping: Option<u64>,
+    boost_card_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Library › Boosts' list, the window's profile's, read as it's shown.
+    boost_list: Vec<crate::boosts::Boost>,
     /// The tab Portrait Mode's card is open over, with the background chosen on it, and where the
     /// card and its swatches were drawn last (portrait.rs).
     portrait_card: Option<(u64, crate::capture::portrait::Background)>,
@@ -1772,6 +1833,12 @@ pub struct Shell {
     /// Whether Little ilo is on, as Settings › Features has it (bc_little_windows): off, nothing
     /// offers or opens a Little ilo window.
     little_windows: bool,
+    /// Whether New Note is on, as Settings › Features has it (`NewNoteOn`): off, nothing offers
+    /// or runs New Note or New Note Split.
+    new_note: bool,
+    /// Whether links copy without tracking, as Settings › Privacy has it (`CleanLinksOn`): off,
+    /// every copy path gives the address as it is.
+    clean_links: bool,
     /// Whether Show Space Header keeps a lone unnamed Space's name row, as `LoneSpaceHeader` said
     /// as the window last drew.
     lone_header: bool,
@@ -2070,9 +2137,11 @@ impl Shell {
             update_banner: update_banner::Waiting::of(crate::updates::stage(cx)),
             update_open: false,
             update_restarting: false,
+            update_offer: crate::updates::automatic(cx) == Some(false),
             update_motion: None,
             update_said: None,
             update_drawn: Rc::default(),
+            update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
             drm_notes: HashMap::new(),
             keys: HashMap::new(),
@@ -2084,6 +2153,11 @@ impl Shell {
             portrait_card_drawn: Rc::default(),
             portrait_swatches_drawn: Default::default(),
             translate_mark_drawn: Rc::default(),
+            boost_card: None,
+            boost_pending: None,
+            zapping: None,
+            boost_card_drawn: Rc::default(),
+            boost_list: Vec::new(),
             battery_saver: None,
             battery_leaf_drawn: Rc::default(),
             frozen: HashSet::new(),
@@ -2110,6 +2184,8 @@ impl Shell {
             system_tone: Tone::Dark,
             app_appearance: Appearance::Automatic,
             little_windows: true,
+            new_note: cx.try_global::<NewNoteOn>().is_none_or(|on| on.0),
+            clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             forced_tone: None,
             window_active: true,
@@ -2380,7 +2456,7 @@ impl Shell {
     }
 
     /// The tab whose row is `tab`'s: its split's first.
-    fn row_of(&self, tab: u64) -> u64 {
+    pub(super) fn row_of(&self, tab: u64) -> u64 {
         self.panes(tab)[0]
     }
 
@@ -2835,7 +2911,8 @@ impl Shell {
                 beside: Some(before),
                 from: if to > from { width } else { -width },
                 velocity: 0.,
-                start: crate::motion::start(cx),
+                start: crate::motion::start_at(cx.background_executor().now(), cx),
+                clock: cx.background_executor().clone(),
                 next_door: from.abs_diff(to) == 1,
             });
         }
@@ -3219,6 +3296,9 @@ impl Shell {
         self.adding_pane = None;
         self.link_tab_changed(cx);
         self.note_hang(cx);
+        if self.boost_pending.take() == Some(tab) {
+            self.open_boost(cx);
+        }
         if self.split_pending.take() == Some(tab) {
             self.add_pane(cx);
         }
@@ -3420,6 +3500,10 @@ impl Shell {
             let (audible, muted) = (flag(page.audible), flag(page.muted));
             log!("browser: page {tab} audible {audible} muted {muted}");
         }
+        if page.volume != entry.page.volume {
+            // check.sh waits for this line.
+            log!("browser: page {tab} volume {:.2}", page.volume.0);
+        }
         let capture = |page: &Page| [page.camera, page.microphone, page.sharing, page.shared];
         if capture(&page) != capture(&entry.page) {
             let [camera, microphone, sharing, shared] = capture(&page).map(flag);
@@ -3441,6 +3525,7 @@ impl Shell {
             (
                 page.media,
                 page.media_playing,
+                page.media_previous,
                 page.media_next,
                 pip,
                 page.media_title.clone(),
@@ -3450,9 +3535,10 @@ impl Shell {
         if media_changed {
             // check.sh waits for this line.
             log!(
-                "browser: page {tab} media {} playing {} next {} pip {} {}",
+                "browser: page {tab} media {} playing {} previous {} next {} pip {} {}",
                 flag(page.media),
                 flag(page.media_playing),
+                flag(page.media_previous),
                 flag(page.media_next),
                 flag(page.media_picture_in_picture),
                 page.media_title
@@ -3482,10 +3568,16 @@ impl Shell {
         // What its hover card shows of the page, besides its title: its host, emoji and buttons.
         let carded = |page: &Page| (page.url.clone(), page.icon.clone(), page.share_instead);
         let card_changed = carded(&page) != carded(&entry.page);
+        // A load that finished, or a URL that changed with none under way, as a same-page one does:
+        // the page differs from its picture in the window it left.
+        let page_changed = !page.loading && (entry.page.loading || page.url != entry.page.url);
         let changed =
             entry.keep_page(page) | replace(&mut entry.left_pinned_host, left_pinned_host);
         if card_changed {
             self.card_changed(tab, cx);
+        }
+        if page_changed {
+            self.picture_page_changed(tab, cx);
         }
         // An untitled tab is named by its URL.
         if changed && tab == self.selected {
@@ -4565,6 +4657,7 @@ impl Shell {
                     .children(self.turning_drag())
                     .children(self.question_card(cx))
                     .children(self.translate_card(cx))
+                    .children(self.boost_card(cx))
                     .children(self.portrait_card(cx))
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))

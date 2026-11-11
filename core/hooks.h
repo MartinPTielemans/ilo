@@ -84,6 +84,10 @@ class SyncInvalidationsService;
 class SyncService;
 }
 
+namespace sync_pb {
+class SyncEntity;
+}
+
 namespace gfx {
 class Rect;
 }
@@ -276,6 +280,11 @@ extern bool (*g_browser_core_sync_hold_commit)(syncer::DataType type,
                                                syncer::PassphraseType passphrase);
 extern void (*g_browser_core_sync_commit)(syncer::DataType type,
                                           syncer::CommitRequestDataList& commit);
+// The same file: whether to take |update|, which the server sent for |type|, given whether the
+// type is encrypted. On sync's own sequence.
+extern bool (*g_browser_core_sync_keep_update)(syncer::DataType type,
+                                               bool encrypted,
+                                               const sync_pb::SyncEntity& update);
 
 // chrome/browser/ui/sync/tab_contents_synced_tab_delegate.cc: whether the account's other devices
 // may get |contents| as one of this device's open tabs, as session sync would give them every tab:
@@ -328,6 +337,9 @@ extern gfx::Rect (*g_browser_core_mini_player_place)(VideoOverlayWindowViews* wi
                                                      bool shown,
                                                      const gfx::Rect& work_area);
 extern void (*g_browser_core_mini_player_left)(VideoOverlayWindowViews* window);
+// The same file: the Mini Player |window| once Chrome has laid out its controls, as it shows and
+// each time it's sized, for the core to give it its look.
+extern void (*g_browser_core_mini_player_laid_out)(VideoOverlayWindowViews* window);
 
 // chrome/browser/prefs/browser_prefs.cc: registers the core's local state prefs, app-wide ones,
 // such as where the Mini Player was left, with Chrome's.

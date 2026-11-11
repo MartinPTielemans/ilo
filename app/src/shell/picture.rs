@@ -4,6 +4,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    mem::replace,
     sync::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
@@ -145,6 +146,8 @@ pub(super) struct Picture {
     /// The last request made to the core, and whether its answer hasn't come.
     request: u64,
     pending: bool,
+    /// The page changed while that answer was out, so another picture follows it.
+    again: bool,
     image: Option<PagePicture>,
     /// Whether the window has drawn `image`, for the handover lines.
     drawn: bool,
@@ -183,6 +186,7 @@ impl Shell {
             tab,
             request: 0,
             pending: false,
+            again: false,
             motion: image.is_some().then(|| Move::step_back(cx)),
             image,
             drawn: false,
@@ -215,6 +219,24 @@ impl Shell {
         if seen {
             self.ask_picture(cx);
         }
+    }
+
+    /// The page of `tab` finished a load or went to another URL: a picture of it is taken again, so
+    /// the window it left shows what it is now. From the core's reports alone, never on a timer, so
+    /// an idle browser takes none (#359).
+    pub(super) fn picture_page_changed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let Some(picture) = self
+            .picture
+            .as_mut()
+            .filter(|picture| picture.tab == tab && !picture.taken)
+        else {
+            return;
+        };
+        if picture.pending {
+            picture.again = true;
+            return;
+        }
+        self.ask_picture(cx);
     }
 
     fn ask_picture(&mut self, cx: &mut Context<Self>) {
@@ -264,6 +286,12 @@ impl Shell {
             return;
         };
         picture.pending = false;
+        if replace(&mut picture.again, false) {
+            self.ask_picture(cx);
+        }
+        let Some(picture) = self.picture.as_mut() else {
+            return;
+        };
         let Some(image) = image else {
             return;
         };

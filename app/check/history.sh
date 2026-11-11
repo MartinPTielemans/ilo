@@ -93,11 +93,11 @@ else
   send pageswipe $page_point forward
   expect "^browser: swiped forward $tab\$" "a swipe forward over the page didn't reach the UI"
   expect_page example.org 1 0 "after a swipe forward"
+  swipe=$((step + 1))
   send pageswipe $sidebar_point back
-  none_since '^browser: swiped' || fail "a swipe over the sidebar went back"
 fi
-
 history_key r reload ui
+[ -z "${swipe:-}" ] || none_since '^browser: swiped' "$swipe" || fail "a swipe over the sidebar went back"
 expect "^browser: loaded $tab https://example.org/\$" "⌘R didn't load the page again"
 send key r cmd shift
 expect '^browser: command force-reload via ui$' "⇧⌘R didn't run force-reload"
@@ -107,6 +107,18 @@ expect '^browser: nav shows reload$' "the stop button didn't turn back into relo
 send click $reload_button
 expect '^browser: command reload via sidebar$' "a click on reload didn't reload"
 expect "^browser: loaded $tab https://example.org/\$" "a click on reload didn't load the page again"
+
+# A mouse's side buttons over the page go back and forward, as Chrome's do (#688). Over the sidebar
+# they show another Space, which the spaces run checks.
+# A side button's click gives the page the keyboard, so this comes after the keys with the UI focused.
+if windows; then
+  echo "skip: side buttons over the page: the Windows driver can't press them yet."
+else
+  send sideclick $page_point back
+  expect_page example.com 1 1 "after the back side button over the page"
+  send sideclick $page_point forward
+  expect_page example.org 1 0 "after the forward side button over the page"
+fi
 
 # While a page loads, the URL field shows where it's going and reload is stop.
 send click $page_point

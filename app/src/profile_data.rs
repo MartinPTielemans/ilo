@@ -175,7 +175,7 @@ pub(crate) unsafe extern "C" fn sync_changed(_: *mut c_void, state: *const bc::b
 pub(crate) unsafe extern "C" fn settings_synced(_: *mut c_void) {
     update_app_later(|cx| {
         little_windows_followed(cx);
-        settings::refresh(cx);
+        settings::look_followed(cx);
     });
 }
 
@@ -186,7 +186,6 @@ pub(crate) unsafe extern "C" fn sync_pairing_asked(
     pairing: *const bc::bc_sync_pairing,
 ) {
     let Some(pairing) = (unsafe { pairing.as_ref() }) else {
-        // check.sh waits for this line.
         log!("browser: pairing withdrawn");
         update_app_later(dialog::withdraw_account);
         return;

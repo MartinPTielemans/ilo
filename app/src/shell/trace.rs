@@ -38,7 +38,6 @@ pub(super) fn toggle(browser: Rc<dyn Browser>, cx: &mut App) {
         return stop(&*browser, cx);
     }
     if !browser.start_trace() {
-        // check.sh reads this line.
         log!("browser: trace not started");
         return browser.toast(NOT_STARTED, None, NOTE_TIME, cx);
     }

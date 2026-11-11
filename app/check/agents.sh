@@ -20,21 +20,31 @@ step=0
 rm -f "$saved" "$launch_frame"
 # Library › Agents keeps the profile's past tasks on this computer, 30 days from their end (#1080):
 # the run's, a task that ended an hour ago and one that ended 30 days ago, in the first profile's
-# own folder, as the browser keeps them.
+# own folder, as the browser keeps them. The hour-old one's page lists its steps, one refused, and
+# its site, where Claude Code may always act, as the agents' settings keep it, which Revoke takes.
 history_file="$profile_dir/Default/Agent sessions"
 mkdir -p "$profile_dir/Default"
 python3 -I - "$history_file" << 'PY'
 import json, sys, time
 now = int(time.time())
 def past(id, title, ago, orders):
+    def step(at, action, site, refused=""):
+        return {"at": now - ago - at, "action": action, "site": site, "refused": refused}
     return {"id": id, "title": title, "agent": "Claude Code", "started": now - ago - 300,
-            "ended": now - ago, "pages": [{"title": "Booking", "url": "https://example.com/"}],
-            "orders": orders, "messages": 0}
+            "ended": now - ago,
+            "pages": [{"title": "Booking", "url": "https://check-allowed.example/booking"}],
+            "orders": orders, "messages": 0, "answers": "claude-code",
+            "steps": [step(240, "open_tab", "check-allowed.example"),
+                      step(180, "click", "check-allowed.example"),
+                      step(120, "passwords", "",
+                           "Agents never read passwords, cookies or autofill data.")]}
 with open(sys.argv[1], "w", encoding="utf-8") as file:
     for entry in (past("check-new", "Book a table for four", 3600, 1),
                   past("check-old", "Compare the museum passes", 30 * 24 * 3600, 0)):
         file.write(json.dumps(entry) + "\n")
 PY
+agents_file="$(dirname "$saved")/Agents"
+printf '{"on":false,"agents":[],"grants":{"claude-code":{"check-allowed.example":"always"}}}' > "$agents_file"
 # The user's tab, as the first run opens none.
 BROWSER_DRIVE=1 BROWSER_URL='https://en.wikipedia.org/wiki/Arc_(web_browser)' \
   "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -102,8 +112,10 @@ driven=$active
 if [ "$driven" = 1 ]; then
   # ⌃2 and ⌃3 have no second Space to show.
   send key 2 ctrl
+  expect '^browser: command select-space via page$' "⌃2 didn't reach the UI"
   none_since "^browser: \(task \)\{0,1\}space $agent" || fail "⌃2 showed the agent's Space"
   send key 3 ctrl
+  expect '^browser: command select-space via page$' "⌃3 didn't reach the UI"
   none_since "^browser: \(task \)\{0,1\}space $task" || fail "⌃3 showed the task's Space"
   [ "$(space)" = "$first" ] || fail "the window left the user's Space for $(space)"
 fi
@@ -115,9 +127,29 @@ await '^browser: library shown$' || fail "the Library didn't settle open on Agen
 ../tools/window-screenshot.sh "$pid" "$out/library-agents.png" || fail "no window to capture"
 grep -q 'check-new' "$history_file" || fail "the hour-old past task went: $(cat "$history_file")"
 grep -q 'check-old' "$history_file" && fail "the 30-day-old past task stayed: $(cat "$history_file")"
+# A click on its row opens its page: its site, where Claude Code may always act, with Revoke, and its
+# steps. Revoke there takes the answer, as Settings › Agents' does, and Back goes to the list.
+session_page=
+if [ "$driven" = 1 ]; then
+  at=$(drawn 'library past check-new') || fail "the past task's row wasn't drawn"
+  send click $at
+  expect '^browser: agents history shows check-new: 3 steps, 1 sites, answers check-allowed.example allowed$' \
+    "the row didn't open its page: $(grep '^browser: agents history' "$log" | tail -1)"
+  at=$(drawn 'library revoke check-allowed.example') || fail "the page drew no Revoke"
+  ../tools/window-screenshot.sh "$pid" "$out/library-agents-session.png" || fail "no window to capture"
+  send click $at
+  expect '^browser: agent claude-code revoked check-allowed.example$' "Revoke didn't take the answer"
+  expect '^browser: agents history shows check-new: 3 steps, 1 sites, answers none$' \
+    "the page still has the answer Revoke took"
+  grep -q 'check-allowed' "$agents_file" && fail "the agents' settings kept the answer: $(cat "$agents_file")"
+  at=$(drawn 'library back') || fail "the page drew no Back"
+  send click $at
+  expect '^browser: agents history lists$' "Back didn't go back to the list"
+  session_page=", and a past task's page lists its steps and its site, whose answer for good its Revoke takes"
+fi
 send menu 'View Agents…'
 expect '^browser: library hidden$' "View Agents… didn't close the Library"
-rm -f "$history_file"
+rm -f "$history_file" "$agents_file"
 quit
 
 # Launched again, the user's Space comes back alone: quit deletes the agent's Space, as it does a
@@ -586,7 +618,7 @@ PY
   tasks_found="; on Windows the task agents find claude.exe and codex.cmd, then claude.cmd and codex.exe, off the PATH, each signed in, Codex's models listed, a task from ⌘T starts on each and its CLI gets its instructions whole and the first message, and no console window shows"
 fi
 if [ "$driven" = 1 ]; then
-  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found"
+  echo "ok: $made, the switcher and ⌃1 to ⌃9, as a task's does, refuses an agent the user's tab, ad blocking, passwords, DevTools, a profile's settings and any action agents lack, with why in the activity log, and comes back as no Space of the user's$session_page$connected$tasks_found"
 else
-  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. skip: ⌃2 and ⌃3. Browser wasn't the active app, so the page ignored the click."
+  echo "ok: $made and the switcher, as a task's does, refuses an agent the user's tab and what agents lack, with why in the activity log, and comes back as no Space of the user's$connected$tasks_found. skip: ⌃2 and ⌃3, and a past task's page. Browser wasn't the active app, so the page ignored the click."
 fi

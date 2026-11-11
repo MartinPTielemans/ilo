@@ -52,7 +52,9 @@ ours/chromium-sync-service.patch
 ours/chromium-sync-hooks.patch
 ours/chromium-sync-agent-tabs.patch
 ours/chromium-sync-ilo-types.patch
+ours/chromium-sync-no-incoming-password-sharing.patch
 ours/chromium-core-agent-no-autofill.patch
+ours/chromium-sync-no-priority-preferences.patch
 ours/chromium-core-mini-player.patch
 ours/chromium-core-activate-tab.patch
 ours/chromium-core-cast-dialog.patch
@@ -75,6 +77,7 @@ ours/chromium-core-agent-accessibility.patch
 ours/chromium-core-download-completion-hold.patch
 ours/chromium-session-cookies-window-close.patch
 ours/chromium-core-bluetooth-pair.patch
+ours/chromium-customize-chrome-private.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch

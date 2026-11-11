@@ -128,6 +128,9 @@ send_link() {
         fail "$what didn't go chrome.exe's fast way to the running browser ($status):" \
           "$(tr '\n' ' ' < "$out/links-sent-now.log")"
     fi
+  elif [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${link_token:-}" ]; then
+    XDG_ACTIVATION_TOKEN=$link_token "$browser" "$@" >> "$out/links-sent.log" 2>&1 ||
+      fail "the second launch with $what failed"
   elif [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
     # Wayland brings a window forward only with an activation token, which a launcher gives the
     # app it starts, and the second launch hands it the running browser. sway's exec gives its
@@ -199,10 +202,19 @@ send window 2
 # The same link again, with the regular window in front, brings that Little ilo window back.
 send window 1
 expect "^browser: key window $window\$" "the regular window didn't come to the front"
+# Under Wayland the link comes as from another app the user clicked it in, with the token for that
+# click (other_app_click), which sway brings an open window forward for.
+link_token=
+if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  other_app_click
+  link_token=$other_app_token
+fi
 send_link "${site}?ext"
 expect_late "^browser: link from another app ${site}?ext: little window $little again\$" \
   "the same link again didn't bring its Little ilo window back: $(grep '^browser: link' "$log" | tail -1)"
 expect "^browser: key window $little\$" "the link's Little ilo window didn't come to the front"
+other_app_closes
+link_token=
 [ "$(grep -c "$(little_line "?ext" "[0-9]*")" "$log")" = 1 ] ||
   fail "the same link again opened a second Little ilo window"
 send window 2
@@ -463,6 +475,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings shown Links$' "Settings… didn't show Settings on its Links tab"
   settings_drew Links
   send key z cmd
+  expect '^browser: settings undo had nothing$' "⌘Z didn't reach Settings"
   none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey $(drawn "link space 0")
   expect "^browser: menu shown $front, [^,]*, work, Little ilo (checked)\$" \

@@ -329,3 +329,62 @@ fn a_page_that_is_live_here_is_never_captured(cx: &mut TestAppContext) {
     assert!(!pictured(&shell, cx));
     assert!(picture_at(&shell, cx).is_none());
 }
+
+/// The page as the core reports it: at `url`, loading or not.
+fn report(shell: &Entity<Shell>, cx: &mut VisualTestContext, tab: u64, url: &str, loading: bool) {
+    shell.update(cx, |shell, cx| {
+        let page = crate::shell::Page {
+            url: url.to_owned().into(),
+            loading,
+            ..shell.page(tab)
+        };
+        shell.set_page(tab, page, cx)
+    });
+}
+
+/// The picture is taken again when its page finishes a load or goes to another URL with none under
+/// way, as a same-page one does, and not while a load is under way or for anything else the core
+/// reports. A change while a picture is out takes one more once it comes (#359).
+#[gpui::test]
+fn the_picture_follows_the_page_s_loads(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", false);
+    picture_arrives(&shell, cx, 10);
+    host.take();
+
+    // A navigation: nothing while it loads, a picture once it's done.
+    report(&shell, cx, 10, "https://b.test/", true);
+    assert!(asked(&host).is_empty());
+    report(&shell, cx, 10, "https://b.test/", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer(&shell, cx);
+    assert!(asked(&host).is_empty());
+
+    // A same-page navigation, with no load.
+    report(&shell, cx, 10, "https://b.test/#more", false);
+    assert_eq!(asked(&host), ["picture 10"]);
+    // Another while that picture is out waits for it, then takes one more, once.
+    report(&shell, cx, 10, "https://b.test/#end", false);
+    report(&shell, cx, 10, "https://b.test/#top", false);
+    assert!(asked(&host).is_empty());
+    answer(&shell, cx);
+    assert_eq!(asked(&host), ["picture 10"]);
+    answer(&shell, cx);
+    assert!(asked(&host).is_empty());
+
+    // Another tab's load, or a report that changes neither, takes none.
+    report(&shell, cx, 20, "https://c.test/", true);
+    report(&shell, cx, 20, "https://c.test/", false);
+    report(&shell, cx, 10, "https://b.test/#top", false);
+    assert!(asked(&host).is_empty());
+}
+
+/// A window whose page is live here takes no picture when the page loads.
+#[gpui::test]
+fn a_live_page_s_load_takes_no_picture(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    report(&shell, cx, 10, "https://a.test/", true);
+    report(&shell, cx, 10, "https://a.test/", false);
+    assert!(asked(&host).is_empty());
+    assert!(!pictured(&shell, cx));
+}

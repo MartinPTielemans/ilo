@@ -59,7 +59,7 @@ expect_tabs "$b $a" "$b" "after opening a tab"
 # Below. Dragged onto the Space's name, the row takes the tab out of Today into a tile, and its
 # press shows the tab, as Arc's does.
 post rightclick $(row 1)
-expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below (disabled)")\$" \
+expect "^browser: menu shown $(cased "Copy Link$share, Change Icon…, Rename…, Mute (disabled), New Boost…, Add Split View, Duplicate, Add to Folder › New Folder, Move to › [^,]* (checked), Move to › New Space…, Archive Tab, Archive Tabs Below (disabled)")\$" \
   "a right-click on the bottom Today row didn't show Arc's tab menu"
 expect '^browser: menu drawn ' "the Today tab's menu didn't draw"
 # With ⌥ held, its Copy Link is Copy Link as Markdown, as Arc's menu copies a link as Markdown.
@@ -257,6 +257,9 @@ send resize 1000 340
 expect '^browser: drawn at 1000x340$' "the window didn't draw at its new size"
 # Rows hidden under the list's foot bring a line across the sidebar 1 under it (Arc).
 expect '^browser: scroll foot edge shown$' "the rows under the list's foot didn't show its edge"
+# The overlay knob holds 0.8 s after the last scroll, less than a still can take to be captured,
+# so the scroll is recorded for a look at the knob (scroller.mp4).
+record scroller 2
 send scroll 100 200 10 5
 expect '^browser: scroll edge shown$' "the list scrolled past its top didn't show its edge"
 if [ $legacy = 1 ]; then
@@ -264,6 +267,7 @@ if [ $legacy = 1 ]; then
 else
   expect '^browser: scroller shown$' "the list scrolled didn't show its knob"
 fi
+recorded
 ../tools/window-screenshot.sh "$pid" "$out/scroll-edge.png" || fail "no window to capture"
 # Near each row's top, as Windows' capture is a row taller than the window.
 edge=$(pixel "$out/scroll-edge.png" 0.1 $(awk 'BEGIN { print 187.2 / 340 }'))
@@ -447,9 +451,9 @@ expect '^browser: detent$' "a row dragged onto the favorites didn't click the tr
 none_since '^browser: dragged' ||
   fail "a row dragged onto the favorites dropped before the pointer let go"
 send release 114 112
-none_since '^browser: detent$' || fail "letting go on the favorites clicked the trackpad"
 expect "^browser: dragged $x to favorites 0\$" \
   "a Today row dragged onto the favorites didn't go there"
+none_since '^browser: detent$' || fail "letting go on the favorites clicked the trackpad"
 expect "^browser: favorites $x\$" \
   "the row dropped on the favorites isn't one: the favorites are \"$(favorites)\""
 expect "^browser: today $a $y\$" "the row dropped on the favorites is still in Today: \"$(today)\""
@@ -473,6 +477,7 @@ expect "^browser: favorites $a\$" "the tile dropped in Today is still a favorite
 none_since '^browser: selected' || fail "dragging a tile showed it"
 # Escape puts a dragged tile back.
 send press 114 110
+expect "^browser: pressed $a\$" "the press on a tile didn't reach the UI"
 none_since '^browser: detent$' || fail "pressing a tile clicked the trackpad"
 send dragto 100 200
 expect '^browser: drag shape row$' "a tile dragged into the list didn't turn into a row"
@@ -483,8 +488,8 @@ send dragto 100 300
 escaped=$((step + 1))
 send key escape
 expect '^browser: command stop via ' "escape during a tile's drag didn't reach the UI"
+let_go=$((step + 1))
 send release 100 300
-none_since '^browser: dragged' || fail "a tile's drag escape put back dropped it"
 [ "$(favorites)" = "$a" ] || fail "a tile's drag escape put back moved it: \"$(favorites)\""
 # A press hits the frame drawn, so the next drag waits for the put-back's.
 expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
@@ -497,6 +502,7 @@ expect '^browser: drag put back$' "Escape's put-back didn't finish" "$escaped"
 # as they were for the steps after.
 send click $(tiled_row 0)
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "a click on the first Today row didn't show it"
+none_since '^browser: dragged' "$let_go" || fail "a tile's drag escape put back dropped it"
 send click $(tiled_row 1) alt
 expect "^browser: splits $x+$y\$" "⌥-click on the second Today row didn't split it with the first"
 send drag $(tiled_row 0) 180 112
@@ -822,14 +828,16 @@ expect "^browser: menu shown $(cased 'Unpin Tab, Add to Favorites (disabled), ')
 send dismiss
 send press $pinned_full
 send dragto 100 200
+over=$((step + 1))
 send dragto 114 112
-none_since '^browser: drag shape tile$' || fail "with 12 favorites, a row dragged over the tiles turned into a tile"
 send release 114 112
 # Over the tiles it's still over its own place, so it goes back there, which moves nothing in the
 # browser and logs only the put-back.
 expect "^browser: \(dragged $r to \(pinned\|today\) \|drag put back\$\)" \
   "the row dragged over the 12 tiles didn't drop back in the list"
 none_since "^browser: dragged $r to favorites" || fail "with 12 favorites, a row dropped on the tiles became the 13th"
+none_since '^browser: drag shape tile$' "$over" ||
+  fail "with 12 favorites, a row dragged over the tiles turned into a tile"
 [ "$(favorites)" = "$twelve" ] || fail "with 12 favorites, the drag changed them: \"$(favorites)\""
 exec 3>&-
 quit

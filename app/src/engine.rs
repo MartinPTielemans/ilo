@@ -292,10 +292,15 @@ impl Browser for Engine {
         let action = match action {
             MediaAction::Play => bc::BC_MEDIA_PLAY,
             MediaAction::Pause => bc::BC_MEDIA_PAUSE,
+            MediaAction::Previous => bc::BC_MEDIA_PREVIOUS,
             MediaAction::Next => bc::BC_MEDIA_NEXT,
             MediaAction::PictureInPicture => bc::BC_MEDIA_PICTURE_IN_PICTURE,
         };
         unsafe { bc::bc_tab_media(tab, action as i32) };
+    }
+
+    fn set_volume(&self, tab: u64, volume: f32, _: &mut App) {
+        unsafe { bc::bc_tab_set_volume(tab, volume as f64) };
     }
 
     fn cast(&self, tab: u64, _: &mut App) {
@@ -962,7 +967,6 @@ impl Browser for Engine {
     fn new_note(&self, space: u64, beside: Option<u64>, cx: &mut App) {
         let profile = unsafe { bc::bc_space_profile(space) };
         let url = browser::notes::new_document(&name(bc::bc_profile_notes_service, profile));
-        // check.sh waits for this line.
         log!(
             "browser: new note {url}{}",
             if beside.is_some() { " split" } else { "" }
@@ -989,12 +993,49 @@ impl Browser for Engine {
         bar_picks_host::folder(profile)
     }
 
+    fn load_boosts(&self, profile: u64, cx: &mut App) {
+        boosts_host::load(profile, cx);
+    }
+
+    fn show_boosts(&self, changes: Vec<browser::boosts::Change>, _: &mut App) {
+        boosts_host::show(changes);
+    }
+
+    fn zap(&self, tab: u64, on: bool, _: &mut App) {
+        // check.sh reads this line.
+        log!("browser: zap {tab} {}", if on { "on" } else { "off" });
+        unsafe { bc::bc_tab_boost_zap(tab, on) };
+    }
+
+    fn edit_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::edit_file(path);
+    }
+
+    fn show_file(&self, path: &std::path::Path, _: &mut App) {
+        boosts_host::show_file(path);
+    }
+
     fn agent_history(&self, profile: u64) -> String {
         bar_picks_host::sessions(profile)
     }
 
     fn set_agent_history(&self, profile: u64, text: &str) {
         bar_picks_host::set_sessions(profile, text);
+    }
+
+    fn agent_answers(&self, key: &str, cx: &App) -> Vec<(String, bool)> {
+        let Some(agents) = browser::agents::global(cx) else {
+            return Vec::new();
+        };
+        (agents.read(cx).grants(key).into_iter())
+            .map(|(site, may)| (site.to_string(), may))
+            .collect()
+    }
+
+    fn revoke_agent_answer(&self, key: &str, site: &str, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.revoke(key, Some(site), cx));
+        }
     }
 
     fn close_other_window(&self, _: &mut App) -> bool {
@@ -1182,12 +1223,11 @@ impl Browser for Engine {
     }
 
     fn set_appearance(&self, appearance: Appearance, _: &mut App) {
-        settings::save_appearance(appearance);
         give_host_appearance(appearance);
     }
 
     fn keep_lone_header(&self, kept: bool, _: &mut App) {
-        settings::save_lone_header(kept);
+        unsafe { bc::bc_set_space_header(kept) };
     }
 
     fn page_moving(&self, moving: bool, _: &mut App) {
@@ -1699,11 +1739,11 @@ impl Browser for Engine {
         folder_preview::ask(ask, cx);
     }
 
-    fn card_picture(&self, tab: u64, cx: &mut App) {
+    fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
         log!("browser: tab {tab} picturing {request}");
-        let (width, height) = hover_card::PICTURE_PIXELS;
+        let (width, height) = hover_card::picture_pixels(scale);
         unsafe { bc::bc_tab_picture(tab, request, width, height) };
     }
 
@@ -1994,7 +2034,6 @@ impl Browser for Engine {
         let id = self.window;
         cx.defer(move |_| {
             let Some(main) = main_window_for(space) else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no main window for {tab}");
                 return;
             };
@@ -2059,7 +2098,6 @@ impl Browser for Engine {
             let home = home_in_profile(own_home, profile);
             let Some(opened) = home.and_then(|home| open_little(from.unwrap_or(window), home, cx))
             else {
-                // check.sh reads this line.
                 log!("browser: little window {id} has no Space in profile {profile}");
                 return;
             };
