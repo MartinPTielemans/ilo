@@ -312,6 +312,8 @@ bench_procs=$chrome_procs
 bench_chrome "${site}bench.html?b1" power
 chrome_await "^cdp: title [^ ]* b1 fcp" 30 "the bench page didn't paint in Chrome"
 first=$(sed -n 's/^cdp: title \([^ ]*\) b1 fcp$/\1/p' "$log" | head -1)
+# cdp.py asks for the titles each 50 ms, which power mustn't count.
+echo "titles off" >&5
 sleep 30 # the launch's own work settling, before idle counts
 bench_power chrome-idle idle_moment
 bench_row chrome-power-idle "Power, idle, window in view, Chrome for Testing" "$power, CPU $cpu" "ilo's"
@@ -335,11 +337,13 @@ chrome_scroll() {
 }
 bench_power chrome-scroll chrome_scroll
 bench_row chrome-power-scroll "Power, scrolling, Chrome for Testing" "$power, CPU $cpu" "ilo's"
+echo titles >&5
 for n in 2 3 4 5; do
   echo "open ${site}bench.html?b$n" >&5
   chrome_await "^cdp: title [^ ]* b$n fcp" 30 "b$n didn't paint in Chrome's new tab"
 done
 targets=$(for n in 1 2 3 4 5; do sed -n "s/^cdp: title \([^ ]*\) b$n fcp$/\1/p" "$log" | head -1; done)
+echo "titles off" >&5
 sleep 10 # the new tabs' loads settling, before switching counts
 chrome_switch() {
   switch_key=$((switch_key % 5 + 1))
@@ -348,8 +352,10 @@ chrome_switch() {
 }
 bench_power chrome-switch chrome_switch
 bench_row chrome-power-switch "Power, switching tabs, Chrome for Testing" "$power, CPU $cpu" "ilo's"
+echo titles >&5
 echo "open ${site}bench-video.html?v1" >&5
 chrome_await "^cdp: title [^ ]* v1 playing" 30 "the video didn't play in Chrome"
+echo "titles off" >&5
 sleep 5 # the video's start, before its playing counts
 bench_power chrome-video idle_moment
 bench_row chrome-power-video "Power, playing a video, Chrome for Testing" "$power, CPU $cpu" "ilo's"
