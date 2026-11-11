@@ -263,12 +263,24 @@ go_from_bar "http://$nearby:$port/stored.html?$stored_key"
 stored "$nearby" "1 1 1" "Clear Site Data and Reload on 127.0.0.1 lost $nearby's data"
 # With Chrome's warning up, ⌘T opens the command bar for a new tab and escape closes it, and ⌘W
 # closes the tab, as from a page (#2416). Where the warning has the keyboard is said, since only
-# Wayland gives it one without a click.
+# Wayland gives it one without a click: elsewhere the UI keeps the keyboard it had since the click
+# on stop, and GPUI's own bindings take the keys. A click on the warning's top edge gives it the
+# keyboard there, as the user's would, so its keys are the dialog's on every session.
 warned() {
   go_from_bar "$plain"
   expect "^browser: page $tab trouble network -20\$" "$plain had no warning before http again"
   send state
   echo "note: with Chrome's warning before http up, the keyboard is in $key, on $focus"
+  [ "$key" != NativeWidgetMacNSWindow ] || return 0
+  send layout
+  warning=$(sed -n "/^browser: drive $step: /,\$p" "$log" | sed -n 's/^browser: layout child //p' |
+    head -1)
+  [ -n "$warning" ] || fail "Chrome's warning before http wasn't a dialog over the page"
+  warning_x=${warning%%,*} warning_y=${warning#*,}
+  warning_y=${warning_y%% *} warning_width=${warning#* }
+  send click $((warning_x + ${warning_width%%x*} / 2)) $((warning_y + 8))
+  [ "$key" = NativeWidgetMacNSWindow ] ||
+    fail "a click on Chrome's warning before http at $warning didn't give it the keyboard: $key, $focus"
 }
 if [ "$major" -ge 157 ]; then
   warned
