@@ -147,6 +147,45 @@ go_from_bar "$plain"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$plain/\$" \
   "$plain didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
 [ "$(tls)" -gt "$before" ] || fail "$plain came over http without trying https first"
+# PROBE #2416, not for merging: Chrome's warning before http, with the keyboard in the page as the
+# bar left it and no click. Which of ⌘L, ⌘T and ⌘W reach the browser?
+heard() {
+  for _ in $(seq 30); do
+    logged "$1" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+await "^browser: page $tab trouble network -20\$" || fail "probe #2416: no warning before http"
+send title
+send key l cmd
+if heard '^browser: command bar shown$'; then
+  echo "probe #2416 warning: ⌘L with no click opened the command bar"
+else
+  echo "probe #2416 warning: ⌘L with no click was lost"
+  send title
+  send key t cmd
+  if heard '^browser: command new-tab via'; then
+    echo "probe #2416 warning: ⌘T was heard after the lost ⌘L"
+  else
+    echo "probe #2416 warning: ⌘T was lost too"
+    send title
+    send key w cmd
+    if heard '^browser: command close-tab via'; then
+      echo "probe #2416 warning: ⌘W was heard after the lost ⌘L and ⌘T"
+    else
+      echo "probe #2416 warning: ⌘W was lost too"
+      send key r cmd
+      if heard '^browser: command reload via'; then
+        echo "probe #2416 warning: ⌘R was heard after the lost ⌘L, ⌘T and ⌘W"
+      else
+        echo "probe #2416 warning: ⌘R was lost too"
+      fi
+    fi
+  fi
+fi
+grep -n '^browser: drive\|^browser: key window\|^browser: command\|key for tab\|^browser: loaded\|^browser: page' "$log" | tail -40 | sed 's/^/probe #2416 warning: /'
+fail "probe #2416: done"
 before=$(tls)
 go_from_bar "$nearby:$port"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$nearby:$port/\$" \
