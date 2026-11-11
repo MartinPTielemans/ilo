@@ -365,10 +365,12 @@ expect "^browser: remove login [0-9]* 127.0.0.1:$port check@example.test\$" \
 expect "^browser: passwords [0-9]*: none\$" "Settings didn't hear the login was removed"
 
 # With no login saved for the site, Chrome's popup in a sign-up form's new-password field offers
-# Choose Your Own and Use Strong Password, and previews its password in the field. Down selects
-# Choose Your Own, whose return leaves the field to the user. On the page again, down twice selects
-# Use Strong Password, whose return fills the password in; Chrome saves it in the profile, which
-# Settings hears, and the sign-up brings no offer to save it. Made-up usernames only.
+# Choose Your Own and Use Strong Password, and previews its password in the field. Up selects
+# Choose Your Own, whose return leaves the field to the user. On the page again, up then down
+# selects Use Strong Password, whose return fills the password in; Chrome saves it in the profile,
+# which Settings hears, and the sign-up brings no offer to save it. Made-up usernames only. Up
+# first, since the popup's first down selects Choose Your Own on 156 and Use Strong Password on
+# 157, where up selects Choose Your Own on both, and either key then moves to the other button.
 # Loads the sign-up page and types username $1, then tab takes the keyboard to the password field,
 # where down brings the popup: Chrome's desktop Autofill opens on a click, typing or an arrow key in
 # a field, not on focus from the keyboard.
@@ -383,11 +385,11 @@ generation_offered() {
 }
 generation_offered own@example.test
 ../tools/window-screenshot.sh "$pid" "$out/password-generation.png" || fail "no window to capture"
-send key down
+send key up
 send key return
 expect "^browser: title $tab own\$" "Choose Your Own didn't leave the password field to the user"
 generation_offered new@example.test
-send key down
+send key up
 send key down
 send key return
 expect "^browser: title $tab generated\$" "Use Strong Password didn't fill a password in"
