@@ -1051,7 +1051,7 @@ index 5121c41b61..3d7c019c33 100644
      fn successful_compositor_wait_reports_native_callback() {
          let provider = VSyncProvider {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c467101fc8..be358bd26e 100644
+index c467101fc8..4f9f9dda90 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,6 +32,18 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -1089,7 +1089,7 @@ index c467101fc8..be358bd26e 100644
              input_handler: Cell::new(input_handler),
              ime_enabled: Cell::new(true),
              pending_surrogate: Cell::new(pending_surrogate),
-@@ -489,7 +503,19 @@ impl WindowsWindow {
+@@ -489,7 +503,18 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -1097,7 +1097,6 @@ index c467101fc8..be358bd26e 100644
 +        let host_window = Some(NEXT_HOST_WINDOW.replace(0))
 +            .filter(|&host| host != 0)
 +            .map(|host| HWND(host as _));
-+        let parent_hwnd = host_window.or(parent_hwnd);
 +        // A child window leaves its frame, and moving and sizing it, to its host.
 +        let hide_title_bar = hide_title_bar && host_window.is_none();
 +        let (is_movable, is_resizable, is_minimizable) = if host_window.is_some() {
@@ -1110,7 +1109,7 @@ index c467101fc8..be358bd26e 100644
              (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
          } else {
              let mut dwstyle = WS_SYSMENU;
-@@ -510,6 +536,11 @@ impl WindowsWindow {
+@@ -510,6 +535,11 @@ impl WindowsWindow {
  
              (dwexstyle, dwstyle)
          };
@@ -1122,7 +1121,7 @@ index c467101fc8..be358bd26e 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -528,9 +559,9 @@ impl WindowsWindow {
+@@ -528,9 +558,9 @@ impl WindowsWindow {
              handle,
              hide_title_bar,
              display,
@@ -1135,7 +1134,7 @@ index c467101fc8..be358bd26e 100644
              min_size: params.window_min_size,
              executor,
              current_cursor,
-@@ -546,16 +577,25 @@ impl WindowsWindow {
+@@ -546,17 +576,29 @@ impl WindowsWindow {
              draw_coordinator,
              parent_hwnd,
          };
@@ -1158,14 +1157,19 @@ index c467101fc8..be358bd26e 100644
 -                CW_USEDEFAULT,
 -                CW_USEDEFAULT,
 -                CW_USEDEFAULT,
+-                parent_hwnd,
 +                x,
 +                y,
 +                width,
 +                height,
-                 parent_hwnd,
++                // A host isn't the window's GPUI parent, a modal dialog's, which takes the foreground
++                // back as the window is destroyed and would bring the host's window in front of the
++                // app the user moved on to (#2216).
++                host_window.or(parent_hwnd),
                  None,
                  Some(hinstance.into()),
-@@ -569,6 +609,14 @@ impl WindowsWindow {
+                 Some(&context as *const _ as *const _),
+@@ -569,6 +611,14 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -1180,7 +1184,7 @@ index c467101fc8..be358bd26e 100644
          register_drag_drop(&this)?;
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
-@@ -582,6 +630,11 @@ impl WindowsWindow {
+@@ -582,6 +632,11 @@ impl WindowsWindow {
              }
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
@@ -1192,7 +1196,7 @@ index c467101fc8..be358bd26e 100644
              this.state.initial_placement.set(Some(WindowOpenStatus {
                  placement,
                  state: WindowOpenState::Windowed,
-@@ -623,7 +676,8 @@ impl Drop for WindowsWindow {
+@@ -623,7 +678,8 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -1202,7 +1206,7 @@ index c467101fc8..be358bd26e 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -924,7 +978,12 @@ impl PlatformWindow for WindowsWindow {
+@@ -924,7 +980,12 @@ impl PlatformWindow for WindowsWindow {
                  set_window_composition_attribute(hwnd, None, 0);
              }
              WindowBackgroundAppearance::Transparent => {
@@ -1216,7 +1220,7 @@ index c467101fc8..be358bd26e 100644
              }
              WindowBackgroundAppearance::Blurred => {
                  set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-@@ -968,7 +1027,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -968,7 +1029,14 @@ impl PlatformWindow for WindowsWindow {
          self.state.is_fullscreen()
      }
  
@@ -1232,7 +1236,7 @@ index c467101fc8..be358bd26e 100644
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
-@@ -1041,7 +1107,6 @@ impl PlatformWindow for WindowsWindow {
+@@ -1041,7 +1109,6 @@ impl PlatformWindow for WindowsWindow {
              .log_err();
      }
  
