@@ -262,6 +262,7 @@ fn the_server_answers_what_needs_no_browser() {
             "run_steps",
             "hand_off",
             "ask_for_tab",
+            "point",
             "pin_tab",
             "unpin_tab",
             "remove_tab"

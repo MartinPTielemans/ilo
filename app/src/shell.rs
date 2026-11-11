@@ -109,6 +109,7 @@ mod page_motion;
 mod pair;
 mod panes;
 mod permission;
+mod pointing;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
@@ -1639,6 +1640,8 @@ pub struct Shell {
     content_scale_told: f32,
     /// The agent's pointer at an element in the page, while it acts there.
     agent_pointer: Option<agent_pointer::AgentPointer>,
+    /// Point's mode, while the user points for an agent (#2352).
+    point: Option<pointing::Pointing>,
     /// A link dragged over the page, and its targets.
     link_over: Option<split_targets::LinkOver>,
     /// Where the focused page's left edge is in the window, and how far in from the page frame's
@@ -2097,6 +2100,7 @@ impl Shell {
             content_scale: Default::default(),
             content_scale_told: 1.,
             agent_pointer: None,
+            point: None,
             link_over: None,
             pane_corner: (0., 0., 0.),
             archive: Vec::new(),
@@ -2624,6 +2628,8 @@ impl Shell {
             }
             // The card moved, such as with the sidebar, and the plate in its corner with it.
             self.show_link(cx);
+            // And the page pointed in, with Point's bar and the note at its element.
+            self.point_followed(cx);
         }
         self.lay_out_side_panel(cx);
     }
@@ -3318,6 +3324,8 @@ impl Shell {
         self.selected_for_picture(tab, cx);
         self.hid_for_cards(hidden, cx);
         self.cast_for_shown(cx);
+        // Point's frame and bar are its tab's, so they go and come back with it.
+        self.point_followed(cx);
         // check.sh reads this line.
         let panes = self
             .panes(tab)

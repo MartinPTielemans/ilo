@@ -27,6 +27,7 @@ fn card(n: u64, dot: Dot) -> Card {
         open: Vec::new(),
         retry: false,
         command: None,
+        point: None,
     }
 }
 

@@ -3579,7 +3579,41 @@ impl Settings {
                 vec![switch],
             ))
         });
-        let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
+        // Point (#2352) asks the user to click on a page what they mean; its own switch, as
+        // what the user sends is theirs to give.
+        let point_on = agents.read(cx).point_on();
+        let pointing = on.then(|| {
+            let switch = {
+                let agents = agents.clone();
+                let set = move |on, cx: &mut App| {
+                    agents.update(cx, |agents, cx| agents.set_point_on(on, cx))
+                };
+                self.toggle(
+                    "agent pointing",
+                    "Agents can ask you to point",
+                    point_on,
+                    set,
+                    accent,
+                    cx,
+                )
+            };
+            let line = match point_on {
+                true => {
+                    "An agent can ask you to click what you mean on a page. It gets only the \
+                         notes you send."
+                }
+                false => "Off: an agent that asks you to point hears it's turned off.",
+            };
+            nested(setting(
+                look,
+                "Agents can ask you to point",
+                Some(line.into()),
+                vec![switch],
+            ))
+        });
+        let mut blocks = vec![Block::Rows(
+            [master].into_iter().chain(tasks).chain(pointing).collect(),
+        )];
         if tasks_on {
             blocks.push(Block::Heading("Tasks".into()));
             blocks.push(Block::Group(self.tasks(agents, cx)));

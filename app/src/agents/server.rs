@@ -573,7 +573,7 @@ fn lanes(line: &str) -> Vec<Lane> {
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };
-    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab").then_some(Lane::Asks);
+    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab" | "point").then_some(Lane::Asks);
     own.into_iter().chain(asks).collect()
 }
 

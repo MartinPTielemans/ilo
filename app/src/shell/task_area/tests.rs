@@ -705,6 +705,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         open: Vec::new(),
         retry: false,
         command: None,
+        point: None,
     };
     shell.update(cx, |shell, cx| {
         shell.set_page(

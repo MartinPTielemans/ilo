@@ -1007,6 +1007,32 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_boost_zap(tab, on) };
     }
 
+    fn may_point(&self, tab: u64, agent: &str) -> i32 {
+        let Ok(agent) = std::ffi::CString::new(agent) else {
+            return bc::BC_POINT_OTHER_AGENT as i32;
+        };
+        unsafe { bc::bc_tab_may_point(tab, agent.as_ptr()) }
+    }
+
+    fn start_point(&self, id: u64, tab: u64, _: &mut App) {
+        agents_core::update(move |agents, cx| agents.point_start(id, tab, cx));
+    }
+
+    fn answer_point(&self, id: u64, notes: Option<Vec<browser::point::Note>>, _: &mut App) {
+        agents_core::update(move |agents, cx| match notes {
+            Some(notes) => agents.point_send(id, notes, cx),
+            None => agents.point_drop(id, cx),
+        });
+    }
+
+    fn point_do(&self, tab: u64, inner: bool) {
+        let what = match inner {
+            true => bc::BC_POINT_DO_INNER,
+            false => bc::BC_POINT_DO_OUTER,
+        };
+        unsafe { bc::bc_tab_point_do(tab, what as i32) };
+    }
+
     fn edit_file(&self, path: &std::path::Path, _: &mut App) {
         boosts_host::edit_file(path);
     }

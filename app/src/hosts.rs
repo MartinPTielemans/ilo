@@ -14,8 +14,10 @@ pub(crate) const FOLDER_PREVIEW: c_int = 3;
 
 pub(crate) const BOOST_EDITOR: c_int = 4;
 
+pub(crate) const NOTE_PANEL: c_int = 5;
+
 /// The Site Controls aren't one of the host's overlays, but its elevation call takes them too.
-pub(crate) const SITE_CONTROLS: c_int = 5;
+pub(crate) const SITE_CONTROLS: c_int = 6;
 
 /// Shows ilo's menu of `items` at `at` in the content of `ui_view`'s window, any of the app's, or
 /// of its reveal's panel if `in_reveal`, in `look`, and calls `chosen` once it closes.
@@ -610,6 +612,43 @@ impl boost_editor::Host for BoostEditorHost {
 /// The user left the Boost editor, such as with a click outside it.
 pub(crate) extern "C" fn boost_editor_dismissed() {
     update_app(boost_editor::dismissed);
+}
+
+/// Point's note panel's requests, to the host's overlay window, over the window pointed in, as the
+/// pickers': it takes the keyboard, and a click outside closes it.
+pub(crate) struct NotePanelHost;
+
+impl browser::note_panel::Host for NotePanelHost {
+    fn show(&self, window: u64, bounds: Bounds<Pixels>) {
+        let Some(view) = ui_view_of(window) else {
+            return;
+        };
+        let (left, top) = (bounds.left().into(), bounds.top().into());
+        unsafe {
+            platform::host_set_overlay_height(NOTE_PANEL, bounds.size.height.into());
+            platform::host_show_overlay(
+                NOTE_PANEL,
+                view,
+                false,
+                left,
+                top,
+                bounds.size.width.into(),
+            );
+        }
+    }
+
+    fn resize(&self, height: f32) {
+        unsafe { platform::host_set_overlay_height(NOTE_PANEL, height.into()) };
+    }
+
+    fn hide(&self) {
+        unsafe { platform::host_hide_overlay(NOTE_PANEL) };
+    }
+}
+
+/// The user left the note panel with a click outside it.
+pub(crate) extern "C" fn note_panel_dismissed() {
+    update_app(browser::note_panel::dismissed);
 }
 
 /// The tooltip's requests, to the host's tooltip window, over the window the pointer is in.

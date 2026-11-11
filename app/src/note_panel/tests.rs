@@ -1,0 +1,168 @@
+//! Where the note panel goes beside an element, and its ↩ Add and esc, on a host that records what
+//! it asks of its window.
+
+use std::cell::RefCell;
+
+use gpui::{TestAppContext, VisualTestContext};
+
+use super::*;
+
+fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
+    Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+}
+
+const PAGE: (f32, f32, f32, f32) = (0., 0., 1000., 800.);
+
+fn page() -> Bounds<Pixels> {
+    bounds(PAGE.0, PAGE.1, PAGE.2, PAGE.3)
+}
+
+#[test]
+fn it_goes_left_of_the_element_with_room_there() {
+    let at = bounds(600., 300., 200., 100.);
+    let placed = place(at, page(), 150.);
+    assert_eq!(placed.origin.x, px(600. - GAP - WIDTH));
+    // Its top a little over the element's, so the field is level with the mark's label.
+    assert_eq!(placed.origin.y, px(300. - ABOVE));
+    assert_eq!(placed.size, size(px(WIDTH), px(150.)));
+}
+
+#[test]
+fn it_goes_right_when_the_left_has_no_room() {
+    let at = bounds(100., 300., 200., 100.);
+    assert_eq!(place(at, page(), 150.).origin.x, px(300. + GAP));
+}
+
+#[test]
+fn over_an_elements_left_when_neither_side_has_room() {
+    // As wide as most of the page: the panel covers its left, inside the page.
+    let at = bounds(100., 300., 800., 100.);
+    assert_eq!(place(at, page(), 150.).origin.x, px(100.));
+    let wide = bounds(500., 300., 480., 100.);
+    assert_eq!(
+        place(wide, bounds(400., 0., 600., 800.), 150.).origin.x,
+        px(500.)
+    );
+}
+
+#[test]
+fn it_stays_in_the_page() {
+    // At the page's top, and at its foot.
+    assert_eq!(
+        place(bounds(600., 5., 100., 40.), page(), 150.).origin.y,
+        px(0.)
+    );
+    let low = place(bounds(600., 780., 100., 20.), page(), 150.);
+    assert_eq!(low.origin.y, px(800. - 150.));
+}
+
+#[derive(Default)]
+struct Recorder(RefCell<Vec<String>>);
+
+impl Host for Recorder {
+    fn show(&self, window: u64, _: Bounds<Pixels>) {
+        self.0.borrow_mut().push(format!("show {window}"));
+    }
+
+    fn resize(&self, _: f32) {}
+
+    fn hide(&self) {
+        self.0.borrow_mut().push("hide".into());
+    }
+}
+
+/// The panel's window, and what its note's Add and its closing told the shell.
+fn panel_window(
+    cx: &mut TestAppContext,
+) -> (
+    Rc<Recorder>,
+    Rc<RefCell<Vec<String>>>,
+    WindowHandle<NotePanel>,
+) {
+    let host = Rc::new(Recorder::default());
+    let told = Rc::new(RefCell::new(Vec::new()));
+    let window = cx.update(|cx| {
+        open_at(host.clone(), bounds(0., 0., WIDTH, 120.), true, cx).expect("the panel's window")
+    });
+    (host, told, window)
+}
+
+fn panel(told: &Rc<RefCell<Vec<String>>>) -> Panel {
+    let added = told.clone();
+    let dropped = told.clone();
+    Panel {
+        number: 1,
+        agent: "Claude".into(),
+        element: Element {
+            kind: "section".into(),
+            name: "Trending".into(),
+            ..Default::default()
+        },
+        at: bounds(600., 300., 200., 100.),
+        page: page(),
+        palette: Palette::default(),
+        added: Rc::new(move |words, _| added.borrow_mut().push(format!("added {words}"))),
+        dropped: Rc::new(move |_| dropped.borrow_mut().push("dropped".into())),
+    }
+}
+
+#[gpui::test]
+fn add_notes_what_the_user_wrote_and_esc_drops_it(cx: &mut TestAppContext) {
+    let (host, told, window) = panel_window(cx);
+    cx.update(|cx| show(4, panel(&told), cx));
+    assert_eq!(host.0.take(), ["show 4"]);
+
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_input("The title is cut off");
+    visual.simulate_keystrokes("enter");
+    assert_eq!(host.0.take(), ["hide"]);
+    assert_eq!(told.take(), ["added The title is cut off"]);
+
+    // A new note starts empty; esc closes it without a note.
+    cx.update(|cx| show(4, panel(&told), cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_keystrokes("escape");
+    assert_eq!(host.0.take(), ["show 4", "hide"]);
+    assert_eq!(told.take(), ["dropped"]);
+}
+
+#[gpui::test]
+fn the_same_note_asked_again_only_moves_and_keeps_its_words(cx: &mut TestAppContext) {
+    let (host, told, window) = panel_window(cx);
+    cx.update(|cx| show(4, panel(&told), cx));
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_input("Too small");
+    // The page scrolled: the same note, its element higher.
+    let mut moved = panel(&told);
+    moved.at = bounds(600., 200., 200., 100.);
+    cx.update(|cx| show(4, moved, cx));
+    assert_eq!(host.0.take(), ["show 4", "show 4"]);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.simulate_keystrokes("enter");
+    assert_eq!(told.take(), ["added Too small"]);
+}
+
+#[gpui::test]
+fn a_click_outside_drops_the_note(cx: &mut TestAppContext) {
+    let (_, told, _) = panel_window(cx);
+    cx.update(|cx| {
+        show(4, panel(&told), cx);
+        dismissed(cx);
+        // Once closed, another click outside drops nothing.
+        dismissed(cx);
+    });
+    assert_eq!(told.take(), ["dropped"]);
+}
+
+#[gpui::test]
+fn hidden_with_its_page_it_doesnt_drop_the_note(cx: &mut TestAppContext) {
+    let (host, told, _) = panel_window(cx);
+    cx.update(|cx| {
+        show(4, panel(&told), cx);
+        // Another window's page going from view leaves it.
+        hide(5, cx);
+        hide(4, cx);
+    });
+    assert_eq!(host.0.take(), ["show 4", "hide"]);
+    assert_eq!(told.take(), Vec::<String>::new());
+}
