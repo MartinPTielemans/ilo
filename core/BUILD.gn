@@ -561,6 +561,7 @@ source_set("browser_core") {
     "//mojo/public/cpp/system",
     "//net",
     "//services/media_session/public/mojom",
+    "//services/metrics/public/cpp:metrics_cpp",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//skia",

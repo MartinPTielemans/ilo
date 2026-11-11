@@ -55,12 +55,14 @@ void ApplyAdBlocking();
 // Puts the browser's own ad blocker (native_ad_block.h) between the requests of the factory
 // |factory_builder| builds and the network, from ContentBrowserClient::WillCreateURLLoaderFactory,
 // where it blocks: with --ad-block-engine=native and ad blocking on, for a web page on a site the
-// user hasn't turned it off on. A page open as it's turned on blocks from its next load.
+// user hasn't turned it off on. A page open as it's turned on blocks from its next load. What it
+// blocks counts for the page of |ukm_source_id|, as Site Controls shows it.
 void ProxyForAdBlock(content::BrowserContext* context,
                      content::RenderFrameHost* frame,
                      content::ContentBrowserClient::URLLoaderFactoryType type,
                      const url::Origin& request_initiator,
                      const net::IsolationInfo& isolation_info,
+                     ukm::SourceIdObj ukm_source_id,
                      network::URLLoaderFactoryBuilder& factory_builder);
 
 // Whether the user turned it off on the site of |url| in |context|'s profile, where it neither
