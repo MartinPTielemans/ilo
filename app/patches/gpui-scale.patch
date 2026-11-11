@@ -1,3 +1,50 @@
+diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
+index a46c580fc1..453c70002e 100644
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -76,7 +76,6 @@ futures-concurrency = { workspace = true, optional = true }
+ gpui_macros.workspace = true
+ gpui_shared_string.workspace = true
+ http_client.workspace = true
+-image.workspace = true
+ inventory.workspace = true
+ itertools.workspace = true
+ log.workspace = true
+@@ -89,10 +88,8 @@ chrono = { workspace = true, default-features = true }
+ profiling.workspace = true
+ rand = { workspace = true, features = ["small_rng", "thread_rng"] }
+ raw-window-handle.workspace = true
+-regex = { workspace = true, default-features = true }
+ refineable.workspace = true
+ scheduler.workspace = true
+-resvg.workspace = true
+ usvg.workspace = true
+ ttf-parser = "0.25"
+ schemars = { workspace = true, features = ["derive"] }
+@@ -132,7 +129,10 @@ async-channel.workspace = true
+ async-channel = { workspace = true, features = ["std"] }
+ 
+ [target.'cfg(not(target_family = "wasm"))'.dependencies]
++image.workspace = true
+ pollster.workspace = true
++regex = { workspace = true, default-features = true }
++resvg.workspace = true
+ 
+ [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", target_os = "ios"))'.dependencies]
+ async-tungstenite = { workspace = true, optional = true }
+@@ -141,7 +141,12 @@ dioxus-devtools-types = { version = "=0.7.10", optional = true }
+ smol = { workspace = true, optional = true }
+ subsecond = { version = "=0.7.10", optional = true }
+ 
++# The web downloads every decoder it carries, so it decodes favicons' PNG and ICO, and the GIF and
++# WebP that `img` animates, and finds emoji with one Unicode table.
+ [target.'cfg(target_family = "wasm")'.dependencies]
++image = { version = "0.25.1", default-features = false, features = ["gif", "ico", "png", "webp"] }
++regex = { version = "1.5", default-features = false, features = ["std", "unicode-bool"] }
++resvg = { version = "0.46.0", default-features = false, features = ["text"] }
+ getrandom = { version = "0.3.4", features = ["wasm_js"] }
+ uuid = { workspace = true, features = ["js"] }
+ 
 diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
 index 54b72a63ec..998ebbe45a 100644
 --- a/crates/gpui/src/app/test_context.rs

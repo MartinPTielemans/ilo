@@ -520,6 +520,29 @@ Browser* g_toast_over;
 NSWindow* g_toast;
 NSView* g_toast_view;
 bool g_toast_shown = false;
+
+// The foot bar, the browser window it shows over, and where: its size, centred between its insets
+// from the content's left and right edges, its bottom over the content's (host_show_foot_bar).
+Browser* g_foot_bar_over;
+NSWindow* g_foot_bar;
+NSView* g_foot_bar_view;
+bool g_foot_bar_shown = false;
+unsigned g_foot_bar_changes = 0;
+double g_foot_bar_left = 0;
+double g_foot_bar_right = 0;
+double g_foot_bar_bottom = 0;
+NSSize g_foot_bar_size;
+
+void PlaceFootBar() {
+  NSWindow* window = g_foot_bar_over->window;
+  NSRect content = [window contentRectForFrameRect:window.frame];
+  const double across = NSWidth(content) - g_foot_bar_left - g_foot_bar_right;
+  [g_foot_bar setFrame:NSMakeRect(NSMinX(content) + g_foot_bar_left +
+                                      (across - g_foot_bar_size.width) / 2,
+                                  NSMinY(content) + g_foot_bar_bottom, g_foot_bar_size.width,
+                                  g_foot_bar_size.height)
+               display:NO];
+}
 // Whether the toast has buttons, so its plate takes clicks; its window's margin, where its shadow
 // falls, never does. The plate, from the window's top left, and the monitor that hears the pointer
 // move on and off it, since a window is all or nothing for the mouse.
@@ -2061,6 +2084,10 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
                                                 if (g_toast_shown && g_toast_over == browser) {
                                                   PlaceToast();
                                                 }
+                                                if (g_foot_bar_shown &&
+                                                    g_foot_bar_over == browser) {
+                                                  PlaceFootBar();
+                                                }
                                                 if (g_site_controls_shown &&
                                                     g_site_controls_over == browser) {
                                                   PlaceSiteControls();
@@ -2629,6 +2656,9 @@ void host_forget_window(void* ui_view) {
   }
   if (g_toast_shown && g_toast_over == browser) {
     host_hide_toast();
+  }
+  if (g_foot_bar_shown && g_foot_bar_over == browser) {
+    host_hide_foot_bar();
   }
   if (g_tooltip_over == browser) {
     host_hide_tooltip(0);
@@ -4273,6 +4303,69 @@ void host_hide_toast(void) {
   g_toast_plate = NSZeroRect;
   [g_toast_over->window removeChildWindow:g_toast];
   [g_toast orderOut:nil];
+}
+
+void host_add_foot_bar(void* foot_bar_view) {
+  g_foot_bar_view = (__bridge NSView*)foot_bar_view;
+  g_foot_bar = g_foot_bar_view.window;
+  MakeOverlay(g_foot_bar);
+  // The UI draws the bar's rounded shape, which a borderless window's shadow takes, as the find
+  // bar's does.
+  g_foot_bar.styleMask = NSWindowStyleMaskBorderless;
+  g_foot_bar.hasShadow = YES;
+  // Its buttons take clicks, and the keyboard stays with the browser window, where the page has
+  // the mode's keys.
+  NeverKey(g_foot_bar);
+}
+
+void host_show_foot_bar(void* ui_view,
+                        double left,
+                        double right,
+                        double bottom,
+                        double width,
+                        double height) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!g_foot_bar || !browser || !browser->window) {
+    return;
+  }
+  if (g_foot_bar_shown && g_foot_bar_over != browser) {
+    host_hide_foot_bar();
+  }
+  g_foot_bar_shown = true;
+  g_foot_bar_over = browser;
+  g_foot_bar_left = left;
+  g_foot_bar_right = right;
+  g_foot_bar_bottom = bottom;
+  g_foot_bar_size = NSMakeSize(width, height);
+  const unsigned change = ++g_foot_bar_changes;
+  // After the UI's update that asked, as the find bar does: it goes on screen once it has drawn
+  // what it shows now, since a hidden window keeps the last frame it drew.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (change != g_foot_bar_changes) {
+      return;
+    }
+    PlaceFootBar();
+    [g_foot_bar_view.layer setNeedsDisplay];
+    [g_foot_bar_view.layer displayIfNeeded];
+    [g_foot_bar invalidateShadow];
+    if (g_foot_bar.parentWindow != browser->window) {
+      AddOver(browser->window, g_foot_bar);
+      RaiseOverlays(browser, g_foot_bar);
+      fprintf(stderr, "browser: foot bar shown\n");
+    }
+  });
+}
+
+void host_hide_foot_bar(void) {
+  if (!g_foot_bar_shown) {
+    return;
+  }
+  g_foot_bar_shown = false;
+  // Cancels a show still waiting for the bar to draw.
+  ++g_foot_bar_changes;
+  [g_foot_bar.parentWindow removeChildWindow:g_foot_bar];
+  [g_foot_bar orderOut:nil];
+  fprintf(stderr, "browser: foot bar hidden\n");
 }
 
 void host_add_tooltip(void* tooltip_view, double margin, void (*away)(void)) {

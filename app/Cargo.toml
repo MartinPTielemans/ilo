@@ -26,7 +26,8 @@ prod = []
 
 [dependencies]
 gpui = { path = ".deps/zed/crates/gpui" }
-gpui_platform = { path = ".deps/zed/crates/gpui_platform", features = ["font-kit", "runtime_shaders"] }
+# Without threads, which on the web need nightly Rust and a cross-origin-isolated page.
+gpui_platform = { path = ".deps/zed/crates/gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
 # The version GPUI decodes with, for a favicon's pixels and the images drawn from them.
 image = { version = "0.25", default-features = false, features = ["png"] }
 raw-window-handle = "0.6"
@@ -39,14 +40,14 @@ emojis = "0.9"
 # Arc's sidebar and Chromium's Local State, read by the import, and the agents' MCP server's
 # JSON-RPC messages.
 serde_json = "1"
-# The other browsers' history, in SQLite files, built in so every system reads them alike.
-rusqlite = { version = "0.41", features = ["bundled"] }
-# Safari's bookmarks, a property list.
-plist = { version = "1", default-features = false }
 # The agents' MCP server: the channel its threads hand calls to the UI thread on, and the agents'
 # tokens. The server itself is the app's own (src/agents/server.rs).
 futures = "0.3"
 getrandom = "0.3"
+# Safari's bookmarks, a property list.
+plist = { version = "1", default-features = false }
+# std's clock, which panics on the web, where this one reads the page's.
+web-time = "1"
 # The local time an agent task's limit resets at. GPUI's dependencies bring it already.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The screenshots a task's trace shows, which the core hands over in base64. GPUI's dependencies
@@ -56,6 +57,24 @@ base64 = "0.22"
 # into the picture. GPUI's dependencies bring both already.
 lyon = "1.0"
 tiny-skia = "0.11"
+
+# What the web's demo has no use for, and can't build: the import's reader of the other browsers'
+# history, whose SQLite's C would have to be built for the web.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The other browsers' history, in SQLite files, built in so every system reads them alike.
+rusqlite = { version = "0.41", features = ["bundled"] }
+
+# The preview on the web, for the site: GPUI's web platform draws it in a canvas the page hands it.
+[target.'cfg(target_family = "wasm")'.dependencies]
+# The page's canvas, which the demo draws in (patches/gpui-web-page.patch).
+gpui_web = { path = ".deps/zed/crates/gpui_web", default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Performance", "Response", "Window", "console"] }
+# The browser's random numbers and clock, for the agents' tokens and a task's local time.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }
 
 # The session and the timeout of the shell Connect reads the user's PATH from
 # (src/agents/clients.rs), in the version GPUI's already brings.
@@ -120,3 +139,13 @@ zbus = { version = "5.13", default-features = false, features = ["async-io", "p2
 [patch.crates-io]
 accesskit_macos = { path = ".deps/accesskit_macos" }
 accesskit_atspi_common = { path = ".deps/accesskit_atspi_common" }
+
+# The site's demo, which every visitor downloads, so small over quick to build:
+# `cargo build --profile web --target wasm32-unknown-unknown --bin preview`.
+[profile.web]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

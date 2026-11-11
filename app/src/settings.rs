@@ -441,6 +441,8 @@ pub struct Settings {
     /// Whether the window is dark, as View › Appearance or the system has it, which its rows,
     /// pop-up menus and the views it shows follow.
     dark: bool,
+    /// View › Appearance's choice, which General's Appearance rings.
+    appearance: Appearance,
     look: RowLook,
     /// The card the section shows on, which a section starts at the top of.
     card: Card,
@@ -1260,6 +1262,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             section: Section::General,
             focus: cx.focus_handle(),
             dark,
+            appearance: shell::app_appearance(cx),
             look,
             card: Card::default(),
             shown: false,
@@ -1569,6 +1572,18 @@ impl Settings {
     /// Takes the look View › Appearance, else the system, gives it now, and hands it to the views
     /// it shows.
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A choice that leaves the look as it was, such as Automatic after Light on a light
+        // system, still moves Appearance's ring.
+        let appearance = shell::app_appearance(cx);
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            // check.sh waits for this line.
+            log!(
+                "browser: settings appearance {}",
+                appearance_title(appearance)
+            );
+            cx.notify();
+        }
         let dark = dark(window, cx);
         if dark == self.dark {
             return;
@@ -1860,7 +1875,7 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let appearance = shell::app_appearance(cx);
+        let appearance = self.appearance;
         let appearance_line: SharedString = match cfg!(target_os = "macos") {
             true => "Light, dark, or as macOS is. View › Appearance has it too.",
             false => "Light, dark, or as the system is.",
@@ -1880,8 +1895,7 @@ impl Settings {
             },
         )
         .relative()
-        // Drawn again once the appearance changes, from here or View › Appearance, which check.sh
-        // waits for.
+        // Drawn once for each choice the first time it's shown, which check.sh waits for.
         .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
         // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
         let appearances = Row {
