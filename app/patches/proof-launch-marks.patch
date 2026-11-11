@@ -96,7 +96,7 @@ index a56dd63fc9..c5b787b627 100644
                              })
                              .log_err();
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index d0081a535a..f59009dd23 100644
+index d0081a535a..31f157a39a 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -654,6 +654,7 @@ impl X11WindowState {
@@ -132,6 +132,22 @@ index d0081a535a..f59009dd23 100644
  
              // Set max window size hints based on the GPU's maximum texture dimension.
              // This prevents the window from being resized larger than what the GPU can render.
+@@ -1048,7 +1052,14 @@ impl X11WindowState {
+                 hidden: false,
+                 appearance,
+                 handle,
+-                background_appearance: WindowBackgroundAppearance::Opaque,
++                // As the renderer starts, or the decorations' update_transparency, which comes
++                // before GPUI sets the window's background, builds a set of opaque pipelines
++                // that the background then replaces (#2384).
++                background_appearance: if std::env::var_os("BROWSER_PROOF_BEFORE").is_some() {
++                    WindowBackgroundAppearance::Opaque
++                } else {
++                    WindowBackgroundAppearance::Transparent
++                },
+                 client_side_decorations_supported,
+                 decorations: WindowDecorations::Server,
+                 last_insets: [0, 0, 0, 0],
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
 index 86c32284ee..8df9d07bf4 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
