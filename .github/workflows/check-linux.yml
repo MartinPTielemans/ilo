@@ -281,7 +281,8 @@ jobs:
       # clipboard (check/lib.sh's clipboard_holds). The access run reads the app's tree over
       # AT-SPI, on buses of its own from dbus-daemon and at-spi2-core, and the notifications and mcp runs'
       # notification server is python3-gi's, on a bus of its own. check/ime.sh types through
-      # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes.
+      # fcitx5, with check/vkbd's keyboard, whose keymap xkbcli makes, and Korean through
+      # fcitx5-hangul.
       # Ubuntu's AppArmor denies Chromium's sandbox the user namespaces it needs, so the runner
       # allows them, and the sandbox stays on.
       # The packages come from the Actions cache, and from the mirror only on a miss (#1969), in
@@ -293,7 +294,7 @@ jobs:
             libclang-dev libfontconfig-dev libwayland-dev
             libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers libegl1
             libgl1-mesa-dri xvfb xauth openbox imagemagick xdotool xclip ffmpeg sway grim xwayland
-            dbus-daemon at-spi2-core fcitx5 libxkbcommon-tools wl-clipboard python3-gi
+            dbus-daemon at-spi2-core fcitx5 fcitx5-hangul libxkbcommon-tools wl-clipboard python3-gi
 
       - if: ${{ steps.engine.outputs.found == 'true' }}
         run: |
