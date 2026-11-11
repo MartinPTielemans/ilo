@@ -1,7 +1,9 @@
-//! Settings › Tabs & Sidebar › Sidebar position (#2407): two drawings of the window, the sidebar
-//! on the left in one and on the right in the other, each with the window's buttons where that
-//! side puts them on this OS. A click on one picks it, and so do ← and → while the pair has the
-//! keyboard; an assistive app reads them as a pair of options with one chosen.
+//! Settings' rows chosen from drawings: a row of small pictures under the row's line, the chosen
+//! one ringed and its name beneath in the row's ink. A click on one picks it, and so do ← and →
+//! while the row has the keyboard; an assistive app reads them as options with one chosen.
+//!
+//! Sidebar position (#2407) draws the window with the sidebar on each side, and Appearance (#2429)
+//! draws it light, dark, and split between the two for Automatic.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,7 +16,9 @@ use gpui::{
     px, rgb, svg,
 };
 
+use crate::palette::{INK, PAPER};
 use crate::settings_rows::{Look, drawn, ring};
+use crate::theme::Appearance;
 use crate::tokens::settings::{
     SIDE_BAR, SIDE_BAR_FIRST, SIDE_BUTTON, SIDE_BUTTON_GAP, SIDE_BUTTONS, SIDE_GAP, SIDE_GLYPH,
     SIDE_GLYPH_GAP, SIDE_HEADING, SIDE_HEIGHT, SIDE_INSET, SIDE_LABEL_GAP, SIDE_MAC_CLOSE,
@@ -49,28 +53,120 @@ impl Buttons {
     };
 }
 
-/// A side's name, as the drawing's label and an assistive app say it.
-pub fn title(right: bool) -> &'static str {
-    if right { "Right" } else { "Left" }
+/// One of a row's pictures: its name, under it and as an assistive app says it, and its drawing.
+pub struct Choice {
+    pub title: &'static str,
+    pub drawing: gpui::Div,
 }
 
-/// The side a key moves the choice to, if it's ← or → alone and that side isn't chosen.
-pub fn keyed(event: &KeyDownEvent, right: bool) -> Option<bool> {
+/// The choice a key moves to among `count`, if it's ← or → alone and there's one that way.
+pub fn keyed(event: &KeyDownEvent, chosen: usize, count: usize) -> Option<usize> {
     let keys = &event.keystroke;
     if keys.modifiers.modified() {
         return None;
     }
     match keys.key.as_str() {
-        "left" if right => Some(false),
-        "right" if !right => Some(true),
+        "left" => chosen.checked_sub(1),
+        "right" => Some(chosen + 1).filter(|&next| next < count),
         _ => None,
     }
 }
 
-/// The pair, `right` chosen, on a row's plate in `look`, its drawings in the window's `base` ink
-/// (the paper in dark, the ink in light). `pick` is called with the side picked, by a click or a
-/// key, only when it isn't the one chosen. `logged` is Settings' (settings_rows::drawn), so
-/// check.sh can click each drawing.
+/// The row's pictures, `chosen` ringed, on a row's plate in `look`, the others with a hairline in
+/// the window's `base` ink. `name` is the row's, which an assistive app reads for the group, and
+/// `logged` is Settings' (settings_rows::drawn), so check.sh can click each picture as "<name>
+/// option <title>", the name in lower case. `pick` is called with the index picked, by a click or
+/// a key, only when it isn't the one chosen.
+#[allow(clippy::too_many_arguments)]
+pub fn pictures(
+    look: &Look,
+    base: Rgba,
+    name: &'static str,
+    chosen: usize,
+    choices: Vec<Choice>,
+    a11y: bool,
+    logged: Rc<RefCell<Vec<String>>>,
+    pick: impl Fn(usize, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let pick = Rc::new(pick);
+    let keyed_pick = pick.clone();
+    let count = choices.len();
+    let logged_name = name.to_lowercase();
+    let options = choices.into_iter().enumerate().map(|(index, choice)| {
+        let is_chosen = index == chosen;
+        let pick = pick.clone();
+        let label = div()
+            .text_size(px(SMALL))
+            .text_color(if is_chosen { look.ink } else { look.detail })
+            .when(is_chosen, |label| label.font_weight(FontWeight::MEDIUM))
+            .child(choice.title);
+        // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the accent.
+        let ring = match is_chosen {
+            true => vec![
+                spread(look.accent, SIDE_RING_GAP + SIDE_RING),
+                spread(look.surface, SIDE_RING_GAP),
+            ],
+            false => vec![spread(base.opacity(SIDE_OTHER), 1.)],
+        };
+        div()
+            .id((name, index))
+            .when(a11y, |option| {
+                let toggled = if is_chosen {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                };
+                option
+                    .role(Role::RadioButton)
+                    .aria_label(choice.title)
+                    .aria_toggled(toggled)
+                    .a11y_synthetic_children(|builder| {
+                        builder.parent_node().add_action(Action::Click)
+                    })
+            })
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(SIDE_LABEL_GAP))
+            .child(choice.drawing.shadow(ring).relative().child(drawn(
+                format!("{logged_name} option {}", choice.title),
+                logged.clone(),
+            )))
+            .child(label)
+            .on_click(move |_, window, cx| {
+                if !is_chosen {
+                    pick(index, window, cx)
+                }
+            })
+            .into_any_element()
+    });
+    div()
+        .id(name)
+        .when(a11y, |row| row.role(Role::RadioGroup).aria_label(name))
+        .tab_index(0)
+        .focus_from_keys_only()
+        .rounded(px(SIDE_RADIUS + SIDE_ROOM))
+        .focus_visible(ring(look.ink))
+        .p(px(SIDE_ROOM))
+        .flex()
+        .gap(px(SIDE_GAP))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if let Some(index) = keyed(event, chosen, count) {
+                cx.stop_propagation();
+                keyed_pick(index, window, cx);
+            }
+        })
+        .children(options)
+}
+
+/// A side's name, as the drawing's label and an assistive app say it.
+pub fn title(right: bool) -> &'static str {
+    if right { "Right" } else { "Left" }
+}
+
+/// Sidebar position's pair, `right` chosen, its drawings in the window's `base` ink (the paper in
+/// dark, the ink in light). `pick` is called with the side picked.
+#[allow(clippy::too_many_arguments)]
 pub fn picker(
     look: &Look,
     base: Rgba,
@@ -81,83 +177,96 @@ pub fn picker(
     logged: Rc<RefCell<Vec<String>>>,
     pick: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let pick = Rc::new(pick);
-    let keyed_pick = pick.clone();
-    let options = [false, true].map(|side| {
-        let chosen = side == right;
-        let pick = pick.clone();
-        let label = div()
-            .text_size(px(SMALL))
-            .text_color(if chosen { look.ink } else { look.detail })
-            .when(chosen, |label| label.font_weight(FontWeight::MEDIUM))
-            .child(title(side));
-        div()
-            .id(("sidebar-side", usize::from(side)))
-            .when(a11y, |option| {
-                let toggled = if chosen {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                };
-                option
-                    .role(Role::RadioButton)
-                    .aria_label(title(side))
-                    .aria_toggled(toggled)
-                    .a11y_synthetic_children(|builder| {
-                        builder.parent_node().add_action(Action::Click)
-                    })
-            })
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(SIDE_LABEL_GAP))
-            .child(
-                window(look, base, dark, side, chosen, buttons)
-                    .relative()
-                    .child(drawn(
-                        format!("sidebar position option {}", title(side)),
-                        logged.clone(),
-                    )),
-            )
-            .child(label)
-            .on_click(move |_, window, cx| {
-                if !chosen {
-                    pick(side, window, cx)
-                }
-            })
-            .into_any_element()
-    });
-    div()
-        .id("sidebar-position")
-        .when(a11y, |pair| {
-            pair.role(Role::RadioGroup).aria_label("Sidebar position")
+    let choices = [false, true]
+        .map(|side| Choice {
+            title: title(side),
+            drawing: window(base, dark, side, buttons),
         })
-        .tab_index(0)
-        .focus_from_keys_only()
-        .rounded(px(SIDE_RADIUS + SIDE_ROOM))
-        .focus_visible(ring(look.ink))
-        .p(px(SIDE_ROOM))
-        .flex()
-        .gap(px(SIDE_GAP))
-        .on_key_down(move |event: &KeyDownEvent, window, cx| {
-            if let Some(side) = keyed(event, right) {
-                cx.stop_propagation();
-                keyed_pick(side, window, cx);
-            }
-        })
-        .children(options)
+        .into();
+    pictures(
+        look,
+        base,
+        "Sidebar position",
+        usize::from(right),
+        choices,
+        a11y,
+        logged,
+        move |index, window, cx| pick(index == 1, window, cx),
+    )
 }
 
-/// One drawing: the window's material with the sidebar on `right` or not, its buttons at its top,
-/// and the page's card on the other side.
-fn window(
+/// Appearance's choices, in the order they're drawn.
+pub const APPEARANCES: [Appearance; 3] =
+    [Appearance::Automatic, Appearance::Light, Appearance::Dark];
+
+/// An appearance's name, as its picture's label, View › Appearance's items and an assistive app
+/// say it.
+pub fn appearance_title(appearance: Appearance) -> &'static str {
+    match appearance {
+        Appearance::Automatic => "Automatic",
+        Appearance::Light => "Light",
+        Appearance::Dark => "Dark",
+    }
+}
+
+/// Appearance's three, `chosen` ringed: the window as Light and as Dark draw it whatever Settings'
+/// own appearance, and Automatic's split down the middle, its left light and its right dark.
+/// `base` is Settings' ink, for the others' hairline. `pick` is called with the appearance picked.
+pub fn appearance_picker(
     look: &Look,
     base: Rgba,
-    dark: bool,
-    right: bool,
-    chosen: bool,
+    chosen: Appearance,
     buttons: Buttons,
-) -> gpui::Div {
+    a11y: bool,
+    logged: Rc<RefCell<Vec<String>>>,
+    pick: impl Fn(Appearance, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let light = || window(rgb(INK), false, false, buttons);
+    let dark = || window(rgb(PAPER), true, false, buttons);
+    let choices = APPEARANCES
+        .map(|appearance| Choice {
+            title: appearance_title(appearance),
+            drawing: match appearance {
+                Appearance::Light => light(),
+                Appearance::Dark => dark(),
+                Appearance::Automatic => {
+                    let half = SIDE_WIDTH / 2.;
+                    div()
+                        .flex_none()
+                        .w(px(SIDE_WIDTH))
+                        .h(px(SIDE_HEIGHT))
+                        .rounded(px(SIDE_RADIUS))
+                        .child(light())
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left(px(half))
+                                .w(px(half))
+                                .h(px(SIDE_HEIGHT))
+                                .overflow_hidden()
+                                .child(dark().absolute().top_0().left(px(-half))),
+                        )
+                }
+            },
+        })
+        .into();
+    let index = APPEARANCES.iter().position(|&each| each == chosen);
+    pictures(
+        look,
+        base,
+        "Appearance",
+        index.unwrap_or(0),
+        choices,
+        a11y,
+        logged,
+        move |index, window, cx| pick(APPEARANCES[index], window, cx),
+    )
+}
+
+/// The window drawn: its material with the sidebar on `right` or not, its buttons at its top,
+/// and the page's card on the other side.
+fn window(base: Rgba, dark: bool, right: bool, buttons: Buttons) -> gpui::Div {
     let bar = |height: f32, width: f32, alpha: f32| {
         div()
             .flex_none()
@@ -212,14 +321,6 @@ fn window(
                 .iter()
                 .map(|&width| bar(3., width, SIDE_TEXT)),
         );
-    // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the accent.
-    let ring = match chosen {
-        true => vec![
-            spread(look.accent, SIDE_RING_GAP + SIDE_RING),
-            spread(look.surface, SIDE_RING_GAP),
-        ],
-        false => vec![spread(base.opacity(SIDE_OTHER), 1.)],
-    };
     div()
         .flex_none()
         .w(px(SIDE_WIDTH))
@@ -227,7 +328,6 @@ fn window(
         .rounded(px(SIDE_RADIUS))
         .overflow_hidden()
         .bg(rgb(if dark { SIDE_WINDOW } else { SIDE_WINDOW_LIGHT }))
-        .shadow(ring)
         .flex()
         .map(|window| match right {
             true => window.child(page).child(sidebar),

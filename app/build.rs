@@ -4,13 +4,72 @@ fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let header = root.join("../core/public/browser_core.h");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    // The web's preview has neither the core nor a host in C++: the page is its host.
+    let web = std::env::var("CARGO_CFG_TARGET_FAMILY").is_ok_and(|family| family == "wasm");
 
+    println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
+    if !web {
+        native(&root, &header, &os);
+    }
+
+    // The core's API, read from its header, so the two can't drift: on the web too, where the
+    // site's demo reads its constants and calls none of it.
+    bindgen::Builder::default()
+        .header(header.to_string_lossy())
+        .allowlist_function("bc_.*")
+        .allowlist_type("bc_.*")
+        .allowlist_var("BC_.*")
+        .derive_default(true)
+        .rust_edition(bindgen::RustEdition::Edition2024)
+        .generate()
+        .expect("couldn't read the core's header")
+        .write_to_file(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("browser_core.rs"))
+        .unwrap();
+
+    // The name the user reads, from branding/, which build.sh also reads for the app's bundle.
+    let name = root.join("branding/name");
+    let name_text = std::fs::read_to_string(&name).expect("no branding/name");
+    println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
+    println!("cargo:rerun-if-changed={}", name.display());
+    // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
+    // where a new issue is filed (src/build_info.rs).
+    for (file, variable) in [
+        ("branding/site", "APP_SITE"),
+        ("branding/issues", "APP_ISSUES"),
+    ] {
+        let path = root.join(file);
+        let url = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no {file}"));
+        println!("cargo:rustc-env={variable}={}", url.trim());
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    // The sync server the build signs in to unless the user names another (main.rs): ilo's, in
+    // branding/sync-server, which a fork changes or deletes. With no file the build has none. The
+    // folder is watched, as a file that isn't there would have this run on every build.
+    let sync_server = std::fs::read_to_string(root.join("branding/sync-server"));
+    println!(
+        "cargo:rustc-env=SYNC_SERVER={}",
+        sync_server.unwrap_or_default().trim()
+    );
+    println!("cargo:rerun-if-changed={}", root.join("branding").display());
+    println!("cargo:rerun-if-changed=platform");
+    println!("cargo:rerun-if-changed={}", header.display());
+
+    // The look's values, from the file the code and the design file share (tools/design-sync.md).
+    let tokens = root.join("design/tokens.toml");
+    let tokens_text = std::fs::read_to_string(&tokens).expect("no design/tokens.toml");
+    let tokens_rs_path = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("tokens.rs");
+    std::fs::write(tokens_rs_path, tokens_rs(&tokens_text)).unwrap();
+    println!("cargo:rerun-if-changed={}", tokens.display());
+}
+
+/// The C++ host for the OS and the engine the browser links.
+fn native(root: &Path, header: &Path, os: &str) {
     let mut host = cc::Build::new();
     host.cpp(true)
         // The driver calls the core for what only agent code will, once there is some.
         .include(root.join("../core/public"))
         .define("NDEBUG", None);
-    match os.as_str() {
+    match os {
         "macos" => {
             host.file("platform/mac/host.mm")
                 .file("platform/mac/drive.mm")
@@ -115,19 +174,6 @@ fn main() {
     }
     host.compile("host");
 
-    // The core's API, read from its header, so the two can't drift.
-    bindgen::Builder::default()
-        .header(header.to_string_lossy())
-        .allowlist_function("bc_.*")
-        .allowlist_type("bc_.*")
-        .allowlist_var("BC_.*")
-        .derive_default(true)
-        .rust_edition(bindgen::RustEdition::Edition2024)
-        .generate()
-        .expect("couldn't read the core's header")
-        .write_to_file(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("browser_core.rs"))
-        .unwrap();
-
     // Only the browser links the engine; the preview runs without it.
     if os == "windows" {
         // Chromium's framework on Windows is chrome.dll, which the browser loads from beside it.
@@ -178,51 +224,15 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
         println!("cargo:rustc-link-lib=framework=VideoToolbox");
-        translator_swift(&root);
+        translator_swift(root);
     }
 
     // A local engine built from another header would run with shifted calls and layouts. Only the
     // browser, which links it, stops on that (main.rs); the tests and the preview don't link it.
-    println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
-    if let Some(why) = engine_mismatch(&root.join(".deps/Chromium.app"), &header) {
+    if let Some(why) = engine_mismatch(&root.join(".deps/Chromium.app"), header) {
         println!("cargo:rustc-cfg=engine_header_mismatch");
         println!("cargo:rustc-env=ENGINE_HEADER_MISMATCH={why}");
     }
-
-    // The name the user reads, from branding/, which build.sh also reads for the app's bundle.
-    let name = root.join("branding/name");
-    let name_text = std::fs::read_to_string(&name).expect("no branding/name");
-    println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
-    println!("cargo:rerun-if-changed={}", name.display());
-    // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
-    // where a new issue is filed (src/build_info.rs).
-    for (file, variable) in [
-        ("branding/site", "APP_SITE"),
-        ("branding/issues", "APP_ISSUES"),
-    ] {
-        let path = root.join(file);
-        let url = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("no {file}"));
-        println!("cargo:rustc-env={variable}={}", url.trim());
-        println!("cargo:rerun-if-changed={}", path.display());
-    }
-    // The sync server the build signs in to unless the user names another (main.rs): ilo's, in
-    // branding/sync-server, which a fork changes or deletes. With no file the build has none. The
-    // folder is watched, as a file that isn't there would have this run on every build.
-    let sync_server = std::fs::read_to_string(root.join("branding/sync-server"));
-    println!(
-        "cargo:rustc-env=SYNC_SERVER={}",
-        sync_server.unwrap_or_default().trim()
-    );
-    println!("cargo:rerun-if-changed={}", root.join("branding").display());
-    println!("cargo:rerun-if-changed=platform");
-    println!("cargo:rerun-if-changed={}", header.display());
-
-    // The look's values, from the file the code and the design file share (tools/design-sync.md).
-    let tokens = root.join("design/tokens.toml");
-    let tokens_text = std::fs::read_to_string(&tokens).expect("no design/tokens.toml");
-    let tokens_rs_path = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("tokens.rs");
-    std::fs::write(tokens_rs_path, tokens_rs(&tokens_text)).unwrap();
-    println!("cargo:rerun-if-changed={}", tokens.display());
 }
 
 /// The Mac's translator, Apple's Translation, which is Swift's alone (platform/mac/translate.swift):
