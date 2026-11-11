@@ -13,6 +13,49 @@ index 3ce9dcecc4..ce6de4149b 100644
  
  [target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
  wgpu = { workspace = true, default-features = true }
+diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
+index b2a7bfeb49..f64a20ab03 100644
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -185,17 +185,13 @@ impl WgpuAtlasTextures {
+         min_size: Size<DevicePixels>,
+         kind: AtlasTextureKind,
+     ) -> &mut WgpuAtlasTexture {
+-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
+-            width: DevicePixels(1024),
+-            height: DevicePixels(1024),
+-        };
+         let max_texture_size = self.max_texture_size as i32;
+         let max_atlas_size = Size {
+             width: DevicePixels(max_texture_size),
+             height: DevicePixels(max_texture_size),
+         };
+ 
+-        let size = min_size.min(&max_atlas_size).max(&DEFAULT_ATLAS_SIZE);
++        let size = self.storage[kind].next_size(min_size, max_atlas_size);
+         let format = match kind {
+             AtlasTextureKind::Monochrome => wgpu::TextureFormat::R8Unorm,
+             AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => self.color_texture_format,
+@@ -463,13 +459,15 @@ mod tests {
+         let (device, queue) = test_device_and_queue()?;
+         let atlas = WgpuAtlas::new(device, queue, wgpu::TextureFormat::Bgra8Unorm);
+ 
++        // A list's first texture is 256 square (AtlasTextureList::next_size): two of the big
++        // tiles don't fit in it together, so the second fits only where the first was.
+         let small = Size {
+-            width: DevicePixels(64),
+-            height: DevicePixels(64),
++            width: DevicePixels(32),
++            height: DevicePixels(32),
+         };
+         let big = Size {
+-            width: DevicePixels(700),
+-            height: DevicePixels(700),
++            width: DevicePixels(160),
++            height: DevicePixels(160),
+         };
+ 
+         let make_key = |image_id: usize| {
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
 index 16d451f008..bb3d226cf2 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs

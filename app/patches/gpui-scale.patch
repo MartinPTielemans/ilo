@@ -87,7 +87,7 @@ index 11f0b72406..ea39b6a547 100644
              window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index a875ee0f37..d7b4c87b68 100644
+index a875ee0f37..a86f2cf138 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -399,6 +399,12 @@ pub trait Platform: 'static {
@@ -119,7 +119,62 @@ index a875ee0f37..d7b4c87b68 100644
          anyhow::bail!("render_to_image not implemented for this platform")
      }
  }
-@@ -2596,7 +2607,8 @@ pub struct WindowOptions {
+@@ -1934,6 +1945,54 @@ impl<T> AtlasTextureList<T> {
+     pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
+         self.textures.iter_mut().flatten()
+     }
++
++    /// The size of the list's next texture, at least `min_size`, at most `max_size`: the first
++    /// 256 square and the rest 1024. Each window has its own atlas, and most of ilo's are overlays
++    /// that draw a few glyphs, which would hold a 1024 one for nothing (ilo #2317).
++    pub fn next_size(
++        &self,
++        min_size: Size<DevicePixels>,
++        max_size: Size<DevicePixels>,
++    ) -> Size<DevicePixels> {
++        let side = DevicePixels(if self.textures.iter().all(Option::is_none) {
++            256
++        } else {
++            1024
++        });
++        min_size.min(&max_size).max(&Size {
++            width: side,
++            height: side,
++        })
++    }
++}
++
++#[cfg(test)]
++mod atlas_texture_list_tests {
++    use super::*;
++
++    fn square(side: i32) -> Size<DevicePixels> {
++        Size {
++            width: DevicePixels(side),
++            height: DevicePixels(side),
++        }
++    }
++
++    #[test]
++    fn a_lists_first_texture_is_small_and_the_rest_full_size() {
++        let max = square(16384);
++        let mut list = AtlasTextureList::<()>::default();
++        assert_eq!(list.next_size(square(16), max), square(256));
++        assert_eq!(list.next_size(square(600), max), square(600));
++        assert_eq!(list.next_size(square(20000), max), max);
++
++        list.textures.push(Some(()));
++        assert_eq!(list.next_size(square(16), max), square(1024));
++
++        // A list whose textures were all freed starts small again.
++        list.textures[0] = None;
++        list.free_list.push(0);
++        assert_eq!(list.next_size(square(16), max), square(256));
++    }
+ }
+ 
+ #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+@@ -2596,7 +2655,8 @@ pub struct WindowOptions {
      /// Leave this `false` for windows that rely on AppKit's native titlebar dragging.
      pub app_owns_titlebar_drag: bool,
  

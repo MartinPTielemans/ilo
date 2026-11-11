@@ -83,6 +83,34 @@ index 4ad4cc77b3..48291220e4 100644
          if current == DIRECTMANIPULATION_READY {
              self.end_gesture();
  
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 622c1cb604..697ce244f7 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -161,17 +161,18 @@ impl DirectXAtlasTextures {
+         min_size: Size<DevicePixels>,
+         kind: AtlasTextureKind,
+     ) -> Option<&mut DirectXAtlasTexture> {
+-        const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
+-            width: DevicePixels(1024),
+-            height: DevicePixels(1024),
+-        };
+         // Max texture size for DirectX. See:
+         // https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
+         const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
+             width: DevicePixels(16384),
+             height: DevicePixels(16384),
+         };
+-        let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
++        let size = match kind {
++            AtlasTextureKind::Monochrome => &self.monochrome_textures,
++            AtlasTextureKind::Polychrome => &self.polychrome_textures,
++            AtlasTextureKind::Subpixel => &self.subpixel_textures,
++        }
++        .next_size(min_size, MAX_ATLAS_SIZE);
+         let pixel_format;
+         let bind_flag;
+         let bytes_per_pixel;
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
 index 98a13f304c..6cfbd572ae 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
