@@ -48,7 +48,7 @@ TEST(ArrangementTest, AnythingTheSchemaDoesntNameRefusesTheFile) {
       With(R"("kind": "trade")", R"("kind": "hide")"),
       // A field of its own, at each depth.
       With(R"("version": 1,)", R"("version": 1, "css": "body{display:none}",)"),
-      With(R"("pin": "screen")", R"("pin": "screen", "onclick": "alert(1)")"),
+      With(R"("pin": "screen")", R"j("pin": "screen", "onclick": "alert(1)")j"),
       With(R"("tag": "video",)", R"("tag": "video", "style": "x",)"),
       With(R"("path": "#signup")", R"("path": "#signup", "script": "x")"),
       // A settle against both neighbours, or neither.
