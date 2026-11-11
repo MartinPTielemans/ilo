@@ -1,7 +1,8 @@
 # ilo's Flatpak (tools/flatpak.sh) from the prod build on the prebuilt Linux engine, as an artifact,
 # then installed and started on X11 in Xvfb to see that its first window draws.
 # Run it by hand to build from a branch whose packaging didn't change. release.yml calls it for a
-# release's Flatpak, the `ilo-flatpak` artifact, and its crash reports' symbols.
+# release's Flatpak, the `ilo-flatpak` artifact, its crash reports' symbols, and the same build as
+# the native install's tarball, `ilo-linux-native` (tools/linux-tarball.sh).
 # A push or a run by hand whose core/public/browser_core.h no published Linux engine has is
 # skipped, as nothing can run it, as check-linux.yml skips it (#882). A release fails instead: it
 # needs its commit's engine.
@@ -115,6 +116,18 @@ jobs:
         with:
           name: ilo-flatpak
           path: app/build/ilo.flatpak
+          retention-days: 14
+
+      # A release's native install (#2453), the same build packed as install.sh takes it, which
+      # release.yml checks with linux-install.yml before the draft carries it.
+      - name: Native tarball
+        if: ${{ inputs.release && steps.engine.outputs.found == 'true' }}
+        run: tools/linux-tarball.sh app/build/Browser app/build/native
+      - if: ${{ inputs.release && steps.engine.outputs.found == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ilo-linux-native
+          path: app/build/native
           retention-days: 14
 
       - name: Install and start
