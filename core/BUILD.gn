@@ -517,6 +517,7 @@ source_set("browser_core") {
     "//chrome/browser/ui/tabs:utils",
     "//chrome/browser/ui/views:bubble_anchor_util_views",
     "//chrome/browser/ui/toolbar",
+    "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/views/extensions:extension_popup",
     "//chrome/browser/ui/views/eye_dropper",
     "//chrome/browser/ui/views/interaction:impl",
