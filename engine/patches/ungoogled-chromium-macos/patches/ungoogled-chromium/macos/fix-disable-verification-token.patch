@@ -2,9 +2,12 @@ Remove Chromium 156 Private Verification Tokens dependencies on Crubit.
 Source: https://github.com/ungoogled-software/ungoogled-chromium/pull/4003#issuecomment-6250967036
 
 # ungoogled-chromium-macos's fix-disable-verification-token.patch at 31f01756a43d (its
-# 156.0.8078.79 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Context only:
-# 157 adds //chrome/browser/origin_gating next to devtools' dep, and reorders chrome/test's
-# browser_tests deps, so upstream's removals are the same lines in their 157 places.
+# 156.0.8078.79 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from
+# upstream's:
+# - Context: 157 adds //chrome/browser/origin_gating next to devtools' dep, and reorders
+#   chrome/test's browser_tests deps, so upstream's removals are the same lines in their 157 places.
+# - 157's ChromeBrowsingDataRemoverDelegateFactory depends on the service's factory, which then
+#   isn't linked, so it no longer does: the delegate it makes no longer uses the service.
 #
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
@@ -121,6 +124,24 @@ Source: https://github.com/ungoogled-software/ungoogled-chromium/pull/4003#issue
  
    //////////////////////////////////////////////////////////////////////////////
    // DATA_TYPE_CONTENT_SETTINGS
+--- a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.cc
++++ b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.cc
+@@ -30,7 +30,6 @@
+ #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
+ #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
+ #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_service_factory.h"
+-#include "chrome/browser/private_verification_tokens/private_verification_tokens_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/reading_list/reading_list_model_factory.h"
+ #include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
+@@ -107,7 +106,6 @@
+   DependsOn(PermissionActionsHistoryFactory::GetInstance());
+   DependsOn(PermissionDecisionAutoBlockerFactory::GetInstance());
+   DependsOn(prerender::NoStatePrefetchManagerFactory::GetInstance());
+-  DependsOn(PrivateVerificationTokensServiceFactory::GetInstance());
+   DependsOn(ProtocolHandlerRegistryFactory::GetInstance());
+   DependsOn(ReadingListModelFactory::GetInstance());
+   DependsOn(safe_browsing::VerdictCacheManagerFactory::GetInstance());
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
 @@ -6264,21 +6264,6 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
