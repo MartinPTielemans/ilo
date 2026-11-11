@@ -975,7 +975,7 @@ impl Browser for Engine {
             // Outside the shell's update, which the split's layout updates.
             Some(with) => {
                 let window = self.window;
-                cx.defer(move |cx| open_split(window, url, with, cx));
+                cx.defer(move |cx| open_split(window, url, "", with, cx));
             }
             None => open_tab(self.window, url),
         }
