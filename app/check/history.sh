@@ -146,6 +146,9 @@ before=$(tls)
 go_from_bar "$plain"
 expect "^browser: page $tab back 1 forward 0 loading 0 http://$plain/\$" \
   "$plain didn't come over http: $(grep "^browser: page $tab" "$log" | tail -1)"
+# The page itself, not a warning before it: Chrome's HTTPS-First warning keeps the http address.
+expect "^browser: loaded $tab http://$plain/\$" \
+  "$plain's own page didn't load over http: $(grep "^browser: loaded $tab" "$log" | tail -1)"
 [ "$(tls)" -gt "$before" ] || fail "$plain came over http without trying https first"
 before=$(tls)
 go_from_bar "$nearby:$port"
