@@ -45,6 +45,7 @@ use browser::settings_rows::{
     named_button, row, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{self, EndSearch, Entry, NextControl, PreviousControl, Search};
+use browser::settings_side::title as side_title;
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
@@ -52,7 +53,7 @@ use browser::tokens::settings::{
     FAVORITES_POPUP_WIDTH, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE,
     GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP,
     MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SHORT_PADDING,
-    SHORT_ROW, TEXT_X, TITLE, WIDTH,
+    SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -415,8 +416,6 @@ enum Popup {
     Appearance,
     /// General's Page zoom.
     PageZoom,
-    /// Tabs & Sidebar's Sidebar position.
-    SidebarPosition,
 }
 
 impl Popup {
@@ -433,7 +432,6 @@ impl Popup {
             Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
             Popup::Appearance => "Appearance".into(),
             Popup::PageZoom => "Page zoom".into(),
-            Popup::SidebarPosition => "Sidebar position".into(),
         }
     }
 }
@@ -2061,26 +2059,33 @@ impl Settings {
             Block::Rows(vec![favorites]),
         ];
         let right = shell::sidebar_right(cx);
-        let position = self.popup(
-            Popup::SidebarPosition,
-            side_title(right).into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_sidebar_position(right, window, cx)
-            }),
-        );
-        let position = setting(
+        let line: SharedString =
+            "The side of the window the sidebar and the window's buttons are on.".into();
+        let pair = browser::settings_side::picker(
             look,
-            "Sidebar position",
-            Some("The side of the window the sidebar and the window's buttons are on.".into()),
-            vec![
-                position
-                    .child(self.drawn("sidebar position".into()))
-                    // Drawn again once the side changes, which check.sh waits for.
-                    .child(self.drawn(format!("sidebar position {}", side_title(right))))
-                    .into_any_element(),
-            ],
-        );
+            self.base(),
+            self.dark,
+            right,
+            browser::settings_side::Buttons::HERE,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |side, _, cx| set_sidebar_right(side, cx),
+        )
+        .relative()
+        // Drawn again once the side changes, which check.sh waits for.
+        .child(self.drawn(format!("sidebar position {}", side_title(right))));
+        // The drawings go under the row's line, at its start, their ring's room outside it.
+        let position = Row {
+            div: frame()
+                .flex_col()
+                .items_stretch()
+                .child(text(look, "Sidebar position", Some(line.clone())))
+                .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair)),
+            name: "Sidebar position".into(),
+            line: Some(line),
+            keys: None,
+            nested: false,
+        };
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2894,26 +2899,6 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::Favorites, items, picked, window, cx);
-    }
-
-    /// Sidebar position's pop-up menu, Left or Right, over its button.
-    fn choose_sidebar_position(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
-        let items: Vec<MenuEntry> = [false, true]
-            .iter()
-            .map(|&each| MenuEntry {
-                checked: each == right,
-                over: each == right,
-                ..MenuEntry::new(side_title(each), true)
-            })
-            .collect();
-        let settings = cx.weak_entity();
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(index) = picked {
-                set_sidebar_right(index == 1, cx);
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::SidebarPosition, items, picked, window, cx);
     }
 
     /// General's Page zoom: Chrome's choices, which every profile's pages take.
@@ -4695,11 +4680,6 @@ pub fn read_switches(cx: &mut App) {
 /// Whether Sidebar position is kept as Right, for the launch, before the windows read it.
 pub fn sidebar_right_kept() -> bool {
     off(SIDEBAR_RIGHT)
-}
-
-/// Sidebar position's names.
-fn side_title(right: bool) -> &'static str {
-    if right { "Right" } else { "Left" }
 }
 
 /// Moves the sidebar to the window's right, or back to its left: kept on this device, and every

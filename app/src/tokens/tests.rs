@@ -109,6 +109,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
     "menu.radius",
+    // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
+    "settings.side-radius",
+    "settings.side-page-radius",
 ];
 
 #[test]
