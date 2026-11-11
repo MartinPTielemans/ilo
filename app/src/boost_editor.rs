@@ -1,7 +1,7 @@
 //! A Boost's editor without code (#695), which the Boost card's Customize… opens: the theme
 //! picker's card beside the sidebar, its arrow at what opened it, with the Boost's name over a
 //! field of two dots, the page's ground and its links, then Invert lightness, the faces, the size
-//! and the case, and Edit CSS… and Zap at its foot. Each change shows on the site's pages at once;
+//! and the case, and Edit CSS…, Edit Script… and Zap at its foot. Each change shows on the site's pages at once;
 //! a drag shows as it goes and is kept as it ends. What it sets is one block of the site's file
 //! (crate::boost_style), which the user's own lines and Zap's leave alone.
 //!
@@ -46,15 +46,17 @@ actions!(boost_editor, [Dismiss, Commit, Undo, Decrease, Increase]);
 
 /// The name's left edge, after the site's icon.
 const NAME_LEFT: f32 = INSET + SITE_ICON + GAP;
+/// Zap's chip, after Edit CSS… and Edit Script….
+const ZAP_X: f32 = INSET + EDIT_WIDTH + GAP + SCRIPT_WIDTH + GAP;
 
 pub use crate::tokens::boost_editor::HEIGHT;
 use crate::tokens::boost_editor::{
     ADVANCED_HEIGHT, ADVANCED_WIDTH, BUTTON, CASE_Y, CHIP_PADDING, DIM, EDIT_WIDTH, FIELD_HEIGHT,
     FIELD_TOP, FONT_Y, FOOTER_Y, GAP, HEADER, HINT_RIGHT, HINT_TOP, INSET, INVERT_WIDTH, INVERT_Y,
     LABEL_WIDTH, MENU_LEFT, MENU_TOP, PLATE, PLATE_CHOSEN, PLATE_HOVERED, RESET_WIDTH, RULE, RULES,
-    SEGMENT, SEGMENT_HEIGHT, SEGMENT_PADDING, SITE_ICON, SIZE_Y, SLIDER_FILL_INK, SLIDER_PITCH,
-    SLIDER_RING, SLIDER_TICK, SLIDER_TRACK_INK, SLIDER_VALUE, SLIDER_Y, STEPPER_VALUE,
-    SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT, TILE_RING, TILE_TEXT, TILES_TOP, ZAP_WIDTH,
+    SCRIPT_WIDTH, SEGMENT, SEGMENT_HEIGHT, SEGMENT_PADDING, SITE_ICON, SIZE_Y, SLIDER_FILL_INK,
+    SLIDER_PITCH, SLIDER_RING, SLIDER_TICK, SLIDER_TRACK_INK, SLIDER_VALUE, SLIDER_Y,
+    STEPPER_VALUE, SWITCH_RIGHT, TILE_GAP, TILE_HEIGHT, TILE_RING, TILE_TEXT, TILES_TOP, ZAP_WIDTH,
 };
 use crate::tokens::settings::{SWITCH_HEIGHT, SWITCH_WIDTH};
 use crate::tokens::shell::{MEDIA_SLIDER_KNOB, MEDIA_SLIDER_TRACK};
@@ -99,6 +101,8 @@ pub enum Request {
     /// Its switch.
     On(bool),
     EditCss,
+    /// Edit Script…: the site's script in the user's editor (#2297).
+    EditScript,
     Zap,
     Delete,
 }
@@ -133,6 +137,7 @@ pub enum Target {
     ResetAdvanced,
     Slider(Adjust),
     EditCss,
+    EditScript,
     Zap,
     Item(Item),
 }
@@ -579,10 +584,13 @@ pub fn target(x: f32, y: f32, style: &Style, menu: bool) -> Option<Target> {
     }
     if within(
         INSET + EDIT_WIDTH + GAP,
-        ZAP_WIDTH,
+        SCRIPT_WIDTH,
         FOOTER_Y + below,
         BUTTON,
     ) {
+        return Some(Target::EditScript);
+    }
+    if within(ZAP_X, ZAP_WIDTH, FOOTER_Y + below, BUTTON) {
         return Some(Target::Zap);
     }
     None
@@ -785,6 +793,7 @@ impl BoostEditor {
             ),
             Target::Case(case) => self.keep(|style| style.case = case, cx),
             Target::EditCss => self.leave_for(Request::EditCss, window, cx),
+            Target::EditScript => self.leave_for(Request::EditScript, window, cx),
             Target::Zap => self.leave_for(Request::Zap, window, cx),
             Target::Item(_) => {}
         }
@@ -1483,12 +1492,13 @@ impl Render for BoostEditor {
                 .child(label)
         };
         let edit = chip("boost-editor-css", "Edit CSS…", INSET, EDIT_WIDTH);
-        let zap = chip(
-            "boost-editor-zap",
-            "Zap",
+        let script = chip(
+            "boost-editor-script",
+            "Edit Script…",
             INSET + EDIT_WIDTH + GAP,
-            ZAP_WIDTH,
+            SCRIPT_WIDTH,
         );
+        let zap = chip("boost-editor-zap", "Zap", ZAP_X, ZAP_WIDTH);
 
         // The name's menu, ilo's own menu's look, inside the card.
         let menu = editing.menu.then(|| {
@@ -1584,6 +1594,7 @@ impl Render for BoostEditor {
                 .child(segments)
                 .children(cases)
                 .child(edit)
+                .child(script)
                 .child(zap)
                 .children(menu),
         )

@@ -426,6 +426,7 @@ fn start_now(
     press: Option<Point<Pixels>>,
     cx: &mut App,
 ) {
+    crate::lazy_window::ready::<Capture>(cx);
     update(cx, |capture, window, cx| {
         if capture.session.is_some() {
             if press.is_none() {
