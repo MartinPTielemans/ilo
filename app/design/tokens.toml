@@ -46,9 +46,11 @@ rule = 0.12
 label-width = 52.0
 # The labels' and the hint's ink, raised to the overlay's text floor where it needs more.
 dim = 0.6
-# The chips' widths, fixed so a press lands by where they lie: Invert lightness, Edit CSS… and Zap.
+# The chips' widths, fixed so a press lands by where they lie: Invert lightness, Edit CSS…, Edit
+# Script… and Zap.
 invert-width = 140.0
 edit-width = 84.0
+script-width = 96.0
 zap-width = 56.0
 # The face tiles, as many as the computer has, sharing the line.
 tiles-top = 305.0
@@ -1129,6 +1131,13 @@ favicon-size = 18.0
 favicon-drawn = 16.0
 # An emoji's text size in a favicon's place, for its glyph to fill what a favicon does.
 emoji-size = 13.0
+# A pinned tab's or favorite's return mark while it's away from its pinned URL (#2338; ours, as
+# Arc and Dia show nothing at rest): Lucide's undo-2 at `return-glyph` in the secondary ink, in a
+# round notch `return-notch` across cut out of the icon's bottom right, its edge `return-out` past
+# the favicon slot's corner. The glyph is 9 so its hook keeps its shape at 1x.
+return-notch = 11.0
+return-glyph = 9.0
+return-out = 3.0
 # The slot at a row's end for its status dot, where Arc's loading ring was, so the title doesn't
 # move as a load starts or ends.
 loading-size = 12.0

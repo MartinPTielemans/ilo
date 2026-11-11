@@ -278,6 +278,7 @@ pub fn open_at(
 /// big, or shows it there instead of what it showed. Its user calls it again as what it says
 /// changes, or the page moves.
 pub fn show(window: u64, page: Bounds<Pixels>, content: Size<Pixels>, bar: Bar, cx: &mut App) {
+    crate::lazy_window::ready::<FootBar>(cx);
     let Some(handle) = cx.try_global::<FootBarWindow>().map(|bar| bar.0) else {
         return;
     };
