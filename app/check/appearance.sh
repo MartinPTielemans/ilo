@@ -39,11 +39,12 @@ for choice in $other $system $other automatic; do
 done
 # Settings › General's Appearance is three drawings (#2429) that pick as View › Appearance does,
 # and follow it: a click on the other look's gives the page its scheme, View › Appearance's other
-# item moves the ring, and Automatic's click gives back the system's. The row is captured in each
-# look.
+# item moves the ring and gives back the system's, and a click on Automatic's leaves the page's
+# scheme as it is. The row is captured in each look.
 send menu Settings…
 expect '^browser: settings shown General$' "Settings… didn't show General"
 settings_drew
+was=$system
 for choice in $other $system automatic; do
   case $choice in
   dark) item=Dark scheme=dark ;;
@@ -56,8 +57,13 @@ for choice in $other $system automatic; do
     at=$(drawn "appearance option $item") || fail "Settings didn't draw Appearance's $item"
     send clickkey $at
   fi
-  expect "^browser: title [0-9]* scheme $scheme\$" \
-    "Appearance's $item didn't make the page's prefers-color-scheme $scheme"
+  expect "^browser: appearance $choice\$" "Appearance's $item didn't change the appearance"
+  # The page hears only a change of scheme.
+  if [ "$scheme" != "$was" ]; then
+    expect "^browser: title [0-9]* scheme $scheme\$" \
+      "Appearance's $item didn't make the page's prefers-color-scheme $scheme"
+  fi
+  was=$scheme
   expect "^browser: settings appearance $item at " "Settings' Appearance didn't show $item"
   if [ "$choice" != automatic ]; then
     ../tools/window-screenshot.sh "$pid" "$out/settings-appearance-$choice.png" ||
