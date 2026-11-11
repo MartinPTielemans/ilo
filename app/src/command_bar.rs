@@ -463,12 +463,14 @@ pub trait Host {
     /// through `page_favicon`.
     fn page_favicon(&self, url: &str);
     /// Opens a tab loading `url` at the top of the Space's Today tabs, and shows it unless
-    /// `behind`, when it loads only once it's first shown.
-    fn open_tab(&self, url: &str, behind: bool);
+    /// `behind`, when it loads only once it's first shown. `typed` is what the user typed for it,
+    /// which keeps an http address written out as written (`bc_tab_open_typed`), as for each load
+    /// below.
+    fn open_tab(&self, url: &str, typed: &str, behind: bool);
     /// Opens a browser window after the one the bar shows over, as ⌘N does, and shows a tab
     /// loading `url` in it. The user's: agents get none, as it opens a window (decision 8).
-    fn open_window(&self, url: &str, cx: &mut App);
-    fn navigate(&self, tab: u64, url: &str);
+    fn open_window(&self, url: &str, typed: &str, cx: &mut App);
+    fn navigate(&self, tab: u64, url: &str, typed: &str);
     /// Loads `tab`'s page again, as ↩ does on the URL the bar opened on (Arc).
     fn reload(&self, tab: u64);
     fn select(&self, tab: u64);
@@ -481,7 +483,7 @@ pub trait Host {
     /// Puts `tab` in a split view with `with`, on its right, and shows it there.
     fn split(&self, tab: u64, with: u64, cx: &mut App);
     /// Opens a tab loading `url` in a split view with `with`, on its right, and shows it there.
-    fn open_split(&self, url: &str, with: u64, cx: &mut App);
+    fn open_split(&self, url: &str, typed: &str, with: u64, cx: &mut App);
     /// Copies `text`, a sum's result, and says so.
     fn copy(&self, text: &str, cx: &mut App);
     /// Shows the bar's window, `width` wide, its corners rounded by `radius` and shadowed as
@@ -2307,8 +2309,10 @@ impl CommandBar {
     /// Paste and Go, from the input's menu: goes where ↩ would for the clipboard's text, as
     /// Chrome does.
     fn paste_and_go(&mut self, _: &PasteAndGo, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(url) = pasted(cx).and_then(|text| self.typed_url(&text)) {
-            self.go_to(&url, cx);
+        if let Some(text) = pasted(cx)
+            && let Some(url) = self.typed_url(&text)
+        {
+            self.go_to_typed(&url, &text, cx);
         }
     }
 
@@ -2326,9 +2330,14 @@ impl CommandBar {
 
     /// Shows `url` where the bar shows the page chosen, and closes the bar.
     fn go_to(&self, url: &str, cx: &mut App) {
+        self.go_to_typed(url, &self.typed(cx), cx);
+    }
+
+    /// As `go_to`, for `url` given as `typed`, which an http address written out keeps.
+    fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
-        self.show_page(url, cx);
+        self.show_page(url, typed, cx);
         self.close();
     }
 
@@ -2342,7 +2351,7 @@ impl CommandBar {
         if let Some(url) = self.return_url(cx) {
             // check.sh reads this line.
             log!("browser: command bar behind {url}");
-            self.host.open_tab(&url, true);
+            self.host.open_tab(&url, &self.typed(cx), true);
         }
     }
 
@@ -2383,7 +2392,7 @@ impl CommandBar {
         log!("browser: command bar window {url}");
         // The bar leaves its window first, which the new one then takes the keyboard from.
         self.close();
-        self.host.open_window(url, cx);
+        self.host.open_window(url, &self.typed(cx), cx);
     }
 
     /// www.<word>.com for a word typed outside a site search, where ⌃↩ goes, as in Chrome.
@@ -2558,12 +2567,12 @@ impl CommandBar {
         self.go(&Go, window, cx);
     }
 
-    /// Shows `url` where the bar shows the page chosen.
-    fn show_page(&self, url: &str, cx: &mut App) {
+    /// Shows `url`, given as `typed`, where the bar shows the page chosen.
+    fn show_page(&self, url: &str, typed: &str, cx: &mut App) {
         match self.target {
-            Target::NewTab | Target::Tabs | Target::Spaces => self.host.open_tab(url, false),
-            Target::Tab(tab) => self.host.navigate(tab, url),
-            Target::Beside(with) => self.host.open_split(url, with, cx),
+            Target::NewTab | Target::Tabs | Target::Spaces => self.host.open_tab(url, typed, false),
+            Target::Tab(tab) => self.host.navigate(tab, url, typed),
+            Target::Beside(with) => self.host.open_split(url, typed, with, cx),
         }
     }
 
@@ -2623,7 +2632,7 @@ impl CommandBar {
             (0, Target::Tab(_)) if row.new_document => {
                 // check.sh reads this line.
                 log!("browser: command bar new tab {}", row.url);
-                self.host.open_tab(&row.url, false);
+                self.host.open_tab(&row.url, "", false);
             }
             (0, _) => return self.go_to(&row.url, cx),
             (tab, Target::Beside(with)) => {
