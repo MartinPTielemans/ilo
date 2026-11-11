@@ -541,6 +541,11 @@ fn the_command_bar_finds_spaces_and_closed_folders_by_name(cx: &mut TestAppConte
             ("Focus Two".to_string(), Command::SelectSpace(1)),
             ("Pin to Two".to_string(), Command::PinToSpace(2)),
             ("Move to Two".to_string(), Command::MoveToSpace(2)),
+            // t…w…o in "Tomorrow Morning", as the bar finds letters in order, last.
+            (
+                "Snooze Tab — Tomorrow Morning".to_string(),
+                Command::Snooze(crate::snooze::Choice::TomorrowMorning)
+            ),
         ]
     );
     // Nothing typed lists none, and the Space shown has none.

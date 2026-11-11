@@ -514,11 +514,12 @@ impl Edit {
                     until,
                 })
             }
-            Edit::Unsnooze { tabs, show, until } => match (Edit::Reopen { tabs, show }).apply(shell, cx)
-            {
-                Some(Edit::Close(tabs)) => Some(Edit::Snooze { tabs, until }),
-                _ => None,
-            },
+            Edit::Unsnooze { tabs, show, until } => {
+                match (Edit::Reopen { tabs, show }).apply(shell, cx) {
+                    Some(Edit::Close(tabs)) => Some(Edit::Snooze { tabs, until }),
+                    _ => None,
+                }
+            }
             Edit::Repin { tabs: closed, spot } => {
                 let At::Pinned { folder, index } = spot.at else {
                     return None;

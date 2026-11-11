@@ -71,8 +71,16 @@ impl Shell {
     /// Snoozes the Today tabs among `tabs` until `at`, as one step ⌘Z takes back, and says when
     /// they come back in a toast with Undo. `tabs` is as Close's step has them: they snooze last
     /// first, and come back first first.
-    pub(super) fn snooze_tabs(&mut self, tabs: Vec<u64>, at: NaiveDateTime, cx: &mut Context<Self>) {
-        let tabs: Vec<u64> = tabs.into_iter().filter(|&tab| self.snoozable(tab)).collect();
+    pub(super) fn snooze_tabs(
+        &mut self,
+        tabs: Vec<u64>,
+        at: NaiveDateTime,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs: Vec<u64> = tabs
+            .into_iter()
+            .filter(|&tab| self.snoozable(tab))
+            .collect();
         let what = match tabs.len() {
             0 => return,
             1 => What::SNOOZE_TAB,
@@ -91,6 +99,16 @@ impl Shell {
         self.keep(what, back, cx);
         let words = snooze::words(at, snooze::now());
         self.offer_undo(&format!("Snoozed until {words}"), cx);
+    }
+
+    /// What the bar's Snooze Tab snoozes: the chosen rows' Today tabs, or the Today tab shown.
+    pub(super) fn tabs_to_snooze(&self) -> Vec<u64> {
+        match self.chosen.is_empty() {
+            true => (self.snoozable(self.selected))
+                .then(|| self.panes(self.selected).into_iter().rev().collect())
+                .unwrap_or_default(),
+            false => self.chosen_to_snooze(),
+        }
     }
 
     /// The chosen rows' Today tabs, each split's pages too, as Close Tabs has them.

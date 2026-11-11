@@ -112,9 +112,9 @@ mod portrait;
 #[cfg(test)]
 mod side_tests;
 #[cfg(test)]
-mod space_order_tests;
-#[cfg(test)]
 mod snooze_tests;
+#[cfg(test)]
+mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
 mod undo_tests;

@@ -62,7 +62,9 @@ fn hm(hour: u32) -> NaiveTime {
 }
 
 fn to_minute(at: NaiveDateTime) -> NaiveDateTime {
-    at.with_second(0).and_then(|at| at.with_nanosecond(0)).unwrap_or(at)
+    at.with_second(0)
+        .and_then(|at| at.with_nanosecond(0))
+        .unwrap_or(at)
 }
 
 /// The clock here now, to the minute.
@@ -89,9 +91,11 @@ pub fn stop_clock(now: NaiveDateTime) {
 /// a clock change skips takes the hour after it.
 pub fn millis(at: NaiveDateTime) -> f64 {
     let local = Local.from_local_datetime(&at);
-    let time: Option<DateTime<Local>> = local
-        .earliest()
-        .or_else(|| Local.from_local_datetime(&(at + chrono::Duration::hours(1))).earliest());
+    let time: Option<DateTime<Local>> = local.earliest().or_else(|| {
+        Local
+            .from_local_datetime(&(at + chrono::Duration::hours(1)))
+            .earliest()
+    });
     time.map_or(0., |time| time.timestamp_millis() as f64)
 }
 
@@ -149,7 +153,10 @@ pub fn read(text: &str, now: NaiveDateTime) -> Result<NaiveDateTime, &'static st
         .replace(',', " ");
     let mut day: Option<Day> = None;
     let mut time: Option<NaiveTime> = None;
-    let words: Vec<&str> = text.split_whitespace().filter(|word| *word != "at").collect();
+    let words: Vec<&str> = text
+        .split_whitespace()
+        .filter(|word| *word != "at")
+        .collect();
     let mut index = 0;
     while index < words.len() {
         let word = words[index];

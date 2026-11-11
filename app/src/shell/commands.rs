@@ -197,6 +197,11 @@ pub enum Command {
     MoveToSpace(u64),
     /// Pins the tab shown and moves it to this Space, at the bottom of its pinned tabs.
     PinToSpace(u64),
+    /// Snoozes the Today tab shown, or the chosen rows', until this time of the short list, as
+    /// their menu's Snooze › does (#2350).
+    Snooze(crate::snooze::Choice),
+    /// Asks for a day and a time to snooze them until, as Snooze › Pick a Date and Time… does.
+    PickSnooze,
     /// Opens this folder of the Space shown, with the folders it's in, and scrolls to it.
     OpenFolder(u64),
     /// Pins the tab shown, or the rows chosen, at the bottom of this folder of the Space shown, as
@@ -1005,12 +1010,23 @@ fn ranked(
             name,
             command,
             // Exit is View › Exit's ⎋, which leaves full screen as it does, bound to no command.
+            // A snooze's row says when it means there, as its menu item does.
             shortcut: (keys.label(command))
                 .or_else(|| (command == Command::Exit).then(|| keystroke_label("escape")))
+                .or_else(|| snooze_time(command))
                 .map(Into::into),
             matched,
         })
         .collect()
+}
+
+/// When a short-list snooze `command` means now, such as "Wed 08:00".
+fn snooze_time(command: Command) -> Option<String> {
+    let Command::Snooze(choice) = command else {
+        return None;
+    };
+    let now = crate::snooze::now();
+    choice.at(now).map(|at| crate::snooze::short(at, now))
 }
 
 /// How `name`, lowercase, or its `keywords` match `typed`, which is lowercase too, if they do.
@@ -1275,6 +1291,8 @@ impl Command {
             Command::SelectSpace(_) => "select-space",
             Command::MoveToSpace(_) => "move-to-space",
             Command::PinToSpace(_) => "pin-to-space",
+            Command::Snooze(_) => "snooze",
+            Command::PickSnooze => "pick-snooze",
             Command::OpenFolder(_) => "open-folder",
             Command::MoveToFolder(_) => "move-to-folder",
             Command::RunExtension(_) => "run-extension",
@@ -1553,6 +1571,20 @@ impl Shell {
                 return self
                     .browser
                     .command_bar(editing, shown, self.bar_tabs(cx), field, cx);
+            }
+            Command::Snooze(choice) => {
+                if let Some(at) = choice.at(crate::snooze::now()) {
+                    let tabs = self.tabs_to_snooze();
+                    self.snooze_tabs(tabs, at, cx);
+                }
+                return;
+            }
+            Command::PickSnooze => {
+                let tabs = self.tabs_to_snooze();
+                if !tabs.is_empty() {
+                    self.pick_snooze(tabs, cx);
+                }
+                return;
             }
             // A Little ilo window's page closes with it (Arc).
             Command::CloseTab if self.little.is_some() => {
@@ -2466,6 +2498,29 @@ impl Shell {
                 row("Move to", Command::MoveToSpace(space.id));
             }
         }
+        // Snooze Tab, for the Today tab shown or the chosen rows', one row for each time.
+        let snoozing = match chosen {
+            true => !self.chosen_to_snooze().is_empty(),
+            false => tab && self.snoozable(self.selected),
+        };
+        if snoozing {
+            let verb = if chosen { "Snooze Tabs" } else { "Snooze Tab" };
+            let now = crate::snooze::now();
+            for choice in crate::snooze::Choice::ALL {
+                if choice.at(now).is_some() {
+                    let name = choice.name();
+                    let words = vec!["snooze".into(), name.into()];
+                    rows.push((
+                        format!("{verb} — {name}").into(),
+                        words,
+                        Command::Snooze(choice),
+                    ));
+                }
+            }
+            let words = vec!["snooze".into(), "pick a date and time".into()];
+            let name = format!("{verb} — Pick a Date and Time…");
+            rows.push((name.into(), words, Command::PickSnooze));
+        }
         if let Some(space) = self.shown_space() {
             let shut = |row: &&u64| space.is_folder(**row) && !space.is_open(**row);
             for &folder in space.pinned.iter().filter(shut) {
@@ -2543,6 +2598,8 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::SelectSpace(_)
             | Command::MoveToSpace(_)
             | Command::PinToSpace(_)
+            | Command::Snooze(_)
+            | Command::PickSnooze
             | Command::OpenFolder(_)
             | Command::MoveToFolder(_)
             | Command::NextSpace

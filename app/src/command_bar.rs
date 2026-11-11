@@ -350,6 +350,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FocusSidebar => "icons/keyboard.svg",
         Command::NewFolder => "icons/folder-plus.svg",
         Command::TogglePin | Command::PinToSpace(_) => "icons/pin.svg",
+        Command::Snooze(_) | Command::PickSnooze => "icons/alarm-clock.svg",
         Command::OpenFolder(_) => "icons/folder-open.svg",
         Command::SelectSpace(_) => "icons/layers.svg",
         Command::MoveToSpace(_) | Command::MoveToFolder(_) => "icons/arrow-right.svg",

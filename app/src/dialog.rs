@@ -18,10 +18,9 @@ use std::{
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful, Subscription,
-    Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions,
+    Global, Hsla, Image, KeyBinding, MouseButton, Pixels, Point, SharedString, Stateful,
+    Subscription, Task, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
     accesskit::{Role, Toggled},
     actions, canvas, div, img, point,
     prelude::*,
@@ -1320,42 +1319,46 @@ impl Render for Dialog {
                     )
                 })
         });
-        let fields = (!asked.fields.is_empty()).then(|| {
-            div()
-                .mt(px(FIELDS_TOP))
-                .flex()
-                .flex_col()
-                .gap(px(FIELD_GAP))
-                .children(asked.fields.iter().zip(&question.fields).map(|(field, asked_for)| {
-                    let reading = (asked_for.reads.as_ref()).map(|reads| reads(field.read(cx).text()));
-                    let input = div()
-                        .h(px(BUTTON_HEIGHT))
-                        .px(px(LABEL_X - 1.))
-                        .flex()
-                        .items_center()
-                        .rounded(px(BUTTON_RADIUS))
-                        .border_1()
-                        .border_color(palette.plate(CANCEL_BORDER))
-                        .bg(palette.plate(CANCEL_FILL))
-                        .text_size(px(text::BODY))
-                        .text_color(palette.on_overlay(FIELD_TEXT))
-                        .child(field.clone());
-                    let reading = reading.map(|reading| {
-                        let (line, alpha) = match reading {
-                            Ok(read) => (read, DETAIL),
-                            Err(why) => (why, SUBLINE_TEXT),
-                        };
-                        div()
-                            .mt(px(READING_TOP))
-                            .pl(px(LABEL_X))
-                            .line_height(px(SUBLINE))
-                            .text_size(px(text::SMALL))
-                            .text_color(palette.on_overlay(alpha))
-                            .child(line)
-                    });
-                    div().flex().flex_col().child(input).children(reading)
-                }))
-        });
+        let fields =
+            (!asked.fields.is_empty()).then(|| {
+                div()
+                    .mt(px(FIELDS_TOP))
+                    .flex()
+                    .flex_col()
+                    .gap(px(FIELD_GAP))
+                    .children(asked.fields.iter().zip(&question.fields).map(
+                        |(field, asked_for)| {
+                            let reading = (asked_for.reads.as_ref())
+                                .map(|reads| reads(field.read(cx).text()));
+                            let input = div()
+                                .h(px(BUTTON_HEIGHT))
+                                .px(px(LABEL_X - 1.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(BUTTON_RADIUS))
+                                .border_1()
+                                .border_color(palette.plate(CANCEL_BORDER))
+                                .bg(palette.plate(CANCEL_FILL))
+                                .text_size(px(text::BODY))
+                                .text_color(palette.on_overlay(FIELD_TEXT))
+                                .child(field.clone());
+                            let reading = reading.map(|reading| {
+                                let (line, alpha) = match reading {
+                                    Ok(read) => (read, DETAIL),
+                                    Err(why) => (why, SUBLINE_TEXT),
+                                };
+                                div()
+                                    .mt(px(READING_TOP))
+                                    .pl(px(LABEL_X))
+                                    .line_height(px(SUBLINE))
+                                    .text_size(px(text::SMALL))
+                                    .text_color(palette.on_overlay(alpha))
+                                    .child(line)
+                            });
+                            div().flex().flex_col().child(input).children(reading)
+                        },
+                    ))
+            });
         let check = question.check.clone().map(|check| {
             let checked = asked.checked;
             // The label wraps inside the card as the detail does, a site's long name too, and the
