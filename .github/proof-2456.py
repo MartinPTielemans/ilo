@@ -156,8 +156,9 @@ who = page.js("""({webdriver: navigator.webdriver, ua: navigator.userAgent,
     brands: navigator.userAgentData ? navigator.userAgentData.brands.map(b => b.brand + ' ' + b.version).join(', ') : null})""")
 say(f"navigator: {who}")
 
-# 1. Our own page asked to share the screen as it loaded, with no click (#2456).
-time.sleep(5)
+# 1. Our own page asks to share the screen as it loads, with no click (#2456). Loaded here, as
+# ilo's first page may still be blank when DevTools first lists it.
+go(own, 6)
 share = page.js("({title: document.title, active: navigator.userActivation.hasBeenActive})")
 say(f"share with no click: {share}")
 os.system(f"import -window root '{out}/{label}-00-share-screen.png'")
