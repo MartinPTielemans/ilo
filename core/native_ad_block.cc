@@ -180,8 +180,8 @@ struct Watched {
   bool waiting = false;
 };
 Watched& Watching() {
-  static base::NoDestructor<Watched> watched;
-  return *watched;
+  static Watched watched;
+  return watched;
 }
 
 // What the main thread hears the count with, and which watch that is. On the main thread.
