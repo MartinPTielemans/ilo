@@ -9,6 +9,7 @@
 #include "browser_core/host.h"
 #include "browser_core/session.h"
 #include "browser_core/snooze.h"
+#include "browser_core/space.h"
 
 namespace browser_core {
 
@@ -48,12 +49,14 @@ void Report() {
   std::vector<bc_archived_tab> tabs;
   tabs.reserve(Tabs().size());
   for (const ArchivedTab& tab : Tabs()) {
+    const Space* space = Space::WithNode(tab.space);
     tabs.push_back({.id = tab.id,
                     .url = tab.url.spec().c_str(),
                     .title = tab.title.c_str(),
                     .archived = tab.archived.InMillisecondsFSinceUnixEpochIgnoringNull(),
                     .little = tab.little,
-                    .snoozed_until = tab.snoozed_until.InMillisecondsFSinceUnixEpoch()});
+                    .snoozed_until = tab.snoozed_until.InMillisecondsFSinceUnixEpoch(),
+                    .space = space ? space->id() : 0});
   }
   Host().archive_changed(Host().context, tabs.data(), tabs.size());
 }
