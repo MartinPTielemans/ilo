@@ -1528,13 +1528,17 @@ bool Window::RedoRemoveSuggestion(bc_id removal) {
   return suggestions_ && suggestions_->RemoveAgain(removal);
 }
 
-content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool when_shown) {
+content::WebContents* Window::OpenTab(Profile* profile,
+                                      const GURL& url,
+                                      bool when_shown,
+                                      bool typed_http) {
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
   }
   NavigateParams params(browser, url, ui::PAGE_TRANSITION_TYPED);
   params.disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
+  params.url_typed_with_http_scheme = typed_http;
   if (when_shown && url.SchemeIsHTTPOrHTTPS()) {
     return OpenBehind(params);
   }
@@ -1544,11 +1548,12 @@ content::WebContents* Window::OpenTab(Profile* profile, const GURL& url, bool wh
   return params.navigated_or_inserted_contents;
 }
 
-content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url) {
+content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http) {
   // A pinned tab without its page opens it too.
   const Tab* from = Tab::Get(pinned);
   content::WebContents* contents =
-      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false) : nullptr;
+      from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false, typed_http)
+                              : nullptr;
   if (contents) {
     ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
                     /*popup=*/std::nullopt, /*popup_placed=*/false);

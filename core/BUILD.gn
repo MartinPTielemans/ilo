@@ -215,6 +215,19 @@ source_set("arrange_rule") {
   deps = [ "//base" ]
 }
 
+# Whether a load the user typed keeps its http:// (#2417), apart so browser_core_unittests tests
+# the rule alone.
+source_set("typed_http") {
+  sources = [
+    "typed_http.cc",
+    "typed_http.h",
+  ]
+  deps = [
+    "//base",
+    "//url",
+  ]
+}
+
 # How an agent's typing goes to a page as key events, apart so browser_core_unittests tests it alone.
 source_set("typing_keys") {
   sources = [
@@ -516,6 +529,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
     ":typing_keys",
     ":window_frames",
     ":withheld_fields",
@@ -824,6 +838,7 @@ test("browser_core_unittests") {
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_updates_unittest.cc",
+    "typed_http_unittest.cc",
     "typing_keys_unittest.cc",
     "window_frames_unittest.cc",
     "withheld_fields_unittest.cc",
@@ -846,6 +861,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":typed_http",
     ":typing_keys",
     ":window_frames",
     ":withheld_fields",
