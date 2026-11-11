@@ -377,13 +377,12 @@ fn putting_back_each_change_ends_the_arrangement() {
     assert_eq!(boosts.reload(1), Vec::new());
 
     boosts.set_misfits(1, "example.com", vec![1]);
-    let (kept, changes) = boosts.put_back(1, "example.com", 0);
-    assert_eq!(changes, Vec::new());
-    let kept = kept.unwrap();
+    let kept = boosts.without(1, "example.com", 0).unwrap();
+    assert_eq!(boosts.put_back(1, "example.com", 0, &kept), Vec::new());
     let left: Vec<String> = arrange::read(&kept)
         .unwrap()
         .into_iter()
-        .map(|each| each.name)
+        .map(|each| each.title())
         .collect();
     assert_eq!(left, ["More like this"]);
     assert_eq!(folder.read("Boosts/example.com.arrange.json"), Some(kept));
@@ -398,10 +397,19 @@ fn putting_back_each_change_ends_the_arrangement() {
         "the misfit didn't follow its change"
     );
 
+    assert_eq!(boosts.without(1, "example.com", 0).as_deref(), Some(""));
     assert_eq!(
-        boosts.put_back(1, "example.com", 0),
-        (None, vec![arranged("example.com", "")])
+        boosts.put_back(1, "example.com", 0, ""),
+        vec![arranged("example.com", "")]
     );
     assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
     assert_eq!(boosts.get(1, "example.com"), None);
+
+    // Reset's empty save takes it away, and a file the core keeps off isn't edited.
+    boosts.save_arrangement(1, "example.com", TWO);
+    assert_eq!(boosts.save_arrangement(1, "example.com", ""), Vec::new());
+    assert_eq!(folder.read("Boosts/example.com.arrange.json"), None);
+    boosts.save_arrangement(1, "example.com", TWO);
+    boosts.set_arranged(1, "example.com", Arranged::Changed);
+    assert_eq!(boosts.without(1, "example.com", 0), None);
 }

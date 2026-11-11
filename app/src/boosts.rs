@@ -507,21 +507,25 @@ impl Boosts {
     }
 
     /// Keeps the arrangement the core made on `site`'s pages, `bytes`, which it has placed and
-    /// recorded already, and turns the Boost on, as Zap does. Refused, with nothing written, for
-    /// bytes arrange::read refuses.
+    /// recorded already, and turns the Boost on, as Zap does. Empty bytes, after Reset, remove the
+    /// file. Refused, with nothing written, for bytes arrange::read refuses.
     pub fn save_arrangement(&mut self, profile: u64, site: &str, bytes: &str) -> Vec<Change> {
         let Some(kept) = self.profiles.get_mut(&profile) else {
             return Vec::new();
         };
-        if arrange::read(bytes).is_none() {
+        if !bytes.is_empty() && arrange::read(bytes).is_none() {
             crate::log!("refused an arrangement for {site} that isn't of its shape");
             return Vec::new();
         }
         if kept.write_arrangement(site, bytes) {
-            kept.shown_arranged
-                .insert(site.to_owned(), bytes.to_owned());
-            kept.arranged_as.insert(site.to_owned(), Arranged::On);
             kept.misfits.remove(site);
+            if bytes.is_empty() {
+                kept.shown_arranged.remove(site);
+                kept.arranged_as.remove(site);
+                return self.changes(profile);
+            }
+            (kept.shown_arranged).insert(site.to_owned(), bytes.to_owned());
+            kept.arranged_as.insert(site.to_owned(), Arranged::On);
             if kept.off.remove(site) {
                 kept.save_off();
             }
@@ -529,45 +533,42 @@ impl Boosts {
         self.changes(profile)
     }
 
-    /// ↺ and ×: `site`'s arrangement without its change at `index`. Returns the bytes left for
-    /// the core to keep (`Browser::keep_arrangement`), none once none is left, when the file goes
-    /// and the changes take the arrangement away.
-    pub fn put_back(
-        &mut self,
-        profile: u64,
-        site: &str,
-        index: usize,
-    ) -> (Option<String>, Vec<Change>) {
-        let Some(kept) = self.profiles.get_mut(&profile) else {
-            return (None, Vec::new());
-        };
-        let left = kept
-            .arranged
-            .get(site)
-            .and_then(|bytes| arrange::without(bytes, index));
-        let Some(left) = left else {
-            return (None, Vec::new());
-        };
+    /// ↺ and ×: what's left of `site`'s arrangement without its change at `index`, for the core
+    /// to keep before `put_back` writes it, or empty once none is left. None while the core
+    /// keeps it off, as only Turn On keeps a file changed outside ilo.
+    pub fn without(&self, profile: u64, site: &str, index: usize) -> Option<String> {
+        let kept = self.profiles.get(&profile)?;
+        if kept.arranged_as.get(site) != Some(&Arranged::On) {
+            return None;
+        }
+        let left = arrange::without(kept.arranged.get(site)?, index)?;
         let empty = arrange::read(&left).is_some_and(|changes| changes.is_empty());
-        let bytes = if empty { String::new() } else { left };
-        if !kept.write_arrangement(site, &bytes) {
-            return (None, Vec::new());
+        Some(if empty { String::new() } else { left })
+    }
+
+    /// Writes `left`, what `without` gave for `index` and the core has kept, as `site`'s
+    /// arrangement: the file goes with the last change, and the changes take it away.
+    pub fn put_back(&mut self, profile: u64, site: &str, index: usize, left: &str) -> Vec<Change> {
+        let Some(kept) = self.profiles.get_mut(&profile) else {
+            return Vec::new();
+        };
+        if !kept.write_arrangement(site, left) {
+            return Vec::new();
         }
         if let Some(misfits) = kept.misfits.get_mut(site) {
             misfits.retain(|each| *each != index);
-            misfits
-                .iter_mut()
+            (misfits.iter_mut())
                 .filter(|each| **each > index)
                 .for_each(|each| *each -= 1);
         }
-        if empty {
+        if left.is_empty() {
             kept.arranged_as.remove(site);
             kept.misfits.remove(site);
-            return (None, self.changes(profile));
+        } else {
+            // The core keeps and places these itself.
+            kept.shown_arranged.insert(site.to_owned(), left.to_owned());
         }
-        // The core keeps and places these itself.
-        kept.shown_arranged.insert(site.to_owned(), bytes.clone());
-        (Some(bytes), self.changes(profile))
+        self.changes(profile)
     }
 
     /// `site`'s arrangement file as it is, for Turn On, if the app can read it.

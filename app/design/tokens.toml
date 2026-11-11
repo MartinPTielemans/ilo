@@ -1739,6 +1739,9 @@ row-top = 6.0
 row-gap = 8.0
 put-back = 24.0
 put-back-glyph = 14.0
+# Arrange's marks in the page, in CSS px, as the mock draws them: the outline's width and corners.
+mark-line = 2.0
+mark-radius = 6.0
 misfit = 0.5
 
 [shell.cast]

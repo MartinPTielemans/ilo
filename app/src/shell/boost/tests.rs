@@ -450,7 +450,7 @@ impl Folder {
 fn arranged(folder: &Folder) -> Vec<String> {
     let bytes = folder.arrangement("example.com").unwrap_or_default();
     let changes = crate::boosts::arrange::read(&bytes).unwrap_or_default();
-    changes.into_iter().map(|change| change.name).collect()
+    changes.into_iter().map(|change| change.title()).collect()
 }
 
 /// The card's list of `count` changes ends this far over its bottom, over its two lines of
@@ -613,6 +613,40 @@ fn an_arrangement_changed_outside_ilo_is_off_until_turned_on(cx: &mut TestAppCon
         (None, None)
     );
     assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+}
+
+/// A file the core refuses for what's in it is off whatever the user does: the card says so, with
+/// nothing to press, and Site Controls has no Turn On for it.
+#[gpui::test]
+fn an_arrangement_the_core_refuses_stays_off(cx: &mut TestAppContext) {
+    let (shell, host, folder, cx) = window(cx);
+    host.arranged.set(Some(crate::boosts::Arranged::Refused));
+    let boosts = folder.0.join("Boosts");
+    std::fs::create_dir_all(&boosts).unwrap();
+    std::fs::write(boosts.join("example.com.arrange.json"), ARRANGED).unwrap();
+    shell.update(cx, |shell, cx| shell.run(Command::EditBoost, "ui", cx));
+    cx.run_until_parked();
+    assert_eq!(host.take(), ["arrangement 1 example.com: 3 changes"]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
+        (None, None)
+    );
+    put_back(&shell, 0, 3, cx);
+    shell.update(cx, |shell, cx| shell.turn_on_arrangement(10, cx));
+    assert_eq!(arrange_calls(&host), Vec::<String>::new());
+    assert_eq!(folder.arrangement("example.com").as_deref(), Some(ARRANGED));
+}
+
+/// Where the core won't run Arrange, the app doesn't count it as on.
+#[gpui::test]
+fn arrange_is_on_only_where_the_core_says(cx: &mut TestAppContext) {
+    let (shell, host, _folder, cx) = window(cx);
+    shell.update(cx, |shell, cx| shell.run(Command::NewBoost, "ui", cx));
+    host.take();
+    host.arrange_refused.set(true);
+    press(&shell, 0.75, LAST, cx);
+    assert_eq!(arrange_calls(&host), ["arrange 10 true"]);
+    assert!(!shell.read_with(cx, |shell, _| shell.arranging(10)));
 }
 
 /// Neither a private window nor an agent's Space offers Arrange, and what the core says of one

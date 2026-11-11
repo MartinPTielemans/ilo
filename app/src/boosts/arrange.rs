@@ -4,7 +4,8 @@
 //! lists and passes the rest through untouched, as the place is the core's.
 //!
 //! The file is the user's, so anything can be in it: one over a cap, or not of this shape, is off
-//! as a whole and never half listed, and its names only ever reach GPUI's text.
+//! as a whole and never half listed, and its names only ever reach GPUI's text. The core checks
+//! it again and its verdict is the one that counts (Arranged::Refused).
 
 use serde_json::Value;
 
@@ -24,6 +25,72 @@ pub enum Arranged {
     New,
     /// Changed since the user kept it, outside ilo: off until the user turns it on.
     Changed,
+    /// Over the core's caps or off its shape: off, and Turn On can't change that.
+    Refused,
+}
+
+/// How the core draws Arrange's marks in the page: the Space's accent for the outline, the line
+/// and the label, whose words are in `label`; `ink` for the dashed place a carried thing left; in
+/// CSS px, the outline's width and its corners. The label names a thing with the app's word for
+/// its kind (KINDS).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    pub accent: u32,
+    pub label: u32,
+    pub ink: u32,
+    pub line: f32,
+    pub radius: f32,
+}
+
+/// The app's word for each kind of thing on a page, by the token the core gives: its ARIA role,
+/// or its tag where it has none. Any other is OTHER.
+pub const KINDS: [(&str, &str); 39] = [
+    ("article", "article"),
+    ("aside", "side box"),
+    ("complementary", "side box"),
+    ("banner", "header"),
+    ("header", "header"),
+    ("button", "button"),
+    ("contentinfo", "footer"),
+    ("footer", "footer"),
+    ("dialog", "dialog"),
+    ("figure", "figure"),
+    ("form", "form"),
+    ("heading", "heading"),
+    ("h1", "heading"),
+    ("h2", "heading"),
+    ("h3", "heading"),
+    ("h4", "heading"),
+    ("h5", "heading"),
+    ("h6", "heading"),
+    ("img", "picture"),
+    ("image", "picture"),
+    ("picture", "picture"),
+    ("link", "link"),
+    ("a", "link"),
+    ("list", "list"),
+    ("ul", "list"),
+    ("ol", "list"),
+    ("listitem", "list item"),
+    ("li", "list item"),
+    ("main", "main content"),
+    ("navigation", "menu"),
+    ("nav", "menu"),
+    ("region", "section"),
+    ("section", "section"),
+    ("search", "search"),
+    ("table", "table"),
+    ("video", "video"),
+    ("audio", "audio player"),
+    ("iframe", "embed"),
+    ("paragraph", "paragraph"),
+];
+pub const OTHER: &str = "part of the page";
+
+/// The app's word for the kind `role`, a token of the core's.
+pub fn kind_word(role: &str) -> &'static str {
+    let found = KINDS.iter().find(|(token, _)| *token == role);
+    found.map_or(OTHER, |(_, word)| word)
 }
 
 /// Where a float stays.
@@ -33,17 +100,34 @@ pub enum Pin {
     Page,
 }
 
+/// A thing on the page, as the core names it: the page's own words, or none, and its kind.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Thing {
+    pub name: String,
+    pub role: String,
+}
+
+impl Thing {
+    /// The thing in a row's second line: its name quoted, or "the video" without one.
+    fn said(&self) -> String {
+        match self.name.is_empty() {
+            true => format!("the {}", kind_word(&self.role)),
+            false => format!("“{}”", self.name),
+        }
+    }
+}
+
 /// What a change did to the thing it moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Move {
     /// Settled before or after another.
     Settle {
         before: bool,
-        other: String,
+        other: Thing,
     },
     /// Traded places with another.
     Trade {
-        with: String,
+        with: Thing,
     },
     Float {
         pin: Pin,
@@ -53,24 +137,34 @@ pub enum Move {
 /// One change, as the card lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
-    /// The thing it moved, as the core named it: "The video".
-    pub name: String,
+    pub thing: Thing,
     pub moved: Move,
 }
 
 impl Change {
+    /// Its row's name: the thing's own, or its kind's word without one, "Video".
+    pub fn title(&self) -> String {
+        if !self.thing.name.is_empty() {
+            return self.thing.name.clone();
+        }
+        let word = kind_word(&self.thing.role);
+        let mut chars = word.chars();
+        let first = chars.next().map(|first| first.to_ascii_uppercase());
+        first.into_iter().chain(chars).collect()
+    }
+
     /// Its row's second line: "Before the article".
     pub fn describe(&self) -> String {
         match &self.moved {
             Move::Settle {
                 before: true,
                 other,
-            } => format!("Before {other}"),
+            } => format!("Before {}", other.said()),
             Move::Settle {
                 before: false,
                 other,
-            } => format!("After {other}"),
-            Move::Trade { with } => format!("Traded with {with}"),
+            } => format!("After {}", other.said()),
+            Move::Trade { with } => format!("Traded with {}", with.said()),
             Move::Float { pin: Pin::Screen } => "Floats, stays on screen".into(),
             Move::Float { pin: Pin::Page } => "Floats, scrolls with the page".into(),
         }
@@ -119,22 +213,33 @@ fn within(value: &Value) -> bool {
     }
 }
 
+/// A thing in the file: its name, and its role where the file has one.
+fn thing(value: &Value) -> Option<Thing> {
+    let role = match value.get("role") {
+        None => String::new(),
+        Some(role) => role.as_str()?.to_owned(),
+    };
+    Some(Thing {
+        name: value.get("name")?.as_str()?.to_owned(),
+        role,
+    })
+}
+
 fn change(change: &Value) -> Option<Change> {
-    let name = |value: &Value| Some(value.get("name")?.as_str()?.to_owned());
     let moved = match change.get("kind")?.as_str()? {
         "settle" => match (change.get("before"), change.get("after")) {
             (Some(other), None) => Move::Settle {
                 before: true,
-                other: name(other)?,
+                other: thing(other)?,
             },
             (None, Some(other)) => Move::Settle {
                 before: false,
-                other: name(other)?,
+                other: thing(other)?,
             },
             _ => return None,
         },
         "trade" => Move::Trade {
-            with: name(change.get("with")?)?,
+            with: thing(change.get("with")?)?,
         },
         "float" => Move::Float {
             pin: match change.get("pin")?.as_str()? {
@@ -146,7 +251,7 @@ fn change(change: &Value) -> Option<Change> {
         _ => return None,
     };
     Some(Change {
-        name: name(change)?,
+        thing: thing(change)?,
         moved,
     })
 }

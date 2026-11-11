@@ -1009,8 +1009,17 @@ impl Browser for Engine {
 
     // Arrange's calls reach the core with its slice (#2347), on the engine with its header;
     // until then a tab has no Arrange and no arrangement is placed.
-    fn arrange(&self, tab: u64, on: bool, _: &mut App) {
-        log!("browser: arrange {tab} {}", if on { "on" } else { "off" });
+    fn arrange(
+        &self,
+        tab: u64,
+        look: Option<&browser::boosts::arrange::Look>,
+        _: &mut App,
+    ) -> bool {
+        log!(
+            "browser: arrange {tab} {}",
+            if look.is_some() { "on" } else { "off" }
+        );
+        false
     }
 
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> browser::boosts::Arranged {

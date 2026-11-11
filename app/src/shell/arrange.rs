@@ -14,7 +14,10 @@ use super::{
 };
 use crate::boosts::{self, Arranged};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::boost::{LIST_TOP, MISFIT, PUT_BACK, PUT_BACK_GLYPH, ROW_GAP, ROW_TOP};
+use crate::theme::packed;
+use crate::tokens::shell::boost::{
+    LIST_TOP, MARK_LINE, MARK_RADIUS, MISFIT, PUT_BACK, PUT_BACK_GLYPH, ROW_GAP, ROW_TOP,
+};
 use crate::tokens::shell::permission::{BUTTON_GAP, DETAIL};
 
 impl Shell {
@@ -28,14 +31,24 @@ impl Shell {
         self.stop_arrange(cx);
         // check.sh reads this line.
         log!("browser: arrange {tab} started");
-        self.arranging = Some(tab);
-        self.browser.arrange(tab, true, cx);
+        // The marks in the page are the Space's, as the card's own controls are.
+        let palette = &self.palette;
+        let look = boosts::arrange::Look {
+            accent: packed(palette.accent),
+            label: packed(palette.accent_label),
+            ink: packed(palette.ink),
+            line: MARK_LINE,
+            radius: MARK_RADIUS,
+        };
+        if self.browser.arrange(tab, Some(&look), cx) {
+            self.arranging = Some(tab);
+        }
         cx.notify();
     }
 
     pub(super) fn stop_arrange(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.arranging.take() {
-            self.browser.arrange(tab, false, cx);
+            self.browser.arrange(tab, None, cx);
             cx.notify();
         }
     }
@@ -85,14 +98,15 @@ impl Shell {
         let Some((profile, site, _)) = self.shown_boost(cx) else {
             return;
         };
-        let (kept, changes) = boosts::with(|boosts| boosts.put_back(profile, &site, index));
-        if let Some(bytes) = kept {
-            let state = match self.browser.keep_arrangement(profile, &site, &bytes) {
-                true => Arranged::On,
-                false => Arranged::Changed,
-            };
-            boosts::with(|boosts| boosts.set_arranged(profile, &site, state));
+        let Some(left) = boosts::with(|boosts| boosts.without(profile, &site, index)) else {
+            return;
+        };
+        // The core records the user's edit before the file changes, or it would read the new
+        // bytes as changed outside ilo. The last change back takes the arrangement away instead.
+        if !left.is_empty() && !self.browser.keep_arrangement(profile, &site, &left) {
+            return;
         }
+        let changes = boosts::with(|boosts| boosts.put_back(profile, &site, index, &left));
         self.browser.show_boosts(changes, cx);
         self.boosts_changed(cx);
     }
@@ -102,6 +116,11 @@ impl Shell {
         let Some((profile, site)) = self.boost_site(tab) else {
             return;
         };
+        let arrangement =
+            boosts::with(|boosts| boosts.get(profile, &site)).and_then(|boost| boost.arrangement);
+        if !arrangement.is_some_and(|arrangement| turns_on(&arrangement)) {
+            return;
+        }
         let Some(bytes) = boosts::with(|boosts| boosts.arrangement(profile, &site)) else {
             return;
         };
@@ -113,8 +132,8 @@ impl Shell {
     }
 
     /// What Site Controls says of the arrangement of `tab`'s site, if it has one: after the Boost's
-    /// state, "1 change no longer fits", and why it's off where the core keeps it off, which its
-    /// Turn On row says.
+    /// state, "1 change no longer fits", and why it's off where Turn On can turn it on, which its
+    /// row says. One that can't be read is the card's to say.
     pub fn arrangement_note(&self, tab: u64) -> (Option<String>, Option<&'static str>) {
         let Some((profile, site)) = self.boost_site(tab) else {
             return (None, None);
@@ -129,7 +148,8 @@ impl Shell {
             1 => Some("1 change no longer fits".to_owned()),
             count => Some(format!("{count} changes no longer fit")),
         };
-        (misfits, off_because(&arrangement))
+        let off = off_because(&arrangement).filter(|_| turns_on(&arrangement));
+        (misfits, off)
     }
 
     /// The card's list of what Arrange moved on the site, under its words.
@@ -156,7 +176,7 @@ impl Shell {
                 false => ("No longer fits".into(), "icons/x.svg"),
             };
             // Off, the file is the user's to turn on as it is, so it isn't edited here.
-            let button = off.is_none().then(|| {
+            let button = (arrangement.state == Some(Arranged::On)).then(|| {
                 div()
                     .id(("arranged-put-back", index))
                     .flex_none()
@@ -192,13 +212,13 @@ impl Shell {
                                 .truncate()
                                 .text_color(palette.text(TITLE))
                                 .when(!fits, |name| name.opacity(MISFIT))
-                                .child(change.name.clone()),
+                                .child(change.title()),
                         )
                         .child(line(what)),
                 )
                 .children(button)
         });
-        let turn_on = off.filter(|_| arrangement.changes.is_some()).map(|_| {
+        let turn_on = turns_on(arrangement).then(|| {
             div().mt(px(BUTTON_GAP)).flex().child(
                 card_button_as(palette, "arranged-turn-on", "Turn On", Look::Quiet).on_click(
                     cx.listener(|shell, _, _, cx| shell.turn_on_arrangement(shell.field_tab(), cx)),
@@ -225,9 +245,16 @@ impl Shell {
 /// Why the core keeps `arrangement` off, if it does, in the words the card and Site Controls say.
 fn off_because(arrangement: &boosts::Arrangement) -> Option<&'static str> {
     match (&arrangement.changes, arrangement.state) {
-        (None, _) => Some("Can't be read, off"),
+        (None, _) | (_, Some(Arranged::Refused)) => Some("Can't be read, off"),
         (_, Some(Arranged::Changed)) => Some("Changed outside ilo, off"),
         (_, Some(Arranged::New)) => Some("New on this computer, off"),
         _ => None,
     }
+}
+
+/// Whether Turn On can turn `arrangement` on: one the core keeps off for where it came from, not
+/// for what's in it.
+fn turns_on(arrangement: &boosts::Arrangement) -> bool {
+    arrangement.changes.is_some()
+        && matches!(arrangement.state, Some(Arranged::New | Arranged::Changed))
 }

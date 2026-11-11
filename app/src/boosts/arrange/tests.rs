@@ -1,16 +1,17 @@
 use super::*;
 
 const FILE: &str = r#"{"version": 1, "changes": [
-  {"kind": "settle", "name": "The video", "before": {"name": "the article", "at": [3, 1]}, "place": "x"},
-  {"kind": "trade", "name": "Trending", "with": {"name": "the sign-up box"}},
-  {"kind": "float", "name": "More like this", "pin": "screen", "box": [10, 20, 300, 200]},
-  {"kind": "settle", "name": "The banner", "after": {"name": "the footer"}}
+  {"kind": "settle", "name": "", "role": "video", "before": {"name": "", "role": "article", "at": [3, 1]}, "place": "x"},
+  {"kind": "trade", "name": "Trending", "role": "aside", "with": {"name": "Get the newsletter", "role": "form"}},
+  {"kind": "float", "name": "More like this", "role": "complementary", "pin": "screen", "box": [10, 20, 300, 200]},
+  {"kind": "settle", "name": "", "role": "div", "after": {"name": "", "role": "contentinfo"}}
 ], "core": {"seen": 4}}"#;
 
+/// A thing is its page's words, quoted, or the app's word for its kind where it has none.
 #[test]
 fn each_change_reads_as_the_card_lists_it() {
     let listed: Vec<(String, String)> = (read(FILE).unwrap().iter())
-        .map(|change| (change.name.clone(), change.describe()))
+        .map(|change| (change.title(), change.describe()))
         .collect();
     let listed: Vec<(&str, &str)> = (listed.iter())
         .map(|(name, what)| (name.as_str(), what.as_str()))
@@ -18,10 +19,10 @@ fn each_change_reads_as_the_card_lists_it() {
     assert_eq!(
         listed,
         [
-            ("The video", "Before the article"),
-            ("Trending", "Traded with the sign-up box"),
+            ("Video", "Before the article"),
+            ("Trending", "Traded with “Get the newsletter”"),
             ("More like this", "Floats, stays on screen"),
-            ("The banner", "After the footer"),
+            ("Part of the page", "After the footer"),
         ]
     );
 }
@@ -33,9 +34,9 @@ fn putting_one_back_keeps_the_rest_as_it_was() {
     let names: Vec<String> = read(&left)
         .unwrap()
         .into_iter()
-        .map(|each| each.name)
+        .map(|each| each.title())
         .collect();
-    assert_eq!(names, ["The video", "More like this", "The banner"]);
+    assert_eq!(names, ["Video", "More like this", "Part of the page"]);
     let left: Value = serde_json::from_str(&left).unwrap();
     assert_eq!(
         left["changes"][0]["before"]["at"],
@@ -82,6 +83,9 @@ fn a_hostile_file_is_refused_whole() {
         file(vec![r#"{"kind":"trade","name":"a","with":"b"}"#.into()]),
         file(vec![r#"{"kind":"float","name":"a","pin":"window"}"#.into()]),
         file(vec![r#"{"kind":"float","name":7,"pin":"page"}"#.into()]),
+        file(vec![
+            r#"{"kind":"float","name":"a","role":1,"pin":"page"}"#.into(),
+        ]),
         file(vec!["null".into()]),
         r#"{"version":2,"changes":[]}"#.into(),
         r#"{"version":"1","changes":[]}"#.into(),
@@ -109,5 +113,8 @@ fn a_name_is_text_whatever_it_holds() {
         r#"{{"version":1,"changes":[{{"kind":"trade","name":"{name}","with":{{"name":"b"}}}}]}}"#
     );
     let read = read(&bytes).unwrap();
-    assert_eq!(read[0].name, "<img src=x onerror=alert(1)> \u{202e}\u{0} ✓");
+    assert_eq!(
+        read[0].thing.name,
+        "<img src=x onerror=alert(1)> \u{202e}\u{0} ✓"
+    );
 }

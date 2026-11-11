@@ -100,6 +100,8 @@ pub(super) struct Recorder {
     pub(super) space_agents: RefCell<HashMap<u64, SharedString>>,
     /// What the core makes of each arrangement it's given, On unless a test says.
     pub(super) arranged: Cell<Option<crate::boosts::Arranged>>,
+    /// Whether the core refuses Arrange, as on a page that isn't http(s).
+    pub(super) arrange_refused: Cell<bool>,
     /// The menus it was asked to show, each item by its title and whether it's enabled.
     pub(super) menus: RefCell<Vec<Vec<(SharedString, bool)>>>,
     /// Where the last menu was asked to show, in the window.
@@ -1070,8 +1072,9 @@ impl Browser for Recorder {
         self.record(format!("zap {tab} {on}"))
     }
 
-    fn arrange(&self, tab: u64, on: bool, _: &mut App) {
-        self.record(format!("arrange {tab} {on}"))
+    fn arrange(&self, tab: u64, look: Option<&crate::boosts::arrange::Look>, _: &mut App) -> bool {
+        self.record(format!("arrange {tab} {}", look.is_some()));
+        look.is_some() && !self.arrange_refused.get()
     }
 
     fn set_arrangement(&self, profile: u64, site: &str, bytes: &str) -> crate::boosts::Arranged {

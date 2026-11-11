@@ -415,10 +415,10 @@ fn preview_boost_folder() -> Option<std::path::PathBuf> {
     let css = css.to_owned() + &"main { max-width: 42em; }\n".repeat(12);
     std::fs::write(boosts.join(format!("{site}.css")), css).ok()?;
     let arrangement = r#"{"version": 1, "changes": [
-  {"kind": "settle", "name": "The video", "before": {"name": "the article"}},
-  {"kind": "trade", "name": "Trending", "with": {"name": "the sign-up box"}},
-  {"kind": "float", "name": "More like this", "pin": "screen"},
-  {"kind": "settle", "name": "The banner", "after": {"name": "the footer"}}
+  {"kind": "settle", "name": "", "role": "video", "before": {"name": "", "role": "article"}},
+  {"kind": "trade", "name": "Trending", "role": "aside", "with": {"name": "Get the newsletter", "role": "form"}},
+  {"kind": "float", "name": "More like this", "role": "complementary", "pin": "screen"},
+  {"kind": "settle", "name": "", "role": "banner", "after": {"name": "", "role": "contentinfo"}}
 ]}
 "#;
     let name = format!("{site}{}", browser::boosts::arrange::SUFFIX);
