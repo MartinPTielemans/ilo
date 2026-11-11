@@ -247,17 +247,19 @@ mcp() {
   printf '%s\n' "$1" >&4
   case "$1" in *'"id":'*) answer=$(next_answer) || fail "the browser didn't answer $1"; printf '%s\n' "$answer" ;; esac
 }
-# Prints a tool's answer on stdin: its text, after "error: " if it's an error, or a picture's type
-# and size.
+# Prints the answer on stdin to the call $1: its text, after "error: " if it's an error, or a
+# picture's type and size. An answer with no result, as a JSON-RPC error, fails the run with it.
 answered() {
-  python3 -I -c '
+  raw=$(cat)
+  printf '%s\n' "$raw" | python3 -I -c '
 import json, sys
 result = json.load(sys.stdin)["result"]
 content = result["content"][0]
 if content["type"] == "image":
     print(content["mimeType"], len(content["data"]))
 else:
-    print(("error: " if result["isError"] else "") + content["text"])'
+    print(("error: " if result["isError"] else "") + content["text"])' 2> /dev/null ||
+    fail "the browser answered $1 with: $raw"
 }
 # The tools/call request for the tool $1 with the arguments $2, as they are: sh's echo would make
 # a JSON escape such as \n a line break.
@@ -267,7 +269,7 @@ request() {
 }
 # Calls the tool $1 with the arguments $2, and prints its answer.
 call() {
-  mcp "$(request "$1" "$2")" | answered
+  mcp "$(request "$1" "$2")" | answered "$1"
 }
 
 mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
@@ -1008,7 +1010,7 @@ addEventListener("keydown", event => event.key == "Escape" && (document.title = 
   await_log "^browser: title $keys_tab escape heard\$" "press_key Escape didn't reach the page"
   pressed=$(perl -e 'alarm 60; exec @ARGV' sh -c 'read -r line && printf "%s\n" "$line"' <&5) ||
     fail "the browser didn't answer press_key Escape"
-  pressed=$(printf '%s\n' "$pressed" | answered)
+  pressed=$(printf '%s\n' "$pressed" | answered "press_key Escape")
   case "$pressed" in "Pressed Escape."*) ;; *) fail "press_key Escape answered: $pressed" ;; esac
   kill -0 "$pid" 2>/dev/null || fail "the app exited as the agent pressed Escape"
   [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
@@ -1202,7 +1204,7 @@ CARD
     send click $((qx + x)) $((qy + qh - 26))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the change's question"
     changed=$(next_answer) || fail "the browser didn't answer the change"
-    changed=$(printf '%s\n' "$changed" | answered)
+    changed=$(printf '%s\n' "$changed" | answered "the change")
   }
   change Once 0
   case "$changed" in
@@ -1363,7 +1365,7 @@ CARD
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back didn't hand the tab back"
   handed=$(next_answer) || fail "the browser didn't answer hand_off"
-  handed=$(printf '%s\n' "$handed" | answered)
+  handed=$(printf '%s\n' "$handed" | answered hand_off)
   case "$handed" in
     "The user handed tab $opened_tab back."*) ;;
     *) fail "hand_off answered: $handed" ;;
@@ -1414,7 +1416,7 @@ CARD
   send click $((qx + 30)) $((qy + qh - 26))
   await_log "^browser: agent mcp-client answered $q Never\$" "Keep didn't answer"
   kept=$(next_answer) || fail "the browser didn't answer ask_for_tab"
-  kept=$(printf '%s\n' "$kept" | answered)
+  kept=$(printf '%s\n' "$kept" | answered ask_for_tab)
   case "$kept" in
     "error: The user keeps tab $opened_tab."*) ;;
     *) fail "ask_for_tab answered: $kept" ;;
@@ -1557,7 +1559,7 @@ CARD
     send click $((qx + x)) $((qy + qh - 26 - 36))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the download"
     downloaded=$(next_answer) || fail "the browser didn't answer the download's open_tab"
-    downloaded=$(printf '%s\n' "$downloaded" | answered)
+    downloaded=$(printf '%s\n' "$downloaded" | answered "the download's open_tab")
   }
   answer_download Once
   [ "$downloaded" = "Downloaded report.docx (7 bytes) to downloads. Agents can't open files; ask the user if you need it." ] ||
@@ -1599,7 +1601,7 @@ CARD
     send click $((qx + x)) $((qy + y))
     await_log "^browser: agent mcp-client answered $q $1\$" "$1 didn't answer the question"
     allowed=$(next_answer) || fail "the browser didn't answer the bank's open_tab"
-    allowed=$(printf '%s\n' "$allowed" | answered)
+    allowed=$(printf '%s\n' "$allowed" | answered "the bank's open_tab")
   }
   answer_bank Once
   case "$allowed" in "Opened tab "*) ;; *) fail "the allowed open_tab answered: $allowed" ;; esac
@@ -1813,7 +1815,7 @@ STOP
       fail "the window stayed urgent once no task waited"
   fi
   stopped=$(next_answer) || fail "the browser didn't answer the hand_off it stopped"
-  stopped=$(printf '%s\n' "$stopped" | answered)
+  stopped=$(printf '%s\n' "$stopped" | answered "the hand_off it stopped")
   case "$stopped" in
     "error: The user stopped you."*) ;;
     *) fail "the hand_off stopped answered: $stopped" ;;
