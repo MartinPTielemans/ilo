@@ -15,7 +15,7 @@ Work that doesn't change the core needs no build: `./fetch.sh` downloads the pre
 | `patches/ardia/` | Patches taken from Ardia, same convention |
 | `patches/ours/` | Our own patches |
 | `patches/mac/` | Our patches for the Mac's tree alone, in `series`' `mac/` section, which every other platform's tree leaves out |
-| `patches/ungoogled-chromium-*/` | A lagging platform's patches, rebased by ilo onto ungoogled-chromium's tag, laid out as in its repository (Rules, below) |
+| `patches/ungoogled-chromium-*/` | A lagging platform's patches and GN flags, rebased by ilo onto ungoogled-chromium's tag, laid out as in its repository (Rules, below) |
 | `args.gn` | Our GN args, after ungoogled-chromium's `flags.gn` and ungoogled-chromium-macos's `flags.macos.gn` |
 | `args.dev.gn` | The dev build's args, after `args.gn` |
 | `tree.sh` | What `setup.sh` and `linux/prepare.sh` both do to a prepared tree: remove Chromium's agent instructions, link the core and apply `series` |
@@ -168,6 +168,6 @@ so a build whose profile is elsewhere, as a dev build's is, does none of that.
 - Domain substitution rewrites Google's hosts in the source before the series is applied, so a patch that needs a real host writes it in full, and nothing rewrites it.
 - One concern per patch, named `chromium-<area>-<what>.patch`.
 - Each release, diff Helium's and Ardia's series against ours for anything worth taking.
-- A platform whose repository hasn't tagged a Chromium major within a few days of Stable builds on ungoogled-chromium's tag with its last platform patches, and goes back to the platform's tag when one appears. Its tag in `pins.ini` stays its last; ilo's rebased copies of the patches that need it are in `patches/<repository>/`, laid out as in the repository, each header saying what changed from the platform's and why, and a copy with no hunks is a patch left out (`rebase_platform` in `tree.sh`). The directory goes in the PR that takes the platform's tag.
+- A platform whose repository hasn't tagged a Chromium major within a few days of Stable builds on ungoogled-chromium's tag with its last platform patches, and goes back to the platform's tag when one appears. Its tag in `pins.ini` stays its last; ilo's rebased copies of the patches and other files that need it are in `patches/<repository>/`, laid out as in the repository, each header saying what changed from the platform's and why, and a copy with no hunks is a patch left out (`rebase_platform` in `tree.sh`). The directory goes in the PR that takes the platform's tag.
 - A new Chromium major, or a change to the GN args, means a full build. A point release taken with `setup.sh update` rebuilds only what it changes.
 - An Xcode update doesn't: `chromium-xcode-build-define.patch` drops the `CR_XCODE_BUILD` define, which upstream compiles every object with only so that one does.

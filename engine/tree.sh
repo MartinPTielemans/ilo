@@ -68,9 +68,9 @@ LOGOS
 
 # A platform repository that hasn't tagged a Chromium major within a few days of Stable builds on
 # ungoogled-chromium's tag with its last platform patches, and goes back to its own tag when one
-# appears. Its patches that need it are rebased by ilo, in engine/patches/<repository>/ laid out as
-# in the repository, each saying in its header what changed from the platform's and why; a copy
-# with no hunks is a patch left out. The directory goes when the platform tags the major; until
+# appears. Its patches and other files that need it are rebased by ilo, in
+# engine/patches/<repository>/ laid out as in the repository, each saying in a comment at its top
+# what changed from the platform's and why; a patch's copy with no hunks is a patch left out. The directory goes when the platform tags the major; until
 # then, copies for a platform whose pin is on [chromium]'s version again are left alone.
 rebased_platform() {
   local tag
@@ -79,7 +79,8 @@ rebased_platform() {
 }
 
 # Puts a platform repository's clone on the pinned ungoogled-chromium tag, with ilo's rebased
-# copies over its patches and those left out off its series, if ilo rebased it. Safe to run again
+# copies over its patches and other files and the patches left out off its series, if ilo rebased
+# it. Safe to run again
 # on the same clone. Takes the clone's path and the repository's name.
 rebase_platform() {
   local dir=$1 name=$2 copies=$engine/patches/$2 uc_tag file
@@ -98,6 +99,13 @@ rebase_platform() {
       grep -vxF "${file#patches/}" "$dir/patches/series" >"$dir/patches/series.new" || true
       mv "$dir/patches/series.new" "$dir/patches/series"
     fi
+  done
+  for file in $(cd "$copies" && find . -type f ! -path './patches/*' | sed 's|^\./||' | sort); do
+    if [ ! -f "$dir/$file" ]; then
+      echo "$name has no $file for ilo's rebased copy to replace" >&2
+      return 1
+    fi
+    cp "$copies/$file" "$dir/$file"
   done
 }
 
