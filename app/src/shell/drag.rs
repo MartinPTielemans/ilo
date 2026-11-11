@@ -2,11 +2,8 @@
 //! favorites, to another Space, and over the page for a split view. And links and files
 //! dragged onto the list from the page or another app, which open there.
 
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
+use web_time::Instant;
 
 use gpui::{
     Bounds, Context, DispatchPhase, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,

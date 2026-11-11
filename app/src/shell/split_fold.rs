@@ -7,7 +7,7 @@
 //! at doesn't move from under it. A press on a segment refolds the row at once: that's the aim.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use web_time::Instant;
 
 use gpui::{Context, Window};
 

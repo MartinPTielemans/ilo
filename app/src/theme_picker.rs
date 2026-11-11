@@ -11,7 +11,8 @@
 //! The handles and the dial stay the mouse's: a swatch places a colour, as a click on the field
 //! does.
 
-use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::OnceCell, f32::consts::TAU, rc::Rc, sync::Arc};
+use web_time::Instant;
 
 use gpui::{
     App, Bounds, Context, DispatchPhase, Div, Entity, FocusHandle, Focusable, FontWeight, Global,
