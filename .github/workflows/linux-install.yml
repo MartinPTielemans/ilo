@@ -156,7 +156,7 @@ jobs:
           path: ${{ runner.temp }}/release
       - uses: ./.github/actions/apt-install
         with:
-          packages: xvfb mesa-vulkan-drivers imagemagick
+          packages: xvfb mesa-vulkan-drivers imagemagick libxkbcommon-x11-0
       - run: |
           [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ] ||
             { echo "::error::The runner no longer restricts user namespaces, so the step isn't checked."; exit 1; }

@@ -84,7 +84,7 @@ curl -fL --progress-bar "$release/$tarball" -o "$work/$tarball" || stop "Couldn'
   stop "The download doesn't match its checksum, so nothing was installed. Try again later."
 tar -xJf "$work/$tarball" -C "$work"
 missing=$(ldd "$work/ilo/chrome" "$work/ilo/libBrowser.so" 2>&1 |
-  sed -n 's/^[[:space:]]*\([^ ]*\) => not found$/\1/p; s/.*version .\([^ ]*\). not found.*/\1/p' | sort -u | tr '\n' ' ')
+  sed -n 's/^[[:space:]]*\([^ ]*\) => not found$/\1/p; s/.*version .\([^ ]*\). not found.*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')
 [ -z "$missing" ] || stop "ilo needs what this system doesn't have: $missing. Install it from your distribution, then run the line again."
 
 # In place: the new build replaces the old one whole, and the profile, apart from it, stays.
