@@ -98,25 +98,21 @@ EOF
   expect '^browser: sidebar shown$' "$side: ⌘S didn't bring the sidebar back"
   buttons $side "sidebar docked again"
   if [ -z "$right" ]; then
-    # #2389's setting turns the title bar while the app runs: each window answers by its own mark,
-    # and AppKit lays the buttons out again once asked, through a resize and full screen.
-    send titlebar right
-    expect '^browser: titlebar turned right to left$' "the title bar didn't turn right to left"
-    buttons $side "turned right"
-    shot $side turned-right
-    send resize 1000 700
-    buttons $side "turned right, resized"
-    send resize 1280 800
-    send fullscreen
-    expect '^browser: window entered full screen$' "turned right: the window didn't go full screen"
-    buttons $side "turned right, full screen"
-    send fullscreen
-    expect '^browser: window left full screen$' "turned right: the window didn't leave full screen"
-    buttons $side "turned right, after full screen"
-    send titlebar left
-    expect '^browser: titlebar turned left to right$' "the title bar didn't turn back"
-    buttons $side "turned back left"
-    shot $side turned-back
+    # #2389's setting turns the title bar while the app runs, and each window answers by its own
+    # mark; marking the views alone left the buttons where they were until the next resize (run
+    # 42941747251). Each way of asking AppKit to place them again turns right and back, the
+    # buttons logged after each turn, then a resize settles them before the next way.
+    for how in layout style tile buttons size frame; do
+      send titlebar right $how
+      expect "^browser: titlebar turned right to left by $how" "$how: the title bar didn't turn"
+      buttons $side "turned right by $how"
+      [ "$how" = frame ] && shot $side turned-right
+      send titlebar left $how
+      expect "^browser: titlebar turned left to right by $how" "$how: the title bar didn't turn back"
+      buttons $side "turned back by $how"
+      send resize 1000 700
+      send resize 1280 800
+    done
   fi
   send menubar Window
   echo "$side Window menu: $(grep '^browser: menu bar Window: ' "$log" | tail -1 | cut -d' ' -f5-)" \

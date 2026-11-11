@@ -5,6 +5,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <VideoToolbox/VideoToolbox.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 #include <dlfcn.h>
@@ -1669,7 +1670,7 @@ static NSUserInterfaceLayoutDirection TitlebarDirection(NSWindow* self, SEL sele
   return ((NSUserInterfaceLayoutDirection (*)(id, SEL))g_titlebar_direction)(self, selector);
 }
 
-bool host_titlebar_right_for_testing(NSWindow* window, bool right) {
+bool host_titlebar_right_for_testing(NSWindow* window, bool right, const char* how) {
   if (!g_titlebar_direction) {
     Class kind = window.class;
     SEL selector = @selector(windowTitlebarLayoutDirection);
@@ -1684,13 +1685,47 @@ bool host_titlebar_right_for_testing(NSWindow* window, bool right) {
   }
   objc_setAssociatedObject(window, &kTitlebarRight, right ? @YES : nil,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  // Each way AppKit might be asked to place the buttons again, for the run to compare: layout
+  // marks the views (the way that didn't, in run 42941747251), style sets the style mask again,
+  // tile and buttons are the theme frame's own private calls, size resizes the frame view by a
+  // point and back, and frame the window.
   NSView* frame = window.contentView.superview;
-  NSView* titlebar = [window standardWindowButton:NSWindowCloseButton].superview;
-  for (NSView* view : {frame, titlebar}) {
-    view.needsLayout = YES;
+  const std::string way = how;
+  if (way == "layout") {
+    NSView* titlebar = [window standardWindowButton:NSWindowCloseButton].superview;
+    for (NSView* view : {frame, titlebar}) {
+      view.needsLayout = YES;
+    }
+    [frame layoutSubtreeIfNeeded];
+  } else if (way == "style") {
+    window.styleMask = window.styleMask;
+  } else if (way == "tile" || way == "buttons") {
+    SEL selector = way == "tile" ? NSSelectorFromString(@"_tileTitlebarAndRedisplay:")
+                                 : NSSelectorFromString(@"_resetTitleBarButtons");
+    if (![frame respondsToSelector:selector]) {
+      fprintf(stderr, "browser: titlebar turned %s by %s: no such call\n",
+              right ? "right to left" : "left to right", how);
+      return true;
+    }
+    if (way == "tile") {
+      ((void (*)(id, SEL, BOOL))objc_msgSend)(frame, selector, YES);
+    } else {
+      ((void (*)(id, SEL))objc_msgSend)(frame, selector);
+    }
+  } else if (way == "size") {
+    const NSSize size = frame.frame.size;
+    [frame setFrameSize:NSMakeSize(size.width + 1, size.height)];
+    [frame setFrameSize:size];
+  } else if (way == "frame") {
+    const NSRect was = window.frame;
+    [window setFrame:NSMakeRect(NSMinX(was), NSMinY(was), NSWidth(was) + 1, NSHeight(was))
+             display:NO];
+    [window setFrame:was display:YES];
+  } else {
+    return false;
   }
-  [frame layoutSubtreeIfNeeded];
-  fprintf(stderr, "browser: titlebar turned %s\n", right ? "right to left" : "left to right");
+  fprintf(stderr, "browser: titlebar turned %s by %s\n", right ? "right to left" : "left to right",
+          how);
   return true;
 }
 
