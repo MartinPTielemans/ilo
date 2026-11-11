@@ -26,9 +26,9 @@ on:
         type: boolean
         default: false
 
-# A find-only run waits for no build.
+# A find-only run waits for no build, and for no other find-only run.
 concurrency:
-  group: engine-mac${{ inputs.find-only && '-find' || '' }}
+  group: ${{ inputs.find-only && format('engine-mac-find-{0}', github.run_id) || 'engine-mac' }}
   cancel-in-progress: false
 
 permissions:
