@@ -113,9 +113,10 @@ if [ ! -e "$deps/downloads/$pgo" ]; then
 fi
 ln -f "$deps/downloads/$pgo" "$src/chrome/build/pgo_profiles/$pgo"
 
-# The SDK Chromium's official builds use. The pinned LLVM's linker can't read newer SDKs' stubs
-# (the macOS 27 SDK lists arm64e.x1 targets it doesn't know).
-sdk_version=$(sed -n 's/^ *mac_sdk_official_version = "\(.*\)"$/\1/p' "$src/build/config/mac/mac_sdk.gni")
+# The SDK Chromium's official builds use with universal Xcode, as on Intel hosts: 26.5 for
+# Chromium 156 and 157, whose Apple silicon builds take the macOS 27 SDK. The pinned LLVM's linker
+# can't read that SDK's stubs, which list arm64e.x1 targets it doesn't know.
+sdk_version=$(sed -n 's/^ *mac_sdk_official_universal_version = "\(.*\)"$/\1/p' "$src/build/config/mac/mac_sdk.gni")
 sdk=
 for dir in "$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs" \
   /Library/Developer/CommandLineTools/SDKs; do

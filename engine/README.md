@@ -42,7 +42,7 @@ Steps 1–3 change the tree and run once; a run that stopped in one of them mean
 
 `setup.sh` names what it needs and isn't installed: Homebrew's `ninja`, `go`, `esbuild`, `typescript`, `coreutils` and `uv`, and Apple's Metal toolchain. It builds with Python 3.13, as ungoogled-chromium-macos does, through `uv`.
 
-It also needs the macOS SDK of Chromium's official builds (`mac_sdk_official_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156), from Xcode or the Command Line Tools, even when a newer Xcode is installed. The pinned LLVM's linker can't read newer SDKs.
+It also needs the macOS SDK of Chromium's official builds with universal Xcode (`mac_sdk_official_universal_version` in `build/config/mac/mac_sdk.gni`: 26.5 for Chromium 156 and 157), from Xcode or the Command Line Tools, even when a newer Xcode is installed. Chromium 157's Apple silicon builds take the macOS 27 SDK, whose stubs the pinned LLVM's linker can't read.
 
 ## The Mac's prebuilt engine
 
